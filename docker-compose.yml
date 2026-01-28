@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - SERVER_PORT=3000
+      - SERVER_ENV=development
+      - REDIS_ADDR=redis:6379
+      - JWT_SECRET=your-super-secret-key-change-in-production
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  redis_data:
