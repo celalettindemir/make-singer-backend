@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ruff format:*)",
+      "Bash(python -m ruff format:*)",
+      "Bash(pip install:*)",
+      "Bash(ruff check:*)",
+      "Bash(go build:*)"
+    ]
+  }
+}

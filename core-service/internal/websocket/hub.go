@@ -189,7 +189,7 @@ func (h *Hub) HandleConnection(c *websocket.Conn, jobID string) {
 			select {
 			case message, ok := <-client.Send:
 				if !ok {
-					c.WriteMessage(websocket.CloseMessage, []byte{})
+					_ = c.WriteMessage(websocket.CloseMessage, []byte{})
 					return
 				}
 				if err := c.WriteMessage(websocket.TextMessage, message); err != nil {
