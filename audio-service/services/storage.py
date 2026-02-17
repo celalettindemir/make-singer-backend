@@ -1,7 +1,6 @@
 """Storage service for R2/S3 operations."""
 
 import io
-import tempfile
 from typing import BinaryIO
 
 import boto3

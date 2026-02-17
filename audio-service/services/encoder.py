@@ -83,9 +83,6 @@ class EncoderService:
         # Map quality to bitrate
         bitrate = f"{quality}k"
 
-        # Build export parameters
-        export_params = ["-b:a", bitrate]
-
         # Add metadata if provided
         tags = {}
         if metadata:
