@@ -5,6 +5,7 @@
 *.so
 *.dylib
 main
+server
 
 # Test binary
 *.test

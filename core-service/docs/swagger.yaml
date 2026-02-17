@@ -1,0 +1,1473 @@
+basePath: /
+definitions:
+  model.Arrangement:
+    properties:
+      density:
+        allOf:
+        - $ref: '#/definitions/model.Density'
+        enum:
+        - minimal
+        - medium
+        - full
+      groove:
+        allOf:
+        - $ref: '#/definitions/model.Groove'
+        enum:
+        - straight
+        - swing
+        - half_time
+      instruments:
+        items:
+          $ref: '#/definitions/model.Instrument'
+        minItems: 1
+        type: array
+      sectionEmphasis:
+        items:
+          $ref: '#/definitions/model.SectionEmphasis'
+        type: array
+    required:
+    - density
+    - groove
+    - instruments
+    type: object
+  model.BPMConfig:
+    properties:
+      max:
+        maximum: 220
+        minimum: 40
+        type: integer
+      min:
+        maximum: 220
+        minimum: 40
+        type: integer
+      mode:
+        allOf:
+        - $ref: '#/definitions/model.BPMMode'
+        enum:
+        - auto
+        - range
+        - fixed
+      value:
+        maximum: 220
+        minimum: 40
+        type: integer
+    required:
+    - mode
+    type: object
+  model.BPMMode:
+    enum:
+    - auto
+    - range
+    - fixed
+    type: string
+    x-enum-varnames:
+    - BPMModeAuto
+    - BPMModeRange
+    - BPMModeFixed
+  model.Brief:
+    properties:
+      bpm:
+        $ref: '#/definitions/model.BPMConfig'
+      genre:
+        allOf:
+        - $ref: '#/definitions/model.Genre'
+        enum:
+        - pop
+        - rock
+        - hiphop
+        - rnb
+        - electronic
+        - jazz
+        - country
+        - folk
+        - classical
+        - latin
+        - reggae
+        - blues
+      key:
+        $ref: '#/definitions/model.KeyConfig'
+      structure:
+        items:
+          $ref: '#/definitions/model.SongSection'
+        minItems: 1
+        type: array
+      vibes:
+        items:
+          type: string
+        maxItems: 5
+        minItems: 1
+        type: array
+    required:
+    - bpm
+    - genre
+    - key
+    - structure
+    - vibes
+    type: object
+  model.Density:
+    enum:
+    - minimal
+    - medium
+    - full
+    type: string
+    x-enum-varnames:
+    - DensityMinimal
+    - DensityMedium
+    - DensityFull
+  model.ExportMP3Request:
+    properties:
+      masterFileUrl:
+        type: string
+      metadata:
+        $ref: '#/definitions/model.ExportMetadata'
+      projectId:
+        type: string
+      quality:
+        enum:
+        - 128
+        - 192
+        - 256
+        - 320
+        type: integer
+    required:
+    - masterFileUrl
+    - projectId
+    type: object
+  model.ExportMP3Response:
+    properties:
+      expiresAt:
+        type: string
+      fileUrl:
+        type: string
+      format:
+        type: string
+      quality:
+        type: integer
+      size:
+        type: integer
+    type: object
+  model.ExportMetadata:
+    properties:
+      album:
+        maxLength: 200
+        type: string
+      artist:
+        maxLength: 200
+        type: string
+      credits:
+        maxLength: 1000
+        type: string
+      title:
+        maxLength: 200
+        type: string
+      year:
+        maximum: 2100
+        minimum: 1900
+        type: integer
+    type: object
+  model.ExportStemsRequest:
+    properties:
+      format:
+        enum:
+        - wav
+        - mp3
+        type: string
+      includeMaster:
+        type: boolean
+      includeVocals:
+        type: boolean
+      masterUrl:
+        type: string
+      projectId:
+        type: string
+      stemUrls:
+        items:
+          type: string
+        minItems: 1
+        type: array
+      vocalUrls:
+        items:
+          type: string
+        type: array
+    required:
+    - projectId
+    - stemUrls
+    type: object
+  model.ExportStemsResponse:
+    properties:
+      expiresAt:
+        type: string
+      fileCount:
+        type: integer
+      fileUrl:
+        type: string
+      size:
+        type: integer
+    type: object
+  model.ExportWAVRequest:
+    properties:
+      bitDepth:
+        enum:
+        - 16
+        - 24
+        - 32
+        type: integer
+      masterFileUrl:
+        type: string
+      projectId:
+        type: string
+      sampleRate:
+        enum:
+        - 44100
+        - 48000
+        - 96000
+        type: integer
+    required:
+    - masterFileUrl
+    - projectId
+    type: object
+  model.ExportWAVResponse:
+    properties:
+      bitDepth:
+        type: integer
+      expiresAt:
+        type: string
+      fileUrl:
+        type: string
+      format:
+        type: string
+      sampleRate:
+        type: integer
+      size:
+        type: integer
+    type: object
+  model.Genre:
+    enum:
+    - pop
+    - rock
+    - hiphop
+    - rnb
+    - electronic
+    - jazz
+    - country
+    - folk
+    - classical
+    - latin
+    - reggae
+    - blues
+    type: string
+    x-enum-varnames:
+    - GenrePop
+    - GenreRock
+    - GenreHiphop
+    - GenreRnb
+    - GenreElectronic
+    - GenreJazz
+    - GenreCountry
+    - GenreFolk
+    - GenreClassical
+    - GenreLatin
+    - GenreReggae
+    - GenreBlues
+  model.Groove:
+    enum:
+    - straight
+    - swing
+    - half_time
+    type: string
+    x-enum-varnames:
+    - GrooveStraight
+    - GrooveSwing
+    - GrooveHalfTime
+  model.Instrument:
+    enum:
+    - drums
+    - bass
+    - piano
+    - guitar
+    - synth
+    - strings
+    - brass
+    - woodwinds
+    - percussion
+    - pads
+    - lead
+    - fx
+    type: string
+    x-enum-varnames:
+    - InstrumentDrums
+    - InstrumentBass
+    - InstrumentPiano
+    - InstrumentGuitar
+    - InstrumentSynth
+    - InstrumentStrings
+    - InstrumentBrass
+    - InstrumentWoodwinds
+    - InstrumentPercussion
+    - InstrumentPads
+    - InstrumentLead
+    - InstrumentFX
+  model.JobStatus:
+    enum:
+    - queued
+    - running
+    - succeeded
+    - failed
+    - canceled
+    type: string
+    x-enum-varnames:
+    - JobStatusQueued
+    - JobStatusRunning
+    - JobStatusSucceeded
+    - JobStatusFailed
+    - JobStatusCanceled
+  model.KeyConfig:
+    properties:
+      mode:
+        allOf:
+        - $ref: '#/definitions/model.KeyMode'
+        enum:
+        - auto
+        - manual
+      scale:
+        allOf:
+        - $ref: '#/definitions/model.Scale'
+        enum:
+        - major
+        - minor
+      tonic:
+        allOf:
+        - $ref: '#/definitions/model.Tonic'
+        enum:
+        - C
+        - C#
+        - D
+        - D#
+        - E
+        - F
+        - F#
+        - G
+        - G#
+        - A
+        - A#
+        - B
+    required:
+    - mode
+    type: object
+  model.KeyMode:
+    enum:
+    - auto
+    - manual
+    type: string
+    x-enum-varnames:
+    - KeyModeAuto
+    - KeyModeManual
+  model.KeyResult:
+    properties:
+      scale:
+        $ref: '#/definitions/model.Scale'
+      tonic:
+        $ref: '#/definitions/model.Tonic'
+    type: object
+  model.Language:
+    enum:
+    - en
+    - tr
+    - fr
+    type: string
+    x-enum-varnames:
+    - LanguageEN
+    - LanguageTR
+    - LanguageFR
+  model.LyricsGenerateRequest:
+    properties:
+      genre:
+        allOf:
+        - $ref: '#/definitions/model.Genre'
+        enum:
+        - pop
+        - rock
+        - hiphop
+        - rnb
+        - electronic
+        - jazz
+        - country
+        - folk
+        - classical
+        - latin
+        - reggae
+        - blues
+      language:
+        allOf:
+        - $ref: '#/definitions/model.Language'
+        enum:
+        - en
+        - tr
+        - fr
+      sectionType:
+        allOf:
+        - $ref: '#/definitions/model.SectionType'
+        enum:
+        - intro
+        - verse
+        - prechorus
+        - chorus
+        - bridge
+        - outro
+        - instrumental
+      vibes:
+        items:
+          type: string
+        maxItems: 3
+        minItems: 1
+        type: array
+    required:
+    - genre
+    - sectionType
+    - vibes
+    type: object
+  model.LyricsGenerateResponse:
+    properties:
+      drafts:
+        items:
+          items:
+            type: string
+          type: array
+        type: array
+    type: object
+  model.LyricsRewriteRequest:
+    properties:
+      currentLyrics:
+        minLength: 1
+        type: string
+      genre:
+        allOf:
+        - $ref: '#/definitions/model.Genre'
+        enum:
+        - pop
+        - rock
+        - hiphop
+        - rnb
+        - electronic
+        - jazz
+        - country
+        - folk
+        - classical
+        - latin
+        - reggae
+        - blues
+      instructions:
+        maxLength: 500
+        type: string
+      sectionType:
+        allOf:
+        - $ref: '#/definitions/model.SectionType'
+        enum:
+        - intro
+        - verse
+        - prechorus
+        - chorus
+        - bridge
+        - outro
+        - instrumental
+      vibes:
+        items:
+          type: string
+        maxItems: 3
+        minItems: 1
+        type: array
+    required:
+    - currentLyrics
+    - genre
+    - sectionType
+    - vibes
+    type: object
+  model.LyricsRewriteResponse:
+    properties:
+      lines:
+        items:
+          type: string
+        type: array
+    type: object
+  model.MasterFinalRequest:
+    properties:
+      mixSnapshot:
+        $ref: '#/definitions/model.MixSnapshot'
+      profile:
+        allOf:
+        - $ref: '#/definitions/model.MasterProfile'
+        enum:
+        - clean
+        - warm
+        - loud
+      projectId:
+        type: string
+      stemUrls:
+        items:
+          type: string
+        minItems: 1
+        type: array
+      vocalTakes:
+        items:
+          $ref: '#/definitions/model.VocalTake'
+        type: array
+    required:
+    - mixSnapshot
+    - profile
+    - projectId
+    - stemUrls
+    type: object
+  model.MasterFinalResponse:
+    properties:
+      estimatedDuration:
+        type: integer
+      jobId:
+        type: string
+      status:
+        $ref: '#/definitions/model.JobStatus'
+    type: object
+  model.MasterPreviewRequest:
+    properties:
+      mixSnapshot:
+        $ref: '#/definitions/model.MixSnapshot'
+      previewStartTime:
+        minimum: 0
+        type: integer
+      profile:
+        allOf:
+        - $ref: '#/definitions/model.MasterProfile'
+        enum:
+        - clean
+        - warm
+        - loud
+      projectId:
+        type: string
+      stemUrls:
+        items:
+          type: string
+        minItems: 1
+        type: array
+    required:
+    - mixSnapshot
+    - profile
+    - projectId
+    - stemUrls
+    type: object
+  model.MasterPreviewResponse:
+    properties:
+      duration:
+        type: integer
+      expiresAt:
+        type: string
+      fileUrl:
+        type: string
+    type: object
+  model.MasterProfile:
+    enum:
+    - clean
+    - warm
+    - loud
+    type: string
+    x-enum-varnames:
+    - MasterProfileClean
+    - MasterProfileWarm
+    - MasterProfileLoud
+  model.MasterResultResponse:
+    properties:
+      duration:
+        type: number
+      expiresAt:
+        type: string
+      fileUrl:
+        type: string
+      lufs:
+        type: integer
+      peakDb:
+        type: number
+      profile:
+        $ref: '#/definitions/model.MasterProfile'
+    type: object
+  model.MasterStatusResponse:
+    properties:
+      currentStep:
+        type: string
+      jobId:
+        type: string
+      progress:
+        type: integer
+      status:
+        $ref: '#/definitions/model.JobStatus'
+    type: object
+  model.MixChannel:
+    properties:
+      mute:
+        type: boolean
+      solo:
+        type: boolean
+      stemId:
+        type: string
+      volumeDb:
+        maximum: 12
+        minimum: -60
+        type: number
+    required:
+    - stemId
+    type: object
+  model.MixPreset:
+    enum:
+    - default
+    - vocal_friendly
+    - bass_heavy
+    - bright
+    - warm
+    type: string
+    x-enum-varnames:
+    - MixPresetDefault
+    - MixPresetVocalFriendly
+    - MixPresetBassHeavy
+    - MixPresetBright
+    - MixPresetWarm
+  model.MixSnapshot:
+    properties:
+      channels:
+        items:
+          $ref: '#/definitions/model.MixChannel'
+        minItems: 1
+        type: array
+      preset:
+        allOf:
+        - $ref: '#/definitions/model.MixPreset'
+        enum:
+        - default
+        - vocal_friendly
+        - bass_heavy
+        - bright
+        - warm
+    required:
+    - channels
+    - preset
+    type: object
+  model.RenderCancelResponse:
+    properties:
+      jobId:
+        type: string
+      status:
+        $ref: '#/definitions/model.JobStatus'
+      success:
+        type: boolean
+    type: object
+  model.RenderResultResponse:
+    properties:
+      bpm:
+        type: integer
+      createdAt:
+        type: string
+      duration:
+        type: number
+      id:
+        type: string
+      key:
+        $ref: '#/definitions/model.KeyResult'
+      stems:
+        items:
+          $ref: '#/definitions/model.StemResult'
+        type: array
+    type: object
+  model.RenderStartRequest:
+    properties:
+      arrangement:
+        $ref: '#/definitions/model.Arrangement'
+      brief:
+        $ref: '#/definitions/model.Brief'
+      projectId:
+        type: string
+    required:
+    - arrangement
+    - brief
+    - projectId
+    type: object
+  model.RenderStartResponse:
+    properties:
+      createdAt:
+        type: string
+      estimatedDuration:
+        type: integer
+      jobId:
+        type: string
+      status:
+        $ref: '#/definitions/model.JobStatus'
+    type: object
+  model.RenderStatusResponse:
+    properties:
+      completedAt:
+        type: string
+      createdAt:
+        type: string
+      currentStep:
+        type: string
+      error:
+        type: string
+      jobId:
+        type: string
+      progress:
+        type: integer
+      retryCount:
+        type: integer
+      startedAt:
+        type: string
+      status:
+        $ref: '#/definitions/model.JobStatus'
+    type: object
+  model.Scale:
+    enum:
+    - major
+    - minor
+    type: string
+    x-enum-varnames:
+    - ScaleMajor
+    - ScaleMinor
+  model.SectionEmphasis:
+    properties:
+      emphasis:
+        enum:
+        - bigger
+        - biggest
+        type: string
+      sectionId:
+        type: string
+    required:
+    - emphasis
+    - sectionId
+    type: object
+  model.SectionType:
+    enum:
+    - intro
+    - verse
+    - prechorus
+    - chorus
+    - bridge
+    - outro
+    - instrumental
+    type: string
+    x-enum-varnames:
+    - SectionIntro
+    - SectionVerse
+    - SectionPrechorus
+    - SectionChorus
+    - SectionBridge
+    - SectionOutro
+    - SectionInstrumental
+  model.SongSection:
+    properties:
+      bars:
+        maximum: 64
+        minimum: 1
+        type: integer
+      id:
+        type: string
+      type:
+        allOf:
+        - $ref: '#/definitions/model.SectionType'
+        enum:
+        - intro
+        - verse
+        - prechorus
+        - chorus
+        - bridge
+        - outro
+        - instrumental
+    required:
+    - bars
+    - id
+    - type
+    type: object
+  model.StemResult:
+    properties:
+      duration:
+        type: number
+      fileUrl:
+        type: string
+      id:
+        type: string
+      instrument:
+        $ref: '#/definitions/model.Instrument'
+      waveformData:
+        items:
+          type: number
+        type: array
+    type: object
+  model.Tonic:
+    enum:
+    - C
+    - C#
+    - D
+    - D#
+    - E
+    - F
+    - F#
+    - G
+    - G#
+    - A
+    - A#
+    - B
+    type: string
+    x-enum-varnames:
+    - TonicC
+    - TonicCSharp
+    - TonicD
+    - TonicDSharp
+    - TonicE
+    - TonicF
+    - TonicFSharp
+    - TonicG
+    - TonicGSharp
+    - TonicA
+    - TonicASharp
+    - TonicB
+  model.UploadVocalResponse:
+    properties:
+      channels:
+        type: integer
+      createdAt:
+        type: string
+      duration:
+        type: number
+      fileUrl:
+        type: string
+      id:
+        type: string
+      sampleRate:
+        type: integer
+    type: object
+  model.VocalTake:
+    properties:
+      fileUrl:
+        type: string
+      offsetMs:
+        type: integer
+      sectionId:
+        type: string
+      takeId:
+        type: string
+    required:
+    - fileUrl
+    - sectionId
+    - takeId
+    type: object
+  response.ErrorDetail:
+    properties:
+      code:
+        type: string
+      details: {}
+      message:
+        type: string
+    type: object
+  response.ErrorResponse:
+    properties:
+      error:
+        $ref: '#/definitions/response.ErrorDetail'
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: Backend API for Make-Singer — AI-powered music creation platform.
+  title: Make-Singer API
+  version: "1.0"
+paths:
+  /api/export/mp3:
+    post:
+      consumes:
+      - application/json
+      description: Export the mastered track as an MP3 file with optional metadata
+      parameters:
+      - description: MP3 export request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.ExportMP3Request'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.ExportMP3Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Export as MP3
+      tags:
+      - Export
+  /api/export/stems:
+    post:
+      consumes:
+      - application/json
+      description: Export individual stems as a bundled archive
+      parameters:
+      - description: Stems export request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.ExportStemsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.ExportStemsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Export stems
+      tags:
+      - Export
+  /api/export/wav:
+    post:
+      consumes:
+      - application/json
+      description: Export the mastered track as a WAV file with configurable bit depth
+        and sample rate
+      parameters:
+      - description: WAV export request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.ExportWAVRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.ExportWAVResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Export as WAV
+      tags:
+      - Export
+  /api/lyrics/generate:
+    post:
+      consumes:
+      - application/json
+      description: Generate lyrics for a song section using AI
+      parameters:
+      - description: Generate request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LyricsGenerateRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.LyricsGenerateResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Generate lyrics
+      tags:
+      - Lyrics
+  /api/lyrics/rewrite:
+    post:
+      consumes:
+      - application/json
+      description: Rewrite existing lyrics with AI-powered suggestions
+      parameters:
+      - description: Rewrite request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LyricsRewriteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.LyricsRewriteResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Rewrite lyrics
+      tags:
+      - Lyrics
+  /api/master/final:
+    post:
+      consumes:
+      - application/json
+      description: Start an asynchronous final mastering job
+      parameters:
+      - description: Master final request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.MasterFinalRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/model.MasterFinalResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Start final mastering
+      tags:
+      - Master
+  /api/master/preview:
+    post:
+      consumes:
+      - application/json
+      description: Generate a quick mastering preview of the mix
+      parameters:
+      - description: Master preview request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.MasterPreviewRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.MasterPreviewResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Master preview
+      tags:
+      - Master
+  /api/master/result/{jobId}:
+    get:
+      description: Get the result of a completed mastering job
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.MasterResultResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get master job result
+      tags:
+      - Master
+  /api/master/status/{jobId}:
+    get:
+      description: Get the current status and progress of a mastering job
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.MasterStatusResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get master job status
+      tags:
+      - Master
+  /api/render/cancel/{jobId}:
+    post:
+      description: Cancel a running or queued render job
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.RenderCancelResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Cancel render job
+      tags:
+      - Render
+  /api/render/result/{jobId}:
+    get:
+      description: Get the result of a completed render job including stems
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.RenderResultResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get render job result
+      tags:
+      - Render
+  /api/render/start:
+    post:
+      consumes:
+      - application/json
+      description: Start an asynchronous render job for a song arrangement
+      parameters:
+      - description: Render start request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.RenderStartRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/model.RenderStartResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Start render job
+      tags:
+      - Render
+  /api/render/status/{jobId}:
+    get:
+      description: Get the current status and progress of a render job
+      parameters:
+      - description: Job ID
+        in: path
+        name: jobId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.RenderStatusResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get render job status
+      tags:
+      - Render
+  /api/upload/vocal:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Upload an audio file as a vocal take for a song section
+      parameters:
+      - description: Project ID
+        in: formData
+        name: projectId
+        required: true
+        type: string
+      - description: Section ID
+        in: formData
+        name: sectionId
+        required: true
+        type: string
+      - description: Take name
+        in: formData
+        name: takeName
+        type: string
+      - description: Audio file (WAV, MP3, M4A, AAC; max 50MB)
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.UploadVocalResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Upload vocal take
+      tags:
+      - Upload
+  /api/upload/vocal/{takeId}:
+    delete:
+      description: Delete a previously uploaded vocal take
+      parameters:
+      - description: Take ID
+        in: path
+        name: takeId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete vocal take
+      tags:
+      - Upload
+securityDefinitions:
+  BearerAuth:
+    description: Enter your bearer token in the format **Bearer &lt;token&gt;**
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

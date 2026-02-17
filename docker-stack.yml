@@ -1,0 +1,344 @@
+version: "3.8"
+
+# =============================================================================
+# PORTAINER ENVIRONMENT VARIABLES (set in Portainer UI):
+# -----------------------------------------------------------------------------
+# DOCKER_USER              - Docker Hub username
+# API_IMAGE                - API image name (default: make-singer-backend)
+# AUDIO_IMAGE              - Audio image name (default: make-singer-audio)
+# API_VERSION              - API image tag (default: latest)
+# AUDIO_VERSION            - Audio image tag (default: latest)
+# API_DOMAIN               - API domain (e.g., api.makeasinger.com)
+# REDIS_HOST               - Redis host (default: redis)
+# REDIS_PORT               - Redis port (default: 6379)
+# POSTGRES_HOST            - PostgreSQL host (default: postgres)
+# POSTGRES_PORT            - PostgreSQL port (default: 5432)
+# POSTGRES_DB              - Zitadel database name (default: zitadel)
+# POSTGRES_USER            - PostgreSQL admin user (default: postgres)
+# POSTGRES_ZITADEL_USER    - Zitadel database user (default: zitadel)
+# ZITADEL_EXTERNAL_DOMAIN  - External domain for Zitadel (e.g., auth.makeasinger.com)
+# ZITADEL_EXTERNAL_SECURE  - Use HTTPS (default: true)
+# R2_BUCKET_NAME           - R2 bucket name (default: makeasinger)
+# R2_PUBLIC_URL            - R2 CDN public URL
+# GROQ_BASE_URL            - Groq API URL
+# GROQ_MODEL               - Groq model
+# SUNO_BASE_URL            - Suno API URL
+# CORS_ORIGINS             - Allowed CORS origins (comma-separated)
+# =============================================================================
+
+services:
+  # =============================================================================
+  # API - Main Backend Service
+  # =============================================================================
+  api:
+    image: ${DOCKER_USER}/${API_IMAGE:-make-singer-backend}:${API_VERSION:-latest}
+    environment:
+      SERVER_PORT: "8000"
+      SERVER_ENV: production
+      GATEWAY_ENABLED: "true"
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      GROQ_API_KEY_FILE: /run/secrets/groq_api_key
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
+      GROQ_MODEL: ${GROQ_MODEL:-llama3-70b-8192}
+      R2_ACCOUNT_ID_FILE: /run/secrets/r2_account_id
+      R2_ACCESS_KEY_ID_FILE: /run/secrets/r2_access_key_id
+      R2_SECRET_ACCESS_KEY_FILE: /run/secrets/r2_secret_access_key
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-makeasinger}
+      R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
+      ZITADEL_DOMAIN: ${ZITADEL_EXTERNAL_DOMAIN:-}
+      ZITADEL_ISSUER: https://${ZITADEL_EXTERNAL_DOMAIN:-localhost}
+      ZITADEL_CLIENT_ID_FILE: /run/secrets/zitadel_client_id
+      SUNO_API_KEY_FILE: /run/secrets/suno_api_key
+      SUNO_BASE_URL: ${SUNO_BASE_URL:-https://api.sunoapi.org}
+      AUDIO_SERVICE_URL: http://audio-service:8084
+      AUDIO_SERVICE_TIMEOUT: "120"
+    secrets:
+      - groq_api_key
+      - r2_account_id
+      - r2_access_key_id
+      - r2_secret_access_key
+      - suno_api_key
+      - redis_password
+      - zitadel_client_id
+    networks:
+      - traefik-public
+      - internal
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+
+        ## Middleware: ForwardAuth
+        - "traefik.http.middlewares.ms-auth-forward.forwardauth.address=http://make-singer_api:8000/auth/verify"
+        - "traefik.http.middlewares.ms-auth-forward.forwardauth.authResponseHeaders=X-User-Id,X-User-Email,X-User-Name"
+        - "traefik.http.middlewares.ms-auth-forward.forwardauth.authRequestHeaders=Authorization,Cookie"
+
+        ## Middleware: Rate Limit
+        - "traefik.http.middlewares.ms-rate-limit.ratelimit.average=100"
+        - "traefik.http.middlewares.ms-rate-limit.ratelimit.burst=200"
+        - "traefik.http.middlewares.ms-rate-limit.ratelimit.period=1s"
+
+        ## Middleware: Security Headers
+        - "traefik.http.middlewares.ms-secure-headers.headers.browserxssfilter=true"
+        - "traefik.http.middlewares.ms-secure-headers.headers.contenttypenosniff=true"
+        - "traefik.http.middlewares.ms-secure-headers.headers.framedeny=true"
+        - "traefik.http.middlewares.ms-secure-headers.headers.stsincludesubdomains=true"
+        - "traefik.http.middlewares.ms-secure-headers.headers.stspreload=true"
+        - "traefik.http.middlewares.ms-secure-headers.headers.stsseconds=31536000"
+        - "traefik.http.middlewares.ms-secure-headers.headers.customframeoptionsvalue=SAMEORIGIN"
+
+        ## Router: Protected API routes
+        - "traefik.http.routers.ms-api-protected.rule=Host(`${API_DOMAIN}`) && PathPrefix(`/api`)"
+        - "traefik.http.routers.ms-api-protected.entrypoints=websecure"
+        - "traefik.http.routers.ms-api-protected.tls=true"
+        - "traefik.http.routers.ms-api-protected.middlewares=ms-auth-forward@docker,ms-rate-limit@docker,ms-secure-headers@docker"
+        - "traefik.http.routers.ms-api-protected.service=ms-api-svc"
+
+        ## Router: Public routes (health, swagger)
+        - "traefik.http.routers.ms-api-public.rule=Host(`${API_DOMAIN}`) && (Path(`/health`) || PathPrefix(`/swagger`) || Path(`/`))"
+        - "traefik.http.routers.ms-api-public.entrypoints=websecure"
+        - "traefik.http.routers.ms-api-public.tls=true"
+        - "traefik.http.routers.ms-api-public.middlewares=ms-secure-headers@docker"
+        - "traefik.http.routers.ms-api-public.service=ms-api-svc"
+
+        ## Router: WebSocket
+        - "traefik.http.routers.ms-api-ws.rule=Host(`${API_DOMAIN}`) && PathPrefix(`/ws`)"
+        - "traefik.http.routers.ms-api-ws.entrypoints=websecure"
+        - "traefik.http.routers.ms-api-ws.tls=true"
+        - "traefik.http.routers.ms-api-ws.service=ms-api-svc"
+
+        ## Service
+        - "traefik.http.services.ms-api-svc.loadbalancer.server.port=8000"
+        - "traefik.http.services.ms-api-svc.loadbalancer.sticky.cookie=true"
+        - "traefik.http.services.ms-api-svc.loadbalancer.sticky.cookie.name=ms_api_sticky"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # =============================================================================
+  # AUDIO SERVICE - Audio Processing (Python/FFmpeg)
+  # =============================================================================
+  audio-service:
+    image: ${DOCKER_USER}/${AUDIO_IMAGE:-make-singer-audio}:${AUDIO_VERSION:-latest}
+    environment:
+      R2_ACCOUNT_ID_FILE: /run/secrets/r2_account_id
+      R2_ACCESS_KEY_ID_FILE: /run/secrets/r2_access_key_id
+      R2_SECRET_ACCESS_KEY_FILE: /run/secrets/r2_secret_access_key
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-makeasinger}
+      R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
+    secrets:
+      - r2_account_id
+      - r2_access_key_id
+      - r2_secret_access_key
+    networks:
+      - internal
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+      labels:
+        - "traefik.enable=false"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8084/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # =============================================================================
+  # ZITADEL - Identity Provider (OIDC/OAuth2)
+  # =============================================================================
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:latest
+    command: start-from-init --masterkeyFile /run/secrets/zitadel_masterkey
+    environment:
+      ZITADEL_EXTERNALDOMAIN: ${ZITADEL_EXTERNAL_DOMAIN}
+      ZITADEL_EXTERNALSECURE: ${ZITADEL_EXTERNAL_SECURE:-true}
+      ZITADEL_EXTERNALPORT: "443"
+      ZITADEL_TLS_ENABLED: "false"
+      ZITADEL_DATABASE_POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      ZITADEL_DATABASE_POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      ZITADEL_DATABASE_POSTGRES_DATABASE: ${POSTGRES_DB:-zitadel}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: ${POSTGRES_USER:-postgres}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD_FILE: /run/secrets/postgres_password
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: ${POSTGRES_ZITADEL_USER:-zitadel}
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD_FILE: /run/secrets/zitadel_db_password
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_FIRSTINSTANCE_LOGINCLIENTPATPATH: /data/login-client.pat
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "false"
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_USERNAME: login-client
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_NAME: Login Client Service Account
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_PAT_EXPIRATIONDATE: "2030-01-01T00:00:00Z"
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "true"
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_BASEURI: https://${ZITADEL_EXTERNAL_DOMAIN}/ui/v2/login
+      ZITADEL_OIDC_DEFAULTLOGINURLV2: https://${ZITADEL_EXTERNAL_DOMAIN}/ui/v2/login/login?authRequest=
+      ZITADEL_OIDC_DEFAULTLOGOUTURLV2: https://${ZITADEL_EXTERNAL_DOMAIN}/ui/v2/login/logout?post_logout_redirect=
+      ZITADEL_SAML_DEFAULTLOGINURLV2: https://${ZITADEL_EXTERNAL_DOMAIN}/ui/v2/login/login?samlRequest=
+      ZITADEL_FIRSTINSTANCE_PATPATH: /data/admin.pat
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: admin
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Admin Service Account
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2030-01-01T00:00:00Z"
+    secrets:
+      - zitadel_masterkey
+      - zitadel_db_password
+      - postgres_password
+    volumes:
+      - zitadel_data:/data
+    networks:
+      - traefik-public
+      - internal
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 30s
+        order: stop-first
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+
+        ## Router: Zitadel API (oauth, oidc, well-known, ui, saml, management, admin)
+        - "traefik.http.routers.ms-zitadel.rule=Host(`${ZITADEL_EXTERNAL_DOMAIN}`) && (PathPrefix(`/oauth`) || PathPrefix(`/oidc`) || PathPrefix(`/.well-known`) || PathPrefix(`/ui`) || PathPrefix(`/saml`) || PathPrefix(`/management`) || PathPrefix(`/admin`))"
+        - "traefik.http.routers.ms-zitadel.entrypoints=websecure"
+        - "traefik.http.routers.ms-zitadel.tls=true"
+        - "traefik.http.routers.ms-zitadel.service=ms-zitadel-svc"
+        - "traefik.http.routers.ms-zitadel.priority=100"
+
+        ## Service: Zitadel
+        - "traefik.http.services.ms-zitadel-svc.loadbalancer.server.port=8080"
+    healthcheck:
+      test: ["CMD", "/app/zitadel", "ready"]
+      interval: 10s
+      timeout: 60s
+      retries: 5
+      start_period: 30s
+
+  # =============================================================================
+  # ZITADEL LOGIN - Login UI (Next.js)
+  # =============================================================================
+  zitadel-login:
+    image: ghcr.io/zitadel/zitadel-login:latest
+    environment:
+      ZITADEL_API_URL: http://zitadel:8080
+      CUSTOM_REQUEST_HEADERS: Host:${ZITADEL_EXTERNAL_DOMAIN}
+      NEXT_PUBLIC_BASE_PATH: /ui/v2/login
+      ZITADEL_SERVICE_USER_TOKEN_FILE: /data/login-client.pat
+    volumes:
+      - zitadel_data:/data:ro
+    networks:
+      - traefik-public
+      - internal
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+
+        ## Router: Zitadel Login UI (higher priority than zitadel catch-all /ui)
+        - "traefik.http.routers.ms-zitadel-login.rule=Host(`${ZITADEL_EXTERNAL_DOMAIN}`) && PathPrefix(`/ui/v2/login`)"
+        - "traefik.http.routers.ms-zitadel-login.entrypoints=websecure"
+        - "traefik.http.routers.ms-zitadel-login.tls=true"
+        - "traefik.http.routers.ms-zitadel-login.service=ms-zitadel-login-svc"
+        - "traefik.http.routers.ms-zitadel-login.priority=200"
+
+        ## Service: Zitadel Login
+        - "traefik.http.services.ms-zitadel-login-svc.loadbalancer.server.port=3000"
+
+# =============================================================================
+# NETWORKS
+# =============================================================================
+networks:
+  traefik-public:
+    external: true
+  internal:
+    driver: overlay
+    internal: true
+
+# =============================================================================
+# VOLUMES
+# =============================================================================
+volumes:
+  zitadel_data:
+    driver: local
+
+# =============================================================================
+# SECRETS - Create in Portainer: Secrets > Add secret
+# =============================================================================
+# API:    groq_api_key, suno_api_key, redis_password
+# R2:     r2_account_id, r2_access_key_id, r2_secret_access_key
+# Zitadel: zitadel_masterkey, zitadel_db_password, zitadel_client_id, postgres_password
+# =============================================================================
+secrets:
+  groq_api_key:
+    external: true
+  suno_api_key:
+    external: true
+  redis_password:
+    external: true
+  r2_account_id:
+    external: true
+  r2_access_key_id:
+    external: true
+  r2_secret_access_key:
+    external: true
+  zitadel_masterkey:
+    external: true
+  zitadel_db_password:
+    external: true
+  zitadel_client_id:
+    external: true
+  postgres_password:
+    external: true

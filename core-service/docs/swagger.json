@@ -1,0 +1,2172 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "Backend API for Make-Singer — AI-powered music creation platform.",
+        "title": "Make-Singer API",
+        "contact": {},
+        "version": "1.0"
+    },
+    "host": "localhost:8080",
+    "basePath": "/",
+    "paths": {
+        "/api/export/mp3": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Export the mastered track as an MP3 file with optional metadata",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Export"
+                ],
+                "summary": "Export as MP3",
+                "parameters": [
+                    {
+                        "description": "MP3 export request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.ExportMP3Request"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.ExportMP3Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/export/stems": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Export individual stems as a bundled archive",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Export"
+                ],
+                "summary": "Export stems",
+                "parameters": [
+                    {
+                        "description": "Stems export request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.ExportStemsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.ExportStemsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/export/wav": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Export the mastered track as a WAV file with configurable bit depth and sample rate",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Export"
+                ],
+                "summary": "Export as WAV",
+                "parameters": [
+                    {
+                        "description": "WAV export request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.ExportWAVRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.ExportWAVResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/lyrics/generate": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Generate lyrics for a song section using AI",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Lyrics"
+                ],
+                "summary": "Generate lyrics",
+                "parameters": [
+                    {
+                        "description": "Generate request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LyricsGenerateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.LyricsGenerateResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/lyrics/rewrite": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Rewrite existing lyrics with AI-powered suggestions",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Lyrics"
+                ],
+                "summary": "Rewrite lyrics",
+                "parameters": [
+                    {
+                        "description": "Rewrite request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LyricsRewriteRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.LyricsRewriteResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/master/final": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Start an asynchronous final mastering job",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Master"
+                ],
+                "summary": "Start final mastering",
+                "parameters": [
+                    {
+                        "description": "Master final request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.MasterFinalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/model.MasterFinalResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/master/preview": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Generate a quick mastering preview of the mix",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Master"
+                ],
+                "summary": "Master preview",
+                "parameters": [
+                    {
+                        "description": "Master preview request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.MasterPreviewRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.MasterPreviewResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/master/result/{jobId}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get the result of a completed mastering job",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Master"
+                ],
+                "summary": "Get master job result",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "jobId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.MasterResultResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/master/status/{jobId}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get the current status and progress of a mastering job",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Master"
+                ],
+                "summary": "Get master job status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "jobId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.MasterStatusResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/render/cancel/{jobId}": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Cancel a running or queued render job",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Render"
+                ],
+                "summary": "Cancel render job",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "jobId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.RenderCancelResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/render/result/{jobId}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get the result of a completed render job including stems",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Render"
+                ],
+                "summary": "Get render job result",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "jobId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.RenderResultResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/render/start": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Start an asynchronous render job for a song arrangement",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Render"
+                ],
+                "summary": "Start render job",
+                "parameters": [
+                    {
+                        "description": "Render start request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.RenderStartRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/model.RenderStartResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/render/status/{jobId}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get the current status and progress of a render job",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Render"
+                ],
+                "summary": "Get render job status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "jobId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.RenderStatusResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/upload/vocal": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Upload an audio file as a vocal take for a song section",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Upload"
+                ],
+                "summary": "Upload vocal take",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "projectId",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Section ID",
+                        "name": "sectionId",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Take name",
+                        "name": "takeName",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "file",
+                        "description": "Audio file (WAV, MP3, M4A, AAC; max 50MB)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.UploadVocalResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/upload/vocal/{takeId}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Delete a previously uploaded vocal take",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Upload"
+                ],
+                "summary": "Delete vocal take",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Take ID",
+                        "name": "takeId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "model.Arrangement": {
+            "type": "object",
+            "required": [
+                "density",
+                "groove",
+                "instruments"
+            ],
+            "properties": {
+                "density": {
+                    "enum": [
+                        "minimal",
+                        "medium",
+                        "full"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Density"
+                        }
+                    ]
+                },
+                "groove": {
+                    "enum": [
+                        "straight",
+                        "swing",
+                        "half_time"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Groove"
+                        }
+                    ]
+                },
+                "instruments": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/definitions/model.Instrument"
+                    }
+                },
+                "sectionEmphasis": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.SectionEmphasis"
+                    }
+                }
+            }
+        },
+        "model.BPMConfig": {
+            "type": "object",
+            "required": [
+                "mode"
+            ],
+            "properties": {
+                "max": {
+                    "type": "integer",
+                    "maximum": 220,
+                    "minimum": 40
+                },
+                "min": {
+                    "type": "integer",
+                    "maximum": 220,
+                    "minimum": 40
+                },
+                "mode": {
+                    "enum": [
+                        "auto",
+                        "range",
+                        "fixed"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.BPMMode"
+                        }
+                    ]
+                },
+                "value": {
+                    "type": "integer",
+                    "maximum": 220,
+                    "minimum": 40
+                }
+            }
+        },
+        "model.BPMMode": {
+            "type": "string",
+            "enum": [
+                "auto",
+                "range",
+                "fixed"
+            ],
+            "x-enum-varnames": [
+                "BPMModeAuto",
+                "BPMModeRange",
+                "BPMModeFixed"
+            ]
+        },
+        "model.Brief": {
+            "type": "object",
+            "required": [
+                "bpm",
+                "genre",
+                "key",
+                "structure",
+                "vibes"
+            ],
+            "properties": {
+                "bpm": {
+                    "$ref": "#/definitions/model.BPMConfig"
+                },
+                "genre": {
+                    "enum": [
+                        "pop",
+                        "rock",
+                        "hiphop",
+                        "rnb",
+                        "electronic",
+                        "jazz",
+                        "country",
+                        "folk",
+                        "classical",
+                        "latin",
+                        "reggae",
+                        "blues"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Genre"
+                        }
+                    ]
+                },
+                "key": {
+                    "$ref": "#/definitions/model.KeyConfig"
+                },
+                "structure": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/definitions/model.SongSection"
+                    }
+                },
+                "vibes": {
+                    "type": "array",
+                    "maxItems": 5,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "model.Density": {
+            "type": "string",
+            "enum": [
+                "minimal",
+                "medium",
+                "full"
+            ],
+            "x-enum-varnames": [
+                "DensityMinimal",
+                "DensityMedium",
+                "DensityFull"
+            ]
+        },
+        "model.ExportMP3Request": {
+            "type": "object",
+            "required": [
+                "masterFileUrl",
+                "projectId"
+            ],
+            "properties": {
+                "masterFileUrl": {
+                    "type": "string"
+                },
+                "metadata": {
+                    "$ref": "#/definitions/model.ExportMetadata"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "quality": {
+                    "type": "integer",
+                    "enum": [
+                        128,
+                        192,
+                        256,
+                        320
+                    ]
+                }
+            }
+        },
+        "model.ExportMP3Response": {
+            "type": "object",
+            "properties": {
+                "expiresAt": {
+                    "type": "string"
+                },
+                "fileUrl": {
+                    "type": "string"
+                },
+                "format": {
+                    "type": "string"
+                },
+                "quality": {
+                    "type": "integer"
+                },
+                "size": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.ExportMetadata": {
+            "type": "object",
+            "properties": {
+                "album": {
+                    "type": "string",
+                    "maxLength": 200
+                },
+                "artist": {
+                    "type": "string",
+                    "maxLength": 200
+                },
+                "credits": {
+                    "type": "string",
+                    "maxLength": 1000
+                },
+                "title": {
+                    "type": "string",
+                    "maxLength": 200
+                },
+                "year": {
+                    "type": "integer",
+                    "maximum": 2100,
+                    "minimum": 1900
+                }
+            }
+        },
+        "model.ExportStemsRequest": {
+            "type": "object",
+            "required": [
+                "projectId",
+                "stemUrls"
+            ],
+            "properties": {
+                "format": {
+                    "type": "string",
+                    "enum": [
+                        "wav",
+                        "mp3"
+                    ]
+                },
+                "includeMaster": {
+                    "type": "boolean"
+                },
+                "includeVocals": {
+                    "type": "boolean"
+                },
+                "masterUrl": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "stemUrls": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "vocalUrls": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "model.ExportStemsResponse": {
+            "type": "object",
+            "properties": {
+                "expiresAt": {
+                    "type": "string"
+                },
+                "fileCount": {
+                    "type": "integer"
+                },
+                "fileUrl": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.ExportWAVRequest": {
+            "type": "object",
+            "required": [
+                "masterFileUrl",
+                "projectId"
+            ],
+            "properties": {
+                "bitDepth": {
+                    "type": "integer",
+                    "enum": [
+                        16,
+                        24,
+                        32
+                    ]
+                },
+                "masterFileUrl": {
+                    "type": "string"
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "sampleRate": {
+                    "type": "integer",
+                    "enum": [
+                        44100,
+                        48000,
+                        96000
+                    ]
+                }
+            }
+        },
+        "model.ExportWAVResponse": {
+            "type": "object",
+            "properties": {
+                "bitDepth": {
+                    "type": "integer"
+                },
+                "expiresAt": {
+                    "type": "string"
+                },
+                "fileUrl": {
+                    "type": "string"
+                },
+                "format": {
+                    "type": "string"
+                },
+                "sampleRate": {
+                    "type": "integer"
+                },
+                "size": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.Genre": {
+            "type": "string",
+            "enum": [
+                "pop",
+                "rock",
+                "hiphop",
+                "rnb",
+                "electronic",
+                "jazz",
+                "country",
+                "folk",
+                "classical",
+                "latin",
+                "reggae",
+                "blues"
+            ],
+            "x-enum-varnames": [
+                "GenrePop",
+                "GenreRock",
+                "GenreHiphop",
+                "GenreRnb",
+                "GenreElectronic",
+                "GenreJazz",
+                "GenreCountry",
+                "GenreFolk",
+                "GenreClassical",
+                "GenreLatin",
+                "GenreReggae",
+                "GenreBlues"
+            ]
+        },
+        "model.Groove": {
+            "type": "string",
+            "enum": [
+                "straight",
+                "swing",
+                "half_time"
+            ],
+            "x-enum-varnames": [
+                "GrooveStraight",
+                "GrooveSwing",
+                "GrooveHalfTime"
+            ]
+        },
+        "model.Instrument": {
+            "type": "string",
+            "enum": [
+                "drums",
+                "bass",
+                "piano",
+                "guitar",
+                "synth",
+                "strings",
+                "brass",
+                "woodwinds",
+                "percussion",
+                "pads",
+                "lead",
+                "fx"
+            ],
+            "x-enum-varnames": [
+                "InstrumentDrums",
+                "InstrumentBass",
+                "InstrumentPiano",
+                "InstrumentGuitar",
+                "InstrumentSynth",
+                "InstrumentStrings",
+                "InstrumentBrass",
+                "InstrumentWoodwinds",
+                "InstrumentPercussion",
+                "InstrumentPads",
+                "InstrumentLead",
+                "InstrumentFX"
+            ]
+        },
+        "model.JobStatus": {
+            "type": "string",
+            "enum": [
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "canceled"
+            ],
+            "x-enum-varnames": [
+                "JobStatusQueued",
+                "JobStatusRunning",
+                "JobStatusSucceeded",
+                "JobStatusFailed",
+                "JobStatusCanceled"
+            ]
+        },
+        "model.KeyConfig": {
+            "type": "object",
+            "required": [
+                "mode"
+            ],
+            "properties": {
+                "mode": {
+                    "enum": [
+                        "auto",
+                        "manual"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.KeyMode"
+                        }
+                    ]
+                },
+                "scale": {
+                    "enum": [
+                        "major",
+                        "minor"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Scale"
+                        }
+                    ]
+                },
+                "tonic": {
+                    "enum": [
+                        "C",
+                        "C#",
+                        "D",
+                        "D#",
+                        "E",
+                        "F",
+                        "F#",
+                        "G",
+                        "G#",
+                        "A",
+                        "A#",
+                        "B"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Tonic"
+                        }
+                    ]
+                }
+            }
+        },
+        "model.KeyMode": {
+            "type": "string",
+            "enum": [
+                "auto",
+                "manual"
+            ],
+            "x-enum-varnames": [
+                "KeyModeAuto",
+                "KeyModeManual"
+            ]
+        },
+        "model.KeyResult": {
+            "type": "object",
+            "properties": {
+                "scale": {
+                    "$ref": "#/definitions/model.Scale"
+                },
+                "tonic": {
+                    "$ref": "#/definitions/model.Tonic"
+                }
+            }
+        },
+        "model.Language": {
+            "type": "string",
+            "enum": [
+                "en",
+                "tr",
+                "fr"
+            ],
+            "x-enum-varnames": [
+                "LanguageEN",
+                "LanguageTR",
+                "LanguageFR"
+            ]
+        },
+        "model.LyricsGenerateRequest": {
+            "type": "object",
+            "required": [
+                "genre",
+                "sectionType",
+                "vibes"
+            ],
+            "properties": {
+                "genre": {
+                    "enum": [
+                        "pop",
+                        "rock",
+                        "hiphop",
+                        "rnb",
+                        "electronic",
+                        "jazz",
+                        "country",
+                        "folk",
+                        "classical",
+                        "latin",
+                        "reggae",
+                        "blues"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Genre"
+                        }
+                    ]
+                },
+                "language": {
+                    "enum": [
+                        "en",
+                        "tr",
+                        "fr"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Language"
+                        }
+                    ]
+                },
+                "sectionType": {
+                    "enum": [
+                        "intro",
+                        "verse",
+                        "prechorus",
+                        "chorus",
+                        "bridge",
+                        "outro",
+                        "instrumental"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.SectionType"
+                        }
+                    ]
+                },
+                "vibes": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "model.LyricsGenerateResponse": {
+            "type": "object",
+            "properties": {
+                "drafts": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "model.LyricsRewriteRequest": {
+            "type": "object",
+            "required": [
+                "currentLyrics",
+                "genre",
+                "sectionType",
+                "vibes"
+            ],
+            "properties": {
+                "currentLyrics": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "genre": {
+                    "enum": [
+                        "pop",
+                        "rock",
+                        "hiphop",
+                        "rnb",
+                        "electronic",
+                        "jazz",
+                        "country",
+                        "folk",
+                        "classical",
+                        "latin",
+                        "reggae",
+                        "blues"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Genre"
+                        }
+                    ]
+                },
+                "instructions": {
+                    "type": "string",
+                    "maxLength": 500
+                },
+                "sectionType": {
+                    "enum": [
+                        "intro",
+                        "verse",
+                        "prechorus",
+                        "chorus",
+                        "bridge",
+                        "outro",
+                        "instrumental"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.SectionType"
+                        }
+                    ]
+                },
+                "vibes": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "model.LyricsRewriteResponse": {
+            "type": "object",
+            "properties": {
+                "lines": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "model.MasterFinalRequest": {
+            "type": "object",
+            "required": [
+                "mixSnapshot",
+                "profile",
+                "projectId",
+                "stemUrls"
+            ],
+            "properties": {
+                "mixSnapshot": {
+                    "$ref": "#/definitions/model.MixSnapshot"
+                },
+                "profile": {
+                    "enum": [
+                        "clean",
+                        "warm",
+                        "loud"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.MasterProfile"
+                        }
+                    ]
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "stemUrls": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "vocalTakes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.VocalTake"
+                    }
+                }
+            }
+        },
+        "model.MasterFinalResponse": {
+            "type": "object",
+            "properties": {
+                "estimatedDuration": {
+                    "type": "integer"
+                },
+                "jobId": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/model.JobStatus"
+                }
+            }
+        },
+        "model.MasterPreviewRequest": {
+            "type": "object",
+            "required": [
+                "mixSnapshot",
+                "profile",
+                "projectId",
+                "stemUrls"
+            ],
+            "properties": {
+                "mixSnapshot": {
+                    "$ref": "#/definitions/model.MixSnapshot"
+                },
+                "previewStartTime": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "profile": {
+                    "enum": [
+                        "clean",
+                        "warm",
+                        "loud"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.MasterProfile"
+                        }
+                    ]
+                },
+                "projectId": {
+                    "type": "string"
+                },
+                "stemUrls": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "model.MasterPreviewResponse": {
+            "type": "object",
+            "properties": {
+                "duration": {
+                    "type": "integer"
+                },
+                "expiresAt": {
+                    "type": "string"
+                },
+                "fileUrl": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.MasterProfile": {
+            "type": "string",
+            "enum": [
+                "clean",
+                "warm",
+                "loud"
+            ],
+            "x-enum-varnames": [
+                "MasterProfileClean",
+                "MasterProfileWarm",
+                "MasterProfileLoud"
+            ]
+        },
+        "model.MasterResultResponse": {
+            "type": "object",
+            "properties": {
+                "duration": {
+                    "type": "number"
+                },
+                "expiresAt": {
+                    "type": "string"
+                },
+                "fileUrl": {
+                    "type": "string"
+                },
+                "lufs": {
+                    "type": "integer"
+                },
+                "peakDb": {
+                    "type": "number"
+                },
+                "profile": {
+                    "$ref": "#/definitions/model.MasterProfile"
+                }
+            }
+        },
+        "model.MasterStatusResponse": {
+            "type": "object",
+            "properties": {
+                "currentStep": {
+                    "type": "string"
+                },
+                "jobId": {
+                    "type": "string"
+                },
+                "progress": {
+                    "type": "integer"
+                },
+                "status": {
+                    "$ref": "#/definitions/model.JobStatus"
+                }
+            }
+        },
+        "model.MixChannel": {
+            "type": "object",
+            "required": [
+                "stemId"
+            ],
+            "properties": {
+                "mute": {
+                    "type": "boolean"
+                },
+                "solo": {
+                    "type": "boolean"
+                },
+                "stemId": {
+                    "type": "string"
+                },
+                "volumeDb": {
+                    "type": "number",
+                    "maximum": 12,
+                    "minimum": -60
+                }
+            }
+        },
+        "model.MixPreset": {
+            "type": "string",
+            "enum": [
+                "default",
+                "vocal_friendly",
+                "bass_heavy",
+                "bright",
+                "warm"
+            ],
+            "x-enum-varnames": [
+                "MixPresetDefault",
+                "MixPresetVocalFriendly",
+                "MixPresetBassHeavy",
+                "MixPresetBright",
+                "MixPresetWarm"
+            ]
+        },
+        "model.MixSnapshot": {
+            "type": "object",
+            "required": [
+                "channels",
+                "preset"
+            ],
+            "properties": {
+                "channels": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/definitions/model.MixChannel"
+                    }
+                },
+                "preset": {
+                    "enum": [
+                        "default",
+                        "vocal_friendly",
+                        "bass_heavy",
+                        "bright",
+                        "warm"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.MixPreset"
+                        }
+                    ]
+                }
+            }
+        },
+        "model.RenderCancelResponse": {
+            "type": "object",
+            "properties": {
+                "jobId": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/model.JobStatus"
+                },
+                "success": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "model.RenderResultResponse": {
+            "type": "object",
+            "properties": {
+                "bpm": {
+                    "type": "integer"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "duration": {
+                    "type": "number"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "key": {
+                    "$ref": "#/definitions/model.KeyResult"
+                },
+                "stems": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.StemResult"
+                    }
+                }
+            }
+        },
+        "model.RenderStartRequest": {
+            "type": "object",
+            "required": [
+                "arrangement",
+                "brief",
+                "projectId"
+            ],
+            "properties": {
+                "arrangement": {
+                    "$ref": "#/definitions/model.Arrangement"
+                },
+                "brief": {
+                    "$ref": "#/definitions/model.Brief"
+                },
+                "projectId": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.RenderStartResponse": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "estimatedDuration": {
+                    "type": "integer"
+                },
+                "jobId": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/model.JobStatus"
+                }
+            }
+        },
+        "model.RenderStatusResponse": {
+            "type": "object",
+            "properties": {
+                "completedAt": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "currentStep": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "jobId": {
+                    "type": "string"
+                },
+                "progress": {
+                    "type": "integer"
+                },
+                "retryCount": {
+                    "type": "integer"
+                },
+                "startedAt": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/model.JobStatus"
+                }
+            }
+        },
+        "model.Scale": {
+            "type": "string",
+            "enum": [
+                "major",
+                "minor"
+            ],
+            "x-enum-varnames": [
+                "ScaleMajor",
+                "ScaleMinor"
+            ]
+        },
+        "model.SectionEmphasis": {
+            "type": "object",
+            "required": [
+                "emphasis",
+                "sectionId"
+            ],
+            "properties": {
+                "emphasis": {
+                    "type": "string",
+                    "enum": [
+                        "bigger",
+                        "biggest"
+                    ]
+                },
+                "sectionId": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.SectionType": {
+            "type": "string",
+            "enum": [
+                "intro",
+                "verse",
+                "prechorus",
+                "chorus",
+                "bridge",
+                "outro",
+                "instrumental"
+            ],
+            "x-enum-varnames": [
+                "SectionIntro",
+                "SectionVerse",
+                "SectionPrechorus",
+                "SectionChorus",
+                "SectionBridge",
+                "SectionOutro",
+                "SectionInstrumental"
+            ]
+        },
+        "model.SongSection": {
+            "type": "object",
+            "required": [
+                "bars",
+                "id",
+                "type"
+            ],
+            "properties": {
+                "bars": {
+                    "type": "integer",
+                    "maximum": 64,
+                    "minimum": 1
+                },
+                "id": {
+                    "type": "string"
+                },
+                "type": {
+                    "enum": [
+                        "intro",
+                        "verse",
+                        "prechorus",
+                        "chorus",
+                        "bridge",
+                        "outro",
+                        "instrumental"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.SectionType"
+                        }
+                    ]
+                }
+            }
+        },
+        "model.StemResult": {
+            "type": "object",
+            "properties": {
+                "duration": {
+                    "type": "number"
+                },
+                "fileUrl": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "instrument": {
+                    "$ref": "#/definitions/model.Instrument"
+                },
+                "waveformData": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                }
+            }
+        },
+        "model.Tonic": {
+            "type": "string",
+            "enum": [
+                "C",
+                "C#",
+                "D",
+                "D#",
+                "E",
+                "F",
+                "F#",
+                "G",
+                "G#",
+                "A",
+                "A#",
+                "B"
+            ],
+            "x-enum-varnames": [
+                "TonicC",
+                "TonicCSharp",
+                "TonicD",
+                "TonicDSharp",
+                "TonicE",
+                "TonicF",
+                "TonicFSharp",
+                "TonicG",
+                "TonicGSharp",
+                "TonicA",
+                "TonicASharp",
+                "TonicB"
+            ]
+        },
+        "model.UploadVocalResponse": {
+            "type": "object",
+            "properties": {
+                "channels": {
+                    "type": "integer"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "duration": {
+                    "type": "number"
+                },
+                "fileUrl": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "sampleRate": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.VocalTake": {
+            "type": "object",
+            "required": [
+                "fileUrl",
+                "sectionId",
+                "takeId"
+            ],
+            "properties": {
+                "fileUrl": {
+                    "type": "string"
+                },
+                "offsetMs": {
+                    "type": "integer"
+                },
+                "sectionId": {
+                    "type": "string"
+                },
+                "takeId": {
+                    "type": "string"
+                }
+            }
+        },
+        "response.ErrorDetail": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "details": {},
+                "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "response.ErrorResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "$ref": "#/definitions/response.ErrorDetail"
+                }
+            }
+        }
+    },
+    "securityDefinitions": {
+        "BearerAuth": {
+            "description": "Enter your bearer token in the format **Bearer \u0026lt;token\u0026gt;**",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        }
+    }
+}

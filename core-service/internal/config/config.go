@@ -1,0 +1,195 @@
+package config
+
+import (
+	"github.com/spf13/viper"
+)
+
+type Config struct {
+	Server    ServerConfig
+	Redis     RedisConfig
+	JWT       JWTConfig
+	RateLimit RateLimitConfig
+	Groq      GroqConfig
+	R2        R2Config
+	Zitadel   ZitadelConfig
+	Suno      SunoConfig
+	Audio     AudioConfig
+	Gateway   GatewayConfig
+}
+
+type ServerConfig struct {
+	Port string
+	Env  string
+}
+
+type RedisConfig struct {
+	Addr     string
+	Password string
+	DB       int
+}
+
+type JWTConfig struct {
+	Secret     string
+	Expiration int // hours
+}
+
+type RateLimitConfig struct {
+	LyricsPerMin  int
+	RenderPerHour int
+	MasterPerHour int
+	ExportPerHour int
+	UploadPerHour int
+}
+
+type GroqConfig struct {
+	APIKey  string
+	BaseURL string
+	Model   string
+}
+
+type R2Config struct {
+	AccountID       string
+	AccessKeyID     string
+	SecretAccessKey string
+	BucketName      string
+	PublicURL       string
+}
+
+type ZitadelConfig struct {
+	Domain   string
+	ClientID string
+	Issuer   string
+}
+
+type SunoConfig struct {
+	APIKey  string
+	BaseURL string
+}
+
+type AudioConfig struct {
+	ServiceURL string
+	Timeout    int // seconds
+}
+
+type GatewayConfig struct {
+	Enabled bool
+}
+
+func Load() (*Config, error) {
+	viper.SetConfigName("config")
+	viper.SetConfigType("yaml")
+	viper.AddConfigPath(".")
+	viper.AddConfigPath("./config")
+
+	// Environment variables
+	viper.AutomaticEnv()
+
+	// Bind environment variables with underscores to nested config keys
+	viper.BindEnv("server.port", "SERVER_PORT")
+	viper.BindEnv("server.env", "SERVER_ENV")
+	viper.BindEnv("redis.addr", "REDIS_ADDR")
+	viper.BindEnv("redis.password", "REDIS_PASSWORD")
+	viper.BindEnv("redis.db", "REDIS_DB")
+	viper.BindEnv("jwt.secret", "JWT_SECRET")
+	viper.BindEnv("jwt.expiration", "JWT_EXPIRATION")
+	viper.BindEnv("groq.api_key", "GROQ_API_KEY")
+	viper.BindEnv("groq.base_url", "GROQ_BASE_URL")
+	viper.BindEnv("groq.model", "GROQ_MODEL")
+	viper.BindEnv("r2.account_id", "R2_ACCOUNT_ID")
+	viper.BindEnv("r2.access_key_id", "R2_ACCESS_KEY_ID")
+	viper.BindEnv("r2.secret_access_key", "R2_SECRET_ACCESS_KEY")
+	viper.BindEnv("r2.bucket_name", "R2_BUCKET_NAME")
+	viper.BindEnv("r2.public_url", "R2_PUBLIC_URL")
+	viper.BindEnv("zitadel.domain", "ZITADEL_DOMAIN")
+	viper.BindEnv("zitadel.client_id", "ZITADEL_CLIENT_ID")
+	viper.BindEnv("zitadel.issuer", "ZITADEL_ISSUER")
+	viper.BindEnv("suno.api_key", "SUNO_API_KEY")
+	viper.BindEnv("suno.base_url", "SUNO_BASE_URL")
+	viper.BindEnv("audio.service_url", "AUDIO_SERVICE_URL")
+	viper.BindEnv("audio.timeout", "AUDIO_SERVICE_TIMEOUT")
+	viper.BindEnv("gateway.enabled", "GATEWAY_ENABLED")
+
+	// Defaults
+	viper.SetDefault("server.port", "8000")
+	viper.SetDefault("server.env", "development")
+	viper.SetDefault("redis.addr", "localhost:6379")
+	viper.SetDefault("redis.password", "")
+	viper.SetDefault("redis.db", 0)
+	viper.SetDefault("jwt.secret", "change-me-in-production")
+	viper.SetDefault("jwt.expiration", 24)
+	viper.SetDefault("ratelimit.lyrics_per_min", 30)
+	viper.SetDefault("ratelimit.render_per_hour", 5)
+	viper.SetDefault("ratelimit.master_per_hour", 10)
+	viper.SetDefault("ratelimit.export_per_hour", 20)
+	viper.SetDefault("ratelimit.upload_per_hour", 50)
+
+	// Groq defaults
+	viper.SetDefault("groq.base_url", "https://api.groq.com/openai/v1")
+	viper.SetDefault("groq.model", "llama3-70b-8192")
+
+	// Suno defaults
+	viper.SetDefault("suno.base_url", "https://api.sunoapi.org")
+
+	// Audio service defaults
+	viper.SetDefault("audio.service_url", "http://localhost:8084")
+	viper.SetDefault("audio.timeout", 120)
+
+	// Gateway defaults
+	viper.SetDefault("gateway.enabled", false)
+
+	// Try to read config file (optional)
+	_ = viper.ReadInConfig()
+
+	cfg := &Config{
+		Server: ServerConfig{
+			Port: viper.GetString("server.port"),
+			Env:  viper.GetString("server.env"),
+		},
+		Redis: RedisConfig{
+			Addr:     viper.GetString("redis.addr"),
+			Password: viper.GetString("redis.password"),
+			DB:       viper.GetInt("redis.db"),
+		},
+		JWT: JWTConfig{
+			Secret:     viper.GetString("jwt.secret"),
+			Expiration: viper.GetInt("jwt.expiration"),
+		},
+		RateLimit: RateLimitConfig{
+			LyricsPerMin:  viper.GetInt("ratelimit.lyrics_per_min"),
+			RenderPerHour: viper.GetInt("ratelimit.render_per_hour"),
+			MasterPerHour: viper.GetInt("ratelimit.master_per_hour"),
+			ExportPerHour: viper.GetInt("ratelimit.export_per_hour"),
+			UploadPerHour: viper.GetInt("ratelimit.upload_per_hour"),
+		},
+		Groq: GroqConfig{
+			APIKey:  viper.GetString("groq.api_key"),
+			BaseURL: viper.GetString("groq.base_url"),
+			Model:   viper.GetString("groq.model"),
+		},
+		R2: R2Config{
+			AccountID:       viper.GetString("r2.account_id"),
+			AccessKeyID:     viper.GetString("r2.access_key_id"),
+			SecretAccessKey: viper.GetString("r2.secret_access_key"),
+			BucketName:      viper.GetString("r2.bucket_name"),
+			PublicURL:       viper.GetString("r2.public_url"),
+		},
+		Zitadel: ZitadelConfig{
+			Domain:   viper.GetString("zitadel.domain"),
+			ClientID: viper.GetString("zitadel.client_id"),
+			Issuer:   viper.GetString("zitadel.issuer"),
+		},
+		Suno: SunoConfig{
+			APIKey:  viper.GetString("suno.api_key"),
+			BaseURL: viper.GetString("suno.base_url"),
+		},
+		Audio: AudioConfig{
+			ServiceURL: viper.GetString("audio.service_url"),
+			Timeout:    viper.GetInt("audio.timeout"),
+		},
+		Gateway: GatewayConfig{
+			Enabled: viper.GetBool("gateway.enabled"),
+		},
+	}
+
+	return cfg, nil
+}

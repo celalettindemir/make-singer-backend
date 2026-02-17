@@ -1,0 +1,23 @@
+api:
+  dashboard: true
+  insecure: true
+
+entryPoints:
+  web:
+    address: ":80"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: make-singer-backend_default
+  file:
+    directory: "/etc/traefik/dynamic"
+    watch: true
+
+ping:
+  entryPoint: web
+
+accessLog: {}
+log:
+  level: INFO

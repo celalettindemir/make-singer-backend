@@ -1,26 +1,79 @@
-version: '3.8'
+include:
+  - path: ./zitadel-service/docker-compose.yaml
 
 services:
-  api:
-    build: .
+  traefik:
+    image: traefik:v3.3
     ports:
-      - "3000:3000"
-    environment:
-      - SERVER_PORT=3000
-      - SERVER_ENV=development
-      - REDIS_ADDR=redis:6379
-      - JWT_SECRET=your-super-secret-key-change-in-production
-    depends_on:
-      - redis
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
+      - "80:80"
+      - "8180:8080"
     volumes:
-      - redis_data:/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+    networks:
+      - default
+      - zitadel
     restart: unless-stopped
 
-volumes:
-  redis_data:
+  api:
+    build: ./core-service
+    environment:
+      - SERVER_PORT=8000
+      - SERVER_ENV=development
+      - REDIS_ADDR=host.docker.internal:6379
+      - GATEWAY_ENABLED=true
+      # Groq AI
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GROQ_BASE_URL=${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
+      - GROQ_MODEL=${GROQ_MODEL:-llama3-70b-8192}
+      # Cloudflare R2
+      - R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
+      - R2_BUCKET_NAME=${R2_BUCKET_NAME:-makeasinger}
+      - R2_PUBLIC_URL=${R2_PUBLIC_URL:-}
+      # Zitadel OIDC
+      - ZITADEL_DOMAIN=${ZITADEL_DOMAIN:-}
+      - ZITADEL_CLIENT_ID=${ZITADEL_CLIENT_ID:-}
+      - ZITADEL_ISSUER=${ZITADEL_ISSUER:-}
+      # Suno API
+      - SUNO_API_KEY=${SUNO_API_KEY:-}
+      - SUNO_BASE_URL=${SUNO_BASE_URL:-https://api.sunoapi.org}
+      # Audio Service
+      - AUDIO_SERVICE_URL=http://audio-service:8084
+      - AUDIO_SERVICE_TIMEOUT=120
+    depends_on:
+      - audio-service
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    labels:
+      - "traefik.enable=true"
+      # /api/* -> ForwardAuth + rate limit
+      - "traefik.http.routers.api-protected.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.api-protected.entrypoints=web"
+      - "traefik.http.routers.api-protected.middlewares=auth-forward@file,rate-limit-global@file"
+      - "traefik.http.routers.api-protected.service=api-svc"
+      # Public routes (health, swagger, root)
+      - "traefik.http.routers.api-public.rule=Path(`/health`) || PathPrefix(`/swagger`) || Path(`/`)"
+      - "traefik.http.routers.api-public.entrypoints=web"
+      - "traefik.http.routers.api-public.service=api-svc"
+      # WebSocket
+      - "traefik.http.routers.api-ws.rule=PathPrefix(`/ws`)"
+      - "traefik.http.routers.api-ws.entrypoints=web"
+      - "traefik.http.routers.api-ws.service=api-svc"
+      # Service
+      - "traefik.http.services.api-svc.loadbalancer.server.port=8000"
+    restart: unless-stopped
+
+  audio-service:
+    build: ./audio-service
+    environment:
+      - R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
+      - R2_BUCKET_NAME=${R2_BUCKET_NAME:-makeasinger}
+      - R2_PUBLIC_URL=${R2_PUBLIC_URL:-}
+    labels:
+      - "traefik.enable=false"
+    restart: unless-stopped

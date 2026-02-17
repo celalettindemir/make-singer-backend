@@ -1,0 +1,53 @@
+server:
+  port: "8000"
+  env: "development"
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+
+jwt:
+  secret: "your-super-secret-key-change-in-production"
+  expiration: 24 # hours
+
+ratelimit:
+  lyrics_per_min: 30
+  render_per_hour: 5
+  master_per_hour: 10
+  export_per_hour: 20
+  upload_per_hour: 50
+
+# Groq AI Configuration
+groq:
+  api_key: "" # Set via GROQ_API_KEY env var
+  base_url: "https://api.groq.com/openai/v1"
+  model: "llama3-70b-8192"
+
+# Cloudflare R2 Storage Configuration
+r2:
+  account_id: "" # Set via R2_ACCOUNT_ID env var
+  access_key_id: "" # Set via R2_ACCESS_KEY_ID env var
+  secret_access_key: "" # Set via R2_SECRET_ACCESS_KEY env var
+  bucket_name: "makeasinger"
+  public_url: "" # Set via R2_PUBLIC_URL env var (e.g., https://cdn.makeasinger.com)
+
+# Zitadel OIDC Configuration
+zitadel:
+  domain: "" # Set via ZITADEL_DOMAIN env var
+  client_id: "" # Set via ZITADEL_CLIENT_ID env var
+  issuer: "" # Set via ZITADEL_ISSUER env var (e.g., https://your-tenant.zitadel.cloud)
+
+# Suno API Configuration
+suno:
+  api_key: "" # Set via SUNO_API_KEY env var
+  base_url: "https://api.sunoapi.org"
+
+# Audio Processing Service Configuration
+audio:
+  service_url: "http://localhost:8084"
+  timeout: 120 # seconds
+
+# API Gateway Configuration
+gateway:
+  enabled: false # Set to true when running behind Traefik
