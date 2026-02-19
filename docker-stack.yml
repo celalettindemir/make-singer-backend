@@ -11,6 +11,7 @@ version: "3.8"
 # API_DOMAIN               - API domain (e.g., api.makeasinger.com)
 # REDIS_HOST               - Redis host (default: redis) → combined as REDIS_ADDR
 # REDIS_PORT               - Redis port (default: 6379) → combined as REDIS_ADDR
+# REDIS_PASSWORD            - Redis password (optional)
 # POSTGRES_HOST            - PostgreSQL host (default: postgres)
 # POSTGRES_PORT            - PostgreSQL port (default: 5432)
 # POSTGRES_USER            - PostgreSQL admin/superuser (default: postgres)
@@ -35,7 +36,7 @@ services:
       GATEWAY_ENABLED: "true"
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       REDIS_ADDR: ${REDIS_HOST:-redis}:${REDIS_PORT:-6379}
-      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       GROQ_API_KEY_FILE: /run/secrets/groq_api_key
       GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
       GROQ_MODEL: ${GROQ_MODEL:-llama3-70b-8192}
@@ -57,7 +58,6 @@ services:
       - r2_access_key_id
       - r2_secret_access_key
       - suno_api_key
-      - redis_password
       - zitadel_client_id
     networks:
       - traefik-public

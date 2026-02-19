@@ -8,8 +8,12 @@ import (
 )
 
 // readSecret reads a Docker secret from a file path specified by an env var
-// with _FILE suffix. If FOO_FILE is set, reads the file content and sets FOO.
+// with _FILE suffix. If FOO is already set directly, the file is skipped.
+// If FOO_FILE is set, reads the file content and sets FOO.
 func readSecret(envKey string) {
+	if os.Getenv(envKey) != "" {
+		return
+	}
 	fileKey := envKey + "_FILE"
 	filePath := os.Getenv(fileKey)
 	if filePath == "" {
