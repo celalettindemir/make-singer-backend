@@ -21,15 +21,15 @@ FROM alpine:3.19
 
 WORKDIR /app
 
-# Install ca-certificates for HTTPS
-RUN apk --no-cache add ca-certificates
+# Install ca-certificates for HTTPS and curl for healthcheck
+RUN apk --no-cache add ca-certificates curl
 
 # Copy binary from builder
 COPY --from=builder /app/main .
 COPY --from=builder /app/config.yaml .
 
 # Expose port
-EXPOSE 3000
+EXPOSE 8000
 
 # Run
 CMD ["./main"]
