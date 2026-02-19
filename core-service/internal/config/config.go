@@ -1,8 +1,27 @@
 package config
 
 import (
+	"os"
+	"strings"
+
 	"github.com/spf13/viper"
 )
+
+// readSecret reads a Docker secret from a file path specified by an env var
+// with _FILE suffix. If FOO_FILE is set, reads the file content and sets FOO.
+func readSecret(envKey string) {
+	fileKey := envKey + "_FILE"
+	filePath := os.Getenv(fileKey)
+	if filePath == "" {
+		return
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return
+	}
+	val := strings.TrimSpace(string(data))
+	os.Setenv(envKey, val)
+}
 
 type Config struct {
 	Server    ServerConfig
@@ -76,6 +95,15 @@ type GatewayConfig struct {
 }
 
 func Load() (*Config, error) {
+	// Read Docker Swarm secrets from _FILE env vars before Viper binds
+	readSecret("REDIS_PASSWORD")
+	readSecret("GROQ_API_KEY")
+	readSecret("SUNO_API_KEY")
+	readSecret("R2_ACCOUNT_ID")
+	readSecret("R2_ACCESS_KEY_ID")
+	readSecret("R2_SECRET_ACCESS_KEY")
+	readSecret("ZITADEL_CLIENT_ID")
+
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(".")

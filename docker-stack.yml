@@ -9,8 +9,8 @@ version: "3.8"
 # API_VERSION              - API image tag (default: latest)
 # AUDIO_VERSION            - Audio image tag (default: latest)
 # API_DOMAIN               - API domain (e.g., api.makeasinger.com)
-# REDIS_HOST               - Redis host (default: redis)
-# REDIS_PORT               - Redis port (default: 6379)
+# REDIS_HOST               - Redis host (default: redis) → combined as REDIS_ADDR
+# REDIS_PORT               - Redis port (default: 6379) → combined as REDIS_ADDR
 # POSTGRES_HOST            - PostgreSQL host (default: postgres)
 # POSTGRES_PORT            - PostgreSQL port (default: 5432)
 # POSTGRES_USER            - PostgreSQL admin/superuser (default: postgres)
@@ -34,8 +34,7 @@ services:
       SERVER_ENV: production
       GATEWAY_ENABLED: "true"
       CORS_ORIGINS: ${CORS_ORIGINS:-}
-      REDIS_HOST: ${REDIS_HOST:-redis}
-      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_ADDR: ${REDIS_HOST:-redis}:${REDIS_PORT:-6379}
       REDIS_PASSWORD_FILE: /run/secrets/redis_password
       GROQ_API_KEY_FILE: /run/secrets/groq_api_key
       GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
