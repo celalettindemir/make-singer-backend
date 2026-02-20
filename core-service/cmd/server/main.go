@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -151,8 +152,14 @@ func main() {
 
 	// Global middleware
 	app.Use(recover.New())
+	isDebug := strings.EqualFold(cfg.Server.LogLevel, "debug")
+	logFormat := "[${time}] ${status} - ${latency} ${method} ${path}\n"
+	if isDebug {
+		logFormat = "[${time}] ${status} - ${latency} ${method} ${path} ${queryParams} ${body} ${reqHeaders}\n"
+		log.Println("Debug logging enabled")
+	}
 	app.Use(logger.New(logger.Config{
-		Format: "[${time}] ${status} - ${latency} ${method} ${path}\n",
+		Format: logFormat,
 	}))
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "*",
@@ -266,6 +273,15 @@ func startWorkerServer(
 	r2Client *client.R2Client,
 	hub *ws.Hub,
 ) {
+	asynqLogLevel := asynq.InfoLevel
+	if strings.EqualFold(cfg.Server.LogLevel, "debug") {
+		asynqLogLevel = asynq.DebugLevel
+	} else if strings.EqualFold(cfg.Server.LogLevel, "warn") {
+		asynqLogLevel = asynq.WarnLevel
+	} else if strings.EqualFold(cfg.Server.LogLevel, "error") {
+		asynqLogLevel = asynq.ErrorLevel
+	}
+
 	srv := asynq.NewServer(
 		asynq.RedisClientOpt{
 			Addr:     cfg.Redis.Addr,
@@ -278,6 +294,7 @@ func startWorkerServer(
 				"render": 6,
 				"master": 4,
 			},
+			LogLevel: asynqLogLevel,
 		},
 	)
 

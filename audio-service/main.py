@@ -7,6 +7,7 @@ Provides endpoints for:
 - ZIP archiving
 """
 
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -18,6 +19,14 @@ from services.encoder import EncoderService
 from services.archiver import ArchiverService
 from services.storage import StorageService
 
+
+# Logging configuration
+LOG_LEVEL = os.getenv("LOG_LEVEL", "info").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("audio-service")
 
 # Configuration from environment
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")

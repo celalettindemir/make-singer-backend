@@ -33,6 +33,7 @@ services:
     environment:
       SERVER_PORT: "8000"
       SERVER_ENV: production
+      LOG_LEVEL: debug
       GATEWAY_ENABLED: "true"
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       REDIS_ADDR: ${REDIS_HOST:-redis}:${REDIS_PORT:-6379}
@@ -141,6 +142,7 @@ services:
   audio-service:
     image: ${DOCKER_USER}/${AUDIO_IMAGE:-make-singer-audio}:${AUDIO_VERSION:-latest}
     environment:
+      LOG_LEVEL: debug
       R2_ACCOUNT_ID_FILE: /run/secrets/r2_account_id
       R2_ACCESS_KEY_ID_FILE: /run/secrets/r2_access_key_id
       R2_SECRET_ACCESS_KEY_FILE: /run/secrets/r2_secret_access_key

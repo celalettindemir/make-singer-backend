@@ -1,6 +1,7 @@
 server:
   port: "8000"
   env: "development"
+  log_level: "info" # debug, info, warn, error
 
 redis:
   addr: "localhost:6379"

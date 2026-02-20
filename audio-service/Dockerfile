@@ -17,4 +17,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8084"]
+# LOG_LEVEL env var controls uvicorn log verbosity (debug, info, warning, error)
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port 8084 --log-level ${LOG_LEVEL:-info}"]

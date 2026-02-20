@@ -41,8 +41,9 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port string
-	Env  string
+	Port     string
+	Env      string
+	LogLevel string
 }
 
 type RedisConfig struct {
@@ -119,6 +120,7 @@ func Load() (*Config, error) {
 	// Bind environment variables with underscores to nested config keys
 	_ = viper.BindEnv("server.port", "SERVER_PORT")
 	_ = viper.BindEnv("server.env", "SERVER_ENV")
+	_ = viper.BindEnv("server.log_level", "LOG_LEVEL")
 	_ = viper.BindEnv("redis.addr", "REDIS_ADDR")
 	_ = viper.BindEnv("redis.password", "REDIS_PASSWORD")
 	_ = viper.BindEnv("redis.db", "REDIS_DB")
@@ -144,6 +146,7 @@ func Load() (*Config, error) {
 	// Defaults
 	viper.SetDefault("server.port", "8000")
 	viper.SetDefault("server.env", "development")
+	viper.SetDefault("server.log_level", "info")
 	viper.SetDefault("redis.addr", "localhost:6379")
 	viper.SetDefault("redis.password", "")
 	viper.SetDefault("redis.db", 0)
@@ -174,8 +177,9 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		Server: ServerConfig{
-			Port: viper.GetString("server.port"),
-			Env:  viper.GetString("server.env"),
+			Port:     viper.GetString("server.port"),
+			Env:      viper.GetString("server.env"),
+			LogLevel: viper.GetString("server.log_level"),
 		},
 		Redis: RedisConfig{
 			Addr:     viper.GetString("redis.addr"),
