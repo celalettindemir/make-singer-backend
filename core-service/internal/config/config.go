@@ -41,9 +41,10 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port     string
-	Env      string
-	LogLevel string
+	Port      string
+	Env       string
+	LogLevel  string
+	ApiDomain string
 }
 
 type RedisConfig struct {
@@ -141,6 +142,7 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("suno.base_url", "SUNO_BASE_URL")
 	_ = viper.BindEnv("audio.service_url", "AUDIO_SERVICE_URL")
 	_ = viper.BindEnv("audio.timeout", "AUDIO_SERVICE_TIMEOUT")
+	_ = viper.BindEnv("server.api_domain", "API_DOMAIN")
 	_ = viper.BindEnv("gateway.enabled", "GATEWAY_ENABLED")
 
 	// Defaults
@@ -177,9 +179,10 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		Server: ServerConfig{
-			Port:     viper.GetString("server.port"),
-			Env:      viper.GetString("server.env"),
-			LogLevel: viper.GetString("server.log_level"),
+			Port:      viper.GetString("server.port"),
+			Env:       viper.GetString("server.env"),
+			LogLevel:  viper.GetString("server.log_level"),
+			ApiDomain: viper.GetString("server.api_domain"),
 		},
 		Redis: RedisConfig{
 			Addr:     viper.GetString("redis.addr"),

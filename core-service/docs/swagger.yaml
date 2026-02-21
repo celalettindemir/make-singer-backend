@@ -867,7 +867,7 @@ definitions:
       error:
         $ref: '#/definitions/response.ErrorDetail'
     type: object
-host: localhost:8080
+host: localhost:8000
 info:
   contact: {}
   description: Backend API for Make-Singer — AI-powered music creation platform.
@@ -1464,6 +1464,9 @@ paths:
       summary: Delete vocal take
       tags:
       - Upload
+schemes:
+- http
+- https
 securityDefinitions:
   BearerAuth:
     description: Enter your bearer token in the format **Bearer &lt;token&gt;**

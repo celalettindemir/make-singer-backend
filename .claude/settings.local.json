@@ -6,7 +6,9 @@
       "Bash(pip install:*)",
       "Bash(ruff check:*)",
       "Bash(go build:*)",
-      "Bash(docker compose:*)"
+      "Bash(docker compose:*)",
+      "Bash(swag init:*)",
+      "Bash(go run:*)"
     ]
   }
 }

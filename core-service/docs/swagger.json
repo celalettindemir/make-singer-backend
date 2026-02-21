@@ -1,4 +1,8 @@
 {
+    "schemes": [
+        "http",
+        "https"
+    ],
     "swagger": "2.0",
     "info": {
         "description": "Backend API for Make-Singer — AI-powered music creation platform.",
@@ -6,7 +10,7 @@
         "contact": {},
         "version": "1.0"
     },
-    "host": "localhost:8080",
+    "host": "localhost:8000",
     "basePath": "/",
     "paths": {
         "/api/export/mp3": {

@@ -19,7 +19,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 
-	_ "github.com/makeasinger/api/docs"
+	"github.com/makeasinger/api/docs"
 	"github.com/makeasinger/api/internal/auth"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
@@ -33,8 +33,9 @@ import (
 // @title          Make-Singer API
 // @version        1.0
 // @description    Backend API for Make-Singer — AI-powered music creation platform.
-// @host           localhost:8080
+// @host           localhost:8000
 // @BasePath       /
+// @schemes        http https
 // @securityDefinitions.apikey BearerAuth
 // @in             header
 // @name           Authorization
@@ -44,6 +45,15 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Configure Swagger host/scheme based on environment
+	if cfg.Server.ApiDomain != "" {
+		docs.SwaggerInfo.Host = cfg.Server.ApiDomain
+		docs.SwaggerInfo.Schemes = []string{"https"}
+	} else {
+		docs.SwaggerInfo.Host = "localhost:" + cfg.Server.Port
+		docs.SwaggerInfo.Schemes = []string{"http"}
 	}
 
 	// Initialize Redis client

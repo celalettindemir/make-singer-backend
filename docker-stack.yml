@@ -8,7 +8,7 @@ version: "3.8"
 # AUDIO_IMAGE              - Audio image name (default: make-singer-audio)
 # API_VERSION              - API image tag (default: latest)
 # AUDIO_VERSION            - Audio image tag (default: latest)
-# API_DOMAIN               - API domain (e.g., api.makeasinger.com)
+# API_DOMAIN               - API domain (default: makesinger-api.celalettindemir.dev)
 # REDIS_HOST               - Redis host (default: redis) → combined as REDIS_ADDR
 # REDIS_PORT               - Redis port (default: 6379) → combined as REDIS_ADDR
 # REDIS_PASSWORD            - Redis password (optional)
@@ -34,6 +34,7 @@ services:
       SERVER_PORT: "8000"
       SERVER_ENV: production
       LOG_LEVEL: debug
+      API_DOMAIN: ${API_DOMAIN:-makesinger-api.celalettindemir.dev}
       GATEWAY_ENABLED: "true"
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       REDIS_ADDR: ${REDIS_HOST:-redis}:${REDIS_PORT:-6379}
@@ -106,23 +107,20 @@ services:
         - "traefik.http.middlewares.ms-secure-headers.headers.customframeoptionsvalue=SAMEORIGIN"
 
         ## Router: Protected API routes
-        - "traefik.http.routers.ms-api-protected.rule=Host(`${API_DOMAIN}`) && PathPrefix(`/api`)"
-        - "traefik.http.routers.ms-api-protected.entrypoints=websecure"
-        - "traefik.http.routers.ms-api-protected.tls=true"
+        - "traefik.http.routers.ms-api-protected.rule=Host(`${API_DOMAIN:-makesinger-api.celalettindemir.dev}`) && PathPrefix(`/api`)"
+        - "traefik.http.routers.ms-api-protected.entrypoints=web"
         - "traefik.http.routers.ms-api-protected.middlewares=ms-auth-forward@docker,ms-rate-limit@docker,ms-secure-headers@docker"
         - "traefik.http.routers.ms-api-protected.service=ms-api-svc"
 
         ## Router: Public routes (health, swagger)
-        - "traefik.http.routers.ms-api-public.rule=Host(`${API_DOMAIN}`) && (Path(`/health`) || PathPrefix(`/swagger`) || Path(`/`))"
-        - "traefik.http.routers.ms-api-public.entrypoints=websecure"
-        - "traefik.http.routers.ms-api-public.tls=true"
+        - "traefik.http.routers.ms-api-public.rule=Host(`${API_DOMAIN:-makesinger-api.celalettindemir.dev}`) && (Path(`/health`) || PathPrefix(`/swagger`) || Path(`/`))"
+        - "traefik.http.routers.ms-api-public.entrypoints=web"
         - "traefik.http.routers.ms-api-public.middlewares=ms-secure-headers@docker"
         - "traefik.http.routers.ms-api-public.service=ms-api-svc"
 
         ## Router: WebSocket
-        - "traefik.http.routers.ms-api-ws.rule=Host(`${API_DOMAIN}`) && PathPrefix(`/ws`)"
-        - "traefik.http.routers.ms-api-ws.entrypoints=websecure"
-        - "traefik.http.routers.ms-api-ws.tls=true"
+        - "traefik.http.routers.ms-api-ws.rule=Host(`${API_DOMAIN:-makesinger-api.celalettindemir.dev}`) && PathPrefix(`/ws`)"
+        - "traefik.http.routers.ms-api-ws.entrypoints=web"
         - "traefik.http.routers.ms-api-ws.service=ms-api-svc"
 
         ## Service
@@ -260,8 +258,7 @@ services:
 
         ## Router: Zitadel catch-all (login UI gets higher priority)
         - "traefik.http.routers.ms-zitadel.rule=Host(`${ZITADEL_EXTERNAL_DOMAIN}`)"
-        - "traefik.http.routers.ms-zitadel.entrypoints=websecure"
-        - "traefik.http.routers.ms-zitadel.tls=true"
+        - "traefik.http.routers.ms-zitadel.entrypoints=web"
         - "traefik.http.routers.ms-zitadel.service=ms-zitadel-svc"
         - "traefik.http.routers.ms-zitadel.priority=10"
 
@@ -309,8 +306,7 @@ services:
 
         ## Router: Zitadel Login UI (higher priority than zitadel catch-all /ui)
         - "traefik.http.routers.ms-zitadel-login.rule=Host(`${ZITADEL_EXTERNAL_DOMAIN}`) && PathPrefix(`/ui/v2/login`)"
-        - "traefik.http.routers.ms-zitadel-login.entrypoints=websecure"
-        - "traefik.http.routers.ms-zitadel-login.tls=true"
+        - "traefik.http.routers.ms-zitadel-login.entrypoints=web"
         - "traefik.http.routers.ms-zitadel-login.service=ms-zitadel-login-svc"
         - "traefik.http.routers.ms-zitadel-login.priority=200"
 
