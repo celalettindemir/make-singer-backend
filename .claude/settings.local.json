@@ -8,7 +8,8 @@
       "Bash(go build:*)",
       "Bash(docker compose:*)",
       "Bash(swag init:*)",
-      "Bash(go run:*)"
+      "Bash(go run:*)",
+      "WebFetch(domain:makesinger-api.celalettindemir.dev)"
     ]
   }
 }

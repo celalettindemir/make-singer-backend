@@ -162,7 +162,7 @@ func Load() (*Config, error) {
 
 	// Groq defaults
 	viper.SetDefault("groq.base_url", "https://api.groq.com/openai/v1")
-	viper.SetDefault("groq.model", "llama3-70b-8192")
+	viper.SetDefault("groq.model", "llama-3.3-70b-versatile")
 
 	// Suno defaults
 	viper.SetDefault("suno.base_url", "https://api.sunoapi.org")

@@ -41,7 +41,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       GROQ_API_KEY_FILE: /run/secrets/groq_api_key
       GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
-      GROQ_MODEL: ${GROQ_MODEL:-llama3-70b-8192}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
       R2_ACCOUNT_ID_FILE: /run/secrets/r2_account_id
       R2_ACCESS_KEY_ID_FILE: /run/secrets/r2_access_key_id
       R2_SECRET_ACCESS_KEY_FILE: /run/secrets/r2_secret_access_key
