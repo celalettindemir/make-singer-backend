@@ -161,7 +161,7 @@ func (s *MasterService) getJob(ctx context.Context, jobID string) (*model.Job, e
 func newMasterTask(jobID string, payload []byte) (*asynq.Task, error) {
 	taskPayload := map[string]interface{}{
 		"jobId":   jobID,
-		"payload": payload,
+		"payload": json.RawMessage(payload),
 	}
 	data, err := json.Marshal(taskPayload)
 	if err != nil {

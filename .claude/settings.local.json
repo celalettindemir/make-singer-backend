@@ -9,7 +9,18 @@
       "Bash(docker compose:*)",
       "Bash(swag init:*)",
       "Bash(go run:*)",
-      "WebFetch(domain:makesinger-api.celalettindemir.dev)"
+      "WebFetch(domain:makesinger-api.celalettindemir.dev)",
+      "Bash(npm install:*)",
+      "Bash(pnpm install:*)",
+      "Bash(yes:*)",
+      "Bash(pnpm run build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(redis-cli ping:*)",
+      "Bash(go test:*)",
+      "Bash(ls:*)",
+      "Bash(go vet:*)",
+      "Bash(curl:*)",
+      "Bash(python3:*)"
     ]
   }
 }

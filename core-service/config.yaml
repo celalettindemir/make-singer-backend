@@ -23,7 +23,7 @@ ratelimit:
 groq:
   api_key: "" # Set via GROQ_API_KEY env var
   base_url: "https://api.groq.com/openai/v1"
-  model: "llama3-70b-8192"
+  model: "llama-3.3-70b-versatile"
 
 # Cloudflare R2 Storage Configuration
 r2:
