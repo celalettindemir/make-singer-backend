@@ -36,8 +36,8 @@ func createMultipartVocalRequest(t *testing.T, token string) *http.Request {
 	// Minimal WAV header + some data
 	wavHeader := []byte("RIFF\x00\x00\x00\x00WAVEfmt ")
 	fakeData := make([]byte, 1024)
-	part.Write(wavHeader)
-	part.Write(fakeData)
+	_, _ = part.Write(wavHeader)
+	_, _ = part.Write(fakeData)
 
 	writer.Close()
 
