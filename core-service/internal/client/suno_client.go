@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -173,22 +174,29 @@ func (c *SunoClient) doRequest(req *http.Request, result interface{}) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
+	log.Printf("[Suno API] → %s %s", req.Method, req.URL.String())
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		log.Printf("[Suno API] ✗ %s %s — request failed: %v", req.Method, req.URL.String(), err)
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		log.Printf("[Suno API] ✗ %s %s — failed to read response: %v", req.Method, req.URL.String(), err)
 		return fmt.Errorf("failed to read response: %w", err)
 	}
+
+	log.Printf("[Suno API] ← %d %s %s — %s", resp.StatusCode, req.Method, req.URL.String(), string(respBody))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("suno API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	if err := json.Unmarshal(respBody, result); err != nil {
+		log.Printf("[Suno API] ✗ unmarshal error for %s %s: %v (body: %s)", req.Method, req.URL.String(), err, string(respBody))
 		return fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
@@ -203,12 +211,17 @@ func (c *SunoClient) IsConfigured() bool {
 // PollMusicStatus polls for music generation completion
 func (c *SunoClient) PollMusicStatus(ctx context.Context, taskID string, interval time.Duration, maxWait time.Duration) (*MusicResult, error) {
 	deadline := time.Now().Add(maxWait)
+	attempt := 0
 
 	for time.Now().Before(deadline) {
+		attempt++
 		result, err := c.GetMusicStatus(ctx, taskID)
 		if err != nil {
+			log.Printf("[Suno API] Poll music #%d (task=%s) — error: %v", attempt, taskID, err)
 			return nil, err
 		}
+
+		log.Printf("[Suno API] Poll music #%d (task=%s) — status: %s", attempt, taskID, result.Status)
 
 		switch result.Status {
 		case "completed", "success":
@@ -219,6 +232,7 @@ func (c *SunoClient) PollMusicStatus(ctx context.Context, taskID string, interva
 
 		select {
 		case <-ctx.Done():
+			log.Printf("[Suno API] Poll music (task=%s) — context cancelled", taskID)
 			return nil, ctx.Err()
 		case <-time.After(interval):
 			continue
@@ -231,12 +245,17 @@ func (c *SunoClient) PollMusicStatus(ctx context.Context, taskID string, interva
 // PollStemSplitStatus polls for stem split completion
 func (c *SunoClient) PollStemSplitStatus(ctx context.Context, taskID string, interval time.Duration, maxWait time.Duration) (*StemSplitResult, error) {
 	deadline := time.Now().Add(maxWait)
+	attempt := 0
 
 	for time.Now().Before(deadline) {
+		attempt++
 		result, err := c.GetStemSplitStatus(ctx, taskID)
 		if err != nil {
+			log.Printf("[Suno API] Poll stems #%d (task=%s) — error: %v", attempt, taskID, err)
 			return nil, err
 		}
+
+		log.Printf("[Suno API] Poll stems #%d (task=%s) — status: %s", attempt, taskID, result.Status)
 
 		switch result.Status {
 		case "completed", "success":
@@ -247,6 +266,7 @@ func (c *SunoClient) PollStemSplitStatus(ctx context.Context, taskID string, int
 
 		select {
 		case <-ctx.Done():
+			log.Printf("[Suno API] Poll stems (task=%s) — context cancelled", taskID)
 			return nil, ctx.Err()
 		case <-time.After(interval):
 			continue
