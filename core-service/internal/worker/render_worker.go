@@ -201,7 +201,11 @@ func (w *RenderWorker) uploadStems(ctx context.Context, projectID string, stems 
 		if w.r2Client != nil {
 			// In a real implementation, download from stem.URL and upload to R2
 			key := fmt.Sprintf("stems/%s/%s.wav", projectID, stemID)
-			fileURL = w.r2Client.GetPublicURL(key)
+			var err error
+			fileURL, _, err = w.r2Client.URLFor(ctx, key)
+			if err != nil {
+				return nil, fmt.Errorf("stem URL uretilemedi: %w", err)
+			}
 		}
 
 		results = append(results, model.StemResult{
