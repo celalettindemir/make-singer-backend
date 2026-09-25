@@ -42,3 +42,20 @@ func TestLoad_PresignTTLVarsayilani(t *testing.T) {
 		t.Errorf("varsayilan PresignTTL = %v, beklenen 1h", cfg.R2.PresignTTL)
 	}
 }
+
+func TestR2Config_PresignTTLOrDefault(t *testing.T) {
+	var nilCfg *R2Config
+	if got := nilCfg.PresignTTLOrDefault(); got != time.Hour {
+		t.Errorf("nil config icin PresignTTLOrDefault = %v, beklenen 1h", got)
+	}
+
+	zeroCfg := &R2Config{}
+	if got := zeroCfg.PresignTTLOrDefault(); got != time.Hour {
+		t.Errorf("sifir PresignTTL icin PresignTTLOrDefault = %v, beklenen 1h", got)
+	}
+
+	setCfg := &R2Config{PresignTTL: 2 * time.Hour}
+	if got := setCfg.PresignTTLOrDefault(); got != 2*time.Hour {
+		t.Errorf("PresignTTLOrDefault = %v, beklenen config'teki 2h (sabit 1h'e duselmemeliydi)", got)
+	}
+}

@@ -57,7 +57,7 @@ func setupApp(t *testing.T) *testApp {
 	// Services
 	lyricsService := service.NewLyricsService(groqClient)
 	renderService := service.NewRenderService(redisClient, asynqClient)
-	masterService := service.NewMasterService(redisClient, asynqClient)
+	masterService := service.NewMasterService(redisClient, asynqClient, &config.R2Config{})
 	exportService := service.NewExportService(nil, nil, &config.R2Config{}) // nil triggers mock fallbacks
 	uploadService := service.NewUploadService(nil)
 

@@ -8,20 +8,23 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
-	"github.com/redis/go-redis/v9"
+	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/model"
+	"github.com/redis/go-redis/v9"
 )
 
 // MasterService handles mastering operations
 type MasterService struct {
 	redis       *redis.Client
 	asynqClient *asynq.Client
+	r2Cfg       *config.R2Config
 }
 
-func NewMasterService(redisClient *redis.Client, asynqClient *asynq.Client) *MasterService {
+func NewMasterService(redisClient *redis.Client, asynqClient *asynq.Client, r2Cfg *config.R2Config) *MasterService {
 	return &MasterService{
 		redis:       redisClient,
 		asynqClient: asynqClient,
+		r2Cfg:       r2Cfg,
 	}
 }
 
@@ -35,7 +38,7 @@ func (s *MasterService) Preview(ctx context.Context, req *model.MasterPreviewReq
 	return &model.MasterPreviewResponse{
 		FileURL:   fmt.Sprintf("https://cdn.makeasinger.com/previews/%s.mp3", previewID),
 		Duration:  20,
-		ExpiresAt: model.ExpiresPtr(time.Now().Add(1 * time.Hour)),
+		ExpiresAt: model.ExpiresPtr(time.Now().Add(s.r2Cfg.PresignTTLOrDefault())),
 	}, nil
 }
 

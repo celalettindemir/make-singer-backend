@@ -103,7 +103,7 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 	// Services
 	lyricsService := service.NewLyricsService(groqClient)
 	renderService := service.NewRenderService(redisClient, asynqClient)
-	masterService := service.NewMasterService(redisClient, asynqClient)
+	masterService := service.NewMasterService(redisClient, asynqClient, &cfg.R2)
 	exportService := service.NewExportService(nil, nil, &config.R2Config{})
 	uploadService := service.NewUploadService(nil)
 

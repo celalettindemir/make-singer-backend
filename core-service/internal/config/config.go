@@ -86,6 +86,17 @@ type R2Config struct {
 	PresignTTL      time.Duration
 }
 
+// PresignTTLOrDefault, presigned URL suresini dondurur. Config eksikse
+// (nil) veya PresignTTL ayarlanmamissa (<=0), 1 saatlik varsayilana
+// duser. Bu, TTL degerini okuyan TEK yer olsun diye vardir; sabit
+// "1 saat" degeri baska yerlerde tekrar yazilmamali.
+func (c *R2Config) PresignTTLOrDefault() time.Duration {
+	if c == nil || c.PresignTTL <= 0 {
+		return time.Hour
+	}
+	return c.PresignTTL
+}
+
 type ZitadelConfig struct {
 	Domain   string
 	ClientID string

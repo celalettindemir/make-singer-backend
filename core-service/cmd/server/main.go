@@ -116,7 +116,7 @@ func main() {
 	// Initialize services
 	lyricsService := service.NewLyricsService(groqClient)
 	renderService := service.NewRenderService(redisClient, asynqClient)
-	masterService := service.NewMasterService(redisClient, asynqClient)
+	masterService := service.NewMasterService(redisClient, asynqClient, &cfg.R2)
 	exportService := service.NewExportService(r2Client, audioClient, &cfg.R2)
 	uploadService := service.NewUploadService(r2Client)
 
