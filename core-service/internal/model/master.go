@@ -64,6 +64,30 @@ type MasterStatusResponse struct {
 	CurrentStep string    `json:"currentStep,omitempty"`
 }
 
+// MasterResultRecord, is kaydinda (Redis, 24 saat) saklanan master
+// sonucudur. Imzali URL SAKLANMAZ; yalnizca nesne anahtari tutulur ve
+// adres her okumada yeniden uretilir. Aksi halde 1 saatlik imza 24
+// saatlik kaydin icinde donar ve olu link + gecmis expiresAt doner.
+type MasterResultRecord struct {
+	FileKey  string        `json:"fileKey"`
+	Duration float64       `json:"duration"`
+	Profile  MasterProfile `json:"profile"`
+	PeakDb   float64       `json:"peakDb"`
+	LUFS     int           `json:"lufs"`
+}
+
+// Response, kayit uzerine taze bir adres ve son kullanma ani giydirir.
+func (r *MasterResultRecord) Response(fileURL string, expiresAt time.Time) *MasterResultResponse {
+	return &MasterResultResponse{
+		FileURL:   fileURL,
+		Duration:  r.Duration,
+		Profile:   r.Profile,
+		PeakDb:    r.PeakDb,
+		LUFS:      r.LUFS,
+		ExpiresAt: ExpiresPtr(expiresAt),
+	}
+}
+
 // MasterResultResponse represents the result of completed mastering
 type MasterResultResponse struct {
 	FileURL   string        `json:"fileUrl"`

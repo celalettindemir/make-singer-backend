@@ -15,7 +15,7 @@ import (
 // sabit "1 saat" degerine donerse bu test kirilir.
 func TestMasterService_Preview_ExpiresAtConfigTTL(t *testing.T) {
 	r2Cfg := &config.R2Config{PresignTTL: 2 * time.Hour}
-	s := NewMasterService(nil, nil, r2Cfg)
+	s := NewMasterService(nil, nil, nil, r2Cfg)
 
 	before := time.Now()
 	resp, err := s.Preview(context.Background(), &model.MasterPreviewRequest{})

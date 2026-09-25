@@ -101,6 +101,14 @@ func main() {
 		log.Println("Info: R2 storage not configured, using mock storage")
 	}
 
+	// storage: arayuz degiskeni. r2Client nil iken dogrudan arayuze
+	// atamak "tipli nil isaretci" tuzagini kurar (arayuz nil olmaz ama
+	// icindeki isaretci nil'dir); bu yuzden acikca ayiriyoruz.
+	var storage client.StorageClient
+	if r2Client != nil {
+		storage = r2Client
+	}
+
 	// Initialize Zitadel JWKS verifier (optional - falls back to legacy JWT)
 	var jwksVerifier *auth.JWKSVerifier
 	if cfg.Zitadel.Issuer != "" {
@@ -115,10 +123,10 @@ func main() {
 
 	// Initialize services
 	lyricsService := service.NewLyricsService(groqClient)
-	renderService := service.NewRenderService(redisClient, asynqClient)
-	masterService := service.NewMasterService(redisClient, asynqClient, &cfg.R2)
-	exportService := service.NewExportService(r2Client, audioClient, &cfg.R2)
-	uploadService := service.NewUploadService(r2Client)
+	renderService := service.NewRenderService(redisClient, asynqClient, storage, &cfg.R2)
+	masterService := service.NewMasterService(redisClient, asynqClient, storage, &cfg.R2)
+	exportService := service.NewExportService(storage, audioClient, &cfg.R2)
+	uploadService := service.NewUploadService(storage)
 
 	// Initialize handlers
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
@@ -251,7 +259,7 @@ func main() {
 	}))
 
 	// Start Asynq worker server
-	go startWorkerServer(cfg, redisClient, renderService, masterService, sunoClient, audioClient, r2Client, hub)
+	go startWorkerServer(cfg, redisClient, renderService, masterService, sunoClient, audioClient, storage, hub)
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
@@ -280,7 +288,7 @@ func startWorkerServer(
 	masterService *service.MasterService,
 	sunoClient *client.SunoClient,
 	audioClient *client.AudioClient,
-	r2Client *client.R2Client,
+	r2Client client.StorageClient,
 	hub *ws.Hub,
 ) {
 	asynqLogLevel := asynq.InfoLevel

@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/redis/go-redis/v9"
@@ -17,13 +18,15 @@ import (
 type MasterService struct {
 	redis       *redis.Client
 	asynqClient *asynq.Client
+	r2Client    client.StorageClient
 	r2Cfg       *config.R2Config
 }
 
-func NewMasterService(redisClient *redis.Client, asynqClient *asynq.Client, r2Cfg *config.R2Config) *MasterService {
+func NewMasterService(redisClient *redis.Client, asynqClient *asynq.Client, r2Client client.StorageClient, r2Cfg *config.R2Config) *MasterService {
 	return &MasterService{
 		redis:       redisClient,
 		asynqClient: asynqClient,
+		r2Client:    r2Client,
 		r2Cfg:       r2Cfg,
 	}
 }
@@ -35,8 +38,12 @@ func (s *MasterService) Preview(ctx context.Context, req *model.MasterPreviewReq
 
 	previewID := uuid.New().String()
 
+	// Mock adres bile ayni kurallarla uretilir: istemci bunu geri
+	// gonderdiginde KeyFromURL cozebilsin.
+	fileURL := client.UnsignedURL(fmt.Sprintf("previews/%s.mp3", previewID), s.r2Cfg)
+
 	return &model.MasterPreviewResponse{
-		FileURL:   fmt.Sprintf("https://cdn.makeasinger.com/previews/%s.mp3", previewID),
+		FileURL:   fileURL,
 		Duration:  20,
 		ExpiresAt: model.ExpiresPtr(time.Now().Add(s.r2Cfg.PresignTTLOrDefault())),
 	}, nil
@@ -126,12 +133,28 @@ func (s *MasterService) GetResult(ctx context.Context, jobID string) (*model.Mas
 		return nil, fmt.Errorf("job not completed")
 	}
 
-	var result model.MasterResultResponse
-	if err := json.Unmarshal(job.Result, &result); err != nil {
+	return s.BuildResult(ctx, job.Result)
+}
+
+// BuildResult, Redis'te saklanan ham sonuc kaydindan istemci yanitini
+// uretir. Adres HER ISTEKTE yeniden uretilir: kayitta imzali URL
+// tutulmaz, boylece 24 saatlik is kaydi 1 saatlik imzayi tekrar
+// oynatmaz (ve gecmis bir expiresAt donmez).
+func (s *MasterService) BuildResult(ctx context.Context, stored []byte) (*model.MasterResultResponse, error) {
+	var record model.MasterResultRecord
+	if err := json.Unmarshal(stored, &record); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal result: %w", err)
 	}
+	if record.FileKey == "" {
+		return nil, fmt.Errorf("is kaydinda nesne anahtari yok")
+	}
 
-	return &result, nil
+	fileURL, expiresAt, err := client.ResolveURL(ctx, s.r2Client, s.r2Cfg, record.FileKey)
+	if err != nil {
+		return nil, fmt.Errorf("master URL uretilemedi: %w", err)
+	}
+
+	return record.Response(fileURL, expiresAt), nil
 }
 
 // Helper methods

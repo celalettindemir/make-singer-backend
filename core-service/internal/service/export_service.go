@@ -239,7 +239,7 @@ func (s *ExportService) exportMP3Mock(quality int) (*model.ExportMP3Response, er
 	exportID := uuid.New().String()
 
 	return &model.ExportMP3Response{
-		FileURL:   fmt.Sprintf("https://cdn.makeasinger.com/exports/%s.mp3", exportID),
+		FileURL:   client.UnsignedURL(fmt.Sprintf("exports/%s.mp3", exportID), s.r2Cfg),
 		Size:      5242880, // ~5MB
 		Format:    "mp3",
 		Quality:   quality,
@@ -251,7 +251,7 @@ func (s *ExportService) exportWAVMock(bitDepth, sampleRate int) (*model.ExportWA
 	exportID := uuid.New().String()
 
 	return &model.ExportWAVResponse{
-		FileURL:    fmt.Sprintf("https://cdn.makeasinger.com/exports/%s.wav", exportID),
+		FileURL:    client.UnsignedURL(fmt.Sprintf("exports/%s.wav", exportID), s.r2Cfg),
 		Size:       31457280, // ~30MB
 		Format:     "wav",
 		BitDepth:   bitDepth,
@@ -272,7 +272,7 @@ func (s *ExportService) exportStemsMock(req *model.ExportStemsRequest) (*model.E
 	}
 
 	return &model.ExportStemsResponse{
-		FileURL:   fmt.Sprintf("https://cdn.makeasinger.com/exports/%s.zip", exportID),
+		FileURL:   client.UnsignedURL(fmt.Sprintf("exports/%s.zip", exportID), s.r2Cfg),
 		Size:      52428800, // ~50MB
 		FileCount: fileCount,
 		ExpiresAt: nil, // mock export de public/kalicidir, suresi yok

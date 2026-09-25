@@ -101,6 +101,27 @@ type StemResult struct {
 	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
 }
 
+// RenderResultRecord, is kaydinda saklanan render sonucudur. Stem'ler
+// icin imzali URL degil nesne anahtari tutulur; adresler her okumada
+// yeniden uretilir (bkz. MasterResultRecord).
+type RenderResultRecord struct {
+	ID        string             `json:"id"`
+	BPM       int                `json:"bpm"`
+	Duration  float64            `json:"duration"`
+	Key       KeyResult          `json:"key"`
+	CreatedAt time.Time          `json:"createdAt"`
+	Stems     []StemResultRecord `json:"stems"`
+}
+
+// StemResultRecord, tek bir stem'in saklanan hali.
+type StemResultRecord struct {
+	ID           string     `json:"id"`
+	Instrument   Instrument `json:"instrument"`
+	FileKey      string     `json:"fileKey"`
+	Duration     float64    `json:"duration"`
+	WaveformData []float64  `json:"waveformData"`
+}
+
 // RenderCancelResponse represents the response when canceling a render
 type RenderCancelResponse struct {
 	Success bool      `json:"success"`

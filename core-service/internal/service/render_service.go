@@ -8,8 +8,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
-	"github.com/redis/go-redis/v9"
+	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/model"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -21,13 +23,50 @@ const (
 type RenderService struct {
 	redis       *redis.Client
 	asynqClient *asynq.Client
+	r2Client    client.StorageClient
+	r2Cfg       *config.R2Config
 }
 
-func NewRenderService(redisClient *redis.Client, asynqClient *asynq.Client) *RenderService {
+func NewRenderService(redisClient *redis.Client, asynqClient *asynq.Client, r2Client client.StorageClient, r2Cfg *config.R2Config) *RenderService {
 	return &RenderService{
 		redis:       redisClient,
 		asynqClient: asynqClient,
+		r2Client:    r2Client,
+		r2Cfg:       r2Cfg,
 	}
+}
+
+// BuildResult, saklanan kayittan istemci yanitini uretir: her stem'in
+// adresi ve son kullanma ani HER CAGRIDA yeniden uretilir, kayitta
+// imzali URL tutulmaz.
+func (s *RenderService) BuildResult(ctx context.Context, record *model.RenderResultRecord) (*model.RenderResultResponse, error) {
+	stems := make([]model.StemResult, 0, len(record.Stems))
+	for _, st := range record.Stems {
+		if st.FileKey == "" {
+			return nil, fmt.Errorf("stem kaydinda nesne anahtari yok: %s", st.ID)
+		}
+		fileURL, expiresAt, err := client.ResolveURL(ctx, s.r2Client, s.r2Cfg, st.FileKey)
+		if err != nil {
+			return nil, fmt.Errorf("stem URL uretilemedi: %w", err)
+		}
+		stems = append(stems, model.StemResult{
+			ID:           st.ID,
+			Instrument:   st.Instrument,
+			FileURL:      fileURL,
+			Duration:     st.Duration,
+			WaveformData: st.WaveformData,
+			ExpiresAt:    model.ExpiresPtr(expiresAt),
+		})
+	}
+
+	return &model.RenderResultResponse{
+		ID:        record.ID,
+		BPM:       record.BPM,
+		Duration:  record.Duration,
+		Key:       record.Key,
+		CreatedAt: record.CreatedAt,
+		Stems:     stems,
+	}, nil
 }
 
 // StartRender queues a new render job
@@ -118,12 +157,12 @@ func (s *RenderService) GetResult(ctx context.Context, jobID string) (*model.Ren
 		return nil, fmt.Errorf("job not completed")
 	}
 
-	var result model.RenderResultResponse
-	if err := json.Unmarshal(job.Result, &result); err != nil {
+	var record model.RenderResultRecord
+	if err := json.Unmarshal(job.Result, &record); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal result: %w", err)
 	}
 
-	return &result, nil
+	return s.BuildResult(ctx, &record)
 }
 
 // CancelRender cancels a render job

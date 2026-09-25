@@ -121,27 +121,26 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	w.updateJobStatus(ctx, jobID, model.JobStatusRunning, 80, "Applying limiter...")
 	w.updateJobStatus(ctx, jobID, model.JobStatusRunning, 95, "Finalizing...")
 
-	// Step 6: Generate result. masterResp.OutputURL imzasiz oldugundan
-	// (private masters/ nesnesi) dogrudan istemciye verilmez; adres
-	// outputKey'den yeniden uretilir.
-	fileURL, expiresAt, err := w.r2Client.URLFor(ctx, outputKey)
+	// Step 6: Generate result. Kayda ANAHTAR yazilir, imzali URL degil:
+	// is kaydi 24 saat yasiyor, imza 1 saat. Adres okuma aninda
+	// (GetResult) ve burada yayin icin taze uretilir.
+	record := &model.MasterResultRecord{
+		FileKey:  outputKey,
+		Duration: masterResp.Duration,
+		Profile:  payload.Profile,
+		PeakDb:   masterResp.PeakDb,
+		LUFS:     int(masterResp.LUFS),
+	}
+
+	fileURL, expiresAt, err := client.ResolveURL(ctx, w.r2Client, w.r2Cfg, outputKey)
 	if err != nil {
 		w.failJob(ctx, jobID, fmt.Sprintf("Master URL uretilemedi: %v", err))
 		return fmt.Errorf("master URL uretilemedi: %w", err)
 	}
 
-	result := &model.MasterResultResponse{
-		FileURL:   fileURL,
-		Duration:  masterResp.Duration,
-		Profile:   payload.Profile,
-		PeakDb:    masterResp.PeakDb,
-		LUFS:      int(masterResp.LUFS),
-		ExpiresAt: model.ExpiresPtr(expiresAt),
-	}
-
 	// Complete the job
-	w.completeJob(ctx, jobID, result)
-	w.hub.BroadcastComplete(jobID, result)
+	w.completeJob(ctx, jobID, record)
+	w.hub.BroadcastComplete(jobID, record.Response(fileURL, expiresAt))
 
 	log.Printf("Master job %s completed", jobID)
 	return nil
@@ -178,9 +177,15 @@ func (w *MasterWorker) processWithMock(ctx context.Context, jobID string, payloa
 		time.Sleep(step.duration)
 	}
 
-	result := w.generateMockResult(payload)
-	w.completeJob(ctx, jobID, result)
-	w.hub.BroadcastComplete(jobID, result)
+	record := w.generateMockRecord(payload)
+	fileURL, expiresAt, err := client.ResolveURL(ctx, w.r2Client, w.r2Cfg, record.FileKey)
+	if err != nil {
+		w.failJob(ctx, jobID, fmt.Sprintf("Master URL uretilemedi: %v", err))
+		return fmt.Errorf("master URL uretilemedi: %w", err)
+	}
+
+	w.completeJob(ctx, jobID, record)
+	w.hub.BroadcastComplete(jobID, record.Response(fileURL, expiresAt))
 
 	log.Printf("Master job %s completed (mock)", jobID)
 	return nil
@@ -191,11 +196,10 @@ func (w *MasterWorker) buildMixSettings(payload *model.MasterJobPayload) []clien
 
 	// If no channels in mix snapshot, use default settings
 	if len(payload.MixSnapshot.Channels) == 0 {
-		for _, url := range payload.StemURLs {
+		for range payload.StemURLs {
 			settings = append(settings, client.MixChannel{
-				StemURL: url,
-				Volume:  1.0,
-				Pan:     0.0,
+				Volume: 1.0,
+				Pan:    0.0,
 			})
 		}
 		return settings
@@ -210,11 +214,10 @@ func (w *MasterWorker) buildMixSettings(payload *model.MasterJobPayload) []clien
 		// Convert dB to linear: volume = 10^(dB/20)
 		volume := dbToLinear(channel.VolumeDb)
 		settings = append(settings, client.MixChannel{
-			StemURL: payload.StemURLs[i],
-			Volume:  volume,
-			Pan:     0.0, // Pan is not in the model, default to center
-			Mute:    channel.Mute,
-			Solo:    channel.Solo,
+			Volume: volume,
+			Pan:    0.0, // Pan is not in the model, default to center
+			Mute:   channel.Mute,
+			Solo:   channel.Solo,
 		})
 	}
 
@@ -266,7 +269,7 @@ func (w *MasterWorker) updateJobStatus(ctx context.Context, jobID string, status
 	w.hub.BroadcastProgress(jobID, progress, status, step)
 }
 
-func (w *MasterWorker) completeJob(ctx context.Context, jobID string, result *model.MasterResultResponse) {
+func (w *MasterWorker) completeJob(ctx context.Context, jobID string, result *model.MasterResultRecord) {
 	job, err := w.getJob(ctx, jobID)
 	if err != nil {
 		log.Printf("Failed to get job: %v", err)
@@ -322,24 +325,16 @@ func (w *MasterWorker) saveJob(ctx context.Context, job *model.Job) {
 	w.redis.Set(ctx, fmt.Sprintf("job:%s", job.ID), data, 24*time.Hour)
 }
 
-func (w *MasterWorker) generateMockResult(payload *model.MasterJobPayload) *model.MasterResultResponse {
-	return &model.MasterResultResponse{
-		FileURL:  fmt.Sprintf("https://cdn.makeasinger.com/masters/%s.wav", uuid.New().String()),
+// generateMockRecord, mock/dev yolunda saklanacak kaydi uretir. Gercek
+// yolla ayni sekilde ANAHTAR tutar; adres ResolveURL ile uretildigi icin
+// mock ciktisi da KeyFromURL ile cozulebilir (eski sabit
+// "cdn.makeasinger.com" adresi cozulemiyordu).
+func (w *MasterWorker) generateMockRecord(payload *model.MasterJobPayload) *model.MasterResultRecord {
+	return &model.MasterResultRecord{
+		FileKey:  fmt.Sprintf("masters/%s/%s.wav", payload.ProjectID, uuid.New().String()),
 		Duration: 180.5,
 		Profile:  payload.Profile,
 		PeakDb:   -0.3,
 		LUFS:     -14,
-		// Mock: masters/ private oldugu icin gercekte suresi olurdu; sabit
-		// yazmamak icin config'teki PresignTTL kullanilir (varsa).
-		ExpiresAt: model.ExpiresPtr(time.Now().Add(w.presignTTL())),
 	}
-}
-
-// presignTTL, mock/dev yollarinda kullanilacak sure degerini dondurur.
-// r2Cfg yoksa (mock modda calisiliyorsa) 1 saatlik varsayilana duser.
-func (w *MasterWorker) presignTTL() time.Duration {
-	if w.r2Cfg != nil && w.r2Cfg.PresignTTL > 0 {
-		return w.r2Cfg.PresignTTL
-	}
-	return time.Hour
 }

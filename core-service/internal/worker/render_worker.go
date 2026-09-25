@@ -123,7 +123,13 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, payloa
 		return err
 	}
 
-	w.hub.BroadcastComplete(jobID, result)
+	// Yayin icin adresler taze uretilir; kayitta anahtar durur.
+	resp, err := w.renderService.BuildResult(ctx, result)
+	if err != nil {
+		w.failJob(ctx, jobID, fmt.Sprintf("Stem URL uretilemedi: %v", err))
+		return err
+	}
+	w.hub.BroadcastComplete(jobID, resp)
 	log.Printf("Render job %s completed", jobID)
 	return nil
 }
@@ -164,7 +170,12 @@ func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, payloa
 		return err
 	}
 
-	w.hub.BroadcastComplete(jobID, result)
+	resp, err := w.renderService.BuildResult(ctx, result)
+	if err != nil {
+		w.failJob(ctx, jobID, fmt.Sprintf("Stem URL uretilemedi: %v", err))
+		return err
+	}
+	w.hub.BroadcastComplete(jobID, resp)
 	log.Printf("Render job %s completed (mock)", jobID)
 	return nil
 }
@@ -189,40 +200,28 @@ func (w *RenderWorker) buildMusicPrompt(payload *model.RenderJobPayload) string 
 	)
 }
 
-func (w *RenderWorker) uploadStems(ctx context.Context, projectID string, stems []client.Stem) ([]model.StemResult, error) {
-	var results []model.StemResult
+// uploadStems, stem kayitlarini uretir. Kayda imzali URL degil ANAHTAR
+// yazilir; adres okuma aninda (RenderService.GetResult) taze uretilir.
+func (w *RenderWorker) uploadStems(ctx context.Context, projectID string, stems []client.Stem) ([]model.StemResultRecord, error) {
+	var results []model.StemResultRecord
 
 	for _, stem := range stems {
 		stemID := uuid.New().String()
 
-		// If R2 client is available, we could download from Suno and re-upload to R2
-		// For now, we'll use the Suno URLs directly
-		fileURL := stem.URL
-		var expiresAt time.Time
-		if w.r2Client != nil {
-			// In a real implementation, download from stem.URL and upload to R2
-			key := fmt.Sprintf("stems/%s/%s.wav", projectID, stemID)
-			var err error
-			fileURL, expiresAt, err = w.r2Client.URLFor(ctx, key)
-			if err != nil {
-				return nil, fmt.Errorf("stem URL uretilemedi: %w", err)
-			}
-		}
-
-		results = append(results, model.StemResult{
+		// In a real implementation, download from stem.URL and upload to R2
+		results = append(results, model.StemResultRecord{
 			ID:           stemID,
 			Instrument:   model.Instrument(stem.Name),
-			FileURL:      fileURL,
+			FileKey:      fmt.Sprintf("stems/%s/%s.wav", projectID, stemID),
 			Duration:     stem.Duration,
 			WaveformData: generateWaveform(100),
-			ExpiresAt:    model.ExpiresPtr(expiresAt),
 		})
 	}
 
 	return results, nil
 }
 
-func (w *RenderWorker) generateResult(payload *model.RenderJobPayload, musicResult *client.MusicResult, stems []model.StemResult) *model.RenderResultResponse {
+func (w *RenderWorker) generateResult(payload *model.RenderJobPayload, musicResult *client.MusicResult, stems []model.StemResultRecord) *model.RenderResultRecord {
 	tonic := model.TonicC
 	scale := model.ScaleMajor
 	if payload.Brief.Key.Tonic != nil {
@@ -237,7 +236,7 @@ func (w *RenderWorker) generateResult(payload *model.RenderJobPayload, musicResu
 		bpm = *payload.Brief.BPM.Value
 	}
 
-	return &model.RenderResultResponse{
+	return &model.RenderResultRecord{
 		ID:        uuid.New().String(),
 		BPM:       bpm,
 		Duration:  musicResult.Duration,
@@ -261,7 +260,7 @@ func (w *RenderWorker) failJob(ctx context.Context, jobID, errMsg string) {
 	w.hub.BroadcastError(jobID, "RENDER_FAILED", errMsg)
 }
 
-func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) *model.RenderResultResponse {
+func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) *model.RenderResultRecord {
 	var totalBars int
 	for _, section := range payload.Brief.Structure {
 		totalBars += section.Bars
@@ -282,19 +281,19 @@ func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) *mode
 		scale = *payload.Brief.Key.Scale
 	}
 
-	var stems []model.StemResult
+	var stems []model.StemResultRecord
 	for _, instrument := range payload.Arrangement.Instruments {
 		stemID := uuid.New().String()
-		stems = append(stems, model.StemResult{
+		stems = append(stems, model.StemResultRecord{
 			ID:           stemID,
 			Instrument:   instrument,
-			FileURL:      fmt.Sprintf("https://cdn.makeasinger.com/stems/%s/%s.wav", payload.ProjectID, instrument),
+			FileKey:      fmt.Sprintf("stems/%s/%s.wav", payload.ProjectID, instrument),
 			Duration:     duration,
 			WaveformData: generateWaveform(100),
 		})
 	}
 
-	return &model.RenderResultResponse{
+	return &model.RenderResultRecord{
 		ID:        uuid.New().String(),
 		BPM:       bpm,
 		Duration:  duration,
