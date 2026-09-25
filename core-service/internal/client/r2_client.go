@@ -59,10 +59,12 @@ func NewR2Client(cfg *config.R2Config) (*R2Client, error) {
 	s3Client := s3.NewFromConfig(awsCfg)
 	presigner := s3.NewPresignClient(s3Client)
 
+	// NOT: Gecici olarak PrivateBucket kullaniliyor. Task 3'te bu dosya
+	// public/private bucket yonlendirmesi icin yeniden yazilacak.
 	return &R2Client{
 		s3Client:   s3Client,
 		presigner:  presigner,
-		bucketName: cfg.BucketName,
+		bucketName: cfg.PrivateBucket,
 		publicURL:  cfg.PublicURL,
 	}, nil
 }

@@ -30,8 +30,10 @@ r2:
   account_id: "" # Set via R2_ACCOUNT_ID env var
   access_key_id: "" # Set via R2_ACCESS_KEY_ID env var
   secret_access_key: "" # Set via R2_SECRET_ACCESS_KEY env var
-  bucket_name: "makeasinger"
-  public_url: "" # Set via R2_PUBLIC_URL env var (e.g., https://cdn.makeasinger.com)
+  public_bucket: "makeasinger-public"
+  private_bucket: "makeasinger-private"
+  public_url: "" # Set via R2_PUBLIC_URL env var (orn. https://makesinger-cdn.celalettindemir.dev)
+  presign_ttl: "1h" # private nesneler icin presigned URL omru
 
 # Zitadel OIDC Configuration
 zitadel:

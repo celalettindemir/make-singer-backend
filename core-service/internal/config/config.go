@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -72,12 +73,17 @@ type GroqConfig struct {
 	Model   string
 }
 
+// R2Config, Cloudflare R2 icin genel (public) ve ozel (private) bucket
+// yapilandirmasini tutar. Public bucket export dosyalari, private bucket
+// kullanici calisma dosyalari icindir.
 type R2Config struct {
 	AccountID       string
 	AccessKeyID     string
 	SecretAccessKey string
-	BucketName      string
+	PublicBucket    string
+	PrivateBucket   string
 	PublicURL       string
+	PresignTTL      time.Duration
 }
 
 type ZitadelConfig struct {
@@ -133,8 +139,10 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("r2.account_id", "R2_ACCOUNT_ID")
 	_ = viper.BindEnv("r2.access_key_id", "R2_ACCESS_KEY_ID")
 	_ = viper.BindEnv("r2.secret_access_key", "R2_SECRET_ACCESS_KEY")
-	_ = viper.BindEnv("r2.bucket_name", "R2_BUCKET_NAME")
+	_ = viper.BindEnv("r2.public_bucket", "R2_PUBLIC_BUCKET")
+	_ = viper.BindEnv("r2.private_bucket", "R2_PRIVATE_BUCKET")
 	_ = viper.BindEnv("r2.public_url", "R2_PUBLIC_URL")
+	_ = viper.BindEnv("r2.presign_ttl", "R2_PRESIGN_TTL")
 	_ = viper.BindEnv("zitadel.domain", "ZITADEL_DOMAIN")
 	_ = viper.BindEnv("zitadel.client_id", "ZITADEL_CLIENT_ID")
 	_ = viper.BindEnv("zitadel.issuer", "ZITADEL_ISSUER")
@@ -174,6 +182,9 @@ func Load() (*Config, error) {
 	// Gateway defaults
 	viper.SetDefault("gateway.enabled", false)
 
+	// R2 presigned URL varsayilan omru
+	viper.SetDefault("r2.presign_ttl", "1h")
+
 	// Try to read config file (optional)
 	_ = viper.ReadInConfig()
 
@@ -209,8 +220,10 @@ func Load() (*Config, error) {
 			AccountID:       viper.GetString("r2.account_id"),
 			AccessKeyID:     viper.GetString("r2.access_key_id"),
 			SecretAccessKey: viper.GetString("r2.secret_access_key"),
-			BucketName:      viper.GetString("r2.bucket_name"),
+			PublicBucket:    viper.GetString("r2.public_bucket"),
+			PrivateBucket:   viper.GetString("r2.private_bucket"),
 			PublicURL:       viper.GetString("r2.public_url"),
+			PresignTTL:      viper.GetDuration("r2.presign_ttl"),
 		},
 		Zitadel: ZitadelConfig{
 			Domain:   viper.GetString("zitadel.domain"),
