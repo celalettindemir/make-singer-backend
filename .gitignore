@@ -38,5 +38,10 @@ logs/
 # Build
 dist/
 build/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
 .claude/worktrees/
 .superpowers/
