@@ -43,6 +43,11 @@ jobs:
       - name: Run Ruff formatter check
         run: ruff format --check .
 
+      - name: Testler
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pytest tests/ -v
+
   docker:
     name: Docker Build & Push
     runs-on: ubuntu-latest

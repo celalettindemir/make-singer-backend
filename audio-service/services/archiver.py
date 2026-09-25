@@ -22,7 +22,7 @@ class ArchiverService:
         """
         Create a ZIP archive from multiple files.
 
-        Each file entry should have 'url' and 'filename' keys.
+        Each file entry should have 'key' and 'filename' keys.
         """
         if not files:
             raise ValueError("No files provided")

@@ -16,7 +16,8 @@ version: "3.8"
 # POSTGRES_PORT            - PostgreSQL port (default: 5432)
 # POSTGRES_USER            - PostgreSQL admin/superuser (default: postgres)
 # ZITADEL_EXTERNAL_DOMAIN  - External domain for Zitadel (e.g., auth.makeasinger.com)
-# R2_BUCKET_NAME           - R2 bucket name (default: makeasinger)
+# R2_PUBLIC_BUCKET         - R2 public bucket adi (default: makeasinger-public)
+# R2_PRIVATE_BUCKET        - R2 private bucket adi (default: makeasinger-private)
 # R2_PUBLIC_URL            - R2 CDN public URL
 # GROQ_BASE_URL            - Groq API URL
 # GROQ_MODEL               - Groq model
@@ -45,7 +46,8 @@ services:
       R2_ACCOUNT_ID_FILE: /run/secrets/r2_account_id
       R2_ACCESS_KEY_ID_FILE: /run/secrets/r2_access_key_id
       R2_SECRET_ACCESS_KEY_FILE: /run/secrets/r2_secret_access_key
-      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-makeasinger}
+      R2_PUBLIC_BUCKET: ${R2_PUBLIC_BUCKET:-makeasinger-public}
+      R2_PRIVATE_BUCKET: ${R2_PRIVATE_BUCKET:-makeasinger-private}
       R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
       ZITADEL_DOMAIN: ${ZITADEL_EXTERNAL_DOMAIN:-}
       ZITADEL_ISSUER: https://${ZITADEL_EXTERNAL_DOMAIN:-localhost}
@@ -144,7 +146,8 @@ services:
       R2_ACCOUNT_ID_FILE: /run/secrets/r2_account_id
       R2_ACCESS_KEY_ID_FILE: /run/secrets/r2_access_key_id
       R2_SECRET_ACCESS_KEY_FILE: /run/secrets/r2_secret_access_key
-      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-makeasinger}
+      R2_PUBLIC_BUCKET: ${R2_PUBLIC_BUCKET:-makeasinger-public}
+      R2_PRIVATE_BUCKET: ${R2_PRIVATE_BUCKET:-makeasinger-private}
       R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
     secrets:
       - r2_account_id

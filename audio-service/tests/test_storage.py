@@ -64,7 +64,10 @@ def test_upload_dogru_bucket_secer(servis):
 
 
 def test_url_for_public_cdn_adresi(servis):
-    assert servis.url_for("exports/a.mp3") == "https://makesinger-cdn.celalettindemir.dev/exports/a.mp3"
+    assert (
+        servis.url_for("exports/a.mp3")
+        == "https://makesinger-cdn.celalettindemir.dev/exports/a.mp3"
+    )
 
 
 def test_url_for_private_cdn_adresi_vermez(servis):
@@ -77,7 +80,9 @@ def test_download_key_to_file_s3_kullanir(servis, tmp_path):
     hedef = tmp_path / "in.wav"
     servis.download_key_to_file("masters/p/m.wav", str(hedef))
 
-    assert servis.s3_client.indirilenler == [("makeasinger-private", "masters/p/m.wav", str(hedef))]
+    assert servis.s3_client.indirilenler == [
+        ("makeasinger-private", "masters/p/m.wav", str(hedef))
+    ]
     assert hedef.read_bytes() == b"ses"
 
 

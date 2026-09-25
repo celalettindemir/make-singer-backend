@@ -30,7 +30,10 @@ curl http://localhost:8000/health
 cd core-service && swag init -g cmd/server/main.go
 ```
 
-There is no test suite — no `_test.go` files exist. Standard Go tooling (`go fmt`, `go vet`) is used for formatting and linting.
+Testler: `cd core-service && go test ./internal/...` (birim testler, ag gerekmez).
+`./e2e/...` canli Redis ve gecerli Groq/R2 anahtarlari ister; CI onu calistirmaz.
+audio-service: `cd audio-service && python3 -m pytest tests/ -v`.
+Standard Go tooling (`go fmt`, `go vet`) is used for formatting and linting.
 
 ## Architecture
 

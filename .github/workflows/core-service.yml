@@ -61,6 +61,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Unit testler
+        run: go test ./internal/...
+
   docker:
     name: Docker Build & Push
     runs-on: ubuntu-latest
