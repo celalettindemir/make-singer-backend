@@ -105,7 +105,7 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 	renderService := service.NewRenderService(redisClient, asynqClient, nil, &cfg.R2)
 	masterService := service.NewMasterService(redisClient, asynqClient, nil, &cfg.R2)
 	exportService := service.NewExportService(nil, nil, &config.R2Config{})
-	uploadService := service.NewUploadService(nil)
+	uploadService := service.NewUploadService(nil, &config.R2Config{})
 
 	// Handlers
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)

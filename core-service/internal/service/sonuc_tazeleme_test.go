@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/model"
 )
@@ -165,7 +166,7 @@ func TestRenderService_BuildResult_KayittaImzaYok(t *testing.T) {
 // URLFor cagrilmasi ikinci (bosa giden) bir imzalama demekti.
 func TestUploadService_TekImzalama(t *testing.T) {
 	depo := &sahteDepo{}
-	s := NewUploadService(depo)
+	s := NewUploadService(depo, &config.R2Config{})
 
 	resp, err := s.UploadVocal(context.Background(), "p1", "s1", "take1", nil, 0)
 	if err != nil {
@@ -179,5 +180,58 @@ func TestUploadService_TekImzalama(t *testing.T) {
 	}
 	if resp.ExpiresAt == nil {
 		t.Error("private vokal icin expiresAt bekleniyordu")
+	}
+}
+
+// TestUploadService_MockAdresi_KeyFromURLIleCozulur, r2Client
+// yapilandirilmamisken (mock yol) UploadVocal'in urettigi adresin
+// KeyFromURL ile geri anahtara cozulebildigini dogrular. Eskiden bu
+// adres sabit "https://cdn.makeasinger.com/..." idi ve bilinmeyen bir
+// konak oldugu icin sonraki bir master isteginde KeyFromURL hata
+// veriyordu ("taninmayan konak").
+func TestUploadService_MockAdresi_KeyFromURLIleCozulur(t *testing.T) {
+	r2Cfg := &config.R2Config{
+		PrivateBucket: "makeasinger-private",
+		AccountID:     "hesap123",
+	}
+	s := NewUploadService(nil, r2Cfg)
+
+	resp, err := s.UploadVocal(context.Background(), "p1", "s1", "take1", nil, 0)
+	if err != nil {
+		t.Fatalf("UploadVocal: %v", err)
+	}
+
+	beklenenAnahtar := fmt.Sprintf("vocals/p1/%s.wav", resp.ID)
+	gotKey, err := client.KeyFromURL(resp.FileURL, r2Cfg)
+	if err != nil {
+		t.Fatalf("mock adresi KeyFromURL ile cozulemedi: %v (adres: %s)", err, resp.FileURL)
+	}
+	if gotKey != beklenenAnahtar {
+		t.Errorf("cozulen anahtar = %q, beklenen %q", gotKey, beklenenAnahtar)
+	}
+}
+
+// TestUploadService_GetSignedURLMock_KeyFromURLIleCozulur,
+// GetSignedURL'in mock yolunun da ayni kurallarla cozulebilen bir adres
+// urettigini dogrular.
+func TestUploadService_GetSignedURLMock_KeyFromURLIleCozulur(t *testing.T) {
+	r2Cfg := &config.R2Config{
+		PrivateBucket: "makeasinger-private",
+		AccountID:     "hesap123",
+	}
+	s := NewUploadService(nil, r2Cfg)
+
+	anahtar := "vocals/p1/take1.wav"
+	url, err := s.GetSignedURL(context.Background(), anahtar, time.Hour)
+	if err != nil {
+		t.Fatalf("GetSignedURL: %v", err)
+	}
+
+	gotKey, err := client.KeyFromURL(url, r2Cfg)
+	if err != nil {
+		t.Fatalf("mock adresi KeyFromURL ile cozulemedi: %v (adres: %s)", err, url)
+	}
+	if gotKey != anahtar {
+		t.Errorf("cozulen anahtar = %q, beklenen %q", gotKey, anahtar)
 	}
 }

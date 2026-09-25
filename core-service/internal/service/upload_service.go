@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/model"
 )
 
@@ -20,12 +21,14 @@ type FileUploader interface {
 // UploadService handles file uploads to R2 storage
 type UploadService struct {
 	r2Client client.StorageClient
+	r2Cfg    *config.R2Config
 }
 
 // NewUploadService creates a new upload service with R2 client
-func NewUploadService(r2Client client.StorageClient) *UploadService {
+func NewUploadService(r2Client client.StorageClient, r2Cfg *config.R2Config) *UploadService {
 	return &UploadService{
 		r2Client: r2Client,
+		r2Cfg:    r2Cfg,
 	}
 }
 
@@ -84,7 +87,10 @@ func (s *UploadService) DeleteVocalByKey(ctx context.Context, key string) error 
 // GetSignedURL generates a presigned URL for temporary access to a file
 func (s *UploadService) GetSignedURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
 	if s.r2Client == nil {
-		return fmt.Sprintf("https://cdn.makeasinger.com/%s", key), nil
+		// Mock: adres UnsignedURL ile uretilir ki KeyFromURL sonraki
+		// istekte (ornegin master isinde) bu adresi geri anahtara
+		// cozebilsin. Sabit cdn.makeasinger.com bilinmeyen bir konaktir.
+		return client.UnsignedURL(key, s.r2Cfg), nil
 	}
 
 	return s.r2Client.GetSignedURL(ctx, key, expiry)
@@ -92,9 +98,12 @@ func (s *UploadService) GetSignedURL(ctx context.Context, key string, expiry tim
 
 // Mock implementation for development/testing
 func (s *UploadService) uploadMock(takeID, projectID string) (*model.UploadVocalResponse, error) {
+	key := fmt.Sprintf("vocals/%s/%s.wav", projectID, takeID)
 	return &model.UploadVocalResponse{
-		ID:         takeID,
-		FileURL:    fmt.Sprintf("https://cdn.makeasinger.com/vocals/%s/%s.wav", projectID, takeID),
+		ID: takeID,
+		// UnsignedURL kullanilir: mock ciktisi da KeyFromURL ile
+		// cozulebilsin diye (bkz. export/master/render mock'lari).
+		FileURL:    client.UnsignedURL(key, s.r2Cfg),
 		Duration:   32.5,
 		SampleRate: 44100,
 		Channels:   1,

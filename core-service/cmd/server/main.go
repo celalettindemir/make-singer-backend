@@ -126,7 +126,7 @@ func main() {
 	renderService := service.NewRenderService(redisClient, asynqClient, storage, &cfg.R2)
 	masterService := service.NewMasterService(redisClient, asynqClient, storage, &cfg.R2)
 	exportService := service.NewExportService(storage, audioClient, &cfg.R2)
-	uploadService := service.NewUploadService(storage)
+	uploadService := service.NewUploadService(storage, &cfg.R2)
 
 	// Initialize handlers
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
