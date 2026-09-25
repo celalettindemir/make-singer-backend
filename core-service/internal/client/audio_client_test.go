@@ -36,6 +36,29 @@ func TestMasterRequest_AnahtarAlanlariJSON(t *testing.T) {
 	}
 }
 
+// TestMixChannel_AdresAlaniYok: mix kanali hicbir adres alani
+// tasimamali. Python tarafi da stem_url'u artik reddediyor (extra
+// forbid), iki taraf birlikte degisti.
+func TestMixChannel_AdresAlaniYok(t *testing.T) {
+	b, err := json.Marshal(MixChannel{Volume: 0.5, Pan: 0.1, Mute: true})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var cikti map[string]interface{}
+	if err := json.Unmarshal(b, &cikti); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, alan := range []string{"stem_url", "stem_urls", "url"} {
+		if _, yok := cikti[alan]; yok {
+			t.Errorf("%s alani hala duruyor: %s", alan, b)
+		}
+	}
+	if cikti["volume"] != 0.5 {
+		t.Errorf("volume = %v", cikti["volume"])
+	}
+}
+
 func TestEncodeRequest_InputKeyJSON(t *testing.T) {
 	req := EncodeRequest{InputKey: "masters/p1/m1.wav", Format: "mp3", OutputKey: "exports/e1.mp3"}
 

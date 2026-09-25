@@ -26,13 +26,15 @@ type AudioClient struct {
 	baseURL    string
 }
 
-// MixChannel represents volume settings for a single channel
+// MixChannel represents volume settings for a single channel.
+// Kanallar stem_keys ile ayni sirada tasinir; ayrica bir adres alani
+// TASIMAZ: imzali URL'in Python istegine ve loglara sizmamasi icin
+// stem_url alani her iki taraftan da kaldirildi.
 type MixChannel struct {
-	StemURL string  `json:"stem_url"`
-	Volume  float64 `json:"volume"`
-	Pan     float64 `json:"pan,omitempty"`
-	Mute    bool    `json:"mute,omitempty"`
-	Solo    bool    `json:"solo,omitempty"`
+	Volume float64 `json:"volume"`
+	Pan    float64 `json:"pan,omitempty"`
+	Mute   bool    `json:"mute,omitempty"`
+	Solo   bool    `json:"solo,omitempty"`
 }
 
 // VocalTakeInput represents a vocal take for mixing

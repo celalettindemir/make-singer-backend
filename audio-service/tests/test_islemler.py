@@ -4,7 +4,8 @@ import os
 
 import pytest
 
-from main import EncodeRequest, MasterRequest, ZipFileEntry
+from main import EncodeRequest, MasterRequest, MixChannel, ZipFileEntry
+from services.archiver import ArchiverService
 from services.encoder import EncoderService
 import services.encoder as encoder_module
 
@@ -54,6 +55,72 @@ def test_master_request_eski_alan_reddedilir():
             mix_settings=[],
             output_key="masters/p/m.wav",
         )
+
+
+def test_mix_channel_stem_url_reddedilir():
+    """Imzali URL istek govdesine girmesin: alan iki taraftan da kalkti."""
+    with pytest.raises(Exception):
+        MixChannel(
+            stem_url="https://x.r2.cloudflarestorage.com/stems/a.wav?X-Amz-Signature=g",
+            volume=1.0,
+        )
+
+
+def test_mix_channel_yalnizca_karisim_alanlari():
+    kanal = MixChannel(volume=0.5, pan=0.1, mute=True, solo=False)
+    assert kanal.model_dump() == {
+        "volume": 0.5,
+        "pan": 0.1,
+        "mute": True,
+        "solo": False,
+    }
+
+
+def test_master_request_mix_settings_urlsiz_kabul():
+    req = MasterRequest(
+        stem_keys=["stems/p/s.wav"],
+        mix_settings=[{"volume": 1.0}],
+        output_key="masters/p/m.wav",
+    )
+    assert req.mix_settings[0].volume == 1.0
+
+
+@pytest.mark.asyncio
+async def test_archiver_storage_yoksa_hata():
+    """Depolama yokken sessizce bos ZIP uretip 'basarili' demek yerine hata."""
+    servis = ArchiverService(None)
+    with pytest.raises(RuntimeError):
+        await servis.process(
+            files=[{"key": "stems/p/s.wav", "filename": "s.wav"}],
+            output_key="exports/a.zip",
+        )
+
+
+@pytest.mark.asyncio
+async def test_archiver_eksik_anahtar_hata():
+    """key'i olmayan girdi atlanirsa file_count yalan soyluyordu."""
+    servis = ArchiverService(SahteStorage())
+    with pytest.raises(ValueError):
+        await servis.process(
+            files=[{"filename": "s.wav"}],
+            output_key="exports/a.zip",
+        )
+
+
+@pytest.mark.asyncio
+async def test_archiver_dosya_sayisi_gercek():
+    storage = SahteStorage()
+    servis = ArchiverService(storage)
+    sonuc = await servis.process(
+        files=[
+            {"key": "stems/p/s1.wav", "filename": "s1.wav"},
+            {"key": "stems/p/s2.wav", "filename": "s2.wav"},
+        ],
+        output_key="exports/a.zip",
+    )
+    assert sonuc["file_count"] == 2
+    assert storage.indirilen_anahtarlar == ["stems/p/s1.wav", "stems/p/s2.wav"]
+    assert storage.yuklenenler == ["exports/a.zip"]
 
 
 def test_encode_request_input_key():

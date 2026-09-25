@@ -27,6 +27,11 @@ class ArchiverService:
         if not files:
             raise ValueError("No files provided")
 
+        # encoder/master ile ayni kural: depolama yoksa sessizce bos/eksik
+        # ZIP uretip "basarili" demek yerine hemen hata ver.
+        if not self.storage:
+            raise RuntimeError("Storage service not configured")
+
         with tempfile.TemporaryDirectory() as tmpdir:
             zip_path = os.path.join(tmpdir, "archive.zip")
 
@@ -35,26 +40,27 @@ class ArchiverService:
                     key = file_entry.get("key")
                     filename = file_entry.get("filename")
 
+                    # Eksik girdiyi atlamak, file_count dogru ama icerigi
+                    # eksik bir ZIP uretirdi: sessiz gecmek yerine hata ver.
                     if not key or not filename:
-                        continue
+                        raise ValueError(
+                            f"ZIP girdisinde key veya filename eksik: {file_entry!r}"
+                        )
 
                     # Download file (nesne anahtariyla, S3 API uzerinden)
                     temp_path = os.path.join(tmpdir, os.path.basename(filename))
-                    if self.storage:
-                        self.storage.download_key_to_file(key, temp_path)
+                    self.storage.download_key_to_file(key, temp_path)
 
-                        # Add to ZIP with specified filename
-                        zipf.write(temp_path, filename)
+                    # Add to ZIP with specified filename
+                    zipf.write(temp_path, filename)
 
             # Get file size
             file_size = os.path.getsize(zip_path)
 
             # Upload result
-            output_url = zip_path
-            if self.storage:
-                output_url = self.storage.upload_file(
-                    output_key, zip_path, "application/zip"
-                )
+            output_url = self.storage.upload_file(
+                output_key, zip_path, "application/zip"
+            )
 
             return {
                 "output_url": output_url,

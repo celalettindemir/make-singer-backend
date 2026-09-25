@@ -39,7 +39,10 @@ R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "")
 
 # Request/Response models
 class MixChannel(BaseModel):
-    stem_url: str
+    model_config = {"extra": "forbid"}
+
+    # Kanallar stem_keys ile ayni sirada gelir; adres alani yoktur.
+    # stem_url kaldirildi: imzali URL istek govdesine ve loglara dusmesin.
     volume: float = 1.0
     pan: float = 0.0
     mute: bool = False
