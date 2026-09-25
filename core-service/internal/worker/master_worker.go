@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/internal/websocket"
@@ -19,21 +20,23 @@ import (
 
 // MasterWorker processes mastering jobs
 type MasterWorker struct {
-	redis        *redis.Client
-	audioClient  client.AudioProcessor
-	r2Client     client.StorageClient
+	redis         *redis.Client
+	audioClient   client.AudioProcessor
+	r2Client      client.StorageClient
 	masterService *service.MasterService
-	hub          *websocket.Hub
+	hub           *websocket.Hub
+	r2Cfg         *config.R2Config
 }
 
 // NewMasterWorker creates a new master worker
-func NewMasterWorker(redisClient *redis.Client, audioClient client.AudioProcessor, r2Client client.StorageClient, masterService *service.MasterService, hub *websocket.Hub) *MasterWorker {
+func NewMasterWorker(redisClient *redis.Client, audioClient client.AudioProcessor, r2Client client.StorageClient, masterService *service.MasterService, hub *websocket.Hub, r2Cfg *config.R2Config) *MasterWorker {
 	return &MasterWorker{
-		redis:        redisClient,
-		audioClient:  audioClient,
-		r2Client:     r2Client,
+		redis:         redisClient,
+		audioClient:   audioClient,
+		r2Client:      r2Client,
 		masterService: masterService,
-		hub:          hub,
+		hub:           hub,
+		r2Cfg:         r2Cfg,
 	}
 }
 
@@ -75,7 +78,23 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	mixSettings := w.buildMixSettings(payload)
 
 	// Step 3: Build vocal takes if present
-	vocalTakes := w.buildVocalTakes(payload)
+	vocalTakes, err := w.buildVocalTakes(payload)
+	if err != nil {
+		w.failJob(ctx, jobID, fmt.Sprintf("Vokal URL cozulemedi: %v", err))
+		return err
+	}
+
+	// Step 3b: Stem URL'lerini anahtara cevir. Istemciden gelen her URL
+	// KeyFromURL ile anahtara donusturulur.
+	stemKeys := make([]string, 0, len(payload.StemURLs))
+	for _, u := range payload.StemURLs {
+		k, err := client.KeyFromURL(u, w.r2Cfg)
+		if err != nil {
+			w.failJob(ctx, jobID, fmt.Sprintf("Stem URL cozulemedi: %v", err))
+			return fmt.Errorf("stem URL cozulemedi: %w", err)
+		}
+		stemKeys = append(stemKeys, k)
+	}
 
 	// Step 4: Call audio service for mastering
 	w.updateJobStatus(ctx, jobID, model.JobStatusRunning, 20, "Starting mastering process...")
@@ -83,7 +102,7 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	outputKey := fmt.Sprintf("masters/%s/%s.wav", payload.ProjectID, uuid.New().String())
 
 	masterReq := &client.MasterRequest{
-		StemURLs:    payload.StemURLs,
+		StemKeys:    stemKeys,
 		MixSettings: mixSettings,
 		Profile:     string(payload.Profile),
 		VocalTakes:  vocalTakes,
@@ -202,17 +221,21 @@ func dbToLinear(db float64) float64 {
 	return math.Pow(10, db/20)
 }
 
-func (w *MasterWorker) buildVocalTakes(payload *model.MasterJobPayload) []client.VocalTakeInput {
+func (w *MasterWorker) buildVocalTakes(payload *model.MasterJobPayload) ([]client.VocalTakeInput, error) {
 	var takes []client.VocalTakeInput
 
 	for _, take := range payload.VocalTakes {
+		k, err := client.KeyFromURL(take.FileURL, w.r2Cfg)
+		if err != nil {
+			return nil, fmt.Errorf("vokal URL cozulemedi: %w", err)
+		}
 		takes = append(takes, client.VocalTakeInput{
-			URL:    take.FileURL,
+			Key:    k,
 			Volume: 1.0, // Default volume, could be configurable
 		})
 	}
 
-	return takes
+	return takes, nil
 }
 
 func (w *MasterWorker) updateJobStatus(ctx context.Context, jobID string, status model.JobStatus, progress int, step string) {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/model"
 )
 
@@ -21,13 +22,15 @@ type FileExporter interface {
 type ExportService struct {
 	r2Client    client.StorageClient
 	audioClient client.AudioProcessor
+	r2Cfg       *config.R2Config
 }
 
 // NewExportService creates a new export service
-func NewExportService(r2Client client.StorageClient, audioClient client.AudioProcessor) *ExportService {
+func NewExportService(r2Client client.StorageClient, audioClient client.AudioProcessor, r2Cfg *config.R2Config) *ExportService {
 	return &ExportService{
 		r2Client:    r2Client,
 		audioClient: audioClient,
+		r2Cfg:       r2Cfg,
 	}
 }
 
@@ -64,8 +67,13 @@ func (s *ExportService) ExportMP3(ctx context.Context, req *model.ExportMP3Reque
 		}
 	}
 
+	inputKey, err := client.KeyFromURL(req.MasterFileURL, s.r2Cfg)
+	if err != nil {
+		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
+	}
+
 	encodeReq := &client.EncodeRequest{
-		InputURL:  req.MasterFileURL,
+		InputKey:  inputKey,
 		Format:    "mp3",
 		Quality:   quality,
 		OutputKey: outputKey,
@@ -106,8 +114,13 @@ func (s *ExportService) ExportWAV(ctx context.Context, req *model.ExportWAVReque
 	exportID := uuid.New().String()
 	outputKey := fmt.Sprintf("exports/%s.wav", exportID)
 
+	inputKey, err := client.KeyFromURL(req.MasterFileURL, s.r2Cfg)
+	if err != nil {
+		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
+	}
+
 	encodeReq := &client.EncodeRequest{
-		InputURL:   req.MasterFileURL,
+		InputKey:   inputKey,
 		Format:     "wav",
 		BitDepth:   bitDepth,
 		SampleRate: sampleRate,
@@ -144,8 +157,12 @@ func (s *ExportService) ExportStems(ctx context.Context, req *model.ExportStemsR
 
 	// Add stems
 	for i, url := range req.StemURLs {
+		key, err := client.KeyFromURL(url, s.r2Cfg)
+		if err != nil {
+			return nil, fmt.Errorf("zip girdisi cozulemedi: %w", err)
+		}
 		files = append(files, client.ZipFileEntry{
-			URL:      url,
+			Key:      key,
 			Filename: fmt.Sprintf("stems/stem_%d.wav", i+1),
 		})
 	}
@@ -153,8 +170,12 @@ func (s *ExportService) ExportStems(ctx context.Context, req *model.ExportStemsR
 	// Add vocals if requested
 	if req.IncludeVocals && len(req.VocalURLs) > 0 {
 		for i, url := range req.VocalURLs {
+			key, err := client.KeyFromURL(url, s.r2Cfg)
+			if err != nil {
+				return nil, fmt.Errorf("zip girdisi cozulemedi: %w", err)
+			}
 			files = append(files, client.ZipFileEntry{
-				URL:      url,
+				Key:      key,
 				Filename: fmt.Sprintf("vocals/vocal_%d.wav", i+1),
 			})
 		}
@@ -162,8 +183,12 @@ func (s *ExportService) ExportStems(ctx context.Context, req *model.ExportStemsR
 
 	// Add master if requested
 	if req.IncludeMaster && req.MasterURL != "" {
+		key, err := client.KeyFromURL(req.MasterURL, s.r2Cfg)
+		if err != nil {
+			return nil, fmt.Errorf("zip girdisi cozulemedi: %w", err)
+		}
 		files = append(files, client.ZipFileEntry{
-			URL:      req.MasterURL,
+			Key:      key,
 			Filename: "master.wav",
 		})
 	}

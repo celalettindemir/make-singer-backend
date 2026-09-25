@@ -37,14 +37,14 @@ type MixChannel struct {
 
 // VocalTakeInput represents a vocal take for mixing
 type VocalTakeInput struct {
-	URL    string  `json:"url"`
+	Key    string  `json:"key"`
 	Volume float64 `json:"volume"`
 	Pan    float64 `json:"pan,omitempty"`
 }
 
 // MasterRequest represents the request for mastering
 type MasterRequest struct {
-	StemURLs    []string         `json:"stem_urls"`
+	StemKeys    []string         `json:"stem_keys"`
 	MixSettings []MixChannel     `json:"mix_settings"`
 	Profile     string           `json:"profile"`
 	VocalTakes  []VocalTakeInput `json:"vocal_takes,omitempty"`
@@ -61,7 +61,7 @@ type MasterResponse struct {
 
 // EncodeRequest represents the request for audio encoding
 type EncodeRequest struct {
-	InputURL   string            `json:"input_url"`
+	InputKey   string            `json:"input_key"`
 	Format     string            `json:"format"`
 	Quality    int               `json:"quality,omitempty"`
 	SampleRate int               `json:"sample_rate,omitempty"`
@@ -85,7 +85,7 @@ type ZipRequest struct {
 
 // ZipFileEntry represents a file to include in the ZIP
 type ZipFileEntry struct {
-	URL      string `json:"url"`
+	Key      string `json:"key"`
 	Filename string `json:"filename"`
 }
 

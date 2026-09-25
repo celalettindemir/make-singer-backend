@@ -26,8 +26,8 @@ import (
 	"github.com/makeasinger/api/internal/handler"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/service"
-	"github.com/makeasinger/api/internal/worker"
 	ws "github.com/makeasinger/api/internal/websocket"
+	"github.com/makeasinger/api/internal/worker"
 )
 
 // @title          Make-Singer API
@@ -117,7 +117,7 @@ func main() {
 	lyricsService := service.NewLyricsService(groqClient)
 	renderService := service.NewRenderService(redisClient, asynqClient)
 	masterService := service.NewMasterService(redisClient, asynqClient)
-	exportService := service.NewExportService(r2Client, audioClient)
+	exportService := service.NewExportService(r2Client, audioClient, &cfg.R2)
 	uploadService := service.NewUploadService(r2Client)
 
 	// Initialize handlers
@@ -310,7 +310,7 @@ func startWorkerServer(
 
 	// Create workers with external clients
 	renderWorker := worker.NewRenderWorker(renderService, sunoClient, r2Client, hub)
-	masterWorker := worker.NewMasterWorker(redisClient, audioClient, r2Client, masterService, hub)
+	masterWorker := worker.NewMasterWorker(redisClient, audioClient, r2Client, masterService, hub, &cfg.R2)
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
