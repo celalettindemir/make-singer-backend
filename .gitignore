@@ -38,3 +38,5 @@ logs/
 # Build
 dist/
 build/
+.claude/worktrees/
+.superpowers/
