@@ -91,6 +91,43 @@ link gösterir.
 Servisler arası aktarımda presigned URL kullanılmaz. audio-service bir dosyayı
 işlemek için indirdiğinde doğrudan S3 API ile okur.
 
+## Kablo biçimi (2026-09-25 kararı)
+
+audio-service bugün dosyaları S3 ile değil, kendisine verilen URL'den httpx ile
+indiriyor (`services/storage.py:34-45`; çağrı yerleri `master.py:74,163`,
+`encoder.py:37`, `archiver.py:44`). Bu URL'ler istemciden geliyor: mobil
+uygulama `masterFileUrl` ve `stemUrls` alanlarını API'ye geri yolluyor
+(`internal/model/export.go:8,34,52-57`, `master.go:9,39,48`). Dosyalar private
+bucket'a taşınınca bu indirmeler kırılır.
+
+**Karar: URL'yi anahtara Go çevirir.** İstemci API'si DEĞİŞMEZ; mobil ve web
+uygulamasında değişiklik gerekmez. Go, istemciden gelen URL'den nesne
+anahtarını çıkarır (`KeyFromURL`) ve audio-service'e anahtarı gönderir.
+
+Reddedilen iki seçenek: (a) istemcinin anahtar göndermesi — en temizi ama
+kırıcı değişiklik; (b) Python'un URL'den anahtar çözmesi — presigned sorgu
+dizesini ayıklamak kırılgan ve hatası sessiz olur.
+
+Go -> Python kablosunda URL taşıyan alanlar anahtar taşıyan alanlarla
+DEĞİŞTİRİLİR (iki servis birlikte sevk edildiği icin geriye uyumluluk alanı
+tutulmaz):
+
+| Bugun | Yeni |
+|---|---|
+| `MasterRequest.stem_urls` | `stem_keys` |
+| `VocalTakeInput.url` | `key` |
+| `EncodeRequest.input_url` | `input_key` |
+| `ZipFileEntry.url` | `key` |
+
+`output_key` alanlari zaten anahtar tasiyor, degismez. Yanit alanlari
+(`output_url`) degismez: audio-service yukledikten sonra dogru URL'yi
+`URLFor` kuralina gore uretir.
+
+`KeyFromURL` hem CDN adresini (`<R2_PUBLIC_URL>/<key>`), hem R2 endpoint
+adresini (`https://<bucket>.r2.cloudflarestorage.com/<key>`), hem de presigned
+bir URL'yi (sorgu dizesi atilir) kabul eder. Taninmayan bir konak adi hata
+dondurur; tahmin edilmez.
+
 ## Test
 
 TDD ile ilerlenir, testler önce yazılır.
