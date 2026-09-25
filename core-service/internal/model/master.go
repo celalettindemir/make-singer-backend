@@ -27,9 +27,9 @@ type MixChannel struct {
 
 // MasterPreviewResponse represents the response for a master preview
 type MasterPreviewResponse struct {
-	FileURL   string    `json:"fileUrl"`
-	Duration  int       `json:"duration"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	FileURL   string     `json:"fileUrl"`
+	Duration  int        `json:"duration"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 
 // MasterFinalRequest represents the request for final mastering
@@ -71,5 +71,5 @@ type MasterResultResponse struct {
 	Profile   MasterProfile `json:"profile"`
 	PeakDb    float64       `json:"peakDb"`
 	LUFS      int           `json:"lufs"`
-	ExpiresAt time.Time     `json:"expiresAt"`
+	ExpiresAt *time.Time    `json:"expiresAt,omitempty"`
 }

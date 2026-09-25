@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/makeasinger/api/internal/client"
@@ -85,12 +84,20 @@ func (s *ExportService) ExportMP3(ctx context.Context, req *model.ExportMP3Reque
 		return nil, fmt.Errorf("MP3 encoding failed: %w", err)
 	}
 
+	// outputKey public (exports/) oldugu icin URLFor kalici CDN adresi
+	// dondurur; audio-service'ten gelen resp.OutputURL imzasiz oldugundan
+	// dogrudan istemciye verilmez.
+	fileURL, _, err := s.r2Client.URLFor(ctx, outputKey)
+	if err != nil {
+		return nil, fmt.Errorf("export URL uretilemedi: %w", err)
+	}
+
 	return &model.ExportMP3Response{
-		FileURL:   resp.OutputURL,
+		FileURL:   fileURL,
 		Size:      resp.Size,
 		Format:    "mp3",
 		Quality:   quality,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: nil,
 	}, nil
 }
 
@@ -132,13 +139,21 @@ func (s *ExportService) ExportWAV(ctx context.Context, req *model.ExportWAVReque
 		return nil, fmt.Errorf("WAV encoding failed: %w", err)
 	}
 
+	// outputKey public (exports/) oldugu icin URLFor kalici CDN adresi
+	// dondurur; audio-service'ten gelen resp.OutputURL imzasiz oldugundan
+	// dogrudan istemciye verilmez.
+	fileURL, _, err := s.r2Client.URLFor(ctx, outputKey)
+	if err != nil {
+		return nil, fmt.Errorf("export URL uretilemedi: %w", err)
+	}
+
 	return &model.ExportWAVResponse{
-		FileURL:    resp.OutputURL,
+		FileURL:    fileURL,
 		Size:       resp.Size,
 		Format:     "wav",
 		BitDepth:   bitDepth,
 		SampleRate: sampleRate,
-		ExpiresAt:  time.Now().Add(24 * time.Hour),
+		ExpiresAt:  nil,
 	}, nil
 }
 
@@ -203,11 +218,19 @@ func (s *ExportService) ExportStems(ctx context.Context, req *model.ExportStemsR
 		return nil, fmt.Errorf("ZIP creation failed: %w", err)
 	}
 
+	// outputKey public (exports/) oldugu icin URLFor kalici CDN adresi
+	// dondurur; audio-service'ten gelen resp.OutputURL imzasiz oldugundan
+	// dogrudan istemciye verilmez.
+	fileURL, _, err := s.r2Client.URLFor(ctx, outputKey)
+	if err != nil {
+		return nil, fmt.Errorf("export URL uretilemedi: %w", err)
+	}
+
 	return &model.ExportStemsResponse{
-		FileURL:   resp.OutputURL,
+		FileURL:   fileURL,
 		Size:      resp.Size,
 		FileCount: resp.FileCount,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: nil,
 	}, nil
 }
 
@@ -220,7 +243,7 @@ func (s *ExportService) exportMP3Mock(quality int) (*model.ExportMP3Response, er
 		Size:      5242880, // ~5MB
 		Format:    "mp3",
 		Quality:   quality,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: nil, // mock export de public/kalicidir, suresi yok
 	}, nil
 }
 
@@ -233,7 +256,7 @@ func (s *ExportService) exportWAVMock(bitDepth, sampleRate int) (*model.ExportWA
 		Format:     "wav",
 		BitDepth:   bitDepth,
 		SampleRate: sampleRate,
-		ExpiresAt:  time.Now().Add(24 * time.Hour),
+		ExpiresAt:  nil, // mock export de public/kalicidir, suresi yok
 	}, nil
 }
 
@@ -252,6 +275,6 @@ func (s *ExportService) exportStemsMock(req *model.ExportStemsRequest) (*model.E
 		FileURL:   fmt.Sprintf("https://cdn.makeasinger.com/exports/%s.zip", exportID),
 		Size:      52428800, // ~50MB
 		FileCount: fileCount,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: nil, // mock export de public/kalicidir, suresi yok
 	}, nil
 }

@@ -4,9 +4,9 @@ import "time"
 
 // ExportMP3Request represents the request for MP3 export
 type ExportMP3Request struct {
-	ProjectID     string         `json:"projectId" validate:"required,uuid"`
-	MasterFileURL string         `json:"masterFileUrl" validate:"required,url"`
-	Quality       *int           `json:"quality" validate:"omitempty,oneof=128 192 256 320"`
+	ProjectID     string          `json:"projectId" validate:"required,uuid"`
+	MasterFileURL string          `json:"masterFileUrl" validate:"required,url"`
+	Quality       *int            `json:"quality" validate:"omitempty,oneof=128 192 256 320"`
 	Metadata      *ExportMetadata `json:"metadata" validate:"omitempty"`
 }
 
@@ -21,11 +21,11 @@ type ExportMetadata struct {
 
 // ExportMP3Response represents the response for MP3 export
 type ExportMP3Response struct {
-	FileURL   string    `json:"fileUrl"`
-	Size      int64     `json:"size"`
-	Format    string    `json:"format"`
-	Quality   int       `json:"quality"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	FileURL   string     `json:"fileUrl"`
+	Size      int64      `json:"size"`
+	Format    string     `json:"format"`
+	Quality   int        `json:"quality"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 
 // ExportWAVRequest represents the request for WAV export
@@ -38,12 +38,12 @@ type ExportWAVRequest struct {
 
 // ExportWAVResponse represents the response for WAV export
 type ExportWAVResponse struct {
-	FileURL    string    `json:"fileUrl"`
-	Size       int64     `json:"size"`
-	Format     string    `json:"format"`
-	BitDepth   int       `json:"bitDepth"`
-	SampleRate int       `json:"sampleRate"`
-	ExpiresAt  time.Time `json:"expiresAt"`
+	FileURL    string     `json:"fileUrl"`
+	Size       int64      `json:"size"`
+	Format     string     `json:"format"`
+	BitDepth   int        `json:"bitDepth"`
+	SampleRate int        `json:"sampleRate"`
+	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
 }
 
 // ExportStemsRequest represents the request for stems export
@@ -59,8 +59,8 @@ type ExportStemsRequest struct {
 
 // ExportStemsResponse represents the response for stems export
 type ExportStemsResponse struct {
-	FileURL   string    `json:"fileUrl"`
-	Size      int64     `json:"size"`
-	FileCount int       `json:"fileCount"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	FileURL   string     `json:"fileUrl"`
+	Size      int64      `json:"size"`
+	FileCount int        `json:"fileCount"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }

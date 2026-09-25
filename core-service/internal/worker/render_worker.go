@@ -198,11 +198,12 @@ func (w *RenderWorker) uploadStems(ctx context.Context, projectID string, stems 
 		// If R2 client is available, we could download from Suno and re-upload to R2
 		// For now, we'll use the Suno URLs directly
 		fileURL := stem.URL
+		var expiresAt time.Time
 		if w.r2Client != nil {
 			// In a real implementation, download from stem.URL and upload to R2
 			key := fmt.Sprintf("stems/%s/%s.wav", projectID, stemID)
 			var err error
-			fileURL, _, err = w.r2Client.URLFor(ctx, key)
+			fileURL, expiresAt, err = w.r2Client.URLFor(ctx, key)
 			if err != nil {
 				return nil, fmt.Errorf("stem URL uretilemedi: %w", err)
 			}
@@ -214,6 +215,7 @@ func (w *RenderWorker) uploadStems(ctx context.Context, projectID string, stems 
 			FileURL:      fileURL,
 			Duration:     stem.Duration,
 			WaveformData: generateWaveform(100),
+			ExpiresAt:    model.ExpiresPtr(expiresAt),
 		})
 	}
 

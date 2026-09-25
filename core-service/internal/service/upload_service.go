@@ -42,9 +42,13 @@ func (s *UploadService) UploadVocal(ctx context.Context, projectID, sectionID, t
 	}
 
 	// Upload to R2
-	fileURL, err := s.r2Client.Upload(ctx, key, file, "audio/wav")
+	if _, err := s.r2Client.Upload(ctx, key, file, "audio/wav"); err != nil {
+		return nil, fmt.Errorf("vokal yuklenemedi: %w", err)
+	}
+
+	fileURL, expiresAt, err := s.r2Client.URLFor(ctx, key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to upload vocal: %w", err)
+		return nil, fmt.Errorf("vokal URL uretilemedi: %w", err)
 	}
 
 	return &model.UploadVocalResponse{
@@ -54,6 +58,7 @@ func (s *UploadService) UploadVocal(ctx context.Context, projectID, sectionID, t
 		SampleRate: 44100,
 		Channels:   1,
 		CreatedAt:  time.Now(),
+		ExpiresAt:  model.ExpiresPtr(expiresAt),
 	}, nil
 }
 

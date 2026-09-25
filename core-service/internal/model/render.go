@@ -98,6 +98,7 @@ type StemResult struct {
 	FileURL      string     `json:"fileUrl"`
 	Duration     float64    `json:"duration"`
 	WaveformData []float64  `json:"waveformData"`
+	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
 }
 
 // RenderCancelResponse represents the response when canceling a render

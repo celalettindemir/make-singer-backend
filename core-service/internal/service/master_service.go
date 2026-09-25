@@ -35,7 +35,7 @@ func (s *MasterService) Preview(ctx context.Context, req *model.MasterPreviewReq
 	return &model.MasterPreviewResponse{
 		FileURL:   fmt.Sprintf("https://cdn.makeasinger.com/previews/%s.mp3", previewID),
 		Duration:  20,
-		ExpiresAt: time.Now().Add(1 * time.Hour),
+		ExpiresAt: model.ExpiresPtr(time.Now().Add(1 * time.Hour)),
 	}, nil
 }
 

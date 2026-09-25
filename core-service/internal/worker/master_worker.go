@@ -121,14 +121,22 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	w.updateJobStatus(ctx, jobID, model.JobStatusRunning, 80, "Applying limiter...")
 	w.updateJobStatus(ctx, jobID, model.JobStatusRunning, 95, "Finalizing...")
 
-	// Step 6: Generate result
+	// Step 6: Generate result. masterResp.OutputURL imzasiz oldugundan
+	// (private masters/ nesnesi) dogrudan istemciye verilmez; adres
+	// outputKey'den yeniden uretilir.
+	fileURL, expiresAt, err := w.r2Client.URLFor(ctx, outputKey)
+	if err != nil {
+		w.failJob(ctx, jobID, fmt.Sprintf("Master URL uretilemedi: %v", err))
+		return fmt.Errorf("master URL uretilemedi: %w", err)
+	}
+
 	result := &model.MasterResultResponse{
-		FileURL:   masterResp.OutputURL,
+		FileURL:   fileURL,
 		Duration:  masterResp.Duration,
 		Profile:   payload.Profile,
 		PeakDb:    masterResp.PeakDb,
 		LUFS:      int(masterResp.LUFS),
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: model.ExpiresPtr(expiresAt),
 	}
 
 	// Complete the job
@@ -316,11 +324,22 @@ func (w *MasterWorker) saveJob(ctx context.Context, job *model.Job) {
 
 func (w *MasterWorker) generateMockResult(payload *model.MasterJobPayload) *model.MasterResultResponse {
 	return &model.MasterResultResponse{
-		FileURL:   fmt.Sprintf("https://cdn.makeasinger.com/masters/%s.wav", uuid.New().String()),
-		Duration:  180.5,
-		Profile:   payload.Profile,
-		PeakDb:    -0.3,
-		LUFS:      -14,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		FileURL:  fmt.Sprintf("https://cdn.makeasinger.com/masters/%s.wav", uuid.New().String()),
+		Duration: 180.5,
+		Profile:  payload.Profile,
+		PeakDb:   -0.3,
+		LUFS:     -14,
+		// Mock: masters/ private oldugu icin gercekte suresi olurdu; sabit
+		// yazmamak icin config'teki PresignTTL kullanilir (varsa).
+		ExpiresAt: model.ExpiresPtr(time.Now().Add(w.presignTTL())),
 	}
+}
+
+// presignTTL, mock/dev yollarinda kullanilacak sure degerini dondurur.
+// r2Cfg yoksa (mock modda calisiliyorsa) 1 saatlik varsayilana duser.
+func (w *MasterWorker) presignTTL() time.Duration {
+	if w.r2Cfg != nil && w.r2Cfg.PresignTTL > 0 {
+		return w.r2Cfg.PresignTTL
+	}
+	return time.Hour
 }
