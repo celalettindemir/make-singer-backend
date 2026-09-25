@@ -45,7 +45,7 @@ class MasterService:
 
     async def process(
         self,
-        stem_urls: list[str],
+        stem_keys: list[str],
         mix_settings: list[dict[str, Any]],
         profile: str,
         vocal_takes: list[dict[str, Any]],
@@ -61,17 +61,20 @@ class MasterService:
         5. Apply mastering chain (EQ, compression, limiting)
         6. Upload result
         """
+        if not self.storage:
+            raise RuntimeError("Storage service not configured")
+
         if profile not in PROFILES:
             profile = "clean"
 
         profile_settings = PROFILES[profile]
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Download stems
+            # Download stems (nesne anahtariyla, S3 API uzerinden)
             stems = []
-            for i, url in enumerate(stem_urls):
+            for i, stem_key in enumerate(stem_keys):
                 stem_path = os.path.join(tmpdir, f"stem_{i}.wav")
-                await self.storage.download_to_file(url, stem_path)
+                self.storage.download_key_to_file(stem_key, stem_path)
                 stems.append(AudioSegment.from_file(stem_path))
 
             # Apply mix settings and combine
@@ -160,7 +163,7 @@ class MasterService:
         combined = None
         for i, take in enumerate(vocal_takes):
             vocal_path = os.path.join(tmpdir, f"vocal_{i}.wav")
-            await self.storage.download_to_file(take["url"], vocal_path)
+            self.storage.download_key_to_file(take["key"], vocal_path)
 
             vocal = AudioSegment.from_file(vocal_path)
 

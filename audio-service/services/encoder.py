@@ -15,29 +15,31 @@ class EncoderService:
     def __init__(self, storage: StorageService | None = None):
         self.storage = storage
 
-    async def process(
+    async def encode(
         self,
-        input_url: str,
+        input_key: str,
         format: str,
-        quality: int,
-        sample_rate: int,
-        bit_depth: int,
-        metadata: dict[str, str],
         output_key: str,
+        quality: int = 320,
+        sample_rate: int = 48000,
+        bit_depth: int = 24,
+        metadata: dict[str, str] | None = None,
+        **kw: Any,
     ) -> dict[str, Any]:
         """
         Encode audio to specified format.
 
         Supports MP3 and WAV formats with configurable quality settings.
         """
+        if not self.storage:
+            raise RuntimeError("Storage service not configured")
+
+        metadata = metadata or {}
+
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Download input file
+            # Download input file (nesne anahtariyla, S3 API uzerinden)
             input_path = os.path.join(tmpdir, "input.wav")
-            if self.storage:
-                await self.storage.download_to_file(input_url, input_path)
-            else:
-                # For testing without storage
-                raise ValueError("Storage service not configured")
+            self.storage.download_key_to_file(input_key, input_path)
 
             # Load audio
             audio = AudioSegment.from_file(input_path)

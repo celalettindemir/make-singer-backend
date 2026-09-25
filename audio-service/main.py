@@ -32,7 +32,8 @@ logger = logging.getLogger("audio-service")
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
 R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
-R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "makeasinger")
+R2_PUBLIC_BUCKET = os.getenv("R2_PUBLIC_BUCKET", "makeasinger-public")
+R2_PRIVATE_BUCKET = os.getenv("R2_PRIVATE_BUCKET", "makeasinger-private")
 R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "")
 
 
@@ -46,13 +47,15 @@ class MixChannel(BaseModel):
 
 
 class VocalTakeInput(BaseModel):
-    url: str
+    key: str
     volume: float = 1.0
     pan: float = 0.0
 
 
 class MasterRequest(BaseModel):
-    stem_urls: list[str]
+    model_config = {"extra": "forbid"}
+
+    stem_keys: list[str]
     mix_settings: list[MixChannel]
     profile: str = "clean"  # clean, warm, loud
     vocal_takes: list[VocalTakeInput] = []
@@ -67,7 +70,7 @@ class MasterResponse(BaseModel):
 
 
 class EncodeRequest(BaseModel):
-    input_url: str
+    input_key: str
     format: str  # mp3, wav
     quality: int = 320  # for mp3
     sample_rate: int = 48000
@@ -83,7 +86,7 @@ class EncodeResponse(BaseModel):
 
 
 class ZipFileEntry(BaseModel):
-    url: str
+    key: str
     filename: str
 
 
@@ -116,7 +119,8 @@ async def lifespan(app: FastAPI):
             account_id=R2_ACCOUNT_ID,
             access_key_id=R2_ACCESS_KEY_ID,
             secret_access_key=R2_SECRET_ACCESS_KEY,
-            bucket_name=R2_BUCKET_NAME,
+            public_bucket=R2_PUBLIC_BUCKET,
+            private_bucket=R2_PRIVATE_BUCKET,
             public_url=R2_PUBLIC_URL,
         )
 
@@ -157,7 +161,7 @@ async def master_audio(request: MasterRequest):
 
     try:
         result = await master_service.process(
-            stem_urls=request.stem_urls,
+            stem_keys=request.stem_keys,
             mix_settings=[s.model_dump() for s in request.mix_settings],
             profile=request.profile,
             vocal_takes=[v.model_dump() for v in request.vocal_takes],
@@ -179,8 +183,8 @@ async def encode_audio(request: EncodeRequest):
         raise HTTPException(status_code=503, detail="Encoder service not initialized")
 
     try:
-        result = await encoder_service.process(
-            input_url=request.input_url,
+        result = await encoder_service.encode(
+            input_key=request.input_key,
             format=request.format,
             quality=request.quality,
             sample_rate=request.sample_rate,

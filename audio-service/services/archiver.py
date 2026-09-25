@@ -32,16 +32,16 @@ class ArchiverService:
 
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
                 for file_entry in files:
-                    url = file_entry.get("url")
+                    key = file_entry.get("key")
                     filename = file_entry.get("filename")
 
-                    if not url or not filename:
+                    if not key or not filename:
                         continue
 
-                    # Download file
+                    # Download file (nesne anahtariyla, S3 API uzerinden)
                     temp_path = os.path.join(tmpdir, os.path.basename(filename))
                     if self.storage:
-                        await self.storage.download_to_file(url, temp_path)
+                        self.storage.download_key_to_file(key, temp_path)
 
                         # Add to ZIP with specified filename
                         zipf.write(temp_path, filename)
