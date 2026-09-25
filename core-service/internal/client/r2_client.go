@@ -15,7 +15,10 @@ import (
 
 // StorageClient defines the interface for object storage operations
 type StorageClient interface {
-	Upload(ctx context.Context, key string, body io.Reader, contentType string) (string, error)
+	// Upload, nesneyi yazar ve istemciye verilecek adresi TEK seferde
+	// uretir (public: kalici CDN adresi ve sifir zaman, private: imzali
+	// URL ve son kullanma ani). Cagiranin ayrica URLFor cagirmasi gerekmez.
+	Upload(ctx context.Context, key string, body io.Reader, contentType string) (string, time.Time, error)
 	Delete(ctx context.Context, key string) error
 	GetSignedURL(ctx context.Context, key string, expiry time.Duration) (string, error)
 	// URLFor, anahtarin onegine gore dogru adresi uretir: public anahtarda
@@ -38,6 +41,12 @@ func NewR2Client(cfg *config.R2Config) (*R2Client, error) {
 	}
 	if cfg.PublicBucket == "" || cfg.PrivateBucket == "" {
 		return nil, fmt.Errorf("R2 bucket adlari eksik: public=%q private=%q", cfg.PublicBucket, cfg.PrivateBucket)
+	}
+	// R2_PUBLIC_URL zorunludur: bos olursa public anahtarlar ne gecerli bir
+	// CDN ne de dogru bir R2 adresi uretir ve KeyFromURL CDN adreslerini
+	// tanimaz. Baslangicta patlamasi, uretimde sessizce bozulmasindan iyidir.
+	if cfg.PublicURL == "" {
+		return nil, fmt.Errorf("R2_PUBLIC_URL eksik: public bucket icin CDN adresi zorunludur")
 	}
 
 	endpoint := fmt.Sprintf("https://%s.r2.cloudflarestorage.com", cfg.AccountID)
@@ -71,9 +80,9 @@ func NewR2Client(cfg *config.R2Config) (*R2Client, error) {
 	}, nil
 }
 
-// Upload uploads a file to R2 and returns its URL (public keys: CDN address,
-// private keys: presigned URL).
-func (c *R2Client) Upload(ctx context.Context, key string, body io.Reader, contentType string) (string, error) {
+// Upload uploads a file to R2 and returns its URL and expiry (public keys:
+// CDN address with zero time, private keys: presigned URL with expiry).
+func (c *R2Client) Upload(ctx context.Context, key string, body io.Reader, contentType string) (string, time.Time, error) {
 	input := &s3.PutObjectInput{
 		Bucket:      aws.String(BucketFor(key, c.cfg)),
 		Key:         aws.String(key),
@@ -82,11 +91,10 @@ func (c *R2Client) Upload(ctx context.Context, key string, body io.Reader, conte
 	}
 
 	if _, err := c.s3Client.PutObject(ctx, input); err != nil {
-		return "", fmt.Errorf("failed to upload to R2: %w", err)
+		return "", time.Time{}, fmt.Errorf("failed to upload to R2: %w", err)
 	}
 
-	url, _, err := c.URLFor(ctx, key)
-	return url, err
+	return c.URLFor(ctx, key)
 }
 
 // Delete removes a file from R2

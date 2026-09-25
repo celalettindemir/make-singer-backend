@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	neturl "net/url"
 	"strings"
 	"testing"
 	"time"
@@ -53,8 +54,15 @@ func TestURLFor_PrivateAnahtarPresignedVeBirSaat(t *testing.T) {
 	if !strings.Contains(url, "X-Amz-Signature") {
 		t.Errorf("presigned URL bekleniyordu: %q", url)
 	}
-	if !strings.Contains(url, "makeasinger-private") {
-		t.Errorf("private bucket bekleniyordu: %q", url)
+	// Konak TAM olarak dogrulanir: "icerir mi" kontrolu hem
+	// "bucket.r2..." hem "bucket.hesap.r2..." bicimine uyuyordu ve
+	// KeyFromURL'in hangi bicimi bekledigini hic sinamiyordu.
+	u, err := neturl.Parse(url)
+	if err != nil {
+		t.Fatalf("uretilen URL cozulemedi: %v", err)
+	}
+	if u.Host != "makeasinger-private.hesap123.r2.cloudflarestorage.com" {
+		t.Errorf("konak = %q, beklenen makeasinger-private.hesap123.r2.cloudflarestorage.com", u.Host)
 	}
 	fark := expires.Sub(once)
 	if fark < 59*time.Minute || fark > 61*time.Minute {
@@ -75,5 +83,16 @@ func TestNewR2Client_BucketAdlariZorunlu(t *testing.T) {
 	cfg.PrivateBucket = ""
 	if _, err := NewR2Client(cfg); err == nil {
 		t.Error("private bucket adi bos iken hata bekleniyordu")
+	}
+}
+
+// TestNewR2Client_PublicURLZorunlu: bos R2_PUBLIC_URL ne gecerli bir CDN
+// adresi ne de taninan bir konak uretir. Bucket adlari gibi baslangicta
+// patlamali.
+func TestNewR2Client_PublicURLZorunlu(t *testing.T) {
+	cfg := testR2Cfg()
+	cfg.PublicURL = ""
+	if _, err := NewR2Client(cfg); err == nil {
+		t.Error("R2_PUBLIC_URL bos iken hata bekleniyordu")
 	}
 }

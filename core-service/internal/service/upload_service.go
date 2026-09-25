@@ -41,14 +41,11 @@ func (s *UploadService) UploadVocal(ctx context.Context, projectID, sectionID, t
 		return s.uploadMock(takeID, projectID)
 	}
 
-	// Upload to R2
-	if _, err := s.r2Client.Upload(ctx, key, file, "audio/wav"); err != nil {
-		return nil, fmt.Errorf("vokal yuklenemedi: %w", err)
-	}
-
-	fileURL, expiresAt, err := s.r2Client.URLFor(ctx, key)
+	// Upload to R2. Upload adresi de dondurur; ayrica URLFor cagirmak
+	// ikinci (bosa giden) bir imzalama demekti.
+	fileURL, expiresAt, err := s.r2Client.Upload(ctx, key, file, "audio/wav")
 	if err != nil {
-		return nil, fmt.Errorf("vokal URL uretilemedi: %w", err)
+		return nil, fmt.Errorf("vokal yuklenemedi: %w", err)
 	}
 
 	return &model.UploadVocalResponse{

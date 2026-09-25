@@ -32,7 +32,7 @@ r2:
   secret_access_key: "" # Set via R2_SECRET_ACCESS_KEY env var
   public_bucket: "makeasinger-public"
   private_bucket: "makeasinger-private"
-  public_url: "" # Set via R2_PUBLIC_URL env var (orn. https://makesinger-cdn.celalettindemir.dev)
+  public_url: "https://makesinger-cdn.celalettindemir.dev" # zorunlu; R2_PUBLIC_URL ile ezilebilir
   presign_ttl: "1h" # private nesneler icin presigned URL omru
 
 # Zitadel OIDC Configuration

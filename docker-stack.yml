@@ -18,7 +18,7 @@ version: "3.8"
 # ZITADEL_EXTERNAL_DOMAIN  - External domain for Zitadel (e.g., auth.makeasinger.com)
 # R2_PUBLIC_BUCKET         - R2 public bucket adi (default: makeasinger-public)
 # R2_PRIVATE_BUCKET        - R2 private bucket adi (default: makeasinger-private)
-# R2_PUBLIC_URL            - R2 CDN public URL
+# R2_PUBLIC_URL            - R2 CDN public URL (zorunlu, default: https://makesinger-cdn.celalettindemir.dev)
 # GROQ_BASE_URL            - Groq API URL
 # GROQ_MODEL               - Groq model
 # SUNO_BASE_URL            - Suno API URL
@@ -48,7 +48,7 @@ services:
       R2_SECRET_ACCESS_KEY_FILE: /run/secrets/r2_secret_access_key
       R2_PUBLIC_BUCKET: ${R2_PUBLIC_BUCKET:-makeasinger-public}
       R2_PRIVATE_BUCKET: ${R2_PRIVATE_BUCKET:-makeasinger-private}
-      R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
+      R2_PUBLIC_URL: ${R2_PUBLIC_URL:-https://makesinger-cdn.celalettindemir.dev}
       ZITADEL_DOMAIN: ${ZITADEL_EXTERNAL_DOMAIN:-}
       ZITADEL_ISSUER: https://${ZITADEL_EXTERNAL_DOMAIN:-localhost}
       ZITADEL_CLIENT_ID_FILE: /run/secrets/zitadel_client_id
@@ -148,7 +148,7 @@ services:
       R2_SECRET_ACCESS_KEY_FILE: /run/secrets/r2_secret_access_key
       R2_PUBLIC_BUCKET: ${R2_PUBLIC_BUCKET:-makeasinger-public}
       R2_PRIVATE_BUCKET: ${R2_PRIVATE_BUCKET:-makeasinger-private}
-      R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
+      R2_PUBLIC_URL: ${R2_PUBLIC_URL:-https://makesinger-cdn.celalettindemir.dev}
     secrets:
       - r2_account_id
       - r2_access_key_id
