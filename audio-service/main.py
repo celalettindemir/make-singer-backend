@@ -14,11 +14,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from services.master import MasterService
-from services.encoder import EncoderService
 from services.archiver import ArchiverService
+from services.encoder import EncoderService
+from services.master import MasterService
 from services.storage import StorageService
-
 
 # Logging configuration
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info").upper()
@@ -135,7 +134,6 @@ async def lifespan(app: FastAPI):
     yield
 
     # Cleanup on shutdown
-    pass
 
 
 app = FastAPI(
@@ -171,7 +169,9 @@ async def master_audio(request: MasterRequest):
             output_key=request.output_key,
         )
         return MasterResponse(**result)
-    except Exception as e:
+    # Genis yakalama BILINCLI: FastAPI ucunda son siginak, her hata 500
+    # olarak donsun. BLE001 bu yuzden susturuldu.
+    except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -196,7 +196,9 @@ async def encode_audio(request: EncodeRequest):
             output_key=request.output_key,
         )
         return EncodeResponse(**result)
-    except Exception as e:
+    # Genis yakalama BILINCLI: FastAPI ucunda son siginak, her hata 500
+    # olarak donsun. BLE001 bu yuzden susturuldu.
+    except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -214,7 +216,9 @@ async def create_zip(request: ZipRequest):
             output_key=request.output_key,
         )
         return ZipResponse(**result)
-    except Exception as e:
+    # Genis yakalama BILINCLI: FastAPI ucunda son siginak, her hata 500
+    # olarak donsun. BLE001 bu yuzden susturuldu.
+    except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(e))
 
 

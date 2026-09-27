@@ -3,11 +3,12 @@
 import os
 
 import pytest
+from pydantic import ValidationError
 
+import services.encoder as encoder_module
 from main import EncodeRequest, MasterRequest, MixChannel, ZipFileEntry
 from services.archiver import ArchiverService
 from services.encoder import EncoderService
-import services.encoder as encoder_module
 
 
 class SahteStorage:
@@ -49,7 +50,7 @@ def test_master_request_anahtar_alanlari():
 
 
 def test_master_request_eski_alan_reddedilir():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         MasterRequest(
             stem_urls=["https://x/stems/p/s.wav"],
             mix_settings=[],
@@ -59,7 +60,7 @@ def test_master_request_eski_alan_reddedilir():
 
 def test_mix_channel_stem_url_reddedilir():
     """Imzali URL istek govdesine girmesin: alan iki taraftan da kalkti."""
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         MixChannel(
             stem_url="https://x.r2.cloudflarestorage.com/stems/a.wav?X-Amz-Signature=g",
             volume=1.0,

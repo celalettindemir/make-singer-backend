@@ -1,3 +1,6 @@
 -r requirements.txt
 pytest==8.0.0
 pytest-asyncio==0.23.7
+# CI ile yerel ayni kurallari gormesi icin SABITLENDI: ruff 0.16 varsayilan
+# kural setini genisletti ve sabitlenmemis kurulum CI'i sessizce kirdi.
+ruff==0.16.9

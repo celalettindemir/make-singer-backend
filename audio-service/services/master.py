@@ -6,10 +6,9 @@ from typing import Any
 
 import numpy as np
 from pydub import AudioSegment
-from pydub.effects import normalize, compress_dynamic_range
+from pydub.effects import compress_dynamic_range, normalize
 
 from .storage import StorageService
-
 
 # Mastering profiles define EQ and compression settings
 PROFILES = {
