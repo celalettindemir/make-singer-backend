@@ -59,3 +59,19 @@ func TestR2Config_PresignTTLOrDefault(t *testing.T) {
 		t.Errorf("PresignTTLOrDefault = %v, beklenen config'teki 2h (sabit 1h'e duselmemeliydi)", got)
 	}
 }
+
+func TestAuthVarsayilanlari(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Auth.Port != "8001" {
+		t.Errorf("Auth.Port = %q, beklenen %q", cfg.Auth.Port, "8001")
+	}
+	if cfg.Auth.AccessTTL != 15*time.Minute {
+		t.Errorf("Auth.AccessTTL = %v, beklenen 15m", cfg.Auth.AccessTTL)
+	}
+	if cfg.Auth.RefreshTTL != 1440*time.Hour {
+		t.Errorf("Auth.RefreshTTL = %v, beklenen 1440h", cfg.Auth.RefreshTTL)
+	}
+}

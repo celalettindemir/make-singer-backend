@@ -39,6 +39,7 @@ type Config struct {
 	Suno      SunoConfig
 	Audio     AudioConfig
 	Gateway   GatewayConfig
+	Auth      AuthConfig
 }
 
 type ServerConfig struct {
@@ -117,6 +118,20 @@ type GatewayConfig struct {
 	Enabled bool
 }
 
+// AuthConfig, kendi OpenID Provider'imizin yapilandirmasi.
+// Issuer bos ise OP hic baslamaz; API o zaman eski auth yolunda kalir.
+type AuthConfig struct {
+	Issuer        string        // https://makesinger-auth.celalettindemir.dev
+	Port          string        // ikinci dinleyicinin portu
+	DBURL         string        // Postgres DSN
+	SigningKeyPEM string        // RSA ozel anahtar, PEM
+	CryptoKey     string        // op.Config.CryptoKey icin 32 baytlik sir
+	ClientID      string        // mobil public client
+	RedirectURIs  []string      // izinli redirect adresleri
+	AccessTTL     time.Duration // access token omru
+	RefreshTTL    time.Duration // refresh token omru
+}
+
 func Load() (*Config, error) {
 	// Read Docker Swarm secrets from _FILE env vars before Viper binds
 	readSecret("REDIS_PASSWORD")
@@ -126,6 +141,9 @@ func Load() (*Config, error) {
 	readSecret("R2_ACCESS_KEY_ID")
 	readSecret("R2_SECRET_ACCESS_KEY")
 	readSecret("ZITADEL_CLIENT_ID")
+	readSecret("AUTH_DB_URL")
+	readSecret("AUTH_SIGNING_KEY")
+	readSecret("AUTH_CRYPTO_KEY")
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
@@ -163,6 +181,15 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("audio.timeout", "AUDIO_SERVICE_TIMEOUT")
 	_ = viper.BindEnv("server.api_domain", "API_DOMAIN")
 	_ = viper.BindEnv("gateway.enabled", "GATEWAY_ENABLED")
+	_ = viper.BindEnv("auth.issuer", "AUTH_ISSUER")
+	_ = viper.BindEnv("auth.port", "AUTH_PORT")
+	_ = viper.BindEnv("auth.db_url", "AUTH_DB_URL")
+	_ = viper.BindEnv("auth.signing_key_pem", "AUTH_SIGNING_KEY")
+	_ = viper.BindEnv("auth.crypto_key", "AUTH_CRYPTO_KEY")
+	_ = viper.BindEnv("auth.client_id", "AUTH_CLIENT_ID")
+	_ = viper.BindEnv("auth.redirect_uris", "AUTH_REDIRECT_URIS")
+	_ = viper.BindEnv("auth.access_ttl", "AUTH_ACCESS_TTL")
+	_ = viper.BindEnv("auth.refresh_ttl", "AUTH_REFRESH_TTL")
 
 	// Defaults
 	viper.SetDefault("server.port", "8000")
@@ -195,6 +222,11 @@ func Load() (*Config, error) {
 
 	// R2 presigned URL varsayilan omru
 	viper.SetDefault("r2.presign_ttl", "1h")
+
+	// Auth (kendi OpenID Provider) varsayilanlari
+	viper.SetDefault("auth.port", "8001")
+	viper.SetDefault("auth.access_ttl", "15m")
+	viper.SetDefault("auth.refresh_ttl", "1440h") // 60 gun
 
 	// Try to read config file (optional)
 	_ = viper.ReadInConfig()
@@ -251,6 +283,17 @@ func Load() (*Config, error) {
 		},
 		Gateway: GatewayConfig{
 			Enabled: viper.GetBool("gateway.enabled"),
+		},
+		Auth: AuthConfig{
+			Issuer:        viper.GetString("auth.issuer"),
+			Port:          viper.GetString("auth.port"),
+			DBURL:         viper.GetString("auth.db_url"),
+			SigningKeyPEM: viper.GetString("auth.signing_key_pem"),
+			CryptoKey:     viper.GetString("auth.crypto_key"),
+			ClientID:      viper.GetString("auth.client_id"),
+			RedirectURIs:  viper.GetStringSlice("auth.redirect_uris"),
+			AccessTTL:     viper.GetDuration("auth.access_ttl"),
+			RefreshTTL:    viper.GetDuration("auth.refresh_ttl"),
 		},
 	}
 
