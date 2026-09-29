@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	jose "github.com/go-jose/go-jose/v4"
+	"github.com/zitadel/oidc/v3/pkg/op"
 )
 
 // Anahtar, RS256 imzalama anahtarini tasir ve op paketinin hem
@@ -32,7 +33,7 @@ func AnahtarYukle(pemMetni string) (*Anahtar, error) {
 	} else {
 		herhangi, err8 := x509.ParsePKCS8PrivateKey(blok.Bytes)
 		if err8 != nil {
-			return nil, fmt.Errorf("RSA ozel anahtari cozulemedi: %w", err)
+			return nil, fmt.Errorf("RSA ozel anahtari cozulemedi (PKCS#1: %v, PKCS#8: %w)", err, err8)
 		}
 		rsaAnahtar, uygun := herhangi.(*rsa.PrivateKey)
 		if !uygun {
@@ -61,13 +62,11 @@ func kidUret(acik *rsa.PublicKey) string {
 }
 
 func (a *Anahtar) SignatureAlgorithm() jose.SignatureAlgorithm { return jose.RS256 }
-func (a *Anahtar) Algorithm() jose.SignatureAlgorithm          { return jose.RS256 }
-func (a *Anahtar) Use() string                                 { return "sig" }
 func (a *Anahtar) ID() string                                  { return a.kid }
 
-// Key, op.SigningKey icin ozel anahtari, op.Key icin acik anahtari
-// dondurmelidir. op paketi SigningKey'i imzalarken, Key'i JWKS
-// yayinlarken kullanir; ikisi ayni metot adini paylasiyor.
+// Key, op.SigningKey icin ozel anahtari dondurur. op paketi SigningKey'i
+// imzalarken kullanir; AcikAnahtar().Key() ise acik anahtari JWKS yayini
+// icin dondurur.
 func (a *Anahtar) Key() any { return a.ozel }
 
 // AcikAnahtar, JWKS yayini icin op.Key olarak kullanilacak sarmalayiciyi
@@ -80,6 +79,12 @@ func (k *AcikAnahtarKey) ID() string                         { return k.a.kid }
 func (k *AcikAnahtarKey) Algorithm() jose.SignatureAlgorithm { return jose.RS256 }
 func (k *AcikAnahtarKey) Use() string                        { return "sig" }
 func (k *AcikAnahtarKey) Key() any                           { return &k.a.ozel.PublicKey }
+
+// Tiklamak ve derleme zamanında arayuz uyumunu kontrol et
+var (
+	_ op.SigningKey = (*Anahtar)(nil)
+	_ op.Key        = (*AcikAnahtarKey)(nil)
+)
 
 // CryptoAnahtar, op.Config.CryptoKey icin tam 32 bayt dondurur. Kisa bir
 // sir sessizce doldurulmaz: sifreleme zayiflar ve bu sessizce olur.

@@ -28,13 +28,9 @@ func TestAnahtarYuklenirVeArayuzleriKarsilar(t *testing.T) {
 		t.Fatalf("AnahtarYukle: %v", err)
 	}
 	var _ op.SigningKey = a
-	var _ op.Key = a
 
 	if a.SignatureAlgorithm() != jose.RS256 {
 		t.Errorf("algoritma = %v, beklenen RS256", a.SignatureAlgorithm())
-	}
-	if a.Use() != "sig" {
-		t.Errorf("Use() = %q, beklenen %q", a.Use(), "sig")
 	}
 	if a.ID() == "" {
 		t.Error("anahtar ID'si bos")
@@ -69,9 +65,9 @@ func TestAnahtarIDFarkliAnahtarlardaFarkli(t *testing.T) {
 
 func TestBozukPEMReddedilir(t *testing.T) {
 	for ad, girdi := range map[string]string{
-		"bos":         "",
-		"cop":         "bu bir PEM degil",
-		"govde yok":   "-----BEGIN RSA PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----\n",
+		"bos":       "",
+		"cop":       "bu bir PEM degil",
+		"govde yok": "-----BEGIN RSA PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----\n",
 	} {
 		if _, err := AnahtarYukle(girdi); err == nil {
 			t.Errorf("%s: hata beklenirken nil dondu", ad)
@@ -94,6 +90,46 @@ func TestCryptoAnahtarUzunlugu(t *testing.T) {
 	}
 	if len(b) != 32 {
 		t.Errorf("uzunluk = %d, beklenen 32", len(b))
+	}
+}
+
+// PKCS#8 formatinda uretilmis RSA anahtarinin kabul edildigini dogrula.
+func TestPKCS8FormatKabulu(t *testing.T) {
+	rsaAnahtar, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("anahtar uretilemedi: %v", err)
+	}
+	pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(rsaAnahtar)
+	if err != nil {
+		t.Fatalf("PKCS#8 encode hatasi: %v", err)
+	}
+	blok := &pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8Bytes}
+	pemMetni := string(pem.EncodeToMemory(blok))
+
+	a, err := AnahtarYukle(pemMetni)
+	if err != nil {
+		t.Fatalf("PKCS#8 anahtari yuklemedi: %v", err)
+	}
+	if a.ID() == "" {
+		t.Error("PKCS#8 anahtarinin ID'si bos")
+	}
+}
+
+// 1024 bitlik anahtar reddedilmeli; RSA icin en az 2048 bit gerekli.
+func TestKisaBitAnahtariReddedilir(t *testing.T) {
+	rsaAnahtar, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("anahtar uretilemedi: %v", err)
+	}
+	blok := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(rsaAnahtar)}
+	pemMetni := string(pem.EncodeToMemory(blok))
+
+	_, err = AnahtarYukle(pemMetni)
+	if err == nil {
+		t.Error("1024 bitlik anahtar kabul edildi")
+	}
+	if err != nil && err.Error() != "anahtar 1024 bit, en az 2048 olmali" {
+		t.Errorf("hata mesaji beklenen metni icermiyor: %v", err)
 	}
 }
 
