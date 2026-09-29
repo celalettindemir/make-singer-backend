@@ -29,6 +29,20 @@ func TestMigrationlarGomulu(t *testing.T) {
 			t.Errorf("migration %q icermiyor", beklenen)
 		}
 	}
+	// 002 de gomulu olmali: KullaniciIptal'in (user_id, client_id)
+	// yuklemi bu indekse dayaniyor.
+	ikinci, err := migrationFS.ReadFile("migrations/002_refresh_indeks.sql")
+	if err != nil {
+		t.Fatalf("002_refresh_indeks.sql okunamadi: %v", err)
+	}
+	for _, beklenen := range []string{
+		"CREATE INDEX IF NOT EXISTS refresh_tokens_user_client_idx",
+		"(user_id, client_id)",
+	} {
+		if !strings.Contains(string(ikinci), beklenen) {
+			t.Errorf("002 migration %q icermiyor", beklenen)
+		}
+	}
 }
 
 func TestMigrationSirali(t *testing.T) {

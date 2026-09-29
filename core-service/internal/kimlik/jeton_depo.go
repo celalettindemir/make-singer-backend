@@ -101,8 +101,9 @@ func (s *PostgresTokenStore) AccessKaydet(ctx context.Context, id, userID, clien
 	if err != nil {
 		return fmt.Errorf("access kaydi serilenemedi: %w", err)
 	}
-	// TTL = access omru. Suresi gecmis kayit Redis'te kalmaz, bu yuzden
-	// okuma tarafinda ayrica sure kontrolu yapmaya gerek kalmaz.
+	// TTL = access omru: kayit kendiliginden silinir, Redis'e kalici veri
+	// yazilmaz. Okuma tarafi yine de ExpiresAt'i kontrol eder (saat kaymasi
+	// ve TTL'in henuz isletilmemis olmasi ihtimaline karsi savunma).
 	ttl := time.Until(expiresAt)
 	if ttl <= 0 {
 		return nil
@@ -173,18 +174,19 @@ func (s *PostgresTokenStore) RefreshDondur(ctx context.Context, sunulan string, 
 	defer func() { _ = islem.Rollback(ctx) }()
 
 	var (
-		id, familyID string
-		expiresAt    time.Time
-		usedAt       *time.Time
-		revokedAt    *time.Time
+		id, familyID     string
+		userID, clientID string
+		expiresAt        time.Time
+		usedAt           *time.Time
+		revokedAt        *time.Time
 	)
 	// FOR UPDATE: ayni jetonla gelen iki istek yarisirsa ikincisi
 	// birincinin used_at yazmasini gormeli, yoksa yeniden kullanim
 	// tespiti sessizce kacar.
 	err = islem.QueryRow(ctx,
-		`SELECT id, family_id, expires_at, used_at, revoked_at
+		`SELECT id, family_id, user_id, client_id, expires_at, used_at, revoked_at
 		   FROM refresh_tokens WHERE token_hash = $1 FOR UPDATE`,
-		jetonOzet(sunulan)).Scan(&id, &familyID, &expiresAt, &usedAt, &revokedAt)
+		jetonOzet(sunulan)).Scan(&id, &familyID, &userID, &clientID, &expiresAt, &usedAt, &revokedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrJetonYok
 	}
@@ -205,9 +207,17 @@ func (s *PostgresTokenStore) RefreshDondur(ctx context.Context, sunulan string, 
 			return "", fmt.Errorf("aile iptal edilemedi: %w", err)
 		}
 		if err := islem.Commit(ctx); err != nil {
-			return "", fmt.Errorf("iptal commit edilemedi: %w", err)
+			// Commit hatasi yeniden kullanim bilgisini YUTMAMALI: cagiran
+			// errors.Is ile bunun bir hirsizlik alarmi oldugunu gormeli.
+			return "", fmt.Errorf("%w (iptal commit edilemedi: %v)", ErrJetonTekrar, err)
 		}
 		return "", ErrJetonTekrar
+	}
+	// Sahiplik: cagiran katmanda bir hata olursa ayni aileye baska bir
+	// kullanicinin (veya baska istemcinin) kaydi eklenmesin. Ucuz savunma,
+	// uyusmazlikta jeton hic yokmus gibi davranilir.
+	if userID != yeni.UserID || clientID != yeni.ClientID {
+		return "", ErrJetonYok
 	}
 	if time.Now().UTC().After(expiresAt) {
 		return "", ErrJetonYok

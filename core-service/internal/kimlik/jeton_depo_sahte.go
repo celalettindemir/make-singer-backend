@@ -2,6 +2,7 @@ package kimlik
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -36,7 +37,7 @@ func (s *SahteTokenStore) AccessKaydet(ctx context.Context, id, userID, clientID
 		ID:        id,
 		UserID:    userID,
 		ClientID:  clientID,
-		Scopes:    scopes,
+		Scopes:    slices.Clone(scopes),
 		ExpiresAt: expiresAt,
 	}
 	return nil
@@ -52,7 +53,7 @@ func (s *SahteTokenStore) AccessOku(ctx context.Context, id string) (*AccessKayi
 	if time.Now().UTC().After(kayit.ExpiresAt) {
 		return nil, ErrJetonYok
 	}
-	return kayit, nil
+	return accessKopya(kayit), nil
 }
 
 // RefreshOlustur yeni bir AILE baslatir: family_id yeni uretilir.
@@ -77,9 +78,9 @@ func (s *SahteTokenStore) ekle(k *RefreshKayit, familyID, jeton string) {
 		UserID:    k.UserID,
 		ClientID:  k.ClientID,
 		TokenHash: ozet,
-		Scopes:    k.Scopes,
-		Audience:  k.Audience,
-		AMR:       k.AMR,
+		Scopes:    slices.Clone(k.Scopes),
+		Audience:  slices.Clone(k.Audience),
+		AMR:       slices.Clone(k.AMR),
 		AuthTime:  k.AuthTime,
 		ExpiresAt: k.ExpiresAt,
 	}
@@ -106,6 +107,12 @@ func (s *SahteTokenStore) RefreshDondur(ctx context.Context, sunulan string, yen
 		// Yeniden kullanim: ailenin tamamini oldur ve ayri bir hata don.
 		s.aileIptal(kayit.FamilyID)
 		return "", ErrJetonTekrar
+	}
+	// Sahiplik: cagiran katmanda bir hata olursa ayni aileye baska bir
+	// kullanicinin (veya baska istemcinin) kaydi eklenmesin. Ucuz savunma,
+	// uyusmazlikta jeton hic yokmus gibi davranilir.
+	if kayit.UserID != yeni.UserID || kayit.ClientID != yeni.ClientID {
+		return "", ErrJetonYok
 	}
 	if time.Now().UTC().After(kayit.ExpiresAt) {
 		return "", ErrJetonYok
@@ -134,7 +141,7 @@ func (s *SahteTokenStore) RefreshOku(ctx context.Context, sunulan string) (*Refr
 	if kayit.RevokedAt != nil || kayit.UsedAt != nil || time.Now().UTC().After(kayit.ExpiresAt) {
 		return nil, ErrJetonYok
 	}
-	return kayit, nil
+	return refreshKopya(kayit), nil
 }
 
 func (s *SahteTokenStore) AileIptal(ctx context.Context, familyID string) error {
@@ -177,7 +184,38 @@ func (s *SahteTokenStore) TumKayitlar() []*RefreshKayit {
 	defer s.mu.Unlock()
 	hepsi := make([]*RefreshKayit, 0, len(s.refresh))
 	for _, kayit := range s.refresh {
-		hepsi = append(hepsi, kayit)
+		hepsi = append(hepsi, refreshKopya(kayit))
 	}
 	return hepsi
+}
+
+// refreshKopya / accessKopya / zamanKopya: sahte depo cagirana DAHILI
+// isaretci vermez. PostgresTokenStore her okumada satiri yeniden
+// tarayarak dogal olarak taze bir yapi doner; cagiran donen kaydi
+// mutasyona ugratsa (orn. RevokedAt = nil) veritabani bozulmaz. Sahte
+// deponun ayni yalitimi elle saglamasi gerekir, yoksa testler gecerken
+// uretim sasar.
+func refreshKopya(k *RefreshKayit) *RefreshKayit {
+	kopya := *k
+	kopya.TokenHash = slices.Clone(k.TokenHash)
+	kopya.Scopes = slices.Clone(k.Scopes)
+	kopya.Audience = slices.Clone(k.Audience)
+	kopya.AMR = slices.Clone(k.AMR)
+	kopya.UsedAt = zamanKopya(k.UsedAt)
+	kopya.RevokedAt = zamanKopya(k.RevokedAt)
+	return &kopya
+}
+
+func accessKopya(k *AccessKayit) *AccessKayit {
+	kopya := *k
+	kopya.Scopes = slices.Clone(k.Scopes)
+	return &kopya
+}
+
+func zamanKopya(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	k := *t
+	return &k
 }
