@@ -56,6 +56,15 @@ func (s *SahteTokenStore) AccessOku(ctx context.Context, id string) (*AccessKayi
 	return accessKopya(kayit), nil
 }
 
+// AccessSil, Postgres uygulamasiyla ayni sekilde kaydi kaldirir; kayit
+// yoksa sessizce basarili sayilir.
+func (s *SahteTokenStore) AccessSil(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.access, id)
+	return nil
+}
+
 // RefreshOlustur yeni bir AILE baslatir: family_id yeni uretilir.
 func (s *SahteTokenStore) RefreshOlustur(ctx context.Context, k *RefreshKayit) (string, error) {
 	jeton, err := jetonUret()

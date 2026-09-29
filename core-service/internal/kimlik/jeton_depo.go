@@ -48,6 +48,11 @@ type RefreshKayit struct {
 type TokenStore interface {
 	AccessKaydet(ctx context.Context, id, userID, clientID string, scopes []string, expiresAt time.Time) error
 	AccessOku(ctx context.Context, id string) (*AccessKayit, error)
+	// AccessSil, tek bir access token kaydini siler. op.Storage.RevokeToken
+	// bir access token'i hedef aldiginda cagirir: jeton kendisi (JWT
+	// oldugu icin) hala imza gecerliyse dogrulanir, ama introspection ve
+	// /userinfo artik onu bulamaz.
+	AccessSil(ctx context.Context, id string) error
 	RefreshOlustur(ctx context.Context, k *RefreshKayit) (string, error)
 	RefreshDondur(ctx context.Context, sunulan string, yeni *RefreshKayit) (string, error)
 	RefreshOku(ctx context.Context, sunulan string) (*RefreshKayit, error)
@@ -130,6 +135,15 @@ func (s *PostgresTokenStore) AccessOku(ctx context.Context, id string) (*AccessK
 		return nil, ErrJetonYok
 	}
 	return &kayit, nil
+}
+
+// AccessSil, access kaydini Redis'ten kaldirir. Kayit zaten yoksa
+// (suresi dolmus veya hic yazilmamis) sessizce basarili sayilir.
+func (s *PostgresTokenStore) AccessSil(ctx context.Context, id string) error {
+	if err := s.rdb.Del(ctx, accessAnahtar(id)).Err(); err != nil {
+		return fmt.Errorf("access kaydi silinemedi: %w", err)
+	}
+	return nil
 }
 
 // RefreshOlustur yeni bir AILE baslatir: family_id yeni uretilir. Rotasyon
