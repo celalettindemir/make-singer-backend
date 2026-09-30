@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rsa"
 	"fmt"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -37,10 +39,16 @@ type Sunucu struct {
 // dinleyicisinde (cfg.Port) discovery belgesini, JWKS'i ve OIDC
 // uclarini yayinlamaya baslar. Issuer bos ise hic baslamaz: bos issuer
 // ile uretilen discovery belgesi kullanilamaz ve API eski auth yolunda
-// kalmalidir.
-func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client) (*Sunucu, error) {
+// kalmalidir. env, cfg.Server.Env'dir (SERVER_ENV); issuer http:// ise
+// guvensiz modun sadece yerel gelistirmede acilabilmesi icin kullanilir
+// (bkz. issuerGuvensizIzniDogrula).
+func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env string) (*Sunucu, error) {
 	if cfg.Issuer == "" {
 		return nil, fmt.Errorf("issuer bos: kimlik saglayicisi baslatilamaz")
+	}
+
+	if err := issuerGuvensizIzniDogrula(cfg.Issuer, env); err != nil {
+		return nil, err
 	}
 
 	anahtar, err := AnahtarYukle(cfg.SigningKeyPEM)
@@ -81,11 +89,12 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client) (*Sun
 		},
 	}
 
+	// issuerGuvensizIzniDogrula yukarida gecti; yani buraya http://
+	// issuer ile gelindiyse guvensiz mod bilerek izin verilmis demektir
+	// (yerel gelistirme / Docker ile elle dogrulama). Kutuphane
+	// varsayilan olarak https disinda issuer kabul etmez.
 	var opOpts []op.Option
 	if strings.HasPrefix(cfg.Issuer, "http://") {
-		// Kutuphane varsayilan olarak https disinda issuer kabul etmez.
-		// Yerel gelistirme ve Docker ile elle dogrulama http kullanir;
-		// uretimde Issuer https oldugu icin bu dal hic devreye girmez.
 		opOpts = append(opOpts, op.WithAllowInsecure())
 	}
 
@@ -110,13 +119,48 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client) (*Sun
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			// Burada log.Fatal cagirmiyoruz: bu goroutine ana akistan
-			// ayrik, panik yerine sessizce durur; cagiran tarafin
-			// /health uzerinden fark etmesi beklenir.
+			// ayrik, panik yerine sessizce durur. NOT: /health yalnizca
+			// kimlikSunucu != nil bakiyor (yani Start basariyla dondu
+			// mu) — dinleyici SONRADAN burada coker (orn. port
+			// cakismasi), /health bunu YAKALAMAZ ve hala "kimlik":true
+			// doner. Gercek dinleyici sagligini izlemek Faz 1
+			// kapsaminda degil.
 			_ = err
 		}
 	}()
 
 	return &Sunucu{srv: srv, havuz: havuz, anahtar: anahtar}, nil
+}
+
+// issuerGuvensizIzniDogrula, issuer http:// ile basliyorsa guvensiz moda
+// (op.WithAllowInsecure) izin verilip verilmeyecegine karar verir.
+// Kutuphane (zitadel/oidc) host'a bakmadan yalnizca semaya gore karar
+// verir; bu yuzden guvensiz izni BIZ, iki kosul BIRLIKTE saglandiginda
+// veriyoruz:
+//  1. env production degil (SERVER_ENV=production ise izin YOK).
+//  2. issuer'in host kismi localhost, 127.0.0.1 veya ::1 (port'lu
+//     haller dahil, url.Hostname() ile cozulur).
+//
+// Aksi halde https zorunlu hatasi doner ve Start hicbir baglanti
+// acmadan durur. Issuer sir degildir, hata mesajinda ve uyari
+// loglarinda acikca gecebilir.
+func issuerGuvensizIzniDogrula(issuer, env string) error {
+	if !strings.HasPrefix(issuer, "http://") {
+		return nil
+	}
+	if env == "production" {
+		return fmt.Errorf("issuer http: production ortaminda https zorunlu, guvensiz mod izinli degil: %s", issuer)
+	}
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return fmt.Errorf("issuer cozulemedi: %w", err)
+	}
+	host := u.Hostname()
+	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		return fmt.Errorf("issuer http: yalnizca localhost/127.0.0.1/::1 icin guvensiz moda izin verilir, https zorunlu: %s", issuer)
+	}
+	log.Printf("UYARI: issuer http ve yerel, GUVENSIZ mod acik: %s", issuer)
+	return nil
 }
 
 // migrateKilitli, Migrate'i bir Postgres advisory lock ile sarar. Kumede
@@ -136,9 +180,9 @@ func migrateKilitli(ctx context.Context, havuz *pgxpool.Pool) error {
 	}
 	defer func() {
 		// Kilidi ayni baglanti uzerinden birak; birakma hatasi migration
-		// sonucunu degistirmez ama sessizce yutulmamali.
+		// sonucunu degistirmez ama sessizce yutulmamali, iz birakilmali.
 		if _, err := baglanti.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationKilitAnahtari); err != nil {
-			_ = err
+			log.Printf("migration kilidi birakilamadi: %v", err)
 		}
 	}()
 
@@ -146,13 +190,15 @@ func migrateKilitli(ctx context.Context, havuz *pgxpool.Pool) error {
 }
 
 // Kapat, HTTP dinleyicisini nazikce durdurur ve veritabani havuzunu
-// kapatir.
+// kapatir. Havuz, dinleyici kapanisi hata verse bile HER YOLDA kapatilir;
+// aksi halde Shutdown hatasinda havuz sizar.
 func (s *Sunucu) Kapat(ctx context.Context) error {
-	if err := s.srv.Shutdown(ctx); err != nil {
-		return fmt.Errorf("dinleyici kapatilamadi: %w", err)
+	shutdownErr := s.srv.Shutdown(ctx)
+	if shutdownErr != nil {
+		shutdownErr = fmt.Errorf("dinleyici kapatilamadi: %w", shutdownErr)
 	}
 	s.havuz.Close()
-	return nil
+	return shutdownErr
 }
 
 // APIAcikAnahtar, access token dogrulamasi icin API tarafinin kullanacagi

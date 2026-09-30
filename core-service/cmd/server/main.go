@@ -77,7 +77,7 @@ func main() {
 	var kimlikSunucu *kimlik.Sunucu
 	if cfg.Auth.Issuer != "" {
 		var err error
-		kimlikSunucu, err = kimlik.Start(ctx, &cfg.Auth, redisClient)
+		kimlikSunucu, err = kimlik.Start(ctx, &cfg.Auth, redisClient, cfg.Server.Env)
 		if err != nil {
 			log.Printf("Uyari: kimlik saglayicisi baslatilamadi: %v", err)
 		} else {
