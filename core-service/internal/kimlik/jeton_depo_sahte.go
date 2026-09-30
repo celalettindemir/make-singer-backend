@@ -153,6 +153,21 @@ func (s *SahteTokenStore) RefreshOku(ctx context.Context, sunulan string) (*Refr
 	return refreshKopya(kayit), nil
 }
 
+// RefreshIDileOku, Postgres uygulamasiyla ayni sozlesmeyi karsilar: ID ile
+// arar (jetonun kendisiyle degil) ve gecerlilik filtrelemesi yapmaz.
+// Sahte depo jetonu (hash'ini) anahtar olarak tuttugu icin ID ile aramak
+// dogrusal bir tarama gerektirir; testler icin bu yeterlidir.
+func (s *SahteTokenStore) RefreshIDileOku(ctx context.Context, id string) (*RefreshKayit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, kayit := range s.refresh {
+		if kayit.ID == id {
+			return refreshKopya(kayit), nil
+		}
+	}
+	return nil, ErrJetonYok
+}
+
 func (s *SahteTokenStore) AileIptal(ctx context.Context, familyID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

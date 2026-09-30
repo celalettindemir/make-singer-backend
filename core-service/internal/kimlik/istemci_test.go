@@ -2,6 +2,7 @@ package kimlik
 
 import (
 	"testing"
+	"time"
 
 	"github.com/makeasinger/api/internal/config"
 	"github.com/zitadel/oidc/v3/pkg/oidc"
@@ -16,6 +17,12 @@ func testAuthCfg() *config.AuthConfig {
 			"com.makesinger.app:/oauth2redirect",
 			"https://makesinger.ornek.dev/oauth2redirect",
 		},
+		// Depo testleri (depo_test.go) CreateAccessAndRefreshTokens gibi
+		// TTL'e bagli yollari da olcer; bunlar 0 birakilirsa access kaydi
+		// TTL<=0 ile sessizce yazilmaz ve refresh aninda "gecmis" sayilir,
+		// o yollar fiilen hic test edilmemis olur.
+		AccessTTL:  15 * time.Minute,
+		RefreshTTL: 1440 * time.Hour,
 	}
 }
 

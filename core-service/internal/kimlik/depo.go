@@ -140,12 +140,6 @@ func (d *Depo) CreateAccessAndRefreshTokens(ctx context.Context, request op.Toke
 		authTime = g.GetAuthTime()
 	}
 
-	accessID := uuid.NewString()
-	accessExpiresAt := time.Now().UTC().Add(d.cfg.AccessTTL)
-	if err := d.jetonlar.AccessKaydet(ctx, accessID, userID, clientID, scopes, accessExpiresAt); err != nil {
-		return "", "", time.Time{}, err
-	}
-
 	yeni := &RefreshKayit{
 		UserID:    userID,
 		ClientID:  clientID,
@@ -156,6 +150,11 @@ func (d *Depo) CreateAccessAndRefreshTokens(ctx context.Context, request op.Toke
 		ExpiresAt: time.Now().UTC().Add(d.cfg.RefreshTTL),
 	}
 
+	// Rotasyon ONCE yapilir, access kaydi SONRA yazilir. Sira tersine
+	// cevrilirse (once access, sonra rotasyon) ve rotasyon basarisiz
+	// olursa, TokenStore'da sahipsiz bir access kaydi 15 dakika (AccessTTL)
+	// boyunca yasar. Bu sirayla, rotasyon basarisiz olursa access kaydi
+	// hic yazilmaz.
 	var refreshToken string
 	if currentRefreshToken == "" {
 		// Authorization code akisi: sunulan jeton yok, yeni bir aile baslar.
@@ -163,10 +162,20 @@ func (d *Depo) CreateAccessAndRefreshTokens(ctx context.Context, request op.Toke
 	} else {
 		refreshToken, err = d.jetonlar.RefreshDondur(ctx, currentRefreshToken, yeni)
 		if errors.Is(err, ErrJetonTekrar) || errors.Is(err, ErrJetonYok) {
-			err = op.ErrInvalidRefreshToken
+			// op.ErrInvalidRefreshToken duz bir errors.New'dir, *oidc.Error
+			// DEGILDIR; bu bacakta donerse kutuphane onu generic bir hata
+			// sanip istemciye 500 server_error dondurur. oidc.ErrInvalidGrant()
+			// dogru OAuth hata koduna (invalid_grant, 400) cevrilir.
+			err = oidc.ErrInvalidGrant()
 		}
 	}
 	if err != nil {
+		return "", "", time.Time{}, err
+	}
+
+	accessID := uuid.NewString()
+	accessExpiresAt := time.Now().UTC().Add(d.cfg.AccessTTL)
+	if err := d.jetonlar.AccessKaydet(ctx, accessID, userID, clientID, scopes, accessExpiresAt); err != nil {
 		return "", "", time.Time{}, err
 	}
 	return accessID, refreshToken, accessExpiresAt, nil
@@ -223,47 +232,109 @@ func (d *Depo) TerminateSession(ctx context.Context, userID string, clientID str
 	return d.jetonlar.KullaniciIptal(ctx, userID, clientID)
 }
 
+// revokeRefresh, tokenOrTokenID'nin bir refresh token oldugunu varsayip
+// iptalini dener. bulundu=false ise deger bu turde degildi (baska bir tur
+// denenmeli); bulundu=true ise islem tamamlanmis demektir (hata nil de
+// olabilir, o zaman basarili iptal edilmis demektir).
+//
+// ONEMLI: kutuphane RevokeToken'i cagirmadan ONCE GetRefreshTokenInfo'yu
+// cagirir ve onun dondurdugu tokenID'yi (JETONUN KENDISINI DEGIL)
+// RevokeToken'a gecirir (bkz. zitadel/oidc pkg/op/token_revocation.go
+// ve server_legacy.go: "token = tokenID; subject = userID"). Bu yuzden
+// ONCE ID ile ariyoruz (RefreshIDileOku); ham jetonla arama (RefreshOku)
+// yalnizca ID ile bulunamadiginda denenen bir fallback'tir (ornegin
+// dogrudan bu depoyu cagiran baska bir yol icin).
+func (d *Depo) revokeRefresh(ctx context.Context, tokenOrTokenID, clientID string) (bulundu bool, hata *oidc.Error) {
+	kayit, err := d.jetonlar.RefreshIDileOku(ctx, tokenOrTokenID)
+	if err != nil && errors.Is(err, ErrJetonYok) {
+		kayit, err = d.jetonlar.RefreshOku(ctx, tokenOrTokenID)
+	}
+	if err != nil {
+		if errors.Is(err, ErrJetonYok) {
+			return false, nil
+		}
+		// Gercek bir depolama hatasi (orn. Postgres kesintisi):
+		// ErrJetonYok ile karistirilirsa DB olu iken /revoke sessizce 200
+		// doner ve sorun gorunmez olur.
+		return true, oidc.ErrServerError().WithParent(err)
+	}
+	if kayit.ClientID != clientID {
+		return true, oidc.ErrInvalidClient().WithDescription("jeton bu istemci icin verilmemis")
+	}
+	if err := d.jetonlar.AileIptal(ctx, kayit.FamilyID); err != nil {
+		return true, oidc.ErrServerError().WithParent(err)
+	}
+	return true, nil
+}
+
+// revokeAccess, tokenOrTokenID'nin bir access tokenID oldugunu varsayip
+// TokenStore kaydini siler. Semantigi revokeRefresh ile ayni: bulundu
+// false ise baska bir tur denenmeli.
+func (d *Depo) revokeAccess(ctx context.Context, tokenOrTokenID, clientID string) (bulundu bool, hata *oidc.Error) {
+	kayit, err := d.jetonlar.AccessOku(ctx, tokenOrTokenID)
+	if err != nil {
+		if errors.Is(err, ErrJetonYok) {
+			return false, nil
+		}
+		return true, oidc.ErrServerError().WithParent(err)
+	}
+	if kayit.ClientID != clientID {
+		return true, oidc.ErrInvalidClient().WithDescription("jeton bu istemci icin verilmemis")
+	}
+	if err := d.jetonlar.AccessSil(ctx, tokenOrTokenID); err != nil {
+		return true, oidc.ErrServerError().WithParent(err)
+	}
+	return true, nil
+}
+
 // RevokeToken, RFC 7009 /revoke uc noktasindan cagrilir. Refresh token
 // icin tum aile iptal edilir (tek jetonu degil): aksi halde ayni aileden
 // baska bir jeton hala gecerli kalir. Access token icin sadece TokenStore
 // kaydi silinir; JWT'nin kendisi imza gecerliyse gecerliligini korur,
 // ama introspection/userinfo artik onu bulamaz.
+//
+// userID parametresi kutuphane sozlesmesi geregi YALNIZCA access token
+// iptalinde doludur (refresh icin bos gelir); bu ipucu, hangi turu once
+// deneyecegimizi secip gereksiz bir depolama sorgusundan kacinmamizi
+// saglar.
 func (d *Depo) RevokeToken(ctx context.Context, tokenOrTokenID string, userID string, clientID string) *oidc.Error {
-	// Once refresh token olarak dene: RefreshOku basariliysa aileyi iptal et.
-	if kayit, err := d.jetonlar.RefreshOku(ctx, tokenOrTokenID); err == nil {
-		if kayit.ClientID != clientID {
-			hata := oidc.ErrInvalidClient().WithDescription("jeton bu istemci icin verilmemis")
+	if userID != "" {
+		if bulundu, hata := d.revokeAccess(ctx, tokenOrTokenID, clientID); bulundu {
 			return hata
 		}
-		if err := d.jetonlar.AileIptal(ctx, kayit.FamilyID); err != nil {
-			hata := oidc.ErrServerError().WithParent(err)
+		if bulundu, hata := d.revokeRefresh(ctx, tokenOrTokenID, clientID); bulundu {
 			return hata
 		}
+		// Ne access ne refresh: RFC 7009 idempotent iptal geregi basarili
+		// sayilir.
 		return nil
 	}
-	// Refresh degilse access tokenID olarak dene.
-	if kayit, err := d.jetonlar.AccessOku(ctx, tokenOrTokenID); err == nil {
-		if kayit.ClientID != clientID {
-			hata := oidc.ErrInvalidClient().WithDescription("jeton bu istemci icin verilmemis")
-			return hata
-		}
-		if err := d.jetonlar.AccessSil(ctx, tokenOrTokenID); err != nil {
-			hata := oidc.ErrServerError().WithParent(err)
-			return hata
-		}
-		return nil
+	if bulundu, hata := d.revokeRefresh(ctx, tokenOrTokenID, clientID); bulundu {
+		return hata
 	}
-	// Ne refresh ne access: kutuphanenin beklentisi budur -- jeton zaten
-	// gecersizse "basarili" sayilir (RFC 7009 idempotent iptal).
+	if bulundu, hata := d.revokeAccess(ctx, tokenOrTokenID, clientID); bulundu {
+		return hata
+	}
 	return nil
 }
 
 // GetRefreshTokenInfo, sunulan degerin gercekten bir refresh token olup
-// olmadigini kontrol eder; degilse (veya tuketilmis/iptal edilmisse)
-// op.ErrInvalidRefreshToken donmek ZORUNLUDUR (kutuphane sozlesmesi).
+// olmadigini kontrol eder; degilse (veya tuketilmis/iptal edilmisse ya da
+// baska bir istemciye aitse) op.ErrInvalidRefreshToken donmek ZORUNLUDUR
+// (kutuphane sozlesmesi). Gercek bir depolama hatasi (orn. Postgres
+// kesintisi) BUNUNLA KARISTIRILMAZ: kutuphane yalnizca ErrInvalidRefreshToken
+// gormezse 500 server_error'a duser, bu ayrimi yutmak DB olu iken
+// revoke/refresh akislarinin sessizce "gecersiz jeton" gibi gorunmesine
+// (ve gercek arizanin gizlenmesine) yol acar.
 func (d *Depo) GetRefreshTokenInfo(ctx context.Context, clientID string, token string) (userID string, tokenID string, err error) {
 	kayit, err := d.jetonlar.RefreshOku(ctx, token)
 	if err != nil {
+		if errors.Is(err, ErrJetonYok) || errors.Is(err, ErrJetonTekrar) {
+			return "", "", op.ErrInvalidRefreshToken
+		}
+		return "", "", fmt.Errorf("refresh jetonu okunamadi: %w", err)
+	}
+	if kayit.ClientID != clientID {
 		return "", "", op.ErrInvalidRefreshToken
 	}
 	return kayit.UserID, kayit.ID, nil
@@ -317,6 +388,13 @@ func (d *Depo) SetUserinfoFromToken(ctx context.Context, userinfo *oidc.UserInfo
 	kayit, err := d.jetonlar.AccessOku(ctx, tokenID)
 	if err != nil {
 		return err
+	}
+	// subject, kutuphanenin id_token/erisim baglaminda bagimsiz olarak
+	// bildigi kullanici; kayit.UserID ile uyusmuyorsa jeton BASKA bir
+	// kullaniciya ait demektir (orn. tokenID cakismasi ya da cagiran
+	// katmanda bir hata) -- sessizce baska birinin bilgisini donmemeliyiz.
+	if kayit.UserID != subject {
+		return fmt.Errorf("jeton bu kullanici icin verilmemis")
 	}
 	return d.userinfoDoldur(ctx, userinfo, kayit.UserID, kayit.Scopes)
 }
@@ -383,20 +461,25 @@ func (d *Depo) ValidateJWTProfileScopes(ctx context.Context, userID string, scop
 	return nil, fmt.Errorf("JWT profile grant desteklenmiyor")
 }
 
-// Health, ikincil dinleyicinin /healthz'i tarafindan cagrilir. havuz veya
-// rdb SaglikBagla ile baglanmadiysa (orn. testlerde) o bacak atlanir;
-// boylece Depo agsiz test edilebilir ama uretimde her iki bagimlilik da
-// gercekten yoklanir.
+// Health, ikincil dinleyicinin /healthz'i tarafindan cagrilir.
+//
+// FAIL-CLOSED: SaglikBagla hic cagrilmadiysa (havuz veya rdb nil), Health
+// bunu ACIKCA hata sayar. Onceki bir surumde bu durumda "basarili"
+// donuluyordu; bu, uretimde SaglikBagla cagrilmasi UNUTULURSA (ki bu
+// dosyada hicbir yerden cagrilmiyor -- bootstrap kodu ayri bir gorevin
+// isi) /healthz'in Postgres ve Redis olu iken bile "sagliklı" demesine
+// yol acardi. Bagimliliklar baglanmadan Depo yine de test edilebilsin
+// diye testler SaglikBagla'yi gercek baglantilarla cagirir ya da bu
+// hatayi bekler.
 func (d *Depo) Health(ctx context.Context) error {
-	if d.havuz != nil {
-		if err := d.havuz.Ping(ctx); err != nil {
-			return fmt.Errorf("postgres saglik kontrolu basarisiz: %w", err)
-		}
+	if d.havuz == nil || d.rdb == nil {
+		return fmt.Errorf("saglik bagimliliklari baglanmadi: SaglikBagla cagrilmadi")
 	}
-	if d.rdb != nil {
-		if err := d.rdb.Ping(ctx).Err(); err != nil {
-			return fmt.Errorf("redis saglik kontrolu basarisiz: %w", err)
-		}
+	if err := d.havuz.Ping(ctx); err != nil {
+		return fmt.Errorf("postgres saglik kontrolu basarisiz: %w", err)
+	}
+	if err := d.rdb.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("redis saglik kontrolu basarisiz: %w", err)
 	}
 	return nil
 }

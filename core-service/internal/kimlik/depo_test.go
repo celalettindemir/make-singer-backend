@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zitadel/oidc/v3/pkg/oidc"
 	"github.com/zitadel/oidc/v3/pkg/op"
 )
 
@@ -103,6 +104,13 @@ func TestGetRefreshTokenInfoGecerli(t *testing.T) {
 
 // RevokeToken bir refresh jetonunu hedef alirsa TUM AILE olmeli: ayni
 // aileden baska bir jeton da artik gecersiz olmali.
+//
+// KRITIK: kutuphane RevokeToken'a HAM JETONU degil, GetRefreshTokenInfo'nun
+// dondurdugu tokenID'yi gecirir (bkz. zitadel/oidc pkg/op/
+// token_revocation.go:48-55 ve server_legacy.go:434-444). Bu test bilerek
+// RevokeToken'i tokenID ile cagirir; ham jetonla cagirmak, RevokeToken'in
+// ID'yi hic bulamadigi (ve aileyi hic iptal etmedigi) bir regresyonu
+// yakalamaz.
 func TestRevokeTokenRefreshAileyiIptalEder(t *testing.T) {
 	d := testDepo(t)
 	ctx := context.Background()
@@ -114,11 +122,30 @@ func TestRevokeTokenRefreshAileyiIptalEder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RefreshDondur: %v", err)
 	}
-	if oidcErr := d.RevokeToken(ctx, ikinci, "", "makesinger-mobil"); oidcErr != nil {
+	// Kutuphanenin gercekte yaptigi gibi: once ID'yi ogren.
+	_, tokenID, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", ikinci)
+	if err != nil {
+		t.Fatalf("GetRefreshTokenInfo: %v", err)
+	}
+	// Sonra RevokeToken'i HAM JETONLA DEGIL, bu ID ile cagir.
+	if oidcErr := d.RevokeToken(ctx, tokenID, "", "makesinger-mobil"); oidcErr != nil {
 		t.Fatalf("RevokeToken: %v", oidcErr)
 	}
+	// Hedef alinan jeton olmus olmali...
 	if _, err := d.jetonlar.RefreshOku(ctx, ikinci); !errors.Is(err, ErrJetonYok) {
 		t.Errorf("iptal edilen jeton hala gecerli (err=%v)", err)
+	}
+	// ...ve AYNI AILEDEN, iptal cagrisinda hic adi gecmeyen bir baska jeton
+	// da olmus olmali: aile iptali tek jetonu degil, TUM zinciri kapatir.
+	ucuncu, err := d.jetonlar.RefreshDondur(ctx, ikinci, yeniRefresh("k1"))
+	// Not: ikinci zaten RevokeToken ile iptal edildigi icin RefreshDondur
+	// da basarisiz olmali; bu, "aile gercekten olu mu" sorusunun ikinci
+	// bir kaniti.
+	if err == nil {
+		t.Fatalf("iptal edilmis ailede rotasyon basarili oldu, yeni jeton = %q", ucuncu)
+	}
+	if !errors.Is(err, ErrJetonYok) {
+		t.Errorf("beklenmeyen hata turu: %v", err)
 	}
 }
 
@@ -156,11 +183,91 @@ func TestSetUserinfoFromScopesBos(t *testing.T) {
 	}
 }
 
-// Health, Postgres/Redis baglanmadiginda (testlerdeki gibi) hata
-// dondurmemeli.
-func TestHealthBaglantisizBasarili(t *testing.T) {
+// Health FAIL-CLOSED olmali: SaglikBagla hic cagrilmadiysa (testlerdeki
+// gibi), /healthz'in Postgres/Redis olu iken bile "sagliklı" demesini
+// engellemek icin acikca hata donmeli.
+func TestHealthBaglantisizHataDoner(t *testing.T) {
 	d := testDepo(t)
-	if err := d.Health(context.Background()); err != nil {
-		t.Errorf("Health hata dondu: %v", err)
+	if err := d.Health(context.Background()); err == nil {
+		t.Error("Health, baglanti yokken basarili dondu (fail-closed olmali)")
+	}
+}
+
+// GetRefreshTokenInfo, jeton BASKA bir istemciye aitse de
+// op.ErrInvalidRefreshToken donmeli; clientID parametresi yok sayilirsa
+// bir istemci baskasinin refresh jetonunun userID/tokenID'sini ogrenebilir.
+func TestGetRefreshTokenInfoBaskaIstemcininJetonuReddedilir(t *testing.T) {
+	d := testDepo(t)
+	ctx := context.Background()
+	baskaIstemci := yeniRefresh("k1")
+	baskaIstemci.ClientID = "makesinger-web"
+	jeton, err := d.jetonlar.RefreshOlustur(ctx, baskaIstemci)
+	if err != nil {
+		t.Fatalf("RefreshOlustur: %v", err)
+	}
+	if _, _, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", jeton); !errors.Is(err, op.ErrInvalidRefreshToken) {
+		t.Errorf("hata = %v, beklenen op.ErrInvalidRefreshToken", err)
+	}
+}
+
+// CreateAccessAndRefreshTokens, currentRefreshToken bos oldugunda
+// (authorization code akisi) yeni bir aile baslatmali: donen access ve
+// refresh jetonlarinin ikisi de gecerli olmali.
+func TestCreateAccessAndRefreshTokensYeniAileBaslatir(t *testing.T) {
+	d := testDepo(t)
+	ctx := context.Background()
+	istek := &AuthIstek{
+		ID:       "istek1",
+		ClientID: "makesinger-mobil",
+		Subject:  "k1",
+		Scopes:   []string{"openid", "offline_access"},
+		AuthTime: time.Now().UTC(),
+	}
+	accessID, refreshToken, exp, err := d.CreateAccessAndRefreshTokens(ctx, istek, "")
+	if err != nil {
+		t.Fatalf("CreateAccessAndRefreshTokens: %v", err)
+	}
+	if accessID == "" || refreshToken == "" {
+		t.Fatalf("bos deger dondu: accessID=%q refreshToken=%q", accessID, refreshToken)
+	}
+	if !exp.After(time.Now().UTC()) {
+		t.Errorf("access suresi gecmiste: %v", exp)
+	}
+	if _, err := d.jetonlar.AccessOku(ctx, accessID); err != nil {
+		t.Errorf("access kaydi okunamadi: %v", err)
+	}
+	if kayit, err := d.jetonlar.RefreshOku(ctx, refreshToken); err != nil {
+		t.Errorf("refresh jetonu okunamadi: %v", err)
+	} else if kayit.UserID != "k1" || kayit.ClientID != "makesinger-mobil" {
+		t.Errorf("refresh kaydi yanlis doldu: %+v", kayit)
+	}
+}
+
+// CreateAccessAndRefreshTokens, currentRefreshToken doluysa (refresh_token
+// akisi) rotasyon yapmali: eski jeton olmeli, yenisi gecerli olmali, ve
+// eski jeton TEKRAR sunulursa op.ErrInvalidRefreshToken (invalid_grant)
+// donmeli -- yeniden kullanim tespiti Depo seviyesinde de calismali.
+func TestCreateAccessAndRefreshTokensRotasyonYapar(t *testing.T) {
+	d := testDepo(t)
+	ctx := context.Background()
+	eski, err := d.jetonlar.RefreshOlustur(ctx, yeniRefresh("k1"))
+	if err != nil {
+		t.Fatalf("RefreshOlustur: %v", err)
+	}
+	istek := &refreshIstek{userID: "k1", clientID: "makesinger-mobil", scopes: []string{"openid"}}
+	accessID, yeniJeton, _, err := d.CreateAccessAndRefreshTokens(ctx, istek, eski)
+	if err != nil {
+		t.Fatalf("CreateAccessAndRefreshTokens: %v", err)
+	}
+	if accessID == "" || yeniJeton == "" || yeniJeton == eski {
+		t.Fatalf("rotasyon beklenen sekilde calismadi: accessID=%q yeniJeton=%q", accessID, yeniJeton)
+	}
+	if _, err := d.jetonlar.RefreshOku(ctx, yeniJeton); err != nil {
+		t.Errorf("yeni jeton gecersiz: %v", err)
+	}
+	// Eski jeton TEKRAR sunulursa: calinti tespiti tetiklenmeli ve dogru
+	// OAuth hatasina (invalid_grant) cevrilmeli.
+	if _, _, _, err := d.CreateAccessAndRefreshTokens(ctx, istek, eski); !errors.Is(err, oidc.ErrInvalidGrant()) {
+		t.Errorf("hata = %v, beklenen oidc.ErrInvalidGrant()", err)
 	}
 }

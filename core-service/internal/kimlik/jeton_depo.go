@@ -56,6 +56,10 @@ type TokenStore interface {
 	RefreshOlustur(ctx context.Context, k *RefreshKayit) (string, error)
 	RefreshDondur(ctx context.Context, sunulan string, yeni *RefreshKayit) (string, error)
 	RefreshOku(ctx context.Context, sunulan string) (*RefreshKayit, error)
+	// RefreshIDileOku, RefreshOku'nun aksine JETONUN KENDISIYLE degil,
+	// veritabani ID'siyle arar. op.Storage.RevokeToken bunu gerektirir:
+	// bkz. RefreshIDileOku'nun kendi yorumu.
+	RefreshIDileOku(ctx context.Context, id string) (*RefreshKayit, error)
 	AileIptal(ctx context.Context, familyID string) error
 	KullaniciIptal(ctx context.Context, userID, clientID string) error
 }
@@ -276,6 +280,33 @@ func (s *PostgresTokenStore) RefreshOku(ctx context.Context, sunulan string) (*R
 	}
 	if k.RevokedAt != nil || k.UsedAt != nil || time.Now().UTC().After(k.ExpiresAt) {
 		return nil, ErrJetonYok
+	}
+	return &k, nil
+}
+
+// RefreshIDileOku, ID ILE arar (jetonun kendisiyle DEGIL). op kutuphanesi
+// RevokeToken'i cagirmadan once GetRefreshTokenInfo'yu cagirir ve donen
+// tokenID'yi (ham jeton degil) RevokeToken'a gecirir (bkz. pkg/op/
+// token_revocation.go). Bu yuzden /revoke akisinda refresh jetonlari ID
+// ile bulunmak ZORUNDA; RefreshOku (hash ile arama) burada ISE YARAMAZ.
+// Gecerlilik filtrelemesi YAPILMAZ (used/revoked/expired de donulur):
+// iptal etmek istedigimiz kaydin FamilyID'sine ulasmak icin kaydin var
+// olmasi yeterli, zaten iptal edilmis bir kaydi tekrar iptal etmek
+// zararsizdir (AileIptal idempotenttir).
+func (s *PostgresTokenStore) RefreshIDileOku(ctx context.Context, id string) (*RefreshKayit, error) {
+	var k RefreshKayit
+	err := s.havuz.QueryRow(ctx,
+		`SELECT id, family_id, user_id, client_id, token_hash, scopes, audience, amr,
+		        auth_time, expires_at, used_at, revoked_at
+		   FROM refresh_tokens WHERE id = $1`,
+		id).Scan(
+		&k.ID, &k.FamilyID, &k.UserID, &k.ClientID, &k.TokenHash, &k.Scopes, &k.Audience,
+		&k.AMR, &k.AuthTime, &k.ExpiresAt, &k.UsedAt, &k.RevokedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrJetonYok
+	}
+	if err != nil {
+		return nil, fmt.Errorf("jeton okunamadi: %w", err)
 	}
 	return &k, nil
 }
