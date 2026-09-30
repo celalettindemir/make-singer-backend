@@ -69,15 +69,15 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 	// Validate file type
 	contentType := file.Header.Get("Content-Type")
 	validTypes := map[string]bool{
-		"audio/wav":      true,
-		"audio/x-wav":    true,
-		"audio/wave":     true,
-		"audio/mpeg":     true,
-		"audio/mp3":      true,
-		"audio/mp4":      true,
-		"audio/x-m4a":    true,
-		"audio/aac":      true,
-		"audio/x-aac":    true,
+		"audio/wav":   true,
+		"audio/x-wav": true,
+		"audio/wave":  true,
+		"audio/mpeg":  true,
+		"audio/mp3":   true,
+		"audio/mp4":   true,
+		"audio/x-m4a": true,
+		"audio/aac":   true,
+		"audio/x-aac": true,
 	}
 
 	if !validTypes[contentType] {
