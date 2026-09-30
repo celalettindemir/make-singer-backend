@@ -66,8 +66,19 @@ func (rl *RateLimiter) Limit(keyPrefix string, maxRequests int, window time.Dura
 			// bir sekilde TTL'siz kaldiysa (-1) negatif/sifir deger
 			// donmemeli.
 			bekle := window
-			if ttl, err := rl.redis.TTL(ctx, key).Result(); err == nil && ttl > 0 {
+			ttl, ttlErr := rl.redis.TTL(ctx, key).Result()
+			switch {
+			case ttlErr == nil && ttl > 0:
 				bekle = ttl
+			case ttlErr == nil && ttl < 0:
+				// MIRAS ANAHTAR IYILESTIRMESI: TTL -1 demek anahtarin
+				// suresi yok. Yeni kod boyle bir anahtar URETEMEZ
+				// (MULTI/EXEC atomik), ama eski kodun uretimde biraktigi
+				// anahtarlar olabilir: SET NX uygulanmadigi icin TTL -1
+				// kalir, sayac sonsuza buyur ve kullanici KALICI kilitli
+				// kalir — tek cikis manuel DEL. Burada pencereyi geri
+				// veriyoruz ki anahtar kendiliginden sifirlansin.
+				rl.redis.Expire(ctx, key, window)
 			}
 			saniye := int(bekle.Seconds())
 			if saniye < 1 {

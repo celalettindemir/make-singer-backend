@@ -145,14 +145,19 @@ func TestIssizJetonReddedilir(t *testing.T) {
 
 // "alg: none" ile imzasiz jeton kabul edilmemeli.
 //
-// DIKKAT — bu test TEK BASINA bizim kodumuzu kanitlamaz: kendi
-// WithValidMethods + keyfunc alg kontrolumuzu kaldirsak bile PASS kalir,
-// cunku jwt/v5 "none" yontemi icin keyfunc'un
-// jwt.UnsafeAllowNoneSignatureType dondurmesini sart kosuyor ve bizim
-// keyfunc *rsa.PublicKey donduruyor. Yani koruma kismen kutuphaneden
-// geliyor. Bizim alg zorlamamizin asil kaniti
-// TestHS256AlgKarisikligiReddedilir'dir; alg guvencesini degerlendiren
-// biri bu teste tek basina guvenmemeli.
+// DIKKAT — ALG ZORLAMAMIZ SU AN TEST KAPSAMINDA DEGIL. Olculdu: bu test
+// VE TestHS256AlgKarisikligiReddedilir, dogrulayicidaki iki katmanin
+// (jwt.WithValidMethods ve keyfunc icindeki alg kontrolu) IKISI BIRLIKTE
+// kaldirildiginda da PASS kalir. Sebep, bizim kodumuz degil jwt/v5'in
+// anahtar-tipi denetimi: keyfunc *rsa.PublicKey donduruyor, HS256'nin
+// Verify'i []byte, "none"un Verify'i jwt.UnsafeAllowNoneSignatureType
+// bekliyor; kutuphane tip uyusmazligindan reddediyor.
+//
+// Yani bu iki test, koruma kutuphaneden geldigi icin gecer. Iki katli
+// zorlamamiz bilincli savunma derinligidir (kutuphane davranisi degisir
+// veya keyfunc ileride farkli bir tip donmeye baslarsa tek koruma kalir)
+// ama su an bir testle OLCULMUYOR. Alg guvencesini degerlendiren biri bu
+// testlere "bizim zorlamamiz calisiyor" kaniti olarak guvenmemeli.
 func TestAlgNoneReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
 	j := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{
@@ -250,6 +255,8 @@ func TestYanlisAudReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
 	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
 		"iss": denemeIssuer, "sub": "k1", "aud": []string{"baska-istemci"},
+		// jti var ki tek reddetme sebebi yanlis aud olsun.
+		"jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
@@ -422,5 +429,23 @@ func TestEksikYapilandirmadaHerIstekReddedilir(t *testing.T) {
 		if durum, _ := istek(t, uygulamaMW(t, mw), "Bearer "+jeton); durum != 401 {
 			t.Errorf("%s: durum = %d, beklenen 401", ad, durum)
 		}
+	}
+}
+
+// Legacy middleware bos sirla kurulmussa hicbir jetonu kabul etmemeli.
+// `jwtSecret != ""` kapisi bunu zaten sagliyor; test kapinin ILERIDE
+// kalkmasina karsi kilit. (auth.ValidateLegacyToken'in kendi kapisi
+// internal/auth/legacy_test.go'da olculuyor.)
+func TestLegacyMiddlewareBosSirlaHicbirJetonuKabulEtmez(t *testing.T) {
+	bosSirli, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"userId": "saldirgan",
+		"exp":    time.Now().Add(time.Hour).Unix(),
+	}).SignedString([]byte(""))
+	if err != nil {
+		t.Fatalf("jeton uretilemedi: %v", err)
+	}
+	app := uygulamaMW(t, NewLegacyAuthMiddleware(""))
+	if durum, govde := istek(t, app, "Bearer "+bosSirli); durum != 401 {
+		t.Errorf("durum = %d (govde %q), beklenen 401", durum, govde)
 	}
 }
