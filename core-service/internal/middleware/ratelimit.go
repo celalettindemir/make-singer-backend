@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/redis/go-redis/v9"
 	"github.com/makeasinger/api/pkg/response"
+	"github.com/redis/go-redis/v9"
 )
 
 type RateLimiter struct {
@@ -23,7 +23,10 @@ func (rl *RateLimiter) Limit(keyPrefix string, maxRequests int, window time.Dura
 	return func(c *fiber.Ctx) error {
 		userID := GetUserID(c)
 		if userID == "" {
-			return c.Next() // Skip rate limiting if no user (auth middleware should catch this)
+			// Auth middleware userId'yi garanti eder; bos gelmesi bir
+			// hatadir. Eskiden burada rate limit ATLANIYORDU (return
+			// c.Next()), bu da kota bypass'i demekti.
+			return response.Unauthorized(c, "Kimlik dogrulanamadi")
 		}
 
 		key := fmt.Sprintf("ratelimit:%s:%s", keyPrefix, userID)
@@ -32,8 +35,13 @@ func (rl *RateLimiter) Limit(keyPrefix string, maxRequests int, window time.Dura
 		// Increment counter
 		count, err := rl.redis.Incr(ctx, key).Result()
 		if err != nil {
-			// If Redis fails, allow the request but log the error
-			return c.Next()
+			// Fail-closed: sayaci artiramadiysak kotanin asilip
+			// asilmadigini BILEMEYIZ. Eskiden istek serbest gecirilirdi;
+			// bu, Redis'i dusurebilen birine sinirsiz kota veriyordu.
+			// Hata metni loglanmaz (baglanti dizgesi sir tasiyabilir).
+			c.Set("Retry-After", "5")
+			return response.Error(c, fiber.StatusServiceUnavailable,
+				response.CodeServiceError, "Rate limit denetlenemedi", nil)
 		}
 
 		// Set expiration on first request

@@ -165,11 +165,19 @@ func main() {
 
 	// Initialize middleware (with fallback support)
 	var apiAuthMiddleware fiber.Handler
-	if cfg.Gateway.Enabled {
+	switch {
+	case kimlikSunucu != nil:
+		// Kendi OP'umuz ayakta: access token'lari onun anahtariyla
+		// dogrula. Anahtar surec icinden okunur, kendi JWKS ucumuza ag
+		// uzerinden gidilmez. Bu modda gateway veya legacy yola dusulmez.
+		log.Println("Info: kimlik saglayicisi modu — RS256 access token dogrulanacak")
+		apiAuthMiddleware = middleware.NewOPAuthMiddlewareIleIstemci(
+			cfg.Auth.Issuer, cfg.Auth.ClientID, kimlikSunucu.APIAcikAnahtar()).Authenticate()
+	case cfg.Gateway.Enabled:
 		// Behind Traefik: auth is handled by ForwardAuth, read X-User-* headers
 		log.Println("Info: Gateway mode enabled — using header-based auth")
 		apiAuthMiddleware = middleware.GatewayAuthMiddleware()
-	} else {
+	default:
 		// Direct mode: auth is handled by the backend itself
 		var authMiddleware *middleware.AuthMiddleware
 		if jwksVerifier != nil && cfg.JWT.Secret != "" {
@@ -194,8 +202,11 @@ func main() {
 	isDebug := strings.EqualFold(cfg.Server.LogLevel, "debug")
 	logFormat := "[${time}] ${status} - ${latency} ${method} ${path}\n"
 	if isDebug {
-		logFormat = "[${time}] ${status} - ${latency} ${method} ${path} ${queryParams} ${body} ${reqHeaders}\n"
-		log.Println("Debug logging enabled")
+		// ${reqHeaders} ve ${body} BILINCLI olarak yok: birincisi
+		// Authorization header'ini, ikincisi giris/kayit formlarinin duz
+		// metin sifresini loga kalici hale getirirdi.
+		logFormat = "[${time}] ${status} - ${latency} ${method} ${path} ${queryParams}\n"
+		log.Println("Debug logging enabled (istek header'lari ve govdesi loglanmaz)")
 	}
 	app.Use(logger.New(logger.Config{
 		Format: logFormat,
@@ -222,7 +233,7 @@ func main() {
 				"suno":   sunoClient.IsConfigured(),
 				"r2":     r2Client != nil,
 				"audio":  audioClient.IsConfigured(),
-				"auth":   jwksVerifier != nil || cfg.JWT.Secret != "",
+				"auth":   kimlikSunucu != nil || jwksVerifier != nil,
 				"kimlik": kimlikSunucu != nil,
 			},
 		})
