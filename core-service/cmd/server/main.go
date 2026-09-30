@@ -24,6 +24,7 @@ import (
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/handler"
+	"github.com/makeasinger/api/internal/kimlik"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/service"
 	ws "github.com/makeasinger/api/internal/websocket"
@@ -67,6 +68,26 @@ func main() {
 	ctx := context.Background()
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		log.Printf("Warning: Redis not available: %v", err)
+	}
+
+	// Kendi OpenID Provider'imiz. Issuer bos ise hic baslamaz; API o
+	// zaman eski auth yolunda kalir. Hata olursa fatal degil: OP
+	// olmadan da /health ve genel akis ayakta kalmali ki sorun
+	// tanilanabilsin.
+	var kimlikSunucu *kimlik.Sunucu
+	if cfg.Auth.Issuer != "" {
+		var err error
+		kimlikSunucu, err = kimlik.Start(ctx, &cfg.Auth, redisClient)
+		if err != nil {
+			log.Printf("Uyari: kimlik saglayicisi baslatilamadi: %v", err)
+		} else {
+			log.Printf("Kimlik saglayicisi %s uzerinde, issuer %s", cfg.Auth.Port, cfg.Auth.Issuer)
+			defer func() {
+				kapatCtx, iptal := context.WithTimeout(context.Background(), 10*time.Second)
+				defer iptal()
+				_ = kimlikSunucu.Kapat(kapatCtx)
+			}()
+		}
 	}
 
 	// Initialize Asynq client
@@ -197,11 +218,12 @@ func main() {
 		return c.JSON(fiber.Map{
 			"status": "ok",
 			"services": fiber.Map{
-				"groq":  groqClient.IsConfigured(),
-				"suno":  sunoClient.IsConfigured(),
-				"r2":    r2Client != nil,
-				"audio": audioClient.IsConfigured(),
-				"auth":  jwksVerifier != nil || cfg.JWT.Secret != "",
+				"groq":   groqClient.IsConfigured(),
+				"suno":   sunoClient.IsConfigured(),
+				"r2":     r2Client != nil,
+				"audio":  audioClient.IsConfigured(),
+				"auth":   jwksVerifier != nil || cfg.JWT.Secret != "",
+				"kimlik": kimlikSunucu != nil,
 			},
 		})
 	})

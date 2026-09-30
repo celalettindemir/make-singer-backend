@@ -47,7 +47,9 @@ func NewDepo(cfg *config.AuthConfig, kullanici UserStore, jetonlar TokenStore, i
 }
 
 // SaglikBagla, Health'in kullanacagi Postgres havuzunu ve Redis
-// istemcisini baglar. cagrilmazsa Health ilgili bacagi atlar (bkz. Health).
+// istemcisini baglar. cagrilmazsa Health fail-closed davranir ve her
+// zaman hata doner (bkz. Health): baglanti yoksa saglikli sayilmak
+// yerine acikca basarisiz olmak tercih edilir.
 func (d *Depo) SaglikBagla(havuz *pgxpool.Pool, rdb *redis.Client) {
 	d.havuz = havuz
 	d.rdb = rdb
