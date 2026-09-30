@@ -119,7 +119,9 @@ func (s *Sayfalar) girisPost(w http.ResponseWriter, r *http.Request) {
 
 	kullanici, err := s.kullanici.ByEmail(r.Context(), eposta)
 	if err != nil && !errors.Is(err, ErrKullaniciYok) {
-		log.Printf("giris: kullanici okunamadi eposta=%s hata=%v", eposta, err)
+		// E-posta PII'dir ve burada loglanmaz; hatanin kendisi zaten
+		// teshis icin yeterli.
+		log.Printf("giris: kullanici okunamadi: %v", err)
 	}
 	if !kullanici.SifreDogru(sifre) {
 		// Kasitli olarak hesabin var olup olmadigini AYIRT ETMIYORUZ:
@@ -200,7 +202,9 @@ func (s *Sayfalar) kayitPost(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, ErrSifreKisa):
 			s.kayitRender(w, http.StatusBadRequest, id, eposta, ad, ErrSifreKisa.Error())
 		default:
-			log.Printf("kayit: kullanici olusturulamadi eposta=%s hata=%v", eposta, err)
+			// E-posta PII'dir ve burada loglanmaz; hatanin kendisi zaten
+			// teshis icin yeterli.
+			log.Printf("kayit: kullanici olusturulamadi: %v", err)
 			s.kayitRender(w, http.StatusInternalServerError, id, eposta, ad, hataSunucu)
 		}
 		return
