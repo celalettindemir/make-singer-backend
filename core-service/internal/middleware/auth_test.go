@@ -36,18 +36,11 @@ func jetonUretTest(t *testing.T, ozel *rsa.PrivateKey, talepler jwt.MapClaims) s
 
 func uygulama(t *testing.T, ozel *rsa.PrivateKey) *fiber.App {
 	t.Helper()
-	mw := NewOPAuthMiddleware(denemeIssuer, &ozel.PublicKey)
-	app := fiber.New()
-	app.Get("/korumali", mw.Authenticate(), func(c *fiber.Ctx) error {
-		return c.SendString(GetUserID(c))
-	})
-	return app
+	return uygulamaMW(t, NewOPAuthMiddleware(denemeIssuer, denemeIstemci, &ozel.PublicKey))
 }
 
-// uygulamaIstemci, aud dogrulamasinin da acik oldugu varyanti kurar.
-func uygulamaIstemci(t *testing.T, ozel *rsa.PrivateKey) *fiber.App {
+func uygulamaMW(t *testing.T, mw *AuthMiddleware) *fiber.App {
 	t.Helper()
-	mw := NewOPAuthMiddlewareIleIstemci(denemeIssuer, denemeIstemci, &ozel.PublicKey)
 	app := fiber.New()
 	app.Get("/korumali", mw.Authenticate(), func(c *fiber.Ctx) error {
 		return c.SendString(GetUserID(c))
@@ -75,6 +68,7 @@ func TestGecerliJetonKabulEdilir(t *testing.T) {
 	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
 		"iss": denemeIssuer,
 		"sub": "kullanici-1",
+		"aud": []string{denemeIstemci},
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	durum, govde := istek(t, uygulama(t, ozel), "Bearer "+jeton)
@@ -90,7 +84,9 @@ func TestGecerliJetonKabulEdilir(t *testing.T) {
 // hatasi tam buydu; yeni yolda zorunlu.
 func TestExpsizJetonReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{"iss": denemeIssuer, "sub": "k1"})
+	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
+		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci},
+	})
 	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
 		t.Errorf("durum = %d, beklenen 401", durum)
 	}
@@ -99,7 +95,7 @@ func TestExpsizJetonReddedilir(t *testing.T) {
 func TestSuresiGecmisJetonReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
 	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1",
+		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci},
 		"exp": time.Now().Add(-time.Minute).Unix(),
 	})
 	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
@@ -112,7 +108,8 @@ func TestBaskaAnahtarlaImzaliJetonReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
 	sahte := denemeAnahtar(t)
 	jeton := jetonUretTest(t, sahte, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "exp": time.Now().Add(time.Hour).Unix(),
+		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci},
+		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
 		t.Errorf("durum = %d, beklenen 401", durum)
@@ -125,6 +122,7 @@ func TestYanlisIssuerReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
 	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
 		"iss": "https://baska.ornek.dev", "sub": "k1",
+		"aud": []string{denemeIstemci},
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
@@ -136,7 +134,8 @@ func TestYanlisIssuerReddedilir(t *testing.T) {
 func TestIssizJetonReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
 	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"sub": "k1", "exp": time.Now().Add(time.Hour).Unix(),
+		"sub": "k1", "aud": []string{denemeIstemci},
+		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
 		t.Errorf("durum = %d, beklenen 401", durum)
@@ -147,7 +146,8 @@ func TestIssizJetonReddedilir(t *testing.T) {
 func TestAlgNoneReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
 	j := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "exp": time.Now().Add(time.Hour).Unix(),
+		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci},
+		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	imzasiz, err := j.SignedString(jwt.UnsafeAllowNoneSignatureType)
 	if err != nil {
@@ -168,7 +168,8 @@ func TestHS256AlgKarisikligiReddedilir(t *testing.T) {
 		t.Fatalf("acik anahtar kodlanamadi: %v", err)
 	}
 	j := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "exp": time.Now().Add(time.Hour).Unix(),
+		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci},
+		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	// Acik anahtar HMAC sirri gibi kullanilir.
 	sahteJeton, err := j.SignedString(acikDER)
@@ -200,7 +201,8 @@ func TestEksikVeBozukHeader(t *testing.T) {
 func TestSubBossaReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
 	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "", "exp": time.Now().Add(time.Hour).Unix(),
+		"iss": denemeIssuer, "sub": "", "aud": []string{denemeIstemci},
+		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
 		t.Errorf("durum = %d, beklenen 401", durum)
@@ -211,7 +213,7 @@ func TestSubBossaReddedilir(t *testing.T) {
 func TestGelecekNbfReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
 	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1",
+		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci},
 		"nbf": time.Now().Add(time.Hour).Unix(),
 		"exp": time.Now().Add(2 * time.Hour).Unix(),
 	})
@@ -224,7 +226,7 @@ func TestGelecekNbfReddedilir(t *testing.T) {
 func TestGelecekIatReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
 	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1",
+		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci},
 		"iat": time.Now().Add(time.Hour).Unix(),
 		"exp": time.Now().Add(2 * time.Hour).Unix(),
 	})
@@ -233,26 +235,27 @@ func TestGelecekIatReddedilir(t *testing.T) {
 	}
 }
 
-// aud dogrulamasi acikken bizim client ID'mizi icermeyen jeton reddedilir.
+// Bizim client ID'mizi icermeyen jeton reddedilir.
 func TestYanlisAudReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
 	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
 		"iss": denemeIssuer, "sub": "k1", "aud": []string{"baska-istemci"},
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	if durum, _ := istek(t, uygulamaIstemci(t, ozel), "Bearer "+jeton); durum != 401 {
+	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
 		t.Errorf("durum = %d, beklenen 401", durum)
 	}
 }
 
-// aud dogrulamasi acikken aud hic yoksa da reddedilir.
-func TestAudsuzJetonIstemciModundaReddedilir(t *testing.T) {
+// aud claim'i hic yoksa da reddedilir.
+func TestAudsuzJetonReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
+	// aud BILEREK yok.
 	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
 		"iss": denemeIssuer, "sub": "k1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	if durum, _ := istek(t, uygulamaIstemci(t, ozel), "Bearer "+jeton); durum != 401 {
+	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
 		t.Errorf("durum = %d, beklenen 401", durum)
 	}
 }
@@ -265,7 +268,7 @@ func TestDogruAudKabulEdilir(t *testing.T) {
 		"aud": []string{denemeIstemci, "baska"},
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	durum, govde := istek(t, uygulamaIstemci(t, ozel), "Bearer "+jeton)
+	durum, govde := istek(t, uygulama(t, ozel), "Bearer "+jeton)
 	if durum != 200 {
 		t.Fatalf("durum = %d, beklenen 200", durum)
 	}
@@ -279,7 +282,8 @@ func TestDogruAudKabulEdilir(t *testing.T) {
 func TestOPModundaLegacyYolaDusulmez(t *testing.T) {
 	ozel := denemeAnahtar(t)
 	legacy := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": "k1", "exp": time.Now().Add(time.Hour).Unix(),
+		"sub": "k1", "aud": []string{denemeIstemci},
+		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	sir := make([]byte, 32)
 	if _, err := rand.Read(sir); err != nil {
@@ -291,5 +295,27 @@ func TestOPModundaLegacyYolaDusulmez(t *testing.T) {
 	}
 	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+imzali); durum != 401 {
 		t.Errorf("durum = %d, beklenen 401", durum)
+	}
+}
+
+// Eksik yapilandirmada SESSIZ gevseme olmamali: aud denetimi yapilamayacagi
+// icin dogrulayici her istegi reddeder. Sirasiyla bos istemci, bos issuer
+// ve nil acik anahtar denenir; ucunde de tamamen gecerli bir jeton
+// reddedilmelidir.
+func TestEksikYapilandirmadaHerIstekReddedilir(t *testing.T) {
+	ozel := denemeAnahtar(t)
+	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
+		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci},
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	durumlar := map[string]*AuthMiddleware{
+		"istemci bos":      NewOPAuthMiddleware(denemeIssuer, "", &ozel.PublicKey),
+		"issuer bos":       NewOPAuthMiddleware("", denemeIstemci, &ozel.PublicKey),
+		"acik anahtar nil": NewOPAuthMiddleware(denemeIssuer, denemeIstemci, nil),
+	}
+	for ad, mw := range durumlar {
+		if durum, _ := istek(t, uygulamaMW(t, mw), "Bearer "+jeton); durum != 401 {
+			t.Errorf("%s: durum = %d, beklenen 401", ad, durum)
+		}
 	}
 }

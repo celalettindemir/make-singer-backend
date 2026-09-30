@@ -171,7 +171,7 @@ func main() {
 		// dogrula. Anahtar surec icinden okunur, kendi JWKS ucumuza ag
 		// uzerinden gidilmez. Bu modda gateway veya legacy yola dusulmez.
 		log.Println("Info: kimlik saglayicisi modu — RS256 access token dogrulanacak")
-		apiAuthMiddleware = middleware.NewOPAuthMiddlewareIleIstemci(
+		apiAuthMiddleware = middleware.NewOPAuthMiddleware(
 			cfg.Auth.Issuer, cfg.Auth.ClientID, kimlikSunucu.APIAcikAnahtar()).Authenticate()
 	case cfg.Gateway.Enabled:
 		// Behind Traefik: auth is handled by ForwardAuth, read X-User-* headers

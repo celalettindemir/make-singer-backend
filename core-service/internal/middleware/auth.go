@@ -3,6 +3,7 @@ package middleware
 import (
 	"crypto/rsa"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -28,25 +29,46 @@ type AuthMiddleware struct {
 type opDogrulayici struct {
 	issuer string
 	acik   *rsa.PublicKey
-	// istemci bos degilse "aud" claim'i bu client ID'yi icermek zorunda.
+	// istemci: "aud" claim'i bu client ID'yi icermek ZORUNDA. Bos
+	// birakilamaz; bkz. kurulumHatasi.
 	istemci string
+	// kurulumHatasi doluysa hicbir jeton kabul edilmez. Eksik
+	// yapilandirma sessizce "denetim kapali" moduna DUSMEMELI: iki
+	// ayri constructor'in yan yana durdugu onceki tasarimda yanlis
+	// cagri yeri secimi aud denetimini sessizce dusurebiliyordu ve
+	// hicbir test kirilmiyordu.
+	kurulumHatasi error
 }
 
 // NewOPAuthMiddleware, kendi OP'umuzun access token'ini dogrulayan
-// middleware'i kurar.
-func NewOPAuthMiddleware(issuer string, acik *rsa.PublicKey) *AuthMiddleware {
-	return &AuthMiddleware{op: &opDogrulayici{issuer: issuer, acik: acik}}
-}
-
-// NewOPAuthMiddlewareIleIstemci, ek olarak "aud" claim'inin bizim client
-// ID'mizi icermesini de sart kosar. Uretimde bu varyant kullanilir:
-// baska bir istemci icin uretilmis jeton API'mize girmemeli.
-func NewOPAuthMiddlewareIleIstemci(issuer, istemci string, acik *rsa.PublicKey) *AuthMiddleware {
-	return &AuthMiddleware{op: &opDogrulayici{issuer: issuer, acik: acik, istemci: istemci}}
+// middleware'i kurar. Access token'lar bizim client'a hedefli oldugu
+// icin "aud" denetimi zorunludur: istemci (client ID) bos birakilamaz.
+// Bos/eksik yapilandirmada dogrulayici sessizce gevsemez, HER istegi
+// reddeder (imza *AuthMiddleware donduruyor, hata donduremiyor; guvenli
+// varsayilan "kapali" olmak).
+func NewOPAuthMiddleware(issuer, istemci string, acik *rsa.PublicKey) *AuthMiddleware {
+	d := &opDogrulayici{issuer: issuer, istemci: istemci, acik: acik}
+	switch {
+	case issuer == "":
+		d.kurulumHatasi = fmt.Errorf("OP auth yapilandirmasi eksik: issuer bos")
+	case istemci == "":
+		d.kurulumHatasi = fmt.Errorf("OP auth yapilandirmasi eksik: istemci (client ID) bos")
+	case acik == nil:
+		d.kurulumHatasi = fmt.Errorf("OP auth yapilandirmasi eksik: acik anahtar nil")
+	}
+	if d.kurulumHatasi != nil {
+		// Hata metni sir tasimaz (yalnizca hangi alanin bos oldugunu
+		// soyler), bu yuzden loglanabilir ve loglanmasi gerekir.
+		log.Printf("Hata: %v — tum /api/* istekleri reddedilecek", d.kurulumHatasi)
+	}
+	return &AuthMiddleware{op: d}
 }
 
 // dogrula, jetonu dogrular ve (sub, email, name) dondurur.
 func (d *opDogrulayici) dogrula(jetonMetni string) (string, string, string, error) {
+	if d.kurulumHatasi != nil {
+		return "", "", "", d.kurulumHatasi
+	}
 	ek := jwt.MapClaims{}
 	secenekler := []jwt.ParserOption{
 		// Imza algoritmasi ACIKCA kisitlanir: aksi halde "alg: none"
@@ -56,9 +78,9 @@ func (d *opDogrulayici) dogrula(jetonMetni string) (string, string, string, erro
 		jwt.WithExpirationRequired(),
 		// iat varsa gelecekte olmamali (nbf zaten her zaman denetlenir).
 		jwt.WithIssuedAt(),
-	}
-	if d.istemci != "" {
-		secenekler = append(secenekler, jwt.WithAudience(d.istemci))
+		// "aud" bizim client ID'mizi icermek zorunda: baska bir istemci
+		// icin uretilmis jeton API'mize girmemeli. Kosulsuz uygulanir.
+		jwt.WithAudience(d.istemci),
 	}
 	jeton, err := jwt.ParseWithClaims(jetonMetni, ek,
 		func(t *jwt.Token) (any, error) {
