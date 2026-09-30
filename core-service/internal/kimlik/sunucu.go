@@ -104,11 +104,18 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 		return nil, fmt.Errorf("OpenID Provider kurulamadi: %w", err)
 	}
 
-	// /giris ve /kayit sayfa baglamasi ile op.NewIssuerInterceptor kurulumu
-	// sonraki gorevin isi (Sayfalar tipi orada dogar). Bu asamada mux
-	// yalnizca saglayiciyi kok yola baglar; discovery ve JWKS bununla
-	// calisir, /giris ise henuz 404 doner ve bu beklenen bir durumdur.
 	mux := http.NewServeMux()
+
+	// /giris ve /kayit sayfalarini baglar. POST handler'lari
+	// op.NewIssuerInterceptor ile sarilir: araci issuer'i istek
+	// baglamina koyar, geriCagirma (op.AuthCallbackURL) onu oradan
+	// okur. Sarmadan baglamak akisi yonlendirme asamasinda kirar.
+	araci := op.NewIssuerInterceptor(saglayici.IssuerFromRequest)
+	sayfalar := NewSayfalar(kullaniciDepo, istekDepo, op.AuthCallbackURL(saglayici))
+	sayfalar.Bagla(mux, araci)
+
+	// Kok yol en sona baglanir: kutuphanenin kendi uclari (/authorize,
+	// /oauth/token, /userinfo, /keys, /end_session) buradan gecer.
 	mux.Handle("/", saglayici)
 
 	srv := &http.Server{

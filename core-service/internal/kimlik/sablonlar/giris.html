@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Giris - make-singer</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 24rem; margin: 3rem auto; padding: 0 1rem; color: #222; }
+  h1 { font-size: 1.25rem; }
+  label { display: block; margin-top: 1rem; font-weight: 600; }
+  input { width: 100%; padding: 0.5rem; margin-top: 0.25rem; box-sizing: border-box; font-size: 1rem; }
+  button { margin-top: 1.5rem; padding: 0.6rem 1.2rem; font-size: 1rem; width: 100%; }
+  .hata { color: #b00020; margin-top: 1rem; }
+  .alt { margin-top: 1.5rem; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+  <h1>Giris yap</h1>
+  {{if .Hata}}<p class="hata">{{.Hata}}</p>{{end}}
+  <form method="post" action="{{.GirisYolu}}">
+    <input type="hidden" name="authRequestID" value="{{.AuthRequestID}}">
+    <label for="eposta">E-posta</label>
+    <input type="email" id="eposta" name="eposta" value="{{.Eposta}}" required autofocus>
+    <label for="sifre">Sifre</label>
+    <input type="password" id="sifre" name="sifre" required>
+    <button type="submit">Giris yap</button>
+  </form>
+  <p class="alt">Hesabin yok mu? <a href="{{.KayitYolu}}">Kayit ol</a></p>
+</body>
+</html>
