@@ -54,3 +54,20 @@ audio:
 # API Gateway Configuration
 gateway:
   enabled: false # Set to true when running behind Traefik
+
+# Custom OpenID Provider Configuration
+# When auth.issuer is empty, the service falls back to legacy HMAC JWT verification (development only).
+# When auth.issuer is set but the provider fails to start, the service exits with a fatal error (fail-closed).
+auth:
+  issuer: "" # Set via AUTH_ISSUER env var (e.g., https://makesinger-auth.celalettindemir.dev)
+  port: "8001" # Second listener port for the OpenID Provider
+  client_id: "" # Set via AUTH_CLIENT_ID env var (e.g., makesinger-mobil). MUST NOT be empty if issuer is set.
+  db_url: "" # Set via AUTH_DB_URL env var. PostgreSQL DSN for user database.
+  # RSA private key in PEM format (secret, never in this file)
+  signing_key_pem: "" # Set via AUTH_SIGNING_KEY env var (secret from Kubernetes)
+  # 32-byte encryption key (secret, never in this file)
+  crypto_key: "" # Set via AUTH_CRYPTO_KEY env var (secret from Kubernetes)
+  # Whitespace-separated redirect URIs (Set via AUTH_REDIRECT_URIS env var)
+  redirect_uris: [] # Set via AUTH_REDIRECT_URIS env var
+  access_ttl: "15m" # Set via AUTH_ACCESS_TTL env var
+  refresh_ttl: "1440h" # Set via AUTH_REFRESH_TTL env var (default: 60 days)
