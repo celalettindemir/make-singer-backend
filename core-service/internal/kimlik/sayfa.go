@@ -122,16 +122,23 @@ func (s *Sayfalar) girisPost(w http.ResponseWriter, r *http.Request) {
 		log.Printf("giris: kullanici okunamadi eposta=%s hata=%v", eposta, err)
 	}
 	if !kullanici.SifreDogru(sifre) {
-		// Kasitli olarak hesabin var olup olmadigini AYIRT ETMIYORUZ ve
-		// girilen e-postayi formda GERI YANSITMIYORUZ: aksi halde iki
-		// farkli e-posta icin farkli govdeler donerdi ve form yine bir
-		// e-posta sayim aracina donusurdu. Sifre burada loglanmaz.
-		s.girisRender(w, http.StatusUnauthorized, id, "", hataGirisBasarisiz)
+		// Kasitli olarak hesabin var olup olmadigini AYIRT ETMIYORUZ:
+		// AYNI e-posta icin "hesap yok" ve "sifre yanlis" durumlari
+		// birebir ayni govdeyi/durum kodunu doner (bkz.
+		// TestYanlisGirisKullaniciVarligiSizdirmaz). Girilen e-postayi
+		// forma geri yazmak numaralandirma sayilmaz: saldirgan zaten
+		// kendi yazdigi degeri goruyor, farkli bir bilgi sizmiyor.
+		// html/template kacislama yapar, bkz. TestGirisEpostaEchoKacar. Sifre
+		// burada loglanmaz.
+		s.girisRender(w, http.StatusUnauthorized, id, eposta, hataGirisBasarisiz)
 		return
 	}
 
 	if err := s.istekler.TamamlandiIsaretle(r.Context(), id, kullanici.ID); err != nil {
-		log.Printf("giris: istek tamamlanamadi id=%s hata=%v", id, err)
+		// authRequestID loglanmaz: TamamlandiIsaretle ile birlesince
+		// bekleyen bir istegi belirli bir kullaniciya baglayan, 10
+		// dakika gecerli bir yetki jetonu gibi davranir.
+		log.Printf("giris: istek tamamlanamadi: %v", err)
 		s.girisRender(w, http.StatusInternalServerError, id, eposta, hataSunucu)
 		return
 	}
@@ -200,7 +207,8 @@ func (s *Sayfalar) kayitPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.istekler.TamamlandiIsaretle(r.Context(), id, kullanici.ID); err != nil {
-		log.Printf("kayit: istek tamamlanamadi id=%s hata=%v", id, err)
+		// authRequestID loglanmaz (bkz. girisPost'taki ayni not).
+		log.Printf("kayit: istek tamamlanamadi: %v", err)
 		s.kayitRender(w, http.StatusInternalServerError, id, eposta, ad, hataSunucu)
 		return
 	}

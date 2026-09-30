@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -44,26 +45,46 @@ func TestGirisAuthRequestIDsizReddedilir(t *testing.T) {
 	}
 }
 
-// Yanlis sifre ile giriste hata mesaji, hesabin var olup olmadigini
-// SOYLEMEMELI: aksi halde form bir e-posta sayim araci olur.
+// Numaralandirma sizintisi, AYNI girdi icin hesap durumuna gore FARKLI
+// cikti donmekten dogar. Bu yuzden burada IKI FARKLI e-posta degil,
+// AYNI e-posta ile iki hesap DURUMU (hic kayitli degil / kayitli ama
+// sifre yanlis) karsilastirilir. Cikti (durum kodu, govde, header'lar)
+// birebir ayni olmali; aksi halde saldirgan hesabin var olup olmadigini
+// cikarabilir.
 func TestYanlisGirisKullaniciVarligiSizdirmaz(t *testing.T) {
 	s, kullanici := testSayfalar(t)
-	if _, err := kullanici.Create(t.Context(), "var@ornek.com", "V", "dogruSifre12"); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	govdeler := map[string]string{}
-	for ad, form := range map[string]url.Values{
-		"var olan, yanlis sifre": {"eposta": {"var@ornek.com"}, "sifre": {"yanlis"}, "authRequestID": {"abc"}},
-		"olmayan hesap":          {"eposta": {"yok@ornek.com"}, "sifre": {"herhangi"}, "authRequestID": {"abc"}},
-	} {
+	const eposta = "ayni@ornek.com"
+
+	girisDene := func() *httptest.ResponseRecorder {
+		form := url.Values{"eposta": {eposta}, "sifre": {"yanlis"}, "authRequestID": {"abc"}}
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPost, yolGiris, strings.NewReader(form.Encode()))
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		s.Giris(w, r)
-		govdeler[ad] = w.Body.String()
+		return w
 	}
-	if govdeler["var olan, yanlis sifre"] != govdeler["olmayan hesap"] {
-		t.Error("iki hata yaniti farkli; hesabin varligi sizdiriliyor")
+
+	// Durum A: bu e-postayla hic hesap yok.
+	a := girisDene()
+
+	// Durum B: hesap var, ama "yanlis" sifresi gercek sifreden farkli;
+	// yani bu dal da GIRIS BASARISIZ olan yolda kaliyor.
+	if _, err := kullanici.Create(t.Context(), eposta, "V", "dogruSifre12"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	b := girisDene()
+
+	if a.Code != http.StatusUnauthorized {
+		t.Fatalf("durum A = %d, beklenen %d (giris basarisiz olmali)", a.Code, http.StatusUnauthorized)
+	}
+	if a.Code != b.Code {
+		t.Fatalf("durum kodlari farkli: A=%d B=%d", a.Code, b.Code)
+	}
+	if a.Body.String() != b.Body.String() {
+		t.Error("iki govde farkli; hesabin varligi sizdiriliyor")
+	}
+	if !reflect.DeepEqual(a.Header(), b.Header()) {
+		t.Error("iki yanitin header'lari farkli; hesabin varligi sizdiriliyor")
 	}
 }
 
@@ -77,6 +98,31 @@ func TestSayfaGirdiKacirir(t *testing.T) {
 	s.Giris(w, r)
 	if strings.Contains(w.Body.String(), "<script>") {
 		t.Error("girdi kacirilmamis, XSS mumkun")
+	}
+}
+
+// Basarisiz giriste girilen e-posta forma geri yansitilir (numaralandirma
+// SIZDIRMAZ, cunku saldirgan zaten kendi yazdigi degeri goruyor). Ancak bu
+// echo XSS yuzeyi acar; html/template'in bunu kacisladigini burada
+// dogrudan olcuyoruz.
+func TestGirisEpostaEchoKacar(t *testing.T) {
+	s, _ := testSayfalar(t)
+	kotu := `"><script>alert(1)</script>`
+	form := url.Values{"eposta": {kotu}, "sifre": {"yanlis"}, "authRequestID": {"abc"}}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, yolGiris, strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	s.Giris(w, r)
+
+	govde := w.Body.String()
+	if strings.Contains(govde, "<script>") {
+		t.Error("ham <script> govdede bulundu, XSS mumkun")
+	}
+	if !strings.Contains(govde, "&lt;script&gt;") {
+		t.Error("kacislanmis <script> govdede bulunamadi; echo hic gorunmuyor olabilir")
+	}
+	if !strings.Contains(govde, "&#34;") {
+		t.Error("kacislanmis cift tirnak govdede bulunamadi")
 	}
 }
 
