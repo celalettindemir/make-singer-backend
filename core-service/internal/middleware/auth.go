@@ -89,6 +89,12 @@ func (d *opDogrulayici) dogrula(jetonMetni string) (string, string, string, erro
 			if t.Method.Alg() != jwt.SigningMethodRS256.Alg() {
 				return nil, fmt.Errorf("beklenmeyen imza yontemi: %v", t.Header["alg"])
 			}
+			// Savunma derinligi: nil anahtar crypto/rsa icinde PANIGE
+			// yol acar. kurulumHatasi sayesinde buraya nil ile
+			// gelinmemesi gerekir, yine de kontrol ediyoruz.
+			if d.acik == nil {
+				return nil, fmt.Errorf("acik anahtar nil")
+			}
 			return d.acik, nil
 		}, secenekler...)
 	if err != nil {
@@ -97,8 +103,30 @@ func (d *opDogrulayici) dogrula(jetonMetni string) (string, string, string, erro
 	if !jeton.Valid {
 		return "", "", "", fmt.Errorf("jeton gecersiz")
 	}
+	// Jetonun KULLANIM TURU denetlenir: id_token bir access token
+	// DEGILDIR ve API erisimi vermemeli. Ikisi de ayni anahtarla,
+	// ayni iss ve aud ile imzalandigi icin yukaridaki denetimlerin
+	// hicbiri ikisini ayirt etmez. Ayirt edici claim'ler
+	// (zitadel/oidc v3.51.8, pkg/oidc/token.go):
+	//   access token: jti VAR, azp/at_hash YOK   (NewAccessTokenClaims)
+	//   id_token    : azp VAR (+at_hash), jti YOK (NewIDTokenClaims)
+	// Somut etki: id_token omru 1 saat, access token 15 dakika; ayrica
+	// id_token istemcide daha gevsek tasinir (cache, analytics, crash
+	// log) ve OP tarafinda kaydi tutulmaz.
+	if jti, _ := ek["jti"].(string); strings.TrimSpace(jti) == "" {
+		return "", "", "", fmt.Errorf("jti claim'i yok: access token degil")
+	}
+	if _, varmi := ek["azp"]; varmi {
+		return "", "", "", fmt.Errorf("azp claim'i var: id_token access token olarak kullanilamaz")
+	}
+	if _, varmi := ek["at_hash"]; varmi {
+		return "", "", "", fmt.Errorf("at_hash claim'i var: id_token access token olarak kullanilamaz")
+	}
+
 	sub, _ := ek["sub"].(string)
-	if sub == "" {
+	// Yalnizca "" degil, bosluktan olusan sub da reddedilir: aksi halde
+	// userId "   " olur ve rate limit anahtari anlamsizlasir.
+	if strings.TrimSpace(sub) == "" {
 		return "", "", "", fmt.Errorf("sub claim'i bos")
 	}
 	eposta, _ := ek["email"].(string)

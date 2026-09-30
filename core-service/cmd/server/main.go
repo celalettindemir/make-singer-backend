@@ -71,15 +71,22 @@ func main() {
 	}
 
 	// Kendi OpenID Provider'imiz. Issuer bos ise hic baslamaz; API o
-	// zaman eski auth yolunda kalir. Hata olursa fatal degil: OP
-	// olmadan da /health ve genel akis ayakta kalmali ki sorun
-	// tanilanabilsin.
+	// zaman eski auth yolunda kalir (yerel gelistirme).
+	//
+	// Issuer DOLU ise baslatma hatasi FATALDIR. Eskiden yalnizca uyari
+	// loglaniyordu; o durumda /api/* legacy HMAC yoluna dusuyordu ve
+	// legacy dogrulama ne exp ne iss ne aud istedigi icin, varsayilan
+	// sirla (`change-me-in-production`) imzalanmis SURESIZ bir jeton
+	// kabul ediliyordu. Yani gecici bir Postgres kesintisi tum API'yi
+	// aciyordu. Her istege 401 donen ama /health'te sagliklı gorunen
+	// bir pod sessiz bir kesintidir; CrashLoopBackOff dogru ve gorunur
+	// sinyal, yeniden baslatma da gecici kesinti icin dogru kurtarma.
 	var kimlikSunucu *kimlik.Sunucu
 	if cfg.Auth.Issuer != "" {
 		var err error
 		kimlikSunucu, err = kimlik.Start(ctx, &cfg.Auth, redisClient, cfg.Server.Env)
 		if err != nil {
-			log.Printf("Uyari: kimlik saglayicisi baslatilamadi: %v", err)
+			log.Fatalf("Kimlik saglayicisi baslatilamadi, servis baslatilmiyor: %v", err)
 		} else {
 			log.Printf("Kimlik saglayicisi %s uzerinde, issuer %s", cfg.Auth.Port, cfg.Auth.Issuer)
 			defer func() {
@@ -156,24 +163,43 @@ func main() {
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
 
+	// Mod secimi YAPILANDIRMADAN yapilir, calisma zamani basarisindan
+	// degil: bkz. middleware.APIAuthModuSec. Issuer doluyken legacy ve
+	// gateway dallari secilemez.
+	authModu := middleware.APIAuthModuSec(cfg.Auth.Issuer, cfg.Gateway.Enabled)
+
 	// Initialize auth handler for ForwardAuth verification
 	var tokenVerifier auth.TokenVerifier
 	if jwksVerifier != nil {
 		tokenVerifier = jwksVerifier
 	}
-	authHandler := handler.NewAuthHandler(tokenVerifier, cfg.JWT.Secret)
+	legacySir := cfg.JWT.Secret
+	if authModu == middleware.ModOP {
+		// OP modunda /auth/verify legacy HMAC zincirini KOSMAMALI.
+		// Aksi halde bu uc, varsayilan sirla imzalanmis suresiz bir
+		// jetona 200 + X-User-Id/X-User-Email doner; yani Traefik
+		// ForwardAuth icin bir kimlik oracle'i olur.
+		tokenVerifier = nil
+		legacySir = ""
+	}
+	authHandler := handler.NewAuthHandler(tokenVerifier, legacySir)
 
 	// Initialize middleware (with fallback support)
 	var apiAuthMiddleware fiber.Handler
-	switch {
-	case kimlikSunucu != nil:
-		// Kendi OP'umuz ayakta: access token'lari onun anahtariyla
-		// dogrula. Anahtar surec icinden okunur, kendi JWKS ucumuza ag
-		// uzerinden gidilmez. Bu modda gateway veya legacy yola dusulmez.
+	switch authModu {
+	case middleware.ModOP:
+		// Kendi OP'umuz: access token'lari onun anahtariyla dogrula.
+		// Anahtar surec icinden okunur, kendi JWKS ucumuza ag uzerinden
+		// gidilmez. Bu modda gateway veya legacy yola dusulmez.
+		if kimlikSunucu == nil {
+			// Ulasilamaz: Issuer doluyken Start hatasi yukarida fatal.
+			// Yine de nil dereference yerine acik bir hata verelim.
+			log.Fatalf("Tutarsiz durum: OP modu secildi ama kimlik sunucusu yok")
+		}
 		log.Println("Info: kimlik saglayicisi modu — RS256 access token dogrulanacak")
 		apiAuthMiddleware = middleware.NewOPAuthMiddleware(
 			cfg.Auth.Issuer, cfg.Auth.ClientID, kimlikSunucu.APIAcikAnahtar()).Authenticate()
-	case cfg.Gateway.Enabled:
+	case middleware.ModGateway:
 		// Behind Traefik: auth is handled by ForwardAuth, read X-User-* headers
 		log.Println("Info: Gateway mode enabled — using header-based auth")
 		apiAuthMiddleware = middleware.GatewayAuthMiddleware()
