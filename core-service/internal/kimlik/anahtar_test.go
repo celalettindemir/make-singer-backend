@@ -84,12 +84,18 @@ func TestCryptoAnahtarUzunlugu(t *testing.T) {
 	if _, err := CryptoAnahtar(strings.Repeat("a", 33)); err == nil {
 		t.Error("33 baytlik anahtar kabul edildi")
 	}
-	b, err := CryptoAnahtar(strings.Repeat("a", 32))
+	gizli := strings.Repeat("a", 32)
+	b, err := CryptoAnahtar(gizli)
 	if err != nil {
 		t.Fatalf("32 baytlik anahtar reddedildi: %v", err)
 	}
-	if len(b) != 32 {
-		t.Errorf("uzunluk = %d, beklenen 32", len(b))
+	// Uzunluk iddiasi bos bir iddiaydi: CryptoAnahtar [32]byte
+	// donduruyor, yani len(b) derleme zamani sabiti 32 ve hicbir
+	// zaman tutmayamaz. Anlamli olan, sirrin bayt bayt kopyalanmasi
+	// -- kopyalama duserse anahtar tamamen sifir olur ve sifreleme
+	// sessizce sabit bir anahtara duser.
+	if string(b[:]) != gizli {
+		t.Error("anahtar icerigi girdiyle ayni degil")
 	}
 }
 

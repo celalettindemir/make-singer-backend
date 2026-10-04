@@ -127,7 +127,7 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 		opOpts = append(opOpts, op.WithAllowInsecure())
 	}
 
-	saglayici, err := op.NewOpenIDProvider(cfg.Issuer, opCfg, depo, opOpts...)
+	saglayici, err := op.NewProvider(opCfg, depo, op.StaticIssuer(cfg.Issuer), opOpts...)
 	if err != nil {
 		havuz.Close()
 		return nil, fmt.Errorf("OpenID Provider kurulamadi: %w", err)

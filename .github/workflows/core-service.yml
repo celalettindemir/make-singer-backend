@@ -32,10 +32,13 @@ jobs:
         with:
           go-version: "1.25"
 
+      # Surum SABIT: "latest" v1.64.8'e cozuluyordu ve go1.24 ile
+      # derlendigi icin go.mod'daki "go 1.25.0" hedefini reddediyor
+      # (exit 3). Yapilandirma core-service/.golangci.yml'de.
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.14.0
           working-directory: ./core-service
 
   build:

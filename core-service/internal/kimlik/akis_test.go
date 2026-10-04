@@ -91,7 +91,7 @@ func testSunucuAyarli(t *testing.T, ayar HizLimitAyar) *akisOrtami {
 			oidc.ScopeOpenID, oidc.ScopeProfile, oidc.ScopeEmail, oidc.ScopeOfflineAccess,
 		},
 	}
-	saglayici, err := op.NewOpenIDProvider(issuer, opCfg, depo, op.WithAllowInsecure())
+	saglayici, err := op.NewProvider(opCfg, depo, op.StaticIssuer(issuer), op.WithAllowInsecure())
 	if err != nil {
 		t.Fatalf("OpenIDProvider: %v", err)
 	}

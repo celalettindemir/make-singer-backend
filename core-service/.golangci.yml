@@ -1,0 +1,17 @@
+# golangci-lint v2 yapilandirmasi.
+#
+# Neden var: CI v1.64.8 "latest" olarak cozuluyordu ve go1.24 ile
+# derlendigi icin go.mod'daki "go 1.25.0" hedefini reddediyordu
+# (exit 3). v2'ye gecerken v1'in kendiliginden uyguladigi varsayilan
+# hariç tutma listesi (EXC0001 ve arkadaslari) kaldirildi; asagidaki
+# presetler onu geri getiriyor. Yani bu dosya lint'in anlamini
+# degistirmiyor, v1'deki haliyle ayni tutuyor.
+version: "2"
+
+linters:
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+      - legacy
