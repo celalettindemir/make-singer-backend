@@ -71,3 +71,14 @@ auth:
   redirect_uris: [] # Set via AUTH_REDIRECT_URIS env var
   access_ttl: "15m" # Set via AUTH_ACCESS_TTL env var
   refresh_ttl: "1440h" # Set via AUTH_REFRESH_TTL env var (default: 60 days)
+  # NOTE: access_ttl / refresh_ttl must be values time.ParseDuration
+  # understands ("15m", "1440h"). Viper does NOT fall back to the default
+  # for an unparsable value such as "15min" or "60d" — it silently yields
+  # 0s. kimlik.Start refuses to start on a non-positive TTL.
+  # Rate limits for the OP listener's /giris and /kayit endpoints. These
+  # run on a separate net/http listener, outside the Fiber middleware
+  # chain, so internal/middleware/ratelimit.go never sees them.
+  login_ip_per_min: 10 # Set via AUTH_LOGIN_IP_PER_MIN
+  login_email_per_hour: 60 # Set via AUTH_LOGIN_EMAIL_PER_HOUR
+  signup_ip_per_hour: 5 # Set via AUTH_SIGNUP_IP_PER_HOUR
+  trusted_proxies: 1 # Set via AUTH_TRUSTED_PROXIES. Traefik => 1; 0 ignores X-Forwarded-For.

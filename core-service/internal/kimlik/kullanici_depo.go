@@ -13,6 +13,26 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// epostaNormalize, e-postayi SAKLAMA ve ARAMA icin TEK bicime getirir.
+//
+// NEDEN TEK BIR YARDIMCI: eskiden Create "strings.TrimSpace(email)"
+// uyguluyor, ByEmail ise parametreye HIC trim uygulamiyordu
+// (WHERE lower(email) = lower($1)) ve sayfa katmani form degerini ham
+// geciyordu. Sonuc GERCEK bir uretim hatasiydi: e-postasini bastaki veya
+// sondaki bosluklarla yazan kullanici " x@y.com " ile kayit olup
+// "x@y.com" olarak saklaniyor, sonra AYNI girdiyle giris yapmaya
+// calistiginda bulunamiyor ve "E-posta veya sifre hatali" aliyordu —
+// hesabi var ama o girdiyle asla giremiyordu. Artik Create, ByEmail ve
+// giris/kayit sayfalari AYNI yoldan geciyor.
+//
+// Buyuk/kucuk harf BILINCLI OLARAK degistirilmez: tekillik ve arama
+// Postgres tarafinda lower(email) uzerinden yapilir (unique index +
+// ByEmail sorgusu), yani kullanicinin yazdigi bicim goruntuleme icin
+// korunur ve yine de "E@t" ile "e@t" ayni hesaptir.
+func epostaNormalize(eposta string) string {
+	return strings.TrimSpace(eposta)
+}
+
 type UserStore interface {
 	Create(ctx context.Context, email, name, password string) (*User, error)
 	ByEmail(ctx context.Context, email string) (*User, error)
@@ -34,7 +54,7 @@ func (s *PostgresUserStore) Create(ctx context.Context, email, name, password st
 	}
 	k := &User{
 		ID:           uuid.NewString(),
-		Email:        strings.TrimSpace(email),
+		Email:        epostaNormalize(email),
 		Name:         strings.TrimSpace(name),
 		PasswordHash: hash,
 		CreatedAt:    time.Now().UTC(),
@@ -58,7 +78,7 @@ func (s *PostgresUserStore) Create(ctx context.Context, email, name, password st
 func (s *PostgresUserStore) ByEmail(ctx context.Context, email string) (*User, error) {
 	return s.tekil(ctx,
 		`SELECT id, email, email_verified, name, coalesce(password_hash, ''), created_at
-		 FROM users WHERE lower(email) = lower($1)`, email)
+		 FROM users WHERE lower(email) = lower($1)`, epostaNormalize(email))
 }
 
 func (s *PostgresUserStore) ByID(ctx context.Context, id string) (*User, error) {

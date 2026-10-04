@@ -42,6 +42,20 @@ type akisOrtami struct {
 // discovery ve op.AuthCallbackURL dogru adresi uretsin.
 func testSunucu(t *testing.T) *akisOrtami {
 	t.Helper()
+	// Uretim kablolamasi HER akis testinde kosar (muxKur gercek bir
+	// *HizLimit alir), ama sinirlar bu testleri etkilemeyecek kadar
+	// yuksek: hiz limitinin KENDISI hizlimit_test.go'da dar sinirlarla
+	// olculur.
+	return testSunucuAyarli(t, HizLimitAyar{
+		GirisIPPerMin:      1000,
+		GirisEpostaPerSaat: 1000,
+		KayitIPPerSaat:     1000,
+		GuvenilenProxy:     0,
+	})
+}
+
+func testSunucuAyarli(t *testing.T, ayar HizLimitAyar) *akisOrtami {
+	t.Helper()
 	rdb := testRedis(t) // Redis yoksa burada atlanir
 
 	anahtar, err := AnahtarYukle(testPEM(t))
@@ -82,10 +96,15 @@ func testSunucu(t *testing.T) *akisOrtami {
 		t.Fatalf("OpenIDProvider: %v", err)
 	}
 
+	hizLimit, err := NewHizLimit(rdb, ayar, []byte(testCryptoAnahtari))
+	if err != nil {
+		t.Fatalf("NewHizLimit: %v", err)
+	}
+
 	// cerezGuvenli=false: test dinleyicisi http, Secure cerez
 	// tasinmazdi.
 	srv := &http.Server{
-		Handler:           muxKur(saglayici, kullanici, istekler, false),
+		Handler:           muxKur(saglayici, kullanici, istekler, false, hizLimit),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() { _ = srv.Serve(dinleyici) }()
@@ -510,5 +529,56 @@ func TestDiscoveryYalnizcaS256IlanEder(t *testing.T) {
 	}
 	if len(belge.Methods) != 1 || belge.Methods[0] != "S256" {
 		t.Errorf("code_challenge_methods_supported = %v, beklenen [S256]", belge.Methods)
+	}
+}
+
+// M3: YAYINLANAN discovery belgesi desteklenmeyen akislari ilan
+// ETMEMELI. Inceleyici bunlarin hepsini canli denedi ve hepsi dogru
+// reddediliyor (guvenlik sorunu yok), ama metadata'ya guvenip implicit
+// deneyen uyumlu bir RP gereksiz yere hata alirdi.
+//
+// Bu test, discoveryDuzelt'in gercekten YAYIN YOLUNDA oldugunu olcer:
+// belge kutuphanenin kendi op.CreateDiscoveryConfig'inden gecip bizim
+// mux'umuz uzerinden doner.
+func TestDiscoveryDesteklenmeyenAkislariIlanEtmez(t *testing.T) {
+	o := testSunucu(t)
+	yanit := al(t, tarayici(t), o.issuer+"/.well-known/openid-configuration")
+	if yanit.StatusCode != http.StatusOK {
+		t.Fatalf("discovery durumu = %d", yanit.StatusCode)
+	}
+	var belge struct {
+		ResponseTypes []string `json:"response_types_supported"`
+		GrantTypes    []string `json:"grant_types_supported"`
+		DeviceUcu     string   `json:"device_authorization_endpoint"`
+		Issuer        string   `json:"issuer"`
+		TokenUcu      string   `json:"token_endpoint"`
+	}
+	ham := govde(t, yanit)
+	if err := json.Unmarshal([]byte(ham), &belge); err != nil {
+		t.Fatalf("discovery cozulemedi: %v", err)
+	}
+
+	if len(belge.ResponseTypes) != 1 || belge.ResponseTypes[0] != "code" {
+		t.Errorf("response_types_supported = %v, beklenen [code]", belge.ResponseTypes)
+	}
+	for _, yasak := range []string{"implicit", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:ietf:params:oauth:grant-type:device_code"} {
+		for _, g := range belge.GrantTypes {
+			if g == yasak {
+				t.Errorf("grant_types_supported desteklenmeyen %q iceriyor: %v", yasak, belge.GrantTypes)
+			}
+		}
+	}
+	if belge.DeviceUcu != "" {
+		t.Errorf("device_authorization_endpoint ilan edildi: %q", belge.DeviceUcu)
+	}
+
+	// Belgenin GERI KALANI bozulmamis olmali: issuer ve token ucu
+	// kutuphanenin urettigi degerler, istek baglamindan cozulen issuer
+	// ile birlikte dogru gelmeli (araci.Handler sarmasi calisiyor mu).
+	if belge.Issuer != o.issuer {
+		t.Errorf("issuer = %q, beklenen %q", belge.Issuer, o.issuer)
+	}
+	if belge.TokenUcu != o.issuer+"/oauth/token" {
+		t.Errorf("token_endpoint = %q, beklenen %q", belge.TokenUcu, o.issuer+"/oauth/token")
 	}
 }

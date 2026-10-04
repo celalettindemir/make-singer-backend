@@ -38,7 +38,7 @@ Standard Go tooling (`go fmt`, `go vet`) is used for formatting and linting.
 
 ## Architecture
 
-Go 1.22 API service using the **Fiber v2** web framework. Data storage uses **Redis** (job queue, session cache, rate limits) and **PostgreSQL** (user accounts, password hashes, refresh tokens maintained by the OpenID Provider). Long-running work is processed asynchronously via **Asynq** (Redis-backed task queue).
+Go 1.25 API service using the **Fiber v2** web framework. Data storage uses **Redis** (job queue, session cache, rate limits) and **PostgreSQL** (user accounts, password hashes, refresh tokens maintained by the OpenID Provider). Long-running work is processed asynchronously via **Asynq** (Redis-backed task queue).
 
 ### Request flow
 

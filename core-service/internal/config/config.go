@@ -130,6 +130,20 @@ type AuthConfig struct {
 	RedirectURIs  []string      // izinli redirect adresleri
 	AccessTTL     time.Duration // access token omru
 	RefreshTTL    time.Duration // refresh token omru
+
+	// OP dinleyicisinin (ikinci net/http sunucusu) giris/kayit uclari
+	// icin hiz limiti. Bu uclar ana API'nin Fiber zincirinden AYRIDIR,
+	// yani internal/middleware/ratelimit.go onlari HIC gormez; limitler
+	// burada tanimlanir ve internal/kimlik/hizlimit.go uygular.
+	LoginIPPerMin     int // POST /giris, IP basina dakikada
+	LoginEmailPerHour int // POST /giris, e-posta basina saatte
+	SignupIPPerHour   int // POST /kayit, IP basina saatte
+
+	// TrustedProxies, istek OP'ye ulasmadan once gecen GUVENILEN ters
+	// proxy sayisi (bu kurulumda Traefik => 1). X-Forwarded-For'un
+	// SONDAN bu kadarinci elemani gercek istemci adresi sayilir; 0 ise
+	// baslik hic okunmaz ve RemoteAddr kullanilir. Bkz. kimlik.istemciIP.
+	TrustedProxies int
 }
 
 func Load() (*Config, error) {
@@ -190,6 +204,10 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("auth.redirect_uris", "AUTH_REDIRECT_URIS")
 	_ = viper.BindEnv("auth.access_ttl", "AUTH_ACCESS_TTL")
 	_ = viper.BindEnv("auth.refresh_ttl", "AUTH_REFRESH_TTL")
+	_ = viper.BindEnv("auth.login_ip_per_min", "AUTH_LOGIN_IP_PER_MIN")
+	_ = viper.BindEnv("auth.login_email_per_hour", "AUTH_LOGIN_EMAIL_PER_HOUR")
+	_ = viper.BindEnv("auth.signup_ip_per_hour", "AUTH_SIGNUP_IP_PER_HOUR")
+	_ = viper.BindEnv("auth.trusted_proxies", "AUTH_TRUSTED_PROXIES")
 
 	// Defaults
 	viper.SetDefault("server.port", "8000")
@@ -227,6 +245,40 @@ func Load() (*Config, error) {
 	viper.SetDefault("auth.port", "8001")
 	viper.SetDefault("auth.access_ttl", "15m")
 	viper.SetDefault("auth.refresh_ttl", "1440h") // 60 gun
+
+	// DIKKAT: viper.SetDefault, deger VAR ama COZULEMIYORSA devreye
+	// GIRMEZ. Ornegin AUTH_ACCESS_TTL="15min" veya AUTH_REFRESH_TTL="60d"
+	// (dokumanlardaki "15 dakika"/"60 gun" ifadelerinin dogal ama
+	// time.ParseDuration'in ANLAMADIGI yazimlari) sessizce 0s olur,
+	// varsayilana DUSMEZ. 0 TTL yikicidir: access kaydi hic yazilmaz ve
+	// jeton exp=now ile uretilir (her /api/* 401), refresh kaydi
+	// dogdugu an olur (tum kullanicilar aninda disari atilir). Bu yuzden
+	// kimlik.Start TTL'leri ACIKCA dogrular ve <= 0 ise HIC BASLAMAZ.
+
+	// Hiz limiti varsayilanlari (OP giris/kayit uclari).
+	//
+	// GEREKCELER (uydurma degil, olculen/alintilanan):
+	//   - login_ip_per_min = 10: inceleme sirasinda olculen maliyet istek
+	//     basina ~258 ms CPU (bcrypt cost 12, bkz. kimlik.bcryptCost).
+	//     10/dk bir IP'yi ~%4,3 CPU cekirdegine baglar, yani CPU DoS
+	//     yolu kapanir. Elle giris yapan bir insan dakikada 10 POST'a
+	//     yaklasmaz. Deponun kendi kalibiyla da tutarli:
+	//     ratelimit.lyrics_per_min = 30 (giris ondan seyrek bir islem).
+	//   - login_email_per_hour = 60: dagitik brute-force (her istek ayri
+	//     IP) IP sayacini atlar; hesap basina sayac onu sinirlar. NIST SP
+	//     800-63B 5.2.2 ardisik basarisiz deneme sayisina en fazla 100
+	//     ust siniri verir — 60/saat bunun belirgin altinda, ama gercek
+	//     bir kullanicinin bir saatte ulasamayacagi kadar yukarida.
+	//   - signup_ip_per_hour = 5: e-posta dogrulama ve CAPTCHA MVP'de
+	//     bilerek yok, yani hesap uretimini sinirlayan TEK sey bu.
+	//     Paylasimli bir cikis NAT'i arkasindaki birkac kisiye yeter,
+	//     toplu hesap uretimini bitirir.
+	//   - trusted_proxies = 1: bu kurulumda OP dinleyicisinin onunde
+	//     yalnizca Traefik var (bkz. traefik/).
+	viper.SetDefault("auth.login_ip_per_min", 10)
+	viper.SetDefault("auth.login_email_per_hour", 60)
+	viper.SetDefault("auth.signup_ip_per_hour", 5)
+	viper.SetDefault("auth.trusted_proxies", 1)
 
 	// Try to read config file (optional)
 	_ = viper.ReadInConfig()
@@ -294,6 +346,11 @@ func Load() (*Config, error) {
 			RedirectURIs:  viper.GetStringSlice("auth.redirect_uris"),
 			AccessTTL:     viper.GetDuration("auth.access_ttl"),
 			RefreshTTL:    viper.GetDuration("auth.refresh_ttl"),
+
+			LoginIPPerMin:     viper.GetInt("auth.login_ip_per_min"),
+			LoginEmailPerHour: viper.GetInt("auth.login_email_per_hour"),
+			SignupIPPerHour:   viper.GetInt("auth.signup_ip_per_hour"),
+			TrustedProxies:    viper.GetInt("auth.trusted_proxies"),
 		},
 	}
 

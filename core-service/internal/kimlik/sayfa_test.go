@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -627,5 +628,75 @@ func TestCallbackIDsizReddedilir(t *testing.T) {
 	}
 	if izleyici.cagrildi {
 		t.Error("id olmadan delege edildi")
+	}
+}
+
+// GERCEK URETIM HATASI (I4a): kayit "strings.TrimSpace(email)"
+// uyguluyor, giris ise form degerini HAM geciyordu. E-postasini bastaki
+// veya sondaki boslukla yazan kullanici kayit oluyor (" x@y.com " ->
+// "x@y.com" saklaniyor), sonra AYNI girdiyle giris yapmaya calistiginda
+// bulunamiyor ve "E-posta veya sifre hatali" aliyordu: hesabi var ama o
+// girdiyle asla giremiyordu.
+//
+// Bu test o yolu ucan uca olcer: bosluklu e-postayla KAYIT, ardindan
+// hem BOSLUKLU hem BOSLUKSUZ girdiyle GIRIS.
+func TestBoslukluEpostaIleKayitSonrasiGirisCalisir(t *testing.T) {
+	const sifre = "gecerliSifre12"
+	const bosluklu = "  bosluk@ornek.com  "
+	const bosluksuz = "bosluk@ornek.com"
+
+	o := testSayfalar(t)
+
+	// Kayit: bosluklu girdi.
+	cerez, csrf := formAc(t, o, yolKayit, "istek-kayit")
+	w := postEt(o, yolKayit, url.Values{
+		"authRequestID": {"istek-kayit"},
+		csrfAlan:        {csrf},
+		"eposta":        {bosluklu},
+		"ad":            {"Bosluk Kullanici"},
+		"sifre":         {sifre},
+	}, cerez)
+	if w.Code != http.StatusFound {
+		t.Fatalf("kayit durumu = %d, beklenen 302 (govde: %s)", w.Code, w.Body.String())
+	}
+
+	// Saklanan deger normalize edilmis olmali.
+	kayitli, err := o.kullanici.ByEmail(context.Background(), bosluksuz)
+	if err != nil {
+		t.Fatalf("kayitli kullanici bulunamadi: %v", err)
+	}
+	if kayitli.Email != bosluksuz {
+		t.Errorf("saklanan e-posta = %q, beklenen %q", kayitli.Email, bosluksuz)
+	}
+
+	// Giris: her iki girdi de CALISMALI.
+	for _, girdi := range []string{bosluklu, bosluksuz, "  BOSLUK@ORNEK.COM "} {
+		t.Run("giris girdisi="+strconv.Quote(girdi), func(t *testing.T) {
+			id := "istek-giris-" + girdi
+			cerez, csrf := formAc(t, o, yolGiris, id)
+			w := postEt(o, yolGiris, url.Values{
+				"authRequestID": {id},
+				csrfAlan:        {csrf},
+				"eposta":        {girdi},
+				"sifre":         {sifre},
+			}, cerez)
+			if w.Code != http.StatusFound {
+				t.Errorf("giris durumu = %d, beklenen 302 (govde: %s)", w.Code, w.Body.String())
+			}
+		})
+	}
+
+	// NEGATIF KONTROL: duzeltme "her sifre gecer" haline gelmesin.
+	// Yanlis sifre hala 401 almali, yani yukaridaki 302'ler
+	// normalizasyon sayesinde, dogrulamanin gevsemesi sayesinde DEGIL.
+	cerez, csrf = formAc(t, o, yolGiris, "istek-yanlis")
+	w = postEt(o, yolGiris, url.Values{
+		"authRequestID": {"istek-yanlis"},
+		csrfAlan:        {csrf},
+		"eposta":        {bosluklu},
+		"sifre":         {"yanlisSifre12"},
+	}, cerez)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("yanlis sifre durumu = %d, beklenen 401", w.Code)
 	}
 }

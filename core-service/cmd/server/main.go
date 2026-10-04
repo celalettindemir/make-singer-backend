@@ -252,15 +252,30 @@ func main() {
 
 	// Health check
 	app.Get("/health", func(c *fiber.Ctx) error {
+		// GERCEK hazirlik: "kimlikSunucu != nil" (yani Start basariyla
+		// dondu mu) YETERLI DEGIL — dinleyici sonradan cokerse pod hala
+		// "sagliklı" gorunuyordu. Hazir(), dinleyicinin su an hizmet
+		// verdigini soyler ve nil alici icin de guvenlidir.
+		kimlikHazir := kimlikSunucu.Hazir()
+
+		// AUTH_ISSUER verildiyse OP olmadan servis islevsizdir: her
+		// /api/* istegi 401 doner. Boyle bir pod "ok" demeyi birakmali,
+		// yoksa yanlis saglik sinyali sessiz bir kesintiyi gizler.
+		durum := "ok"
+		if cfg.Auth.Issuer != "" && !kimlikHazir {
+			durum = "degraded"
+			c.Status(fiber.StatusServiceUnavailable)
+		}
+
 		return c.JSON(fiber.Map{
-			"status": "ok",
+			"status": durum,
 			"services": fiber.Map{
 				"groq":   groqClient.IsConfigured(),
 				"suno":   sunoClient.IsConfigured(),
 				"r2":     r2Client != nil,
 				"audio":  audioClient.IsConfigured(),
-				"auth":   kimlikSunucu != nil || jwksVerifier != nil,
-				"kimlik": kimlikSunucu != nil,
+				"auth":   kimlikHazir || jwksVerifier != nil,
+				"kimlik": kimlikHazir,
 			},
 		})
 	})

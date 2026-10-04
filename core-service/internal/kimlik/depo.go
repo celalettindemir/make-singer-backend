@@ -275,6 +275,16 @@ func (d *Depo) aileIptalEt(ctx context.Context, refreshToken string) error {
 // TerminateSession, cikis akisinda kullanicinin o istemcideki tum refresh
 // jetonlarini iptal eder. JWT access token'lar dogal sureleriyle biter.
 func (d *Depo) TerminateSession(ctx context.Context, userID string, clientID string) error {
+	// M2: bos userID/clientID icin koruma YOKTU. Parametresiz bir
+	// GET /end_session, Postgres'e bos dizgeyi uuid olarak gonderip
+	// 500 + "invalid input syntax for type uuid" (SQLSTATE 22P02)
+	// uretiyor ve HER istekte bir ERROR log satiri basiyordu: log
+	// kirliligi ve kucuk bir amplifikasyon yuzeyi. Bos kimlikle iptal
+	// edilecek hicbir jeton zaten YOKTUR, yani erken donmek davranisi
+	// degistirmez — sadece gereksiz sorguyu ve hatayi kaldirir.
+	if userID == "" || clientID == "" {
+		return nil
+	}
 	return d.jetonlar.KullaniciIptal(ctx, userID, clientID)
 }
 
@@ -382,7 +392,27 @@ func (d *Depo) RevokeToken(ctx context.Context, tokenOrTokenID string, userID st
 func (d *Depo) GetRefreshTokenInfo(ctx context.Context, clientID string, token string) (userID string, tokenID string, err error) {
 	kayit, err := d.jetonlar.RefreshOku(ctx, token)
 	if err != nil {
-		if errors.Is(err, ErrJetonYok) || errors.Is(err, ErrJetonTekrar) {
+		if errors.Is(err, ErrJetonTekrar) {
+			// M7: yeniden kullanim BURADA da aileyi oldurur. Mimarinin
+			// tamami "yeniden kullanim => aileyi iptal et" ilkesine
+			// dayaniyor; bu yolda sessizce kaybolan bir tespit kanali
+			// vardi (somurulebilir degildi, ama kanal kaybi gercekti).
+			//
+			// Hata YOLU BILINCLI OLARAK DEGISMEZ: iptal basarisiz olsa
+			// bile op.ErrInvalidRefreshToken donuyoruz. Gerekce: bu
+			// fonksiyon /revoke akisinda da cagrilir ve RFC 7009 §2.2
+			// gecersiz jeton icin 200 ister. Iptal hatasini yukari
+			// tasimak /revoke'u 500'e cevirir ve "kullanilmis jeton" ile
+			// "bilinmeyen jeton" durumlarini yanitlardan ayirt
+			// edilebilir kilardi (bilgi sizmasi). Ariza bunun yerine
+			// aileIptalEt'in kendi log'una ve asagidaki satira dusuyor;
+			// log'a jeton veya ozeti YAZILMAZ.
+			if iptalHata := d.aileIptalEt(ctx, token); iptalHata != nil {
+				log.Printf("refresh yeniden kullanimi: aile iptal edilemedi (erisim yine reddedildi): %v", iptalHata)
+			}
+			return "", "", op.ErrInvalidRefreshToken
+		}
+		if errors.Is(err, ErrJetonYok) {
 			return "", "", op.ErrInvalidRefreshToken
 		}
 		return "", "", fmt.Errorf("refresh jetonu okunamadi: %w", err)

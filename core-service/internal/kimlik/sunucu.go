@@ -5,9 +5,11 @@ import (
 	"crypto/rsa"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,6 +35,19 @@ type Sunucu struct {
 	srv     *http.Server
 	havuz   *pgxpool.Pool
 	anahtar *Anahtar
+
+	// hazir, dinleyicinin GERCEKTEN hizmet verip vermedigini tutar.
+	// /health eskiden yalnizca "kimlikSunucu != nil" bakiyordu, yani
+	// Start dondukten SONRA dinleyicinin cokmesini (orn. kabul
+	// dongusunun hata ile durmasi) hic yakalamiyor ve hala
+	// "kimlik": true donuyordu: tam kesinti + yanlis saglik sinyali.
+	hazir atomic.Bool
+}
+
+// Hazir, OP dinleyicisinin su an hizmet verdigini soyler. /health bunu
+// kullanir; nil alici (OP hic kurulmadi) icin de guvenle cagrilabilir.
+func (s *Sunucu) Hazir() bool {
+	return s != nil && s.hazir.Load()
 }
 
 // Start, kendi OpenID Provider'imizi ayaga kaldirir ve ikinci bir HTTP
@@ -48,6 +63,10 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 	}
 
 	if err := issuerGuvensizIzniDogrula(cfg.Issuer, env); err != nil {
+		return nil, err
+	}
+
+	if err := yapilandirmaDogrula(cfg); err != nil {
 		return nil, err
 	}
 
@@ -119,27 +138,102 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 	// saklamaz ve yerel akis kirilir).
 	cerezGuvenli := !strings.HasPrefix(cfg.Issuer, "http://")
 
-	mux := muxKur(saglayici, kullaniciDepo, istekDepo, cerezGuvenli)
+	// Hiz limiti: POST /giris ve POST /kayit icin. Kurulamazsa Start
+	// HATA DONER (fail-closed): limitsiz bir giris ucu ile ayaga kalkmak
+	// hem sinirsiz brute-force hem de ana API'yi de dusuren bir CPU DoS
+	// yuzeyi demektir. Bkz. hizlimit.go.
+	hizLimit, err := NewHizLimit(rdb, HizLimitAyar{
+		GirisIPPerMin:      cfg.LoginIPPerMin,
+		GirisEpostaPerSaat: cfg.LoginEmailPerHour,
+		KayitIPPerSaat:     cfg.SignupIPPerHour,
+		GuvenilenProxy:     cfg.TrustedProxies,
+	}, cryptoAnahtar[:])
+	if err != nil {
+		havuz.Close()
+		return nil, fmt.Errorf("hiz limiti kurulamadi: %w", err)
+	}
+
+	mux := muxKur(saglayici, kullaniciDepo, istekDepo, cerezGuvenli, hizLimit)
+
+	// Dinleyici Start ICINDE, SENKRON acilir. Eskiden ListenAndServe bir
+	// goroutine icinde cagriliyordu; port cakismasi gibi bir hata Start
+	// DONDUKTEN SONRA sessizce olusuyor, /health bunu yakalamiyordu.
+	// Simdi boyle bir hata Start'i basarisiz kilar ve main.go log.Fatalf
+	// ile durur: CrashLoopBackOff dogru ve gorunur sinyaldir.
+	dinleyici, err := net.Listen("tcp", ":"+cfg.Port)
+	if err != nil {
+		havuz.Close()
+		return nil, fmt.Errorf("kimlik dinleyicisi acilamadi (port %s): %w", cfg.Port, err)
+	}
 
 	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           mux,
+		Handler: mux,
+		// M8: yalnizca ReadHeaderTimeout vardi; govde ve yanit icin sure
+		// siniri YOKTU, yani yavas govde gonderen bir istemci baglantiyi
+		// (ve goroutine'i) sure siz tutabiliyordu (Slowloris benzeri).
+		// Degerler ucun gercek maliyetine gore: en pahali istek bcrypt
+		// ile ~258 ms, formlar birkac yuz bayt.
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
+
+	sunucu := &Sunucu{srv: srv, havuz: havuz, anahtar: anahtar}
+	sunucu.hazir.Store(true)
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(dinleyici); err != nil && err != http.ErrServerClosed {
 			// Burada log.Fatal cagirmiyoruz: bu goroutine ana akistan
-			// ayrik, panik yerine sessizce durur. NOT: /health yalnizca
-			// kimlikSunucu != nil bakiyor (yani Start basariyla dondu
-			// mu) — dinleyici SONRADAN burada coker (orn. port
-			// cakismasi), /health bunu YAKALAMAZ ve hala "kimlik":true
-			// doner. Gercek dinleyici sagligini izlemek Faz 1
-			// kapsaminda degil.
-			_ = err
+			// ayrik, panik yerine sessizce durur. Ama ARTIK sessiz
+			// degil: hazir=false yazilir, /health bunu "kimlik": false
+			// olarak gosterir ve kume pod'u saglikli saymaz.
+			sunucu.hazir.Store(false)
+			log.Printf("kimlik dinleyicisi durdu: %v", err)
 		}
 	}()
 
-	return &Sunucu{srv: srv, havuz: havuz, anahtar: anahtar}, nil
+	return sunucu, nil
+}
+
+// yapilandirmaDogrula, OP'nin HIC BASLAMAMASI gereken yapilandirma
+// hatalarini toplar. Hepsi canli olarak dogrulandi: uc durumun
+// ucunde de Start eskiden HATASIZ donuyordu.
+//
+//   - ClientID bos: middleware.NewOPAuthMiddleware kurulumHatasi'na
+//     duser ve HER /api/* istegini 401 reddeder, ama /health hala
+//     "kimlik": true / "auth": true donerdi — tam kesinti + yanlis
+//     saglik sinyali. config.yaml bunun yasak oldugunu yaziyordu ama
+//     kod zorlamiyordu.
+//   - RedirectURIs bos: her /authorize reddedilir, hic kullanici giris
+//     yapamaz.
+//   - AccessTTL <= 0: AccessKaydet kaydi hic yazmaz (jeton_depo.go) ve
+//     access token exp=now ile uretilir => her /api/* 401, her
+//     /userinfo 403.
+//   - RefreshTTL <= 0: her refresh kaydi dogdugu an olu => tum
+//     kullanicilar aninda disari atilir.
+//
+// Sure degerleri 0 olmasi UYDURMA bir senaryo degil: viper, cozulemeyen
+// bir sure degerinde (orn. "15min", "60d") varsayilana DUSMEZ, sessizce
+// 0s verir (bkz. config.go'daki not).
+func yapilandirmaDogrula(cfg *config.AuthConfig) error {
+	if cfg.ClientID == "" {
+		return fmt.Errorf("client_id bos: AUTH_CLIENT_ID zorunlu (bos iken her /api/* istegi 401 reddedilir)")
+	}
+	if len(cfg.RedirectURIs) == 0 {
+		return fmt.Errorf("redirect_uris bos: AUTH_REDIRECT_URIS zorunlu (bos iken her /authorize reddedilir)")
+	}
+	for _, uri := range cfg.RedirectURIs {
+		if strings.TrimSpace(uri) == "" {
+			return fmt.Errorf("redirect_uris bos bir girdi iceriyor: AUTH_REDIRECT_URIS degerini kontrol edin")
+		}
+	}
+	if cfg.AccessTTL <= 0 {
+		return fmt.Errorf("access_ttl pozitif olmali, cozulen deger: %s (AUTH_ACCESS_TTL gecerli bir sure olmali, orn. 15m)", cfg.AccessTTL)
+	}
+	if cfg.RefreshTTL <= 0 {
+		return fmt.Errorf("refresh_ttl pozitif olmali, cozulen deger: %s (AUTH_REFRESH_TTL gecerli bir sure olmali, orn. 1440h)", cfg.RefreshTTL)
+	}
+	return nil
 }
 
 // muxKur, OP'nin HTTP yuzeyini kurar. Start'tan ayri bir fonksiyon:
@@ -157,6 +251,7 @@ func muxKur(
 	kullaniciDepo UserStore,
 	istekDepo *IstekDepo,
 	cerezGuvenli bool,
+	hizLimit *HizLimit,
 ) *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -173,7 +268,7 @@ func muxKur(
 		cerezGuvenli,
 	)
 	sayfalar.CallbackDelege(http.HandlerFunc(op.AuthorizeCallbackHandler(saglayici)))
-	sayfalar.Bagla(mux, araci)
+	sayfalar.Bagla(mux, araci, hizLimit)
 
 	yolAuthorize := saglayici.AuthorizationEndpoint().Relative()
 
@@ -191,12 +286,56 @@ func muxKur(
 	// GECILMEZ (bkz. Sayfalar.Callback).
 	mux.HandleFunc(yolAuthorize+"/callback", araci.HandlerFunc(sayfalar.Callback))
 
+	// Discovery belgesi: kutuphanenin urettigini AYNEN yayinlamiyoruz,
+	// desteklenmeyen akislari ayikliyoruz (bkz. discoveryDuzelt).
+	mux.Handle(oidc.DiscoveryEndpoint, araci.Handler(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			belge := op.CreateDiscoveryConfig(r.Context(), saglayici, saglayici.Storage())
+			discoveryDuzelt(belge)
+			op.Discover(w, belge)
+		})))
+
 	// Kok yol en sona baglanir: kutuphanenin diger uclari
-	// (/oauth/token, /userinfo, /keys, /end_session, discovery)
-	// buradan gecer.
+	// (/oauth/token, /userinfo, /keys, /end_session) buradan gecer.
 	mux.Handle("/", saglayici)
 
 	return mux
+}
+
+// discoveryDuzelt, discovery belgesini GERCEKTEN destekledigimiz akislara
+// indirir.
+//
+// NEDEN: zitadel/oidc v3.51.8 bu alanlari yapilandirmadan OKUMAZ,
+// SABIT uretir (pkg/op/discovery.go: ResponseTypes hep code + id_token +
+// "id_token token" doner; GrantTypes hep implicit ekler;
+// GrantTypeJWTAuthorizationSupported sabit true doner) ve
+// device_authorization_endpoint'i kosulsuz yazar. op.Config'de bunlari
+// kisitlayan bir alan YOK, bu yuzden belgeyi yayindan once kendimiz
+// duzeltiyoruz. Kutuphane kodu DEGISTIRILMEZ veya KOPYALANMAZ: belge
+// kutuphanenin kendi op.CreateDiscoveryConfig'i ile uretilir, biz
+// yalnizca yanlis alanlari ayikliyoruz.
+//
+// Bu bir GUVENLIK duzeltmesi DEGIL: inceleyici implicit, jwt-bearer ve
+// device akislarinin hepsini denedi, hepsi dogru reddediliyor. Duzeltme
+// UYUMLULUK icin: metadata'ya guvenip implicit deneyen uyumlu bir RP
+// gereksiz yere hata alirdi.
+func discoveryDuzelt(belge *oidc.DiscoveryConfiguration) {
+	// Yalnizca authorization code akisi (PKCE S256 zorunlu, bkz.
+	// pkce.go). id_token / "id_token token" (implicit) desteklenmiyor.
+	belge.ResponseTypesSupported = []string{string(oidc.ResponseTypeCode)}
+
+	// Desteklenen grant'lar: code + refresh_token. Kutuphanenin kosulsuz
+	// ekledigi implicit ve urn:ietf:params:oauth:grant-type:jwt-bearer
+	// burada DUSER.
+	belge.GrantTypesSupported = []oidc.GrantType{
+		oidc.GrantTypeCode,
+		oidc.GrantTypeRefreshToken,
+	}
+
+	// Device authorization grant uygulanmadi (Depo
+	// op.DeviceAuthorizationStorage'i karsilamiyor), ucu ilan etmek
+	// yanlis.
+	belge.DeviceAuthorizationEndpoint = ""
 }
 
 // issuerGuvensizIzniDogrula, issuer http:// ile basliyorsa guvensiz moda
@@ -260,6 +399,8 @@ func migrateKilitli(ctx context.Context, havuz *pgxpool.Pool) error {
 // kapatir. Havuz, dinleyici kapanisi hata verse bile HER YOLDA kapatilir;
 // aksi halde Shutdown hatasinda havuz sizar.
 func (s *Sunucu) Kapat(ctx context.Context) error {
+	// Kapanis baslar baslamaz /health "kimlik": false demeli.
+	s.hazir.Store(false)
 	shutdownErr := s.srv.Shutdown(ctx)
 	if shutdownErr != nil {
 		shutdownErr = fmt.Errorf("dinleyici kapatilamadi: %w", shutdownErr)

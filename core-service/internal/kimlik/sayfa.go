@@ -131,11 +131,25 @@ func (s *Sayfalar) CallbackDelege(h http.Handler) { s.callbackDelege = h }
 // Bagla, sayfalari mux'a baglar. POST handler'lari issuer aracisiyla
 // SARILIR: araci issuer'i istek baglamina koyar ve geriCagirma onu
 // oradan okur. Sarmadan baglamak akisi yonlendirme asamasinda kirar.
-func (s *Sayfalar) Bagla(mux *http.ServeMux, araci *op.IssuerInterceptor) {
+//
+// hiz, POST uclarina uygulanan hiz limitidir (bkz. hizlimit.go). SADECE
+// POST'lar sarilir: GET'ler yalnizca formu uretir, bcrypt kosmaz ve
+// kullanici/jeton deposuna dokunmaz. nil GECILEBILIR ve o zaman hiz
+// limiti UYGULANMAZ; bu yalnizca birim testler icindir, uretimde Start
+// her zaman bir limit kurar ve limit kurulamazsa HIC BASLAMAZ.
+func (s *Sayfalar) Bagla(mux *http.ServeMux, araci *op.IssuerInterceptor, hiz *HizLimit) {
+	girisPost := araci.Handler(http.HandlerFunc(s.Giris))
+	kayitPost := araci.Handler(http.HandlerFunc(s.Kayit))
+	if hiz != nil {
+		// Hiz limiti aracinin ICINDE degil DISINDA: reddedilen bir istek
+		// issuer cozumlemesi dahil hicbir ek is yapmadan donsun.
+		girisPost = hiz.GirisSar(girisPost)
+		kayitPost = hiz.KayitSar(kayitPost)
+	}
 	mux.HandleFunc("GET "+yolGiris, s.Giris)
-	mux.HandleFunc("POST "+yolGiris, araci.HandlerFunc(s.Giris))
+	mux.Handle("POST "+yolGiris, girisPost)
 	mux.HandleFunc("GET "+yolKayit, s.Kayit)
-	mux.HandleFunc("POST "+yolKayit, araci.HandlerFunc(s.Kayit))
+	mux.Handle("POST "+yolKayit, kayitPost)
 }
 
 // oturumBasla, yeni bir oturum degeri ve CSRF jetonu uretir, baglamayi
@@ -225,7 +239,11 @@ func (s *Sayfalar) girisPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	csrf := r.FormValue(csrfAlan)
-	eposta := r.FormValue("eposta")
+	// epostaNormalize: kayit ile giris AYNI yoldan gecmek zorunda.
+	// Eskiden kayit tarafi trim ediyor, giris tarafi ham form degerini
+	// geciyordu; bosluklu e-postayla kayit olan kullanici AYNI girdiyle
+	// giris yapamiyordu (bkz. kullanici_depo.go epostaNormalize notu).
+	eposta := epostaNormalize(r.FormValue("eposta"))
 	sifre := r.FormValue("sifre")
 
 	kullanici, err := s.kullanici.ByEmail(r.Context(), eposta)
@@ -319,7 +337,8 @@ func (s *Sayfalar) kayitPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	csrf := r.FormValue(csrfAlan)
-	eposta := r.FormValue("eposta")
+	// Giris ile AYNI normalizasyon (bkz. girisPost'taki not).
+	eposta := epostaNormalize(r.FormValue("eposta"))
 	ad := r.FormValue("ad")
 	sifre := r.FormValue("sifre")
 
