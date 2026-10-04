@@ -55,7 +55,7 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 - **worker/** — Asynq job processors: `render_worker.go` (Suno API + stem splitting), `master_worker.go` (audio mastering pipeline).
 - **client/** — HTTP clients for external services: Groq (AI lyrics), Suno (music generation), R2 (Cloudflare S3-compatible storage), audio-service (local mastering).
 - **model/** — Request/response structs and enums. All enum values defined in `enums.go`.
-- **middleware/** — `auth.go` (dual JWT: Zitadel JWKS or legacy HMAC), `ratelimit.go` (Redis fixed window per user).
+- **middleware/** — `auth.go` (RS256 tokens from `internal/kimlik`, or legacy HMAC in development), `ratelimit.go` (Redis fixed window per user).
 - **websocket/** — Hub for broadcasting real-time job progress to clients via `GET /ws/jobs/:jobId`.
 - **config/** — Viper-based config loading from `config.yaml` with env var overrides.
 
