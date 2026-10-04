@@ -777,3 +777,124 @@ func TestDiscoveryDesteklenmeyenAkislariIlanEtmez(t *testing.T) {
 		t.Errorf("token_endpoint = %q, beklenen %q", belge.TokenUcu, o.issuer+"/oauth/token")
 	}
 }
+
+// ---- LOGIN-CSRF: /authorize'a capraz-siteden PKCE enjeksiyonu ----
+
+// alBaslikli, al'in fetch-metadata basliklari eklenen surumudur.
+// fetchSite bos gecilirse baslik HIC EKLENMEZ.
+func alBaslikli(t *testing.T, c *http.Client, adres, fetchSite string) *http.Response {
+	t.Helper()
+	istek, err := http.NewRequestWithContext(t.Context(), http.MethodGet, adres, nil)
+	if err != nil {
+		t.Fatalf("istek kurulamadi: %v", err)
+	}
+	if fetchSite != "" {
+		istek.Header.Set(baslikFetchSite, fetchSite)
+		istek.Header.Set(baslikFetchMode, "navigate")
+	}
+	yanit, err := c.Do(istek)
+	if err != nil {
+		t.Fatalf("GET basarisiz: %v", err)
+	}
+	t.Cleanup(func() { _ = yanit.Body.Close() })
+	return yanit
+}
+
+// LOGIN-CSRF SOMURUSU (inceleyicinin senaryosu, birebir): saldirgan
+// kurbani kendi hazirladigi /authorize adresine yonlendirir. Oturum
+// cerezi SameSite=Lax oldugu icin ust-duzey navigasyonda TASINIR, yani
+// kurbanin MEVCUT cerezi istege gider. Duzeltme oncesinde saldirganin
+// code_challenge'i ile dogan authRequestID kurbanin baglama kumesine
+// eklenirdi; kurban formu acip giris yapar, uretilen kodun
+// code_verifier'i ise SALDIRGANDA olurdu (PKCE'nin korudugu TEK
+// senaryo, RFC 8252 bolum 8.1, cokerdi).
+//
+// Simdi: capraz-site navigasyonda yeni baglama EKLENMEZ, kurban o id
+// icin 403 alir ve istek TAMAMLANAMAZ — saldirganin verifier'ini
+// bilmesi ise yaramaz.
+func TestLoginCSRFCaprazSiteEnjeksiyonuTamamlanamaz(t *testing.T) {
+	o := testSunucu(t)
+	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
+	kurban := tarayici(t)
+
+	// 1) Kurbanin MESRU akisi: native uygulama sistem tarayicisini acar
+	// (Sec-Fetch-Site: none). Cerez ve baglama burada dogar.
+	kurbanVerifier, kurbanChallenge := pkceS256(t)
+	mesruID := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(kurbanChallenge, "S256"), fetchSiteYok))
+
+	// 2) Saldirganin hazirladigi adres, KURBANIN tarayicisinda
+	// capraz-site ust-duzey navigasyonla acilir. code_challenge
+	// SALDIRGANIN; verifier'i yalnizca o biliyor.
+	// Verifier'i KASITLI olarak tutmuyoruz: kanit, saldirganin onu
+	// bilmesinin ise yaramamasi — asagida HIC kod uretilmedigi icin
+	// degistirecek bir sey YOK (adim 4).
+	_, saldirganChallenge := pkceS256(t)
+	enjekteID := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(saldirganChallenge, "S256"), fetchSiteCapraz))
+	if enjekteID == mesruID {
+		t.Fatal("iki /authorize ayni authRequestID uretti")
+	}
+
+	// 3) Kurban enjekte id ile formu ACAMAZ: baglama kurulmadi -> 403.
+	_, formDurum := o.girisDene(t, kurban, enjekteID, "kurban@ornek.com", "dogruSifre12")
+	if formDurum != http.StatusForbidden {
+		t.Fatalf("LOGIN-CSRF ACIK: enjekte id icin GET /giris durumu = %d, beklenen 403", formDurum)
+	}
+
+	// 4) Dolayisiyla saldirganin istegi icin KOD URETILMEZ ve istek
+	// hicbir kimlige BAGLANMAZ: saldirganin verifier'i ise yaramaz.
+	devralmaDogrula(t, o, enjekteID,
+		al(t, kurban, o.issuer+"/authorize/callback?id="+url.QueryEscape(enjekteID)))
+
+	// 5) KURBANIN MESRU AKISI BOZULMADI (kontrol DoS'a cevrilmedi):
+	// ayni cerez kabiyla ucan uca tamamlanir ve jeton alir.
+	csrf := o.girisFormuAc(t, kurban, mesruID)
+	girisYanit := o.girisGonder(t, kurban, mesruID, csrf, "kurban@ornek.com", "dogruSifre12")
+	if girisYanit.StatusCode != http.StatusFound {
+		t.Fatalf("kurbanin mesru POST /giris durumu = %d, beklenen 302", girisYanit.StatusCode)
+	}
+	kod := kodCikar(t, al(t, kurban, girisYanit.Header.Get("Location")))
+	if kod == "" {
+		t.Fatal("kurbanin mesru akisi kod uretmedi: kontrol mesru akisi kirdi")
+	}
+	durum, jeton := o.jetonAl(t, kod, kurbanVerifier)
+	if durum != http.StatusOK {
+		t.Fatalf("kurbanin jeton degisimi durumu = %d, govde: %v", durum, jeton)
+	}
+	if jeton["access_token"] == nil || jeton["access_token"] == "" {
+		t.Error("kurbanin mesru akisinda access_token yok")
+	}
+}
+
+// Capraz-site istek, kurbanin MEVCUT baglamalarini ve cerezini
+// BOZMAZ: kontrol yalnizca "yeni baglama eklememek"tir, cerez
+// yenilenmez veya kume temizlenmez. Iki paralel mesru akis, aralarina
+// giren capraz-site istekten SONRA da tamamlanabilmeli.
+func TestCaprazSiteIstekMevcutBaglamalariBozmaz(t *testing.T) {
+	o := testSunucu(t)
+	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
+	kurban := tarayici(t)
+
+	_, challenge1 := pkceS256(t)
+	_, challenge2 := pkceS256(t)
+	id1 := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(challenge1, "S256"), fetchSiteYok))
+	id2 := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(challenge2, "S256"), fetchSiteYok))
+
+	// Araya capraz-site bir istek girer.
+	_, saldirganChallenge := pkceS256(t)
+	enjekteID := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(saldirganChallenge, "S256"), fetchSiteCapraz))
+	if g := al(t, kurban, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(enjekteID)); g.StatusCode != http.StatusForbidden {
+		t.Fatalf("enjekte id icin GET /giris durumu = %d, beklenen 403", g.StatusCode)
+	}
+
+	// Iki mesru sekme de hala formunu acip girisi tamamlayabilmeli.
+	for _, id := range []string{id1, id2} {
+		csrf := o.girisFormuAc(t, kurban, id)
+		yanit := o.girisGonder(t, kurban, id, csrf, "kurban@ornek.com", "dogruSifre12")
+		if yanit.StatusCode != http.StatusFound {
+			t.Fatalf("mesru sekme POST /giris durumu = %d, beklenen 302", yanit.StatusCode)
+		}
+		if kod := kodCikar(t, al(t, kurban, yanit.Header.Get("Location"))); kod == "" {
+			t.Fatal("mesru sekme kod uretmedi: capraz-site istek baglamayi bozdu")
+		}
+	}
+}

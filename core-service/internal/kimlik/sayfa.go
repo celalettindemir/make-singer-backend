@@ -90,7 +90,9 @@ type kayitVeri struct {
 // GET /kayit, POST'lar ve /authorize/callback bu baglamayi ZORUNLU
 // kilar ve HICBIRI yeni baglama mintlemez. Boylece auth istegini
 // baslatan, formu goren, girisi tamamlayan ve kodu toplayan tarayici
-// AYNI olmak zorundadir.
+// AYNI olmak zorundadir. Ayrica /authorize CAPRAZ-SITEDEN cagrildiginda
+// hic baglama kurulmaz (login-CSRF; bkz. AuthorizeSar ve
+// caprazSiteIstek).
 type Sayfalar struct {
 	kullanici    UserStore
 	istekler     IstekTamamlayici
@@ -235,6 +237,18 @@ func (s *Sayfalar) BaglamaKur(w http.ResponseWriter, r *http.Request, id string)
 // FAIL-CLOSED: baglama kurulamazsa (orn. Redis yok) kutuphanenin
 // yonlendirmesi YAZILMAZ, 500 donulur. Aksi halde kullanici, POST'u
 // kesin 403 olacak bir forma gonderilirdi.
+//
+// CAPRAZ-SITE NAVIGASYON (login-CSRF): oturum cerezi SameSite=Lax
+// oldugu icin ust-duzey navigasyonda TASINIR. Saldirgan kurbani kendi
+// hazirladigi /authorize?...&code_challenge=<SALDIRGANIN> adresine
+// yonlendirirse, kurbanin MEVCUT cerezi yeniden kullanilir ve
+// saldirganin parametreleriyle dogan authRequestID kurbanin baglama
+// kumesine girer: kurban formu acabilir, girisi tamamlar, uretilen
+// kodun code_verifier'i ise SALDIRGANDA olur. Kod kurbanin cihazindan
+// sizarsa (ayni custom scheme'i claim eden kotu amacli bir uygulama,
+// RFC 8252 bolum 8.1) PKCE'nin korudugu TEK senaryo cokar. Bu yuzden
+// capraz-siteden gelen istekte baglama KURULMAZ; bkz.
+// caprazSiteIstek.
 func (s *Sayfalar) AuthorizeSar(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		yakalayici := &baglamaYakalayici{ResponseWriter: w}
@@ -246,10 +260,81 @@ func (s *Sayfalar) AuthorizeSar(next http.Handler) http.Handler {
 			if id == "" {
 				return nil
 			}
+			if caprazSiteIstek(r) {
+				// Yalnizca YENI BAGLAMA EKLENMEZ. Kurbanin cerezi, mevcut
+				// baglamalari ve paralel akislari DOKUNULMADAN kalir
+				// (cerez yenilenmez, kume temizlenmez): aksi halde bu
+				// kontrol kurbanin acik sekmelerini dusuren bir DoS'a
+				// donerdi. Kutuphanenin yonlendirmesi YAZILIR; auth
+				// istegi olusur ama hicbir tarayici ona bagli olmadigi
+				// icin GET /giris 403 doner ve istek TAMAMLANAMAZ.
+				//
+				// authRequestID, cerez degeri ve CSRF jetonu LOGLANMAZ.
+				log.Print("authorize: capraz-site navigasyon, oturum baglamasi kurulmadi")
+				return nil
+			}
 			return s.BaglamaKur(w, r, id)
 		}
 		next.ServeHTTP(yakalayici, r)
 	})
+}
+
+// Fetch-metadata baslik adlari (tarayici tarafindan uretilir, istemci
+// JavaScript'i tarafindan DEGISTIRILEMEZ; "Sec-" on eki yasak baslik
+// adi oldugu icin fetch/XHR ile ezilemez).
+const (
+	baslikFetchSite = "Sec-Fetch-Site"
+	baslikFetchMode = "Sec-Fetch-Mode"
+)
+
+// Sec-Fetch-Site degerleri. DORDUNU de ayirmak sart:
+//
+//   - "none"        -> kullanicinin DOGRUDAN baslattigi navigasyon:
+//     adres cubugu, yer imi VE native uygulamanin sistem tarayicisini
+//     acmasi. BIZIM MESRU AKISIMIZ budur (bugun tek istemcimiz
+//     MobilIstemci / ApplicationTypeNative), asla reddedilmez.
+//   - "same-origin" -> kendi sayfalarimizdan donen navigasyon
+//     (giris <-> kayit capraz linkleri, form sonrasi geri donusler).
+//   - "same-site"   -> ayni kayitli alan adi, farkli origin.
+//   - "cross-site"  -> BASKA bir sitenin baslattigi istek: tek
+//     hedefimiz bu.
+const (
+	fetchSiteYok        = "none"
+	fetchSiteAyniOrigin = "same-origin"
+	fetchSiteAyniSite   = "same-site"
+	fetchSiteCapraz     = "cross-site"
+)
+
+// caprazSiteIstek, istegin BASKA bir sitenin baslattigi bir istek
+// oldugunu soyler.
+//
+// BASLIK YOKSA FAIL-OPEN (false doner, yani baglama KURULUR). Gerekce:
+// bu kontrol yalnizca "cerezi tasiyan tarayici" senaryosunda is gorur
+// ve SameSite=Lax cerezi tasiyan her tarayici fetch-metadata'yi da
+// gonderir (Chrome 76+, Firefox 90+, Safari 16.4+; SameSite'i
+// uygulamayan daha eski bir tarayicida zaten Lax korumasi da yoktur,
+// yani fail-closed yapmak somuruyu kapatmaz). Buna karsilik
+// fail-closed, basligi hic gondermeyen TARAYICI OLMAYAN istemcilerde
+// (curl, yerel gelistirme araclari, saglik kontrolleri) girisi tumden
+// kirardi — ve o istemcilerde saldirgan bir "kurban cerezi" de yoktur.
+// Yani eksik baslik, kazandirdigindan cok sey kiriyor.
+//
+// Mod (Sec-Fetch-Mode) kontrolu KASITLI olarak YOK: capraz-site bir
+// alt-kaynak istegi (mod "no-cors"/"cors") Lax cerezi ZATEN tasimaz,
+// dolayisiyla modu ayirmadan TUM capraz-site isteklerde baglama
+// kurmamak hem daha basit hem daha dar. Baslik yine de okunabilir
+// olsun diye adi baslikFetchMode'da tutuluyor.
+//
+// GELECEGE NOT — WEB RP'si: ileride tarayici tabanli bir istemci (web
+// RP) eklenirse, o istemcinin kullaniciyi OP'ye yonlendirmesi MESRU
+// olarak Sec-Fetch-Site: cross-site gelir ve bu kontrol onu reddeder.
+// O gun bu fonksiyon gozden gecirilmeli: ornegin baglamayi kurup
+// login-CSRF'i ayri bir mekanizmayla (OP tarafinda tutulan, istemciye
+// ozel bir baslatma jetonu) kapatmak gerekir. SameSite=Strict'e gecmek
+// COZUM DEGILDIR: tek basina bu somuruyu kapatmaz ve kurbanin mesru
+// akislarini dusurur.
+func caprazSiteIstek(r *http.Request) bool {
+	return r.Header.Get(baslikFetchSite) == fetchSiteCapraz
 }
 
 // girisYonlendirmeID, kutuphanenin urettigi yonlendirme adresi BIZIM

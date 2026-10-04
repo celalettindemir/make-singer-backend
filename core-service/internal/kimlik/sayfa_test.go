@@ -851,3 +851,117 @@ func TestBoslukluEpostaIleKayitSonrasiGirisCalisir(t *testing.T) {
 		t.Errorf("yanlis sifre durumu = %d, beklenen 401", w.Code)
 	}
 }
+
+// ---- Login-CSRF: /authorize'da capraz-site navigasyon ----
+
+// authorizeSar, uretimdeki /authorize bacagini taklit eder: kutuphane
+// handler'inin yerine giris sayfasina 302 yazan bir handler koyar ve
+// onu Sayfalar.AuthorizeSar ile sarar. fetchSite bos gecilirse
+// Sec-Fetch-Site basligi HIC EKLENMEZ (eski/tarayici olmayan istemci).
+func authorizeSar(o *sayfaTestOrtami, fetchSite, id string, cerez *http.Cookie) *httptest.ResponseRecorder {
+	kutuphane := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", yolGiris+"?authRequestID="+url.QueryEscape(id))
+		w.WriteHeader(http.StatusFound)
+	})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/authorize?client_id=makesinger-mobil", nil)
+	if fetchSite != "" {
+		r.Header.Set(baslikFetchSite, fetchSite)
+		r.Header.Set(baslikFetchMode, "navigate")
+	}
+	if cerez != nil {
+		r.AddCookie(cerez)
+	}
+	o.sayfalar.AuthorizeSar(kutuphane).ServeHTTP(w, r)
+	return w
+}
+
+// bagliMi, verilen cerez degerinin verilen authRequestID'ye bagli olup
+// olmadigini depodan okur.
+func bagliMi(t *testing.T, o *sayfaTestOrtami, oturum, id string) bool {
+	t.Helper()
+	baglama, err := o.oturumlar.OturumOku(context.Background(), oturum)
+	if err != nil {
+		return false
+	}
+	_, varMi := baglama.CSRFBul(id)
+	return varMi
+}
+
+// LOGIN-CSRF: capraz-site navigasyonla gelen /authorize, kurbanin
+// MEVCUT cerezine YENI BAGLAMA EKLEMEZ. Saldirganin hazirladigi (kendi
+// PKCE challenge'ini tasiyan) istek kurbanin kumesine giremez; kurban o
+// id ile GET /giris yapamaz (403) ve istek TAMAMLANAMAZ.
+func TestAuthorizeCaprazSiteYeniBaglamaEklemez(t *testing.T) {
+	o := testSayfalar(t)
+	// Kurbanin kendi mesru akisi: cerez ve baglama burada dogar.
+	kurbanCerez := baglamaKur(t, o, "mesru-1", nil)
+
+	// Saldirganin hazirladigi adres, kurbanin tarayicisinda capraz-site
+	// ust-duzey navigasyonla acilir.
+	w := authorizeSar(o, fetchSiteCapraz, "saldirgan-1", kurbanCerez)
+
+	// Istegin kendisi kutuphaneye gider (302 yazilir): reddetmek yerine
+	// yalnizca baglama kurulmaz.
+	if w.Code != http.StatusFound {
+		t.Fatalf("durum = %d, beklenen 302 (istek kutuphaneye gitmeli)", w.Code)
+	}
+	// Cereze DOKUNULMAMIS olmali: yeni Set-Cookie yok.
+	if cerezler := w.Result().Cookies(); len(cerezler) != 0 {
+		t.Errorf("capraz-site istek %d cerez yazdi, beklenen 0", len(cerezler))
+	}
+	// Saldirganin id'si kurbanin kumesine GIRMEMIS olmali.
+	if bagliMi(t, o, kurbanCerez.Value, "saldirgan-1") {
+		t.Fatal("capraz-site istek kurbanin kumesine baglama EKLEDI (login-CSRF acik)")
+	}
+	// Kurban o id ile formu ACAMAZ: 403.
+	if g := formIstek(o, yolGiris, "saldirgan-1", kurbanCerez); g.Code != http.StatusForbidden {
+		t.Fatalf("enjekte id icin GET /giris durumu = %d, beklenen 403", g.Code)
+	}
+	// Kurbanin MEVCUT baglamasi BOZULMAMIS olmali (DoS'a cevirmedik).
+	if !bagliMi(t, o, kurbanCerez.Value, "mesru-1") {
+		t.Error("kurbanin mevcut baglamasi kayboldu")
+	}
+	if g := formIstek(o, yolGiris, "mesru-1", kurbanCerez); g.Code != http.StatusOK {
+		t.Errorf("kurbanin mesru formu durumu = %d, beklenen 200", g.Code)
+	}
+}
+
+// Capraz-site OLMAYAN her fetch-metadata degerinde baglama KURULUR.
+//
+// "none": kullanicinin dogrudan baslattigi navigasyon — native
+// uygulamanin sistem tarayicisini acmasi dahil; BIZIM MESRU AKISIMIZ.
+// "same-origin"/"same-site": kendi sayfalarimizdan donen navigasyon.
+// Baslik YOK: fail-open (gerekce caprazSiteIstek dokumantasyonunda).
+func TestAuthorizeCaprazSiteOlmayanlardaBaglamaKurulur(t *testing.T) {
+	for _, d := range []struct{ ad, fetchSite string }{
+		{"none-native-uygulama", fetchSiteYok},
+		{"same-origin", fetchSiteAyniOrigin},
+		{"same-site", fetchSiteAyniSite},
+		{"baslik-yok-fail-open", ""},
+	} {
+		t.Run(d.ad, func(t *testing.T) {
+			o := testSayfalar(t)
+			w := authorizeSar(o, d.fetchSite, "istek-1", nil)
+			if w.Code != http.StatusFound {
+				t.Fatalf("durum = %d, beklenen 302", w.Code)
+			}
+			var oturum string
+			for _, c := range w.Result().Cookies() {
+				if c.Name == cerezAdOturum {
+					oturum = c.Value
+				}
+			}
+			if oturum == "" {
+				t.Fatal("oturum cerezi verilmedi (baglama kurulmamis)")
+			}
+			if !bagliMi(t, o, oturum, "istek-1") {
+				t.Fatal("baglama depoya yazilmamis")
+			}
+			// Mutlu yol: form acilabilmeli.
+			if g := formIstek(o, yolGiris, "istek-1", &http.Cookie{Name: cerezAdOturum, Value: oturum}); g.Code != http.StatusOK {
+				t.Fatalf("form durumu = %d, beklenen 200", g.Code)
+			}
+		})
+	}
+}
