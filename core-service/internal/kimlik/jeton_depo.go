@@ -60,6 +60,14 @@ type TokenStore interface {
 	// veritabani ID'siyle arar. op.Storage.RevokeToken bunu gerektirir:
 	// bkz. RefreshIDileOku'nun kendi yorumu.
 	RefreshIDileOku(ctx context.Context, id string) (*RefreshKayit, error)
+	// RefreshAileID, sunulan JETONUN ailesinin kimligini doner ve
+	// gecerlilik filtrelemesi YAPMAZ (kullanilmis, iptal edilmis ve suresi
+	// gecmis kayitlar da bulunur). RefreshOku yeniden kullanim tespit
+	// ettiginde kaydin kendisini DONDURMEDIGI icin (hata yolunda yarim
+	// veri dondurmek cagiranin onu gecerli sanmasina acik kapi birakir)
+	// aile kimligine bu dar metotla ulasilir; RefreshIDileOku burada ise
+	// yaramaz, cunku elimizde veritabani ID'si degil ham jeton vardir.
+	RefreshAileID(ctx context.Context, sunulan string) (string, error)
 	AileIptal(ctx context.Context, familyID string) error
 	KullaniciIptal(ctx context.Context, userID, clientID string) error
 }
@@ -260,9 +268,21 @@ func (s *PostgresTokenStore) RefreshDondur(ctx context.Context, sunulan string, 
 	return jeton, nil
 }
 
-// RefreshOku, sunulan jetonu dogrular. Tuketilmis (used_at), iptal
-// edilmis (revoked_at) ve suresi gecmis jetonlarin hepsi ErrJetonYok'tur:
-// cagirana hangisi oldugu sizdirilmaz.
+// RefreshOku, sunulan jetonu dogrular. Karar sirasi RefreshDondur ile
+// BIREBIR aynidir:
+//
+//	kayit yok      -> ErrJetonYok
+//	revoked_at     -> ErrJetonYok (aile zaten olu, alarm tekrar calmasin)
+//	used_at        -> ErrJetonTekrar (YENIDEN KULLANIM)
+//	suresi gecmis  -> ErrJetonYok
+//
+// ErrJetonTekrar'i ayirmak zorunludur: kutuphane refresh akisinda ONCE
+// TokenRequestByRefreshToken'i cagirir ve hata donerse akisi ABORT eder
+// (bkz. op.RefreshTokenExchange), yani RefreshDondur'a HIC ulasmaz. Bu
+// ayrim olmazsa yeniden kullanim uretimde hic tespit edilemez ve aile
+// iptali hic calismaz. Cagirana hangisi oldugunu ISTEMCIYE sizdirmak
+// serbest degildir: depo ayirir, Depo katmani istemciye iki durumda da
+// ayni hatayi doner.
 func (s *PostgresTokenStore) RefreshOku(ctx context.Context, sunulan string) (*RefreshKayit, error) {
 	var k RefreshKayit
 	err := s.havuz.QueryRow(ctx,
@@ -278,10 +298,32 @@ func (s *PostgresTokenStore) RefreshOku(ctx context.Context, sunulan string) (*R
 	if err != nil {
 		return nil, fmt.Errorf("jeton okunamadi: %w", err)
 	}
-	if k.RevokedAt != nil || k.UsedAt != nil || time.Now().UTC().After(k.ExpiresAt) {
+	if k.RevokedAt != nil {
+		return nil, ErrJetonYok
+	}
+	if k.UsedAt != nil {
+		return nil, ErrJetonTekrar
+	}
+	if time.Now().UTC().After(k.ExpiresAt) {
 		return nil, ErrJetonYok
 	}
 	return &k, nil
+}
+
+// RefreshAileID, ham jetondan aile kimligini bulur; gecerlilik
+// filtrelemesi yapmaz (bkz. TokenStore arayuzundeki yorum).
+func (s *PostgresTokenStore) RefreshAileID(ctx context.Context, sunulan string) (string, error) {
+	var familyID string
+	err := s.havuz.QueryRow(ctx,
+		`SELECT family_id FROM refresh_tokens WHERE token_hash = $1`,
+		jetonOzet(sunulan)).Scan(&familyID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrJetonYok
+	}
+	if err != nil {
+		return "", fmt.Errorf("aile kimligi okunamadi: %w", err)
+	}
+	return familyID, nil
 }
 
 // RefreshIDileOku, ID ILE arar (jetonun kendisiyle DEGIL). op kutuphanesi

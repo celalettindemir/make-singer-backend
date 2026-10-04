@@ -138,8 +138,11 @@ func (s *SahteTokenStore) RefreshDondur(ctx context.Context, sunulan string, yen
 	return jeton, nil
 }
 
-// RefreshOku, Postgres uygulamasiyla ayni sekilde tuketilmis, iptal
-// edilmis ve suresi gecmis jetonlarin hepsine ErrJetonYok doner.
+// RefreshOku, Postgres uygulamasiyla BIREBIR ayni sirayla karar verir:
+// kayit yok -> ErrJetonYok, revoked -> ErrJetonYok, used ->
+// ErrJetonTekrar (yeniden kullanim), suresi gecmis -> ErrJetonYok.
+// Iki uygulamanin burada ayrismasi daha once bir kusura yol acti; sira ve
+// hatalar aynen korunmali.
 func (s *SahteTokenStore) RefreshOku(ctx context.Context, sunulan string) (*RefreshKayit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -147,10 +150,28 @@ func (s *SahteTokenStore) RefreshOku(ctx context.Context, sunulan string) (*Refr
 	if !ok {
 		return nil, ErrJetonYok
 	}
-	if kayit.RevokedAt != nil || kayit.UsedAt != nil || time.Now().UTC().After(kayit.ExpiresAt) {
+	if kayit.RevokedAt != nil {
+		return nil, ErrJetonYok
+	}
+	if kayit.UsedAt != nil {
+		return nil, ErrJetonTekrar
+	}
+	if time.Now().UTC().After(kayit.ExpiresAt) {
 		return nil, ErrJetonYok
 	}
 	return refreshKopya(kayit), nil
+}
+
+// RefreshAileID, Postgres uygulamasiyla ayni sozlesme: ham jetondan aile
+// kimligi, gecerlilik filtrelemesi olmadan.
+func (s *SahteTokenStore) RefreshAileID(ctx context.Context, sunulan string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kayit, ok := s.refresh[string(jetonOzet(sunulan))]
+	if !ok {
+		return "", ErrJetonYok
+	}
+	return kayit.FamilyID, nil
 }
 
 // RefreshIDileOku, Postgres uygulamasiyla ayni sozlesmeyi karsilar: ID ile

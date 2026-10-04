@@ -271,3 +271,87 @@ func TestCreateAccessAndRefreshTokensRotasyonYapar(t *testing.T) {
 		t.Errorf("hata = %v, beklenen oidc.ErrInvalidGrant()", err)
 	}
 }
+
+// refreshAkisiTaklit, kutuphanenin refresh_token akisindaki CAGRI SIRASINI
+// birebir taklit eder (bkz. zitadel/oidc pkg/op/token_refresh.go:36-44):
+// once ValidateRefreshTokenRequest -> ... -> TokenRequestByRefreshToken
+// cagrilir ve HATA DONERSE akis ABORT eder; CreateAccessAndRefreshTokens
+// (dolayisiyla RefreshDondur) HIC cagrilmaz. Testlerin bu sirayi taklit
+// etmesi sart: yeniden kullanim tespiti yalnizca RefreshDondur'da
+// yasarsa uretimde hic calismaz, ama RefreshDondur'u dogrudan cagiran bir
+// test bunu asla goremez.
+func refreshAkisiTaklit(t *testing.T, d *Depo, refreshToken string) error {
+	t.Helper()
+	istek, err := d.TokenRequestByRefreshToken(context.Background(), refreshToken)
+	if err != nil {
+		return err
+	}
+	_, _, _, err = d.CreateAccessAndRefreshTokens(context.Background(), istek, refreshToken)
+	return err
+}
+
+// BULGU (Critical) regresyon testi: kullanilmis bir refresh jetonu
+// kutuphanenin gercek cagri sirasiyla sunuldugunda AILE IPTAL EDILMELI.
+// Iptal yeniden yalnizca RefreshDondur'a tasinirsa bu test FAIL eder,
+// cunku akis TokenRequestByRefreshToken'in hatasinda abort eder ve
+// RefreshDondur'a hic ulasilmaz.
+func TestTokenRequestByRefreshTokenYenidenKullanimdaAileyiIptalEder(t *testing.T) {
+	d := testDepo(t)
+	ctx := context.Background()
+	eski, err := d.jetonlar.RefreshOlustur(ctx, yeniRefresh("k1"))
+	if err != nil {
+		t.Fatalf("RefreshOlustur: %v", err)
+	}
+	// Mesru istemci normal sekilde rotasyon yapiyor: eski jeton "used"
+	// olur, yeni jeton gecerlidir.
+	yeni, err := d.jetonlar.RefreshDondur(ctx, eski, yeniRefresh("k1"))
+	if err != nil {
+		t.Fatalf("RefreshDondur: %v", err)
+	}
+	if _, err := d.jetonlar.RefreshOku(ctx, yeni); err != nil {
+		t.Fatalf("rotasyon sonrasi yeni jeton gecersiz: %v", err)
+	}
+
+	// Saldirgan caldigi (artik kullanilmis) jetonu sunuyor.
+	if err := refreshAkisiTaklit(t, d, eski); !errors.Is(err, op.ErrInvalidRefreshToken) {
+		t.Fatalf("hata = %v, beklenen op.ErrInvalidRefreshToken", err)
+	}
+
+	// Asil olculen: ailenin GERI KALANI da olmus olmali. Mesru istemcinin
+	// elindeki GUNCEL jeton artik calismamali.
+	if _, err := d.jetonlar.RefreshOku(ctx, yeni); !errors.Is(err, ErrJetonYok) {
+		t.Errorf("aile iptal edilmemis, guncel jeton hala gecerli (err=%v)", err)
+	}
+	if err := refreshAkisiTaklit(t, d, yeni); err == nil {
+		t.Error("iptal edilmis aileyle refresh akisi basarili oldu")
+	}
+	// Depodaki her kayit iptal edilmis olmali: aile toptan olur.
+	for _, kayit := range d.jetonlar.(*SahteTokenStore).TumKayitlar() {
+		if kayit.RevokedAt == nil {
+			t.Errorf("aile uyesi iptal edilmemis: id=%s", kayit.ID)
+		}
+	}
+}
+
+// Hata AYRISMAMASI: saldirgan, cevaba bakarak jetonun "bilinmiyor" mu
+// "kullanilmis" mi oldugunu ayirt edememeli. Ayrisirsa, elindeki bir
+// degerin gercek bir jeton olup olmadigini olcebilir.
+func TestTokenRequestByRefreshTokenHatasiAyrismaz(t *testing.T) {
+	d := testDepo(t)
+	ctx := context.Background()
+	eski, err := d.jetonlar.RefreshOlustur(ctx, yeniRefresh("k1"))
+	if err != nil {
+		t.Fatalf("RefreshOlustur: %v", err)
+	}
+	if _, err := d.jetonlar.RefreshDondur(ctx, eski, yeniRefresh("k1")); err != nil {
+		t.Fatalf("RefreshDondur: %v", err)
+	}
+	_, kullanilmisHata := d.TokenRequestByRefreshToken(ctx, eski)
+	_, bilinmeyenHata := d.TokenRequestByRefreshToken(ctx, "uydurma-jeton")
+	if kullanilmisHata == nil || bilinmeyenHata == nil {
+		t.Fatalf("iki durumda da hata beklenir: kullanilmis=%v bilinmeyen=%v", kullanilmisHata, bilinmeyenHata)
+	}
+	if kullanilmisHata.Error() != bilinmeyenHata.Error() {
+		t.Errorf("hatalar ayrisiyor: kullanilmis=%q bilinmeyen=%q", kullanilmisHata, bilinmeyenHata)
+	}
+}

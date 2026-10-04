@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	jose "github.com/go-jose/go-jose/v4"
@@ -206,14 +207,35 @@ func (r *refreshIstek) GetScopes() []string              { return r.scopes }
 func (r *refreshIstek) GetSubject() string               { return r.userID }
 func (r *refreshIstek) SetCurrentScopes(scopes []string) { r.scopes = scopes }
 
-// TokenRequestByRefreshToken, sunulan refresh jetonunu SADECE dogrular ve
-// okur (RefreshOku); rotasyon burada YAPILMAZ. Kutuphane bu sonucu
-// dogruladiktan sonra CreateAccessAndRefreshTokens'i ayni jetonla tekrar
-// cagirir, rotasyon orada gerceklesir.
+// TokenRequestByRefreshToken, sunulan refresh jetonunu dogrular ve okur
+// (RefreshOku); rotasyon burada YAPILMAZ, onu CreateAccessAndRefreshTokens
+// yapar.
+//
+// YENIDEN KULLANIM TESPITI URETIMDE BURADA OLUR. Kutuphane refresh
+// akisinda ONCE ValidateRefreshTokenRequest -> ... -> bu metodu cagirir ve
+// hata donerse akisi ABORT eder; CreateAccessAndRefreshTokens'a (dolayisiyla
+// RefreshDondur'a) HIC gitmez (bkz. op.RefreshTokenExchange,
+// pkg/op/token_refresh.go). Bu yuzden kullanilmis bir jeton sunuldugunda
+// aileyi BURADA iptal etmek zorundayiz: aksi halde hirsiz yalnizca 400
+// alir, ama ailenin geri kalani (mesru istemcinin elindeki guncel jeton
+// dahil) gecerli kalir ve rotasyon+tespit mimarisi anlamsizlasir.
 func (d *Depo) TokenRequestByRefreshToken(ctx context.Context, refreshToken string) (op.RefreshTokenRequest, error) {
 	kayit, err := d.jetonlar.RefreshOku(ctx, refreshToken)
+	if errors.Is(err, ErrJetonTekrar) {
+		if iptalHata := d.aileIptalEt(ctx, refreshToken); iptalHata != nil {
+			// Altyapi hatasi (orn. Postgres kesintisi) op.ErrInvalidRefreshToken
+			// ile MASKELENMEZ: "iptal edemedim" sessizce yutulursa hirsizlik
+			// cezasiz kalir ve ariza gorunmez olur. Erisim her halde reddedilir,
+			// cunku hata donmek akisi zaten abort eder.
+			return nil, iptalHata
+		}
+		// Istemciye donen hata, "bilinmeyen jeton" durumuyla AYNI: saldirgan
+		// jetonun bilinmiyor mu kullanilmis mi oldugunu cevaptan ayirt
+		// edememeli.
+		return nil, op.ErrInvalidRefreshToken
+	}
 	if err != nil {
-		if errors.Is(err, ErrJetonYok) || errors.Is(err, ErrJetonTekrar) {
+		if errors.Is(err, ErrJetonYok) {
 			return nil, op.ErrInvalidRefreshToken
 		}
 		return nil, err
@@ -226,6 +248,28 @@ func (d *Depo) TokenRequestByRefreshToken(ctx context.Context, refreshToken stri
 		amr:      kayit.AMR,
 		authTime: kayit.AuthTime,
 	}, nil
+}
+
+// aileIptalEt, yeniden kullanimi tespit edilen jetonun ailesini toptan
+// iptal eder. Hata donerse bu bir ALTYAPI hatasidir ve istemciye
+// oidc.ErrServerError olarak gider; jetonun gecersizligi degismediginden
+// cagiran erisimi her halde reddeder.
+func (d *Depo) aileIptalEt(ctx context.Context, refreshToken string) error {
+	familyID, err := d.jetonlar.RefreshAileID(ctx, refreshToken)
+	if err != nil {
+		// ErrJetonYok dahil her hata burada altyapi/tutarsizlik hatasidir:
+		// kaydi bir an once RefreshOku ile GORDUK (kayitlar silinmez),
+		// dolayisiyla simdi bulunamamasi normal bir durum degildir ve
+		// "gecersiz jeton" diye yutulamaz.
+		return oidc.ErrServerError().WithParent(fmt.Errorf("yeniden kullanim: aile kimligi bulunamadi: %w", err))
+	}
+	if err := d.jetonlar.AileIptal(ctx, familyID); err != nil {
+		return oidc.ErrServerError().WithParent(fmt.Errorf("yeniden kullanim: aile iptal edilemedi: %w", err))
+	}
+	// Log'a jetonun kendisi veya ozeti YAZILMAZ; yalnizca olay ve aile
+	// kimligi (sunucu tarafinda uretilmis bir kimlik, sir degil).
+	log.Printf("refresh yeniden kullanimi tespit edildi, aile iptal edildi: family_id=%s", familyID)
+	return nil
 }
 
 // TerminateSession, cikis akisinda kullanicinin o istemcideki tum refresh
@@ -252,7 +296,14 @@ func (d *Depo) revokeRefresh(ctx context.Context, tokenOrTokenID, clientID strin
 		kayit, err = d.jetonlar.RefreshOku(ctx, tokenOrTokenID)
 	}
 	if err != nil {
-		if errors.Is(err, ErrJetonYok) {
+		// ErrJetonTekrar (kullanilmis jeton) burada ErrJetonYok ile ayni
+		// kefeye konur: /revoke akisinda kutuphane ZATEN once
+		// GetRefreshTokenInfo'nun dondurdugu ID ile gelir ve o yol
+		// RefreshIDileOku ile kaydi gecerlilik filtresi olmadan bulup
+		// aileyi iptal eder. Bu ham-jeton bacagi yalnizca bir fallback'tir;
+		// kullanilmis bir jetonun iptal istegi RFC 7009'a gore 200 ile
+		// yanitlanabilir ve bu, duzeltme oncesi davranisin aynisidir.
+		if errors.Is(err, ErrJetonYok) || errors.Is(err, ErrJetonTekrar) {
 			return false, nil
 		}
 		// Gercek bir depolama hatasi (orn. Postgres kesintisi):
