@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 
 	"github.com/zitadel/oidc/v3/pkg/op"
 )
@@ -83,11 +84,13 @@ type kayitVeri struct {
 // Sayfalar, hosting edilen giris/kayit HTML formlarini ve bunlarin
 // OIDC akisina geri donusunu tasir.
 //
-// GUVENLIK: authRequestID tek basina yetki girdisi DEGILDIR. Her GET
-// bir oturum cerezi uretir ve cerez -> (authRequestID, CSRF)
-// baglamasini oturumlar deposuna yazar; POST'lar ve /authorize/callback
-// bu baglamayi ZORUNLU kilar. Boylece auth istegini baslatan, girisi
-// tamamlayan ve kodu toplayan tarayici AYNI olmak zorundadir.
+// GUVENLIK: authRequestID tek basina yetki girdisi DEGILDIR. Cerez ->
+// {authRequestID, CSRF} baglamasi YALNIZCA /authorize'da, istegi
+// BASLATAN tarayici icin kurulur (bkz. AuthorizeSar). GET /giris,
+// GET /kayit, POST'lar ve /authorize/callback bu baglamayi ZORUNLU
+// kilar ve HICBIRI yeni baglama mintlemez. Boylece auth istegini
+// baslatan, formu goren, girisi tamamlayan ve kodu toplayan tarayici
+// AYNI olmak zorundadir.
 type Sayfalar struct {
 	kullanici    UserStore
 	istekler     IstekTamamlayici
@@ -132,44 +135,177 @@ func (s *Sayfalar) CallbackDelege(h http.Handler) { s.callbackDelege = h }
 // SARILIR: araci issuer'i istek baglamina koyar ve geriCagirma onu
 // oradan okur. Sarmadan baglamak akisi yonlendirme asamasinda kirar.
 //
-// hiz, POST uclarina uygulanan hiz limitidir (bkz. hizlimit.go). SADECE
-// POST'lar sarilir: GET'ler yalnizca formu uretir, bcrypt kosmaz ve
-// kullanici/jeton deposuna dokunmaz. nil GECILEBILIR ve o zaman hiz
-// limiti UYGULANMAZ; bu yalnizca birim testler icindir, uretimde Start
-// her zaman bir limit kurar ve limit kurulamazsa HIC BASLAMAZ.
+// hiz, uclara uygulanan hiz limitidir (bkz. hizlimit.go). GET'ler de
+// SARILIR: baglama /authorize'a tasindiktan sonra GET artik Redis'e
+// yazmiyor ama uc hala kimlik dogrulamasiz ve /authorize'dan (gecerli
+// client_id + redirect_uri + S256 ister) daha ucuz bir yuzey; sablon
+// uretimi de bedava degil. GET'ler POST'lardan AYRI anahtarlarda
+// sayilir: aksi halde formu acmak sifre deneme butcesini tuketir ve
+// mesru kullanici kendi akisini kilitler.
+//
+// nil GECILEBILIR ve o zaman hiz limiti UYGULANMAZ; bu yalnizca birim
+// testler icindir, uretimde Start her zaman bir limit kurar ve limit
+// kurulamazsa HIC BASLAMAZ.
 func (s *Sayfalar) Bagla(mux *http.ServeMux, araci *op.IssuerInterceptor, hiz *HizLimit) {
 	girisPost := araci.Handler(http.HandlerFunc(s.Giris))
 	kayitPost := araci.Handler(http.HandlerFunc(s.Kayit))
+	// GET'ler issuer aracisiyla SARILMAZ: form uretimi geriCagirma
+	// cagirmaz, yani istek baglaminda issuer'a ihtiyac duymaz.
+	var girisGet http.Handler = http.HandlerFunc(s.Giris)
+	var kayitGet http.Handler = http.HandlerFunc(s.Kayit)
 	if hiz != nil {
 		// Hiz limiti aracinin ICINDE degil DISINDA: reddedilen bir istek
 		// issuer cozumlemesi dahil hicbir ek is yapmadan donsun.
 		girisPost = hiz.GirisSar(girisPost)
 		kayitPost = hiz.KayitSar(kayitPost)
+		girisGet = hiz.SayfaGetSar("giris", girisGet)
+		kayitGet = hiz.SayfaGetSar("kayit", kayitGet)
 	}
-	mux.HandleFunc("GET "+yolGiris, s.Giris)
+	mux.Handle("GET "+yolGiris, girisGet)
 	mux.Handle("POST "+yolGiris, girisPost)
-	mux.HandleFunc("GET "+yolKayit, s.Kayit)
+	mux.Handle("GET "+yolKayit, kayitGet)
 	mux.Handle("POST "+yolKayit, kayitPost)
 }
 
-// oturumBasla, yeni bir oturum degeri ve CSRF jetonu uretir, baglamayi
-// depoya yazar ve cerezi yanita koyar. Donen deger forma gomulecek CSRF
-// jetonudur. Oturum degeri, CSRF jetonu ve authRequestID LOGLANMAZ.
-func (s *Sayfalar) oturumBasla(w http.ResponseWriter, r *http.Request, id string) (string, error) {
-	oturum, err := rasgeleJeton()
-	if err != nil {
-		return "", err
+// BaglamaKur, verilen authRequestID'yi CAGIRAN tarayiciya baglar: varsa
+// mevcut oturum cerezini yeniden kullanir (paralel akis icin, bkz.
+// oturumBaglamaUstSinir), yoksa yeni bir oturum degeri uretir; istege
+// ozel bir CSRF jetonu uretip baglamayi depoya yazar ve cerezi yanita
+// koyar.
+//
+// YALNIZCA /authorize bacagindan cagrilir (AuthorizeSar). GET /giris ve
+// GET /kayit bunu CAGIRMAZ: cagirsalardi baglama herkese, herhangi bir
+// id icin mintlenebilir olurdu (bkz. oturum.go cerezAdOturum notu).
+//
+// Oturum degeri, CSRF jetonu ve authRequestID LOGLANMAZ.
+func (s *Sayfalar) BaglamaKur(w http.ResponseWriter, r *http.Request, id string) error {
+	if id == "" {
+		return ErrOturumEslesmedi
+	}
+	var (
+		oturum  string
+		baglama OturumBaglama
+	)
+	// Mevcut cerez YALNIZCA depoda gecerli bir baglamasi varsa yeniden
+	// kullanilir; uydurma veya suresi dolmus bir cerez degerinin uzerine
+	// yazmak, saldirganin secebildigi bir oturum degerini canlandirmak
+	// olurdu.
+	if cerez, err := r.Cookie(cerezAdOturum); err == nil && cerez.Value != "" {
+		if mevcut, err := s.oturumlar.OturumOku(r.Context(), cerez.Value); err == nil {
+			oturum = cerez.Value
+			baglama = mevcut
+		}
+	}
+	if oturum == "" {
+		yeni, err := rasgeleJeton()
+		if err != nil {
+			return err
+		}
+		oturum = yeni
 	}
 	csrf, err := rasgeleJeton()
 	if err != nil {
-		return "", err
+		return err
 	}
-	baglama := OturumBaglama{AuthRequestID: id, CSRF: csrf}
+	baglama.Ekle(id, csrf)
 	if err := s.oturumlar.OturumYaz(r.Context(), oturum, baglama, istekTTL); err != nil {
-		return "", err
+		return err
 	}
+	// Cerez her yolda yeniden yazilir: yeni oturumda zorunlu, mevcut
+	// oturumda MaxAge'i istek TTL'i boyunca tazeler.
 	http.SetCookie(w, oturumCerezi(oturum, s.cerezGuvenli))
-	return csrf, nil
+	return nil
+}
+
+// AuthorizeSar, /authorize handler'ini sarar ve istek dogrulamalari
+// GECTIKTEN sonra (yani kutuphane kullaniciyi giris sayfasina
+// yonlendirdiginde) cerez baglamasini ISTEGI BASLATAN tarayici icin
+// kurar.
+//
+// NEDEN BURADA: /authorize, akisin tarayici tarafindan BASLATILDIGI tek
+// noktadir ve gecerli bir client_id + redirect_uri + S256 PKCE
+// gerektirir (bkz. pkceZorlayici). Baglamayi burada kurmak, "istegi
+// baslatan tarayici" ile "cerezi tasiyan tarayici" esitligini
+// kurulabilir tek yer yapar. Kutuphane kodu DEGISTIRILMEZ: yanit
+// yazilmadan HEMEN once araya giriyoruz.
+//
+// Yonlendirme giris sayfasina DEGILSE (hata 302'si, dogrudan yanit)
+// baglama KURULMAZ.
+//
+// FAIL-CLOSED: baglama kurulamazsa (orn. Redis yok) kutuphanenin
+// yonlendirmesi YAZILMAZ, 500 donulur. Aksi halde kullanici, POST'u
+// kesin 403 olacak bir forma gonderilirdi.
+func (s *Sayfalar) AuthorizeSar(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		yakalayici := &baglamaYakalayici{ResponseWriter: w}
+		yakalayici.kur = func(kod int) error {
+			if kod != http.StatusFound && kod != http.StatusSeeOther {
+				return nil
+			}
+			id := girisYonlendirmeID(w.Header().Get("Location"))
+			if id == "" {
+				return nil
+			}
+			return s.BaglamaKur(w, r, id)
+		}
+		next.ServeHTTP(yakalayici, r)
+	})
+}
+
+// girisYonlendirmeID, kutuphanenin urettigi yonlendirme adresi BIZIM
+// giris sayfamiza gidiyorsa authRequestID'yi doner, aksi halde bos
+// string. Yol kontrolu zorunlu: istemcinin redirect_uri'sine donen hata
+// yonlendirmelerinde baglama kurulmamali.
+func girisYonlendirmeID(konum string) string {
+	if konum == "" {
+		return ""
+	}
+	u, err := url.Parse(konum)
+	if err != nil || u.Path != yolGiris {
+		return ""
+	}
+	return u.Query().Get("authRequestID")
+}
+
+// baglamaYakalayici, sarilan handler'in yanitini YAZMADAN once kur'u
+// cagirir. Cerez ve durum kodu sirasi onemli: Set-Cookie basliklari
+// WriteHeader'dan ONCE yazilmak zorunda.
+type baglamaYakalayici struct {
+	http.ResponseWriter
+
+	// kur, yanitin durum kodunu alir ve baglamayi kurar. Hata donerse
+	// sarilan handler'in yaniti BASTIRILIR ve 500 yazilir.
+	kur func(kod int) error
+
+	yazildi    bool
+	bastirildi bool
+}
+
+func (y *baglamaYakalayici) WriteHeader(kod int) {
+	if y.yazildi {
+		return
+	}
+	y.yazildi = true
+	if err := y.kur(kod); err != nil {
+		// authRequestID, cerez degeri ve CSRF jetonu LOGLANMAZ.
+		log.Printf("authorize: oturum baglamasi kurulamadi: %v", err)
+		y.bastirildi = true
+		y.ResponseWriter.Header().Del("Location")
+		http.Error(y.ResponseWriter, hataSunucu, http.StatusInternalServerError)
+		return
+	}
+	y.ResponseWriter.WriteHeader(kod)
+}
+
+func (y *baglamaYakalayici) Write(b []byte) (int, error) {
+	if !y.yazildi {
+		y.WriteHeader(http.StatusOK)
+	}
+	if y.bastirildi {
+		// Govde yutulur ama yazar hata gormez: 500 ZATEN yazildi.
+		return len(b), nil
+	}
+	return y.ResponseWriter.Write(b)
 }
 
 // oturumZorla, bir POST'un GERCEKTEN bu tarayicida gosterilen forma ait
@@ -207,16 +343,19 @@ func (s *Sayfalar) Giris(w http.ResponseWriter, r *http.Request) {
 	s.girisGet(w, r)
 }
 
+// girisGet, formu YALNIZCA bu tarayici o auth istegini baslatmissa
+// gosterir. Yeni baglama MINTLEMEZ: var olan baglamayi TALEP eder.
+// Baglama yoksa form BILE gosterilmez — aksi halde saldirgan kendi
+// tarayicisinda baglama alip linki kurbana yollayabilirdi.
 func (s *Sayfalar) girisGet(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("authRequestID")
 	if id == "" {
 		http.Error(w, "authRequestID eksik", http.StatusBadRequest)
 		return
 	}
-	csrf, err := s.oturumBasla(w, r, id)
+	csrf, err := oturumBaglamaDogrula(r.Context(), s.oturumlar, r, id)
 	if err != nil {
-		log.Printf("giris: oturum baslatilamadi: %v", err)
-		http.Error(w, hataSunucu, http.StatusInternalServerError)
+		oturumRed(w, "giris-get", err)
 		return
 	}
 	s.girisRender(w, http.StatusOK, id, csrf, "", "")
@@ -306,16 +445,17 @@ func (s *Sayfalar) Kayit(w http.ResponseWriter, r *http.Request) {
 	s.kayitGet(w, r)
 }
 
+// kayitGet, girisGet ile AYNI kurala tabidir: baglama TALEP eder,
+// mintlemez (bkz. girisGet).
 func (s *Sayfalar) kayitGet(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("authRequestID")
 	if id == "" {
 		http.Error(w, "authRequestID eksik", http.StatusBadRequest)
 		return
 	}
-	csrf, err := s.oturumBasla(w, r, id)
+	csrf, err := oturumBaglamaDogrula(r.Context(), s.oturumlar, r, id)
 	if err != nil {
-		log.Printf("kayit: oturum baslatilamadi: %v", err)
-		http.Error(w, hataSunucu, http.StatusInternalServerError)
+		oturumRed(w, "kayit-get", err)
 		return
 	}
 	s.kayitRender(w, http.StatusOK, id, csrf, "", "", "")

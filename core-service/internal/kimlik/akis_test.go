@@ -207,13 +207,20 @@ func authRequestIDCikar(t *testing.T, yanit *http.Response) string {
 
 var akisCSRFDeseni = regexp.MustCompile(`name="csrf" value="([^"]*)"`)
 
-// girisYap, verilen tarayicida giris formunu ACAR (cerez burada
-// kurulur) ve formu gonderir. Donen yanit POST /giris yanitidir.
-func (o *akisOrtami) girisYap(t *testing.T, c *http.Client, id, eposta, sifre string) *http.Response {
+// girisDene, verilen tarayicida giris formunu ACMAYA calisir ve form
+// gosterildiyse gonderir. Doner: (POST yaniti veya form yaniti, GET
+// formunun durum kodu).
+//
+// NEDEN "DENE": baglama artik YALNIZCA /authorize'da kuruldugu icin,
+// akisi baslatmayan bir tarayicida GET /giris 403 doner ve POST'a hic
+// gelinmez. Saldiri testleri iki durumu da olcebilmeli: duzeltilmis
+// kodda form hic gosterilmez, mutasyonlu kodda (GET yeniden mintlerse)
+// gosterilir ve akis tamamlanir.
+func (o *akisOrtami) girisDene(t *testing.T, c *http.Client, id, eposta, sifre string) (*http.Response, int) {
 	t.Helper()
 	formYanit := al(t, c, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
 	if formYanit.StatusCode != http.StatusOK {
-		t.Fatalf("giris formu durumu = %d", formYanit.StatusCode)
+		return formYanit, formYanit.StatusCode
 	}
 	esler := akisCSRFDeseni.FindStringSubmatch(govde(t, formYanit))
 	if esler == nil {
@@ -228,7 +235,63 @@ func (o *akisOrtami) girisYap(t *testing.T, c *http.Client, id, eposta, sifre st
 		t.Fatalf("POST /giris: %v", err)
 	}
 	t.Cleanup(func() { _ = yanit.Body.Close() })
+	return yanit, http.StatusOK
+}
+
+// girisFormuAc, giris formunu acar ve formdaki CSRF jetonunu doner.
+// Form reddedilirse test durur.
+func (o *akisOrtami) girisFormuAc(t *testing.T, c *http.Client, id string) string {
+	t.Helper()
+	formYanit := al(t, c, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
+	if formYanit.StatusCode != http.StatusOK {
+		t.Fatalf("giris formu durumu = %d", formYanit.StatusCode)
+	}
+	esler := akisCSRFDeseni.FindStringSubmatch(govde(t, formYanit))
+	if esler == nil {
+		t.Fatal("giris formunda CSRF jetonu yok")
+	}
+	return esler[1]
+}
+
+// girisGonder, ACIK bir formdan POST /giris yapar. Formu yeniden
+// ACMAZ: gercek tarayici da basarisiz denemede formu yeniden
+// yuklemez, govdeyle birlikte donen sayfayi gosterir.
+func (o *akisOrtami) girisGonder(t *testing.T, c *http.Client, id, csrf, eposta, sifre string) *http.Response {
+	t.Helper()
+	yanit, err := c.PostForm(o.issuer+yolGiris, url.Values{
+		"eposta": {eposta}, "sifre": {sifre},
+		"authRequestID": {id}, csrfAlan: {csrf},
+	})
+	if err != nil {
+		t.Fatalf("POST /giris: %v", err)
+	}
+	t.Cleanup(func() { _ = yanit.Body.Close() })
 	return yanit
+}
+
+// girisYap, girisDene'nin "form GOSTERILMEK ZORUNDA" surumudur: mutlu
+// yol testleri icin.
+func (o *akisOrtami) girisYap(t *testing.T, c *http.Client, id, eposta, sifre string) *http.Response {
+	t.Helper()
+	yanit, formDurum := o.girisDene(t, c, id, eposta, sifre)
+	if formDurum != http.StatusOK {
+		t.Fatalf("giris formu durumu = %d", formDurum)
+	}
+	return yanit
+}
+
+// kodCikar, callback yanitindan authorization code'u cikarir (yoksa bos
+// string).
+func kodCikar(t *testing.T, yanit *http.Response) string {
+	t.Helper()
+	if yanit.StatusCode != http.StatusFound {
+		return ""
+	}
+	konum, err := url.Parse(yanit.Header.Get("Location"))
+	if err != nil {
+		return ""
+	}
+	return konum.Query().Get("code")
 }
 
 // jetonAl, authorization code'u jetona cevirir.
@@ -314,16 +377,45 @@ func TestAkisS256IleUctanUcaCalisir(t *testing.T) {
 }
 
 // ---- C1: hesap devralma saldirisinin kendisi ----
-
-// SALDIRI TESTI (C1). A istemcisi (saldirgan) kendi PKCE ciftiyle
-// /authorize baslatir ve /giris linkini "kurbana" yollar. B istemcisi
-// (kurban, TAMAMEN AYRI bir cerez kabi) kendi e-postasi ve sifresiyle
-// giris yapar. Sonra A, /authorize/callback'i KENDI tarayicisinda
-// cagirir.
 //
-// Beklenti: A kod ALMAZ. Cerez baglamasi kaldirilirsa bu test FAIL
-// eder (mutasyon kaniti raporda).
-func TestSaldirganKurbaninGirisindenKodAlamaz(t *testing.T) {
+// Re-review, onceki tek saldiri testinin (saldirgan giris formunu HIC
+// acmiyordu) somurunun yalnizca BIR varyantini modelledigini gosterdi.
+// Asil somuru, saldirganin GET /giris ile KENDINE baglama mintlemesiydi;
+// iki zamanlama varyantinin ikisi de canli jeton aldi. Asagidaki iki
+// test o iki varyanti AYRI AYRI olcer.
+//
+// devralmaDogrula, her iki varyantta da ayni sonucu dogrular: saldirgan
+// kod ALMAZ ve auth istegi kurbanin kimligine HIC baglanmaz.
+//
+// NEDEN "403" DEGIL "KOD YOK": saldirgan kendi istegine bagli oldugu
+// icin /authorize/callback'te cerez kontrolunu GECER; kutuphane
+// (pkg/op/auth_request.go AuthorizeCallback) istegi Done() olmadigi
+// icin reddeder ve istemcinin redirect_uri'sine error=... ile 302
+// doner. Olculmesi gereken sey durum kodu degil, KOD URETILMEDIGI ve
+// istegin baglanmadigidir.
+func devralmaDogrula(t *testing.T, o *akisOrtami, id string, cbYanit *http.Response) {
+	t.Helper()
+	if kod := kodCikar(t, cbYanit); kod != "" {
+		t.Fatalf("HESAP DEVRALMA: saldirgan kod aldi (durum %d)", cbYanit.StatusCode)
+	}
+	istek, err := o.istekler.IDileOku(context.Background(), id)
+	if err != nil {
+		t.Fatalf("IDileOku: %v", err)
+	}
+	if istek.Done() {
+		t.Fatal("HESAP DEVRALMA YOLU ACIK: saldirganin auth istegi bir kimlige baglandi")
+	}
+}
+
+// SOMURU 1 (on-baglama). Saldirgan /authorize'i kendi S256 ciftiyle
+// cagirir, SONRA kendi tarayicisinda GET /giris acar (giris YAPMAZ,
+// yalnizca baglama almaya calisir), linki kurbana yollar; kurban AYRI
+// bir cerez kabinda giris yapmaya calisir; saldirgan callback'i cagirir.
+//
+// Beklenti: kurbanin GET'i 403 (baglamasi yok, form gosterilmez),
+// saldirgan kod ALMAZ. GET /giris yeniden baglama mintlerse bu test
+// FAIL eder (mutasyon kaniti raporda).
+func TestSomuru1OnBaglamaIleDevralinamaz(t *testing.T) {
 	o := testSunucu(t)
 	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
 	_, challenge := pkceS256(t)
@@ -334,28 +426,131 @@ func TestSaldirganKurbaninGirisindenKodAlamaz(t *testing.T) {
 	// 1) Saldirgan akisi baslatir (challenge/state SALDIRGANIN).
 	id := authRequestIDCikar(t, al(t, saldirgan, o.authorizeURL(challenge, "S256")))
 
-	// 2) Kurban, AYRI bir istemcide girisi tamamlar. Giris basarili
-	//    olabilir (kendi cerezini alir) ama bu saldirgana yaramamali.
-	kurbanYanit := o.girisYap(t, kurban, id, "kurban@ornek.com", "dogruSifre12")
-	if kurbanYanit.StatusCode != http.StatusFound {
-		t.Fatalf("kurbanin girisi 302 donmedi (durum %d); saldiri senaryosu kurulamadi",
-			kurbanYanit.StatusCode)
+	// 2) ON-BAGLAMA: saldirgan formu KENDI tarayicisinda acar. Bu 200
+	//    doner (akisi o baslatti, baglamasi var) ama giris YAPMAZ.
+	saldirganForm := al(t, saldirgan, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
+	if saldirganForm.StatusCode != http.StatusOK {
+		t.Fatalf("saldirganin kendi formu durumu = %d; senaryo kurulamadi", saldirganForm.StatusCode)
 	}
 
-	// 3) Saldirgan kodu KENDI tarayicisinda toplamaya calisir.
-	cbYanit := al(t, saldirgan, o.issuer+"/authorize/callback?id="+url.QueryEscape(id))
-
-	if cbYanit.StatusCode == http.StatusFound {
-		konum, err := url.Parse(cbYanit.Header.Get("Location"))
-		if err == nil && konum.Query().Get("code") != "" {
-			t.Fatalf("HESAP DEVRALMA: saldirgan kurbanin girisinden kod aldi (durum %d)",
-				cbYanit.StatusCode)
-		}
-		t.Fatalf("saldirgana 302 donuldu (kod yok ama red bekleniyordu): %q",
-			cbYanit.Header.Get("Location"))
+	// 3) Kurban AYRI tarayicida ayni linki acar ve girisi dener.
+	kurbanYanit, formDurum := o.girisDene(t, kurban, id, "kurban@ornek.com", "dogruSifre12")
+	if formDurum != http.StatusForbidden {
+		t.Errorf("kurbanin GET /giris durumu = %d, beklenen 403 (baglamasi yok, form gosterilmemeli)", formDurum)
 	}
-	if cbYanit.StatusCode != http.StatusForbidden {
-		t.Errorf("callback durumu = %d, beklenen 403", cbYanit.StatusCode)
+	if kurbanYanit.StatusCode == http.StatusFound {
+		t.Error("kurbanin girisi saldirganin istegini tamamladi")
+	}
+
+	// 4) Saldirgan kodu KENDI tarayicisinda toplamaya calisir.
+	devralmaDogrula(t, o, id, al(t, saldirgan, o.issuer+"/authorize/callback?id="+url.QueryEscape(id)))
+}
+
+// SOMURU 2 (giris sonrasi baglama). Ayni somuru, ama saldirgan
+// baglamayi kurbanin girisi TAMAMLANDIKTAN SONRA almaya calisir:
+// zamanlama sarti bile yok. Sira SOMURU 1'den FARKLI oldugu icin ayri
+// bir testtir.
+func TestSomuru2GirisSonrasiBaglamaIleDevralinamaz(t *testing.T) {
+	o := testSunucu(t)
+	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
+	_, challenge := pkceS256(t)
+
+	saldirgan := tarayici(t)
+	kurban := tarayici(t)
+
+	// 1) Saldirgan akisi baslatir.
+	id := authRequestIDCikar(t, al(t, saldirgan, o.authorizeURL(challenge, "S256")))
+
+	// 2) Kurban ONCE giris yapmayi dener (saldirgan henuz formu
+	//    acmamistir).
+	kurbanYanit, formDurum := o.girisDene(t, kurban, id, "kurban@ornek.com", "dogruSifre12")
+	if formDurum != http.StatusForbidden {
+		t.Errorf("kurbanin GET /giris durumu = %d, beklenen 403", formDurum)
+	}
+	if kurbanYanit.StatusCode == http.StatusFound {
+		t.Error("kurbanin girisi saldirganin istegini tamamladi")
+	}
+
+	// 3) Saldirgan SONRA formu acar (baglama almaya calisir) ve kodu
+	//    toplar.
+	al(t, saldirgan, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
+	devralmaDogrula(t, o, id, al(t, saldirgan, o.issuer+"/authorize/callback?id="+url.QueryEscape(id)))
+}
+
+// Akisi BASLATMAYAN bir tarayicida GET /giris form BILE gostermez.
+// (Birim karsiligi sayfa_test.go TestFormGetBaglamasizReddedilir;
+// buradaki uretim mux'u uzerinden kosar.)
+func TestGetGirisBaglamasizUretimMuxundaReddedilir(t *testing.T) {
+	o := testSunucu(t)
+	_, challenge := pkceS256(t)
+	baslatan := tarayici(t)
+	yabanci := tarayici(t)
+
+	id := authRequestIDCikar(t, al(t, baslatan, o.authorizeURL(challenge, "S256")))
+
+	yanit := al(t, yabanci, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
+	if yanit.StatusCode != http.StatusForbidden {
+		t.Fatalf("yabanci tarayici GET /giris durumu = %d, beklenen 403", yanit.StatusCode)
+	}
+	if strings.Contains(govde(t, yanit), `name="csrf"`) {
+		t.Error("reddedilen GET formu gosterdi")
+	}
+
+	// NEGATIF KONTROL: akisi baslatan tarayicida AYNI link 200 doner,
+	// yani 403 baglama yuzunden (uc tumuyle kapanmis degil).
+	if kendi := al(t, baslatan, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id)); kendi.StatusCode != http.StatusOK {
+		t.Errorf("baslatan tarayicida GET /giris durumu = %d, beklenen 200", kendi.StatusCode)
+	}
+}
+
+// PARALEL AKIS: ayni tarayicida (ayni cerez kabi) iki /authorize
+// baslatilir; IKISININ de POST'u ve callback'i calismali.
+//
+// Bu testin yakaladigi sey: baglama /authorize'a tasinirken cerez ->
+// TEK id modeli korunsa ikinci /authorize birincinin baglamasini EZER
+// ve birinci sekme 403 olurdu (devralma yerine DoS). Bkz.
+// oturumBaglamaUstSinir.
+func TestParalelIkiAkisAyniTarayicidaCalisir(t *testing.T) {
+	o := testSunucu(t)
+	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
+	c := tarayici(t)
+
+	verifier1, challenge1 := pkceS256(t)
+	verifier2, challenge2 := pkceS256(t)
+
+	// Iki sekme: ikisi de giris yapilmadan ONCE baslatilir.
+	id1 := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge1, "S256")))
+	id2 := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge2, "S256")))
+	if id1 == id2 {
+		t.Fatal("iki /authorize ayni authRequestID uretti")
+	}
+
+	// Sekme 1 ONCE tamamlanir: ikinci /authorize onun baglamasini
+	// ezmemis olmali.
+	for _, d := range []struct {
+		ad       string
+		id       string
+		verifier string
+	}{{"sekme-1", id1, verifier1}, {"sekme-2", id2, verifier2}} {
+		t.Run(d.ad, func(t *testing.T) {
+			girisYanit := o.girisYap(t, c, d.id, "kurban@ornek.com", "dogruSifre12")
+			if girisYanit.StatusCode != http.StatusFound {
+				t.Fatalf("POST /giris durumu = %d, beklenen 302. govde: %s",
+					girisYanit.StatusCode, govde(t, girisYanit))
+			}
+			cbYanit := al(t, c, girisYanit.Header.Get("Location"))
+			kod := kodCikar(t, cbYanit)
+			if kod == "" {
+				t.Fatalf("kod uretilmedi (callback durumu %d)", cbYanit.StatusCode)
+			}
+			durum, jeton := o.jetonAl(t, kod, d.verifier)
+			if durum != http.StatusOK {
+				t.Fatalf("token durumu = %d, govde: %v", durum, jeton)
+			}
+			if jeton["access_token"] == nil || jeton["access_token"] == "" {
+				t.Error("access_token yok")
+			}
+		})
 	}
 }
 

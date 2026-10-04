@@ -127,15 +127,20 @@ func TestLoad_HizLimitiVarsayilanlari(t *testing.T) {
 	if cfg.Auth.SignupIPPerHour != 5 {
 		t.Errorf("SignupIPPerHour = %d, beklenen 5", cfg.Auth.SignupIPPerHour)
 	}
-	if cfg.Auth.TrustedProxies != 1 {
-		t.Errorf("TrustedProxies = %d, beklenen 1", cfg.Auth.TrustedProxies)
+	// FAIL-SAFE: varsayilan 0, yani X-Forwarded-For HIC okunmaz. 1
+	// varsayilani, onunde proxy olmayan bir kurulumda uydurma tek
+	// elemanli bir XFF'i guvenilir sayar ve IP limiti tamamen atlanir
+	// (bkz. config.go trusted_proxies notu). Proxy arkasinda deger
+	// ACIKCA verilir; bir sonraki test ezmenin calistigini olcer.
+	if cfg.Auth.TrustedProxies != 0 {
+		t.Errorf("TrustedProxies = %d, beklenen 0 (varsayilan fail-safe olmali)", cfg.Auth.TrustedProxies)
 	}
 }
 
 // Ortam degiskeni gercekten ezebiliyor mu (yalnizca varsayilan degil).
 func TestLoad_HizLimitiOrtamDegiskeniEzer(t *testing.T) {
 	os.Setenv("AUTH_LOGIN_IP_PER_MIN", "3")
-	os.Setenv("AUTH_TRUSTED_PROXIES", "0")
+	os.Setenv("AUTH_TRUSTED_PROXIES", "2")
 	defer func() {
 		os.Unsetenv("AUTH_LOGIN_IP_PER_MIN")
 		os.Unsetenv("AUTH_TRUSTED_PROXIES")
@@ -147,7 +152,9 @@ func TestLoad_HizLimitiOrtamDegiskeniEzer(t *testing.T) {
 	if cfg.Auth.LoginIPPerMin != 3 {
 		t.Errorf("LoginIPPerMin = %d, beklenen 3", cfg.Auth.LoginIPPerMin)
 	}
-	if cfg.Auth.TrustedProxies != 0 {
-		t.Errorf("TrustedProxies = %d, beklenen 0", cfg.Auth.TrustedProxies)
+	// Varsayilandan FARKLI bir deger: aksi halde bu dal varsayilanla
+	// ayni sonucu olcer ve "ortam degiskeni ezer" iddiasi vacuous olur.
+	if cfg.Auth.TrustedProxies != 2 {
+		t.Errorf("TrustedProxies = %d, beklenen 2", cfg.Auth.TrustedProxies)
 	}
 }

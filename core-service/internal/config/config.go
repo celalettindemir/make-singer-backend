@@ -140,9 +140,15 @@ type AuthConfig struct {
 	SignupIPPerHour   int // POST /kayit, IP basina saatte
 
 	// TrustedProxies, istek OP'ye ulasmadan once gecen GUVENILEN ters
-	// proxy sayisi (bu kurulumda Traefik => 1). X-Forwarded-For'un
-	// SONDAN bu kadarinci elemani gercek istemci adresi sayilir; 0 ise
-	// baslik hic okunmaz ve RemoteAddr kullanilir. Bkz. kimlik.istemciIP.
+	// proxy sayisidir. X-Forwarded-For'un SONDAN bu kadarinci elemani
+	// gercek istemci adresi sayilir; 0 ise baslik HIC okunmaz ve
+	// RemoteAddr kullanilir. Bkz. kimlik.istemciIP.
+	//
+	// VARSAYILAN 0 (FAIL-SAFE). Onde proxy YOKSA 1 degeri tek elemanli
+	// uydurma bir XFF'i guvenilir sayar: saldirgan her istekte farkli
+	// bir IP yazip IP limitini TAMAMEN atlar. Traefik gibi bir ters
+	// proxy arkasindaysa bu deger ACIKCA proxy sayisina ayarlanmali
+	// (AUTH_TRUSTED_PROXIES).
 	TrustedProxies int
 }
 
@@ -273,12 +279,17 @@ func Load() (*Config, error) {
 	//     bilerek yok, yani hesap uretimini sinirlayan TEK sey bu.
 	//     Paylasimli bir cikis NAT'i arkasindaki birkac kisiye yeter,
 	//     toplu hesap uretimini bitirir.
-	//   - trusted_proxies = 1: bu kurulumda OP dinleyicisinin onunde
-	//     yalnizca Traefik var (bkz. traefik/).
+	//   - trusted_proxies = 0: VARSAYILAN GUVENLI OLAN taraftir. 1
+	//     varsayilani, onunde proxy OLMAYAN bir kurulumda tek elemanli
+	//     uydurma bir X-Forwarded-For'u guvenilir sayardi ve saldirgan
+	//     her istekte farkli bir IP yazip IP limitini TAMAMEN atlardi.
+	//     0 iken baslik HIC okunmaz, RemoteAddr kullanilir. Traefik gibi
+	//     bir ters proxy arkasinda bu deger ACIKCA proxy sayisina
+	//     ayarlanmalidir (AUTH_TRUSTED_PROXIES, kume manifestinde 1).
 	viper.SetDefault("auth.login_ip_per_min", 10)
 	viper.SetDefault("auth.login_email_per_hour", 60)
 	viper.SetDefault("auth.signup_ip_per_hour", 5)
-	viper.SetDefault("auth.trusted_proxies", 1)
+	viper.SetDefault("auth.trusted_proxies", 0)
 
 	// Try to read config file (optional)
 	_ = viper.ReadInConfig()

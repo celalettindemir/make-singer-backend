@@ -111,34 +111,69 @@ func testSayfalar(t *testing.T) *sayfaTestOrtami {
 
 var csrfDeseni = regexp.MustCompile(`name="csrf" value="([^"]*)"`)
 
-// formAc, bir tarayicinin GET ile formu acmasini taklit eder ve
-// (oturum cerezi, CSRF jetonu) doner.
-func formAc(t *testing.T, o *sayfaTestOrtami, yol, id string) (*http.Cookie, string) {
+// baglamaKur, /authorize bacaginin yaptigi isi taklit eder: verilen
+// authRequestID'yi CAGIRAN tarayiciya baglar ve cerezi doner.
+//
+// Uretimde bunu YALNIZCA /authorize yapar (Sayfalar.AuthorizeSar);
+// GET /giris ve GET /kayit baglama MINTLEMEZ. Testler de o yoldan
+// gecer: once baglama, sonra form.
+func baglamaKur(t *testing.T, o *sayfaTestOrtami, id string, mevcut *http.Cookie) *http.Cookie {
 	t.Helper()
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, yol+"?authRequestID="+url.QueryEscape(id), nil)
-	if yol == yolGiris {
-		o.sayfalar.Giris(w, r)
-	} else {
-		o.sayfalar.Kayit(w, r)
+	r := httptest.NewRequest(http.MethodGet, "/authorize", nil)
+	if mevcut != nil {
+		r.AddCookie(mevcut)
 	}
-	if w.Code != http.StatusOK {
-		t.Fatalf("form acilamadi: durum = %d", w.Code)
+	if err := o.sayfalar.BaglamaKur(w, r, id); err != nil {
+		t.Fatalf("BaglamaKur: %v", err)
 	}
-	var cerez *http.Cookie
 	for _, c := range w.Result().Cookies() {
-		if c.Name == cerezAdOturum {
-			cerez = c
+		if c.Name == cerezAdOturum && c.Value != "" {
+			return c
 		}
 	}
-	if cerez == nil || cerez.Value == "" {
-		t.Fatal("GET oturum cerezi vermedi")
+	t.Fatal("BaglamaKur oturum cerezi vermedi")
+	return nil
+}
+
+// formAc, bir tarayicinin akisi /authorize ile baslatmasini ve ardindan
+// GET ile formu acmasini taklit eder; (oturum cerezi, CSRF jetonu)
+// doner.
+func formAc(t *testing.T, o *sayfaTestOrtami, yol, id string) (*http.Cookie, string) {
+	t.Helper()
+	cerez := baglamaKur(t, o, id, nil)
+	return cerez, formGoster(t, o, yol, id, cerez)
+}
+
+// formGoster, var olan bir cerezle GET formunu acar ve formdaki CSRF
+// jetonunu doner.
+func formGoster(t *testing.T, o *sayfaTestOrtami, yol, id string, cerez *http.Cookie) string {
+	t.Helper()
+	w := formIstek(o, yol, id, cerez)
+	if w.Code != http.StatusOK {
+		t.Fatalf("form acilamadi: durum = %d", w.Code)
 	}
 	esler := csrfDeseni.FindStringSubmatch(w.Body.String())
 	if esler == nil || esler[1] == "" {
 		t.Fatal("formda CSRF jetonu yok")
 	}
-	return cerez, esler[1]
+	return esler[1]
+}
+
+// formIstek, GET /giris veya GET /kayit'i verilen cerez (nil olabilir)
+// ile cagirir.
+func formIstek(o *sayfaTestOrtami, yol, id string, cerez *http.Cookie) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, yol+"?authRequestID="+url.QueryEscape(id), nil)
+	if cerez != nil {
+		r.AddCookie(cerez)
+	}
+	if yol == yolGiris {
+		o.sayfalar.Giris(w, r)
+	} else {
+		o.sayfalar.Kayit(w, r)
+	}
+	return w
 }
 
 // postEt, verilen cerez (nil olabilir) ile form POST'u yapar.
@@ -159,9 +194,8 @@ func postEt(o *sayfaTestOrtami, yol string, form url.Values, cerez *http.Cookie)
 
 func TestGirisSayfasiFormGosterir(t *testing.T) {
 	o := testSayfalar(t)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, yolGiris+"?authRequestID=abc", nil)
-	o.sayfalar.Giris(w, r)
+	cerez := baglamaKur(t, o, "abc", nil)
+	w := formIstek(o, yolGiris, "abc", cerez)
 	if w.Code != http.StatusOK {
 		t.Fatalf("durum = %d, beklenen 200", w.Code)
 	}
@@ -173,12 +207,15 @@ func TestGirisSayfasiFormGosterir(t *testing.T) {
 	}
 }
 
-// GET formu acarken tarayiciya HttpOnly + SameSite=Lax bir oturum
-// cerezi vermeli; bu cerez akisin tek baglama noktasidir.
-func TestGirisGetOturumCereziVerir(t *testing.T) {
+// /authorize baglamayi kurarken tarayiciya HttpOnly + SameSite=Lax bir
+// oturum cerezi vermeli; bu cerez akisin tek baglama noktasidir.
+func TestAuthorizeOturumCereziVerir(t *testing.T) {
 	o := testSayfalar(t)
 	w := httptest.NewRecorder()
-	o.sayfalar.Giris(w, httptest.NewRequest(http.MethodGet, yolGiris+"?authRequestID=abc", nil))
+	r := httptest.NewRequest(http.MethodGet, "/authorize", nil)
+	if err := o.sayfalar.BaglamaKur(w, r, "abc"); err != nil {
+		t.Fatalf("BaglamaKur: %v", err)
+	}
 	var cerez *http.Cookie
 	for _, c := range w.Result().Cookies() {
 		if c.Name == cerezAdOturum {
@@ -206,11 +243,116 @@ func TestGirisGetOturumCereziVerir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OturumOku: %v", err)
 	}
-	if baglama.AuthRequestID != "abc" {
-		t.Errorf("bagli authRequestID = %q, beklenen abc", baglama.AuthRequestID)
+	csrf, bagliMi := baglama.CSRFBul("abc")
+	if !bagliMi {
+		t.Fatalf("authRequestID baglanmamis, kayit sayisi = %d", len(baglama.Kayitlar))
 	}
-	if baglama.CSRF == "" {
+	if csrf == "" {
 		t.Error("baglamada CSRF jetonu yok")
+	}
+}
+
+// C1 (re-review bulgusu): GET /giris ve GET /kayit baglama MINTLEMEZ.
+// Baglamasiz (veya baska bir id'ye bagli cerezle) gelen GET'te form
+// BILE gosterilmez. Bu, "saldirgan kendi tarayicisinda baglama alir,
+// linki kurbana yollar" somurusunun kokunu kapatir.
+func TestFormGetBaglamasizReddedilir(t *testing.T) {
+	for _, yol := range []string{yolGiris, yolKayit} {
+		t.Run(yol, func(t *testing.T) {
+			o := testSayfalar(t)
+
+			// (a) Hic cerez yok.
+			w := formIstek(o, yol, "istek-A", nil)
+			if w.Code != http.StatusForbidden {
+				t.Errorf("cerezsiz GET durumu = %d, beklenen 403", w.Code)
+			}
+			if strings.Contains(w.Body.String(), `name="csrf"`) {
+				t.Error("reddedilen GET formu gosterdi")
+			}
+			if len(w.Result().Cookies()) != 0 {
+				t.Error("reddedilen GET cerez yazdi (baglama mintlendi)")
+			}
+
+			// (b) BASKA bir istege bagli cerez.
+			cerezB := baglamaKur(t, o, "istek-B", nil)
+			w = formIstek(o, yol, "istek-A", cerezB)
+			if w.Code != http.StatusForbidden {
+				t.Errorf("baska id'ye bagli cerezle GET durumu = %d, beklenen 403", w.Code)
+			}
+			if strings.Contains(w.Body.String(), `name="csrf"`) {
+				t.Error("eslesmeyen cerezle form gosterildi")
+			}
+
+			// (c) Uydurma cerez degeri.
+			w = formIstek(o, yol, "istek-A", &http.Cookie{Name: cerezAdOturum, Value: "uydurma"})
+			if w.Code != http.StatusForbidden {
+				t.Errorf("uydurma cerezle GET durumu = %d, beklenen 403", w.Code)
+			}
+
+			// (d) NEGATIF KONTROL: dogru baglama ile form GERCEKTEN
+			//     acilir, yani yukaridaki 403'ler baglamadan kaynakli.
+			cerezA := baglamaKur(t, o, "istek-A", nil)
+			w = formIstek(o, yol, "istek-A", cerezA)
+			if w.Code != http.StatusOK {
+				t.Fatalf("bagli cerezle GET durumu = %d, beklenen 200", w.Code)
+			}
+			if !strings.Contains(w.Body.String(), `name="csrf"`) {
+				t.Error("bagli cerezle form gosterilmedi")
+			}
+		})
+	}
+}
+
+// PARALEL AKIS (birim duzeyi): ayni cerezle iki ayri auth istegi
+// baslatilirsa IKISI de bagli kalmali. Baglama /authorize'a tasinirken
+// "tek id" modeli korunsa ikinci /authorize birincisini ezer ve birinci
+// sekme 403 olurdu. Ucan uca karsiligi akis_test.go'da.
+func TestParalelIkiIstekAyniCerezeBaglanir(t *testing.T) {
+	o := testSayfalar(t)
+	cerez := baglamaKur(t, o, "istek-1", nil)
+	cerez2 := baglamaKur(t, o, "istek-2", cerez)
+	if cerez2.Value != cerez.Value {
+		t.Fatalf("ikinci /authorize cerez degerini degistirdi: %q -> %q", cerez.Value, cerez2.Value)
+	}
+	baglama, err := o.oturumlar.OturumOku(context.Background(), cerez2.Value)
+	if err != nil {
+		t.Fatalf("OturumOku: %v", err)
+	}
+	for _, id := range []string{"istek-1", "istek-2"} {
+		if _, bagliMi := baglama.CSRFBul(id); !bagliMi {
+			t.Errorf("%s baglamada yok", id)
+		}
+	}
+	// Her iki sekmenin formu da acilabilmeli.
+	for _, id := range []string{"istek-1", "istek-2"} {
+		if w := formIstek(o, yolGiris, id, cerez2); w.Code != http.StatusOK {
+			t.Errorf("%s formu durumu = %d, beklenen 200", id, w.Code)
+		}
+	}
+}
+
+// Kume SINIRSIZ buyumemeli (sisirme yuzeyi): ust siniri asinca EN ESKI
+// kayit duser, en yeniler kalir.
+func TestOturumBaglamaUstSiniriUygulanir(t *testing.T) {
+	o := testSayfalar(t)
+	var cerez *http.Cookie
+	toplam := oturumBaglamaUstSinir + 3
+	for i := 0; i < toplam; i++ {
+		cerez = baglamaKur(t, o, "istek-"+strconv.Itoa(i), cerez)
+	}
+	baglama, err := o.oturumlar.OturumOku(context.Background(), cerez.Value)
+	if err != nil {
+		t.Fatalf("OturumOku: %v", err)
+	}
+	if len(baglama.Kayitlar) != oturumBaglamaUstSinir {
+		t.Fatalf("kayit sayisi = %d, beklenen %d", len(baglama.Kayitlar), oturumBaglamaUstSinir)
+	}
+	// En eski kayitlar dusmus, en yeni kalmis olmali.
+	if _, bagliMi := baglama.CSRFBul("istek-0"); bagliMi {
+		t.Error("ust sinir asildi ama en eski kayit dusmedi")
+	}
+	if _, bagliMi := baglama.CSRFBul("istek-" + strconv.Itoa(toplam-1)); !bagliMi {
+		t.Error("en yeni kayit dusmus")
 	}
 }
 
@@ -225,7 +367,9 @@ func TestCerezSecureBayragiIssuerSemasinaBagli(t *testing.T) {
 			s := NewSayfalar(NewSahteUserStore(), newSahteTamamlayici(), NewSahteOturumDepo(),
 				func(_ context.Context, id string) string { return "/bitti?id=" + id }, d.guvenli)
 			w := httptest.NewRecorder()
-			s.Giris(w, httptest.NewRequest(http.MethodGet, yolGiris+"?authRequestID=abc", nil))
+			if err := s.BaglamaKur(w, httptest.NewRequest(http.MethodGet, "/authorize", nil), "abc"); err != nil {
+				t.Fatalf("BaglamaKur: %v", err)
+			}
 			cerezler := w.Result().Cookies()
 			if len(cerezler) == 0 {
 				t.Fatal("cerez yok")
@@ -242,8 +386,8 @@ func TestGirisAuthRequestIDsizReddedilir(t *testing.T) {
 	o := testSayfalar(t)
 	w := httptest.NewRecorder()
 	o.sayfalar.Giris(w, httptest.NewRequest(http.MethodGet, yolGiris, nil))
-	if w.Code == http.StatusOK {
-		t.Error("authRequestID olmadan 200 dondu")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("durum = %d, beklenen 400 (authRequestID eksik)", w.Code)
 	}
 }
 
@@ -475,12 +619,19 @@ func TestYanlisGirisKullaniciVarligiSizdirmaz(t *testing.T) {
 // uretildigi icin bu otomatiktir, ama regresyona karsi test edilir.
 func TestSayfaGirdiKacirir(t *testing.T) {
 	o := testSayfalar(t)
-	w := httptest.NewRecorder()
 	kotu := `"><script>alert(1)</script>`
-	r := httptest.NewRequest(http.MethodGet, yolGiris+"?authRequestID="+url.QueryEscape(kotu), nil)
-	o.sayfalar.Giris(w, r)
+	// Baglama KURULMALI: aksi halde GET 403'te durur, govde hic
+	// uretilmez ve test vacuous olur.
+	cerez := baglamaKur(t, o, kotu, nil)
+	w := formIstek(o, yolGiris, kotu, cerez)
+	if w.Code != http.StatusOK {
+		t.Fatalf("durum = %d, beklenen 200 (sayfa gercekten uretildi mi?)", w.Code)
+	}
 	if strings.Contains(w.Body.String(), "<script>") {
 		t.Error("girdi kacirilmamis, XSS mumkun")
+	}
+	if !strings.Contains(w.Body.String(), "&lt;script&gt;") {
+		t.Error("kacislanmis <script> govdede yok; girdi hic yansitilmiyor olabilir")
 	}
 }
 
@@ -515,8 +666,8 @@ func TestGirisEpostaEchoKacar(t *testing.T) {
 
 func TestKayitSayfasiFormGosterir(t *testing.T) {
 	o := testSayfalar(t)
-	w := httptest.NewRecorder()
-	o.sayfalar.Kayit(w, httptest.NewRequest(http.MethodGet, yolKayit+"?authRequestID=abc", nil))
+	cerez := baglamaKur(t, o, "abc", nil)
+	w := formIstek(o, yolKayit, "abc", cerez)
 	if w.Code != http.StatusOK {
 		t.Fatalf("durum = %d", w.Code)
 	}

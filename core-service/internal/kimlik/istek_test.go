@@ -3,6 +3,7 @@ package kimlik
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -206,7 +207,13 @@ func TestIstekIDIpucuSubjectOlmaz(t *testing.T) {
 func TestOturumBaglamaYazVeOku(t *testing.T) {
 	depo := NewIstekDepo(testRedis(t))
 	ctx := context.Background()
-	baglama := OturumBaglama{AuthRequestID: "istek-1", CSRF: "csrf-1"}
+	// Kume: bir cerez birden fazla istege bagli olabilir (paralel
+	// sekmeler, bkz. oturumBaglamaUstSinir). Redis'e giden JSON tur
+	// yolculugunu da dogruluyoruz: alanlar disa acik olmazsa
+	// encoding/json onlari sessizce atlar ve baglama kaybolur.
+	var baglama OturumBaglama
+	baglama.Ekle("istek-1", "csrf-1")
+	baglama.Ekle("istek-2", "csrf-2")
 	if err := depo.OturumYaz(ctx, "oturum-1", baglama, istekTTL); err != nil {
 		t.Fatalf("OturumYaz: %v", err)
 	}
@@ -214,8 +221,17 @@ func TestOturumBaglamaYazVeOku(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OturumOku: %v", err)
 	}
-	if okunan != baglama {
+	if !reflect.DeepEqual(okunan, baglama) {
 		t.Errorf("baglama = %+v, beklenen %+v", okunan, baglama)
+	}
+	for _, d := range []struct{ id, csrf string }{{"istek-1", "csrf-1"}, {"istek-2", "csrf-2"}} {
+		csrf, bagliMi := okunan.CSRFBul(d.id)
+		if !bagliMi || csrf != d.csrf {
+			t.Errorf("CSRFBul(%q) = (%q, %v), beklenen (%q, true)", d.id, csrf, bagliMi, d.csrf)
+		}
+	}
+	if _, bagliMi := okunan.CSRFBul("istek-3"); bagliMi {
+		t.Error("baglanmamis id icin CSRFBul true dondu")
 	}
 	if _, err := depo.OturumOku(ctx, "yok"); !errors.Is(err, ErrOturumYok) {
 		t.Errorf("hata = %v, beklenen ErrOturumYok", err)

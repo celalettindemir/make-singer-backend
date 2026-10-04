@@ -149,7 +149,8 @@ func (h *HizLimit) GirisSar(next http.Handler) http.Handler {
 			http.Error(w, "form okunamadi", http.StatusBadRequest)
 			return
 		}
-		eposta := epostaNormalize(r.PostFormValue("eposta"))
+		// epostaSayacAnahtari: KUCULTME ZORUNLU, bkz. fonksiyon notu.
+		eposta := epostaSayacAnahtari(r.PostFormValue("eposta"))
 		if eposta == "" {
 			// E-postasiz bir POST zaten giris olamaz; IP sayaci onu
 			// saydi, e-posta sayacini kirletmeye gerek yok.
@@ -160,6 +161,32 @@ func (h *HizLimit) GirisSar(next http.Handler) http.Handler {
 			anahtar: h.epostaAnahtar("giris", eposta),
 			sinir:   h.ayar.GirisEpostaPerSaat,
 			pencere: time.Hour,
+		}) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// SayfaGetSar, GET /giris ve GET /kayit'i IP basina dakikalik bir
+// sayacla sarar. ad, sayac anahtarindaki uc adidir ("giris" / "kayit").
+//
+// NEDEN POST SAYACINDAN AYRI ANAHTAR: GET ile POST ayni anahtari
+// paylassa formu acmak sifre deneme butcesini tuketirdi ve mesru
+// kullanici kendi akisini kilitlerdi. Ayrica 429'un anlami karisirdi.
+//
+// NEDEN AYNI SINIR DEGERI (GirisIPPerMin): GET ucuz bir uctur (sablon
+// uretimi; bcrypt yok, kullanici/jeton deposuna dokunulmaz), ama kimlik
+// dogrulamasiz ve /authorize'dan daha ucuz bir yuzeydir. Dakikada
+// login_ip_per_min kadar sayfa uretimi elle kullanimin cok uzerinde,
+// otomatik taramanin ise belirgin altinda; ayri bir yapilandirma
+// anahtari eklemeye deger bir ayrisma yok.
+func (h *HizLimit) SayfaGetSar(ad string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !h.izinVer(w, r, sayac{
+			anahtar: h.ipAnahtar(ad+"-get", r),
+			sinir:   h.ayar.GirisIPPerMin,
+			pencere: time.Minute,
 		}) {
 			return
 		}
@@ -244,6 +271,26 @@ func (h *HizLimit) ipAnahtar(ad string, r *http.Request) string {
 	return fmt.Sprintf("%s:%s:ip:%s", hizLimitOnEki, ad, istemciIP(r, h.ayar.GuvenilenProxy))
 }
 
+// epostaSayacAnahtari, hiz limiti sayacinin HMAC girdisini uretir.
+//
+// NEDEN KUCULTME: hesap kimligi Postgres'te HARF DUYARSIZDIR
+// (migrations/001_kullanici.sql: UNIQUE (lower(email)) ve ByEmail
+// "WHERE lower(email) = lower($1)"). Sayac anahtari ise
+// epostaNormalize'den (yalnizca TrimSpace, bkz. kullanici_depo.go)
+// turetiliyordu, yani "Kurban@x.com" AYNI hesap ama FARKLI anahtar
+// demekti: dagitik bir brute-force harf varyantlariyla sinirsiz deneme
+// yapabiliyordu ve sayacin tek varlik sebebi tam bu senaryoydu. Canli
+// olcum (sinir 2/saat): ayni yazim 401 401 429, uc harf varyanti ise
+// hepsi 401.
+//
+// SAKLANAN e-posta DEGISMEZ: kucultme yalnizca sayac anahtarina
+// uygulanir, kullanicinin yazdigi bicim goruntuleme icin korunur (bkz.
+// epostaNormalize notu). Sahte depo ayni kalibi zaten uyguluyor
+// (kullanici_depo_sahte.go sahteEpostaAnahtar).
+func epostaSayacAnahtari(eposta string) string {
+	return strings.ToLower(epostaNormalize(eposta))
+}
+
 // epostaAnahtar, e-postanin HMAC-SHA256 ozetinden anahtar uretir.
 // E-posta Redis'e DUZ METIN yazilmaz (bkz. HizLimit.epostaAnahtari).
 // Ozet 128 bite kisaltilir: cakisma olasiligi ihmal edilebilir, anahtar
@@ -281,7 +328,15 @@ func (h *HizLimit) epostaAnahtar(ad, eposta string) string {
 // RemoteAddr de kendi adresidir, yani bu bir gerileme degil.
 func istemciIP(r *http.Request, guvenilenProxy int) string {
 	if guvenilenProxy > 0 {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// TUM X-Forwarded-For SATIRLARI birlestirilir. Header.Get
+		// yalnizca ILK satiri okur; istemci iki ayri XFF satiri
+		// gonderdiginde (HTTP buna izin verir ve net/http ikisini de
+		// saklar) sagdan sayma SALDIRGANIN satirinda yapilirdi ve
+		// inceleyici bu yolla istemciIP'den "9.9.9.9" aldi. RFC 7230
+		// 3.2.2'ye gore ayni basligin coklu satiri virgulle
+		// birlestirilmis TEK bir listeye esdegerdir; guvenilen
+		// proxy'nin ekledigi deger boylece yine EN SAGDA kalir.
+		if xff := strings.Join(r.Header.Values("X-Forwarded-For"), ","); xff != "" {
 			parcalar := strings.Split(xff, ",")
 			if i := len(parcalar) - guvenilenProxy; i >= 0 {
 				aday := strings.TrimSpace(parcalar[i])

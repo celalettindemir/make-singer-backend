@@ -276,11 +276,15 @@ func muxKur(
 	// S256 PKCE zorunlu kilinir (bkz. pkce.go). op.Authorize'i kendimiz
 	// cagiriyoruz cunku kutuphanenin kendi router'i validator'u degil
 	// saglayicinin kendisini kullanir.
+	//
+	// AuthorizeSar: cerez baglamasi YALNIZCA burada, istegi BASLATAN
+	// tarayici icin kurulur (bkz. Sayfalar.AuthorizeSar). GET /giris ve
+	// GET /kayit artik baglama MINTLEMEZ.
 	zorlayici := &pkceZorlayici{Provider: saglayici}
-	mux.Handle(yolAuthorize, araci.Handler(http.HandlerFunc(
+	mux.Handle(yolAuthorize, araci.Handler(sayfalar.AuthorizeSar(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			op.Authorize(w, r, zorlayici)
-		})))
+		}))))
 
 	// /authorize/callback: cerez baglamasi dogrulanmadan kutuphaneye
 	// GECILMEZ (bkz. Sayfalar.Callback).
