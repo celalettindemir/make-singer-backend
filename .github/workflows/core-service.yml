@@ -30,7 +30,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.25"
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6
@@ -44,13 +44,30 @@ jobs:
     defaults:
       run:
         working-directory: ./core-service
+    # Redis is REQUIRED for the OP (kimlik) tests: every test that goes
+    # through muxKur -- the C1 account-takeover attack tests, all PKCE
+    # /authorize tests, the discovery tests and the rate-limit mux test --
+    # calls testRedis(t) and t.Skip()s without it. Without this service
+    # those ~29 tests silently SKIPped in CI, which is why the test suite
+    # never caught the live takeover. Tests look for localhost:6379 (DB 15)
+    # and still skip (never fail) when Redis is absent locally.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.25"
 
       - name: Download dependencies
         run: go mod download

@@ -24,6 +24,7 @@ import (
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/handler"
+	"github.com/makeasinger/api/internal/kimlik"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/service"
 	ws "github.com/makeasinger/api/internal/websocket"
@@ -67,6 +68,33 @@ func main() {
 	ctx := context.Background()
 	if err := redisClient.Ping(ctx).Err(); err != nil {
 		log.Printf("Warning: Redis not available: %v", err)
+	}
+
+	// Kendi OpenID Provider'imiz. Issuer bos ise hic baslamaz; API o
+	// zaman eski auth yolunda kalir (yerel gelistirme).
+	//
+	// Issuer DOLU ise baslatma hatasi FATALDIR. Eskiden yalnizca uyari
+	// loglaniyordu; o durumda /api/* legacy HMAC yoluna dusuyordu ve
+	// legacy dogrulama ne exp ne iss ne aud istedigi icin, varsayilan
+	// sirla (`change-me-in-production`) imzalanmis SURESIZ bir jeton
+	// kabul ediliyordu. Yani gecici bir Postgres kesintisi tum API'yi
+	// aciyordu. Her istege 401 donen ama /health'te sagliklı gorunen
+	// bir pod sessiz bir kesintidir; CrashLoopBackOff dogru ve gorunur
+	// sinyal, yeniden baslatma da gecici kesinti icin dogru kurtarma.
+	var kimlikSunucu *kimlik.Sunucu
+	if cfg.Auth.Issuer != "" {
+		var err error
+		kimlikSunucu, err = kimlik.Start(ctx, &cfg.Auth, redisClient, cfg.Server.Env)
+		if err != nil {
+			log.Fatalf("Kimlik saglayicisi baslatilamadi, servis baslatilmiyor: %v", err)
+		} else {
+			log.Printf("Kimlik saglayicisi %s uzerinde, issuer %s", cfg.Auth.Port, cfg.Auth.Issuer)
+			defer func() {
+				kapatCtx, iptal := context.WithTimeout(context.Background(), 10*time.Second)
+				defer iptal()
+				_ = kimlikSunucu.Kapat(kapatCtx)
+			}()
+		}
 	}
 
 	// Initialize Asynq client
@@ -135,20 +163,47 @@ func main() {
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
 
+	// Mod secimi YAPILANDIRMADAN yapilir, calisma zamani basarisindan
+	// degil: bkz. middleware.APIAuthModuSec. Issuer doluyken legacy ve
+	// gateway dallari secilemez.
+	authModu := middleware.APIAuthModuSec(cfg.Auth.Issuer, cfg.Gateway.Enabled)
+
 	// Initialize auth handler for ForwardAuth verification
 	var tokenVerifier auth.TokenVerifier
 	if jwksVerifier != nil {
 		tokenVerifier = jwksVerifier
 	}
-	authHandler := handler.NewAuthHandler(tokenVerifier, cfg.JWT.Secret)
+	legacySir := cfg.JWT.Secret
+	if authModu == middleware.ModOP {
+		// OP modunda /auth/verify legacy HMAC zincirini KOSMAMALI.
+		// Aksi halde bu uc, varsayilan sirla imzalanmis suresiz bir
+		// jetona 200 + X-User-Id/X-User-Email doner; yani Traefik
+		// ForwardAuth icin bir kimlik oracle'i olur.
+		tokenVerifier = nil
+		legacySir = ""
+	}
+	authHandler := handler.NewAuthHandler(tokenVerifier, legacySir)
 
 	// Initialize middleware (with fallback support)
 	var apiAuthMiddleware fiber.Handler
-	if cfg.Gateway.Enabled {
+	switch authModu {
+	case middleware.ModOP:
+		// Kendi OP'umuz: access token'lari onun anahtariyla dogrula.
+		// Anahtar surec icinden okunur, kendi JWKS ucumuza ag uzerinden
+		// gidilmez. Bu modda gateway veya legacy yola dusulmez.
+		if kimlikSunucu == nil {
+			// Ulasilamaz: Issuer doluyken Start hatasi yukarida fatal.
+			// Yine de nil dereference yerine acik bir hata verelim.
+			log.Fatalf("Tutarsiz durum: OP modu secildi ama kimlik sunucusu yok")
+		}
+		log.Println("Info: kimlik saglayicisi modu — RS256 access token dogrulanacak")
+		apiAuthMiddleware = middleware.NewOPAuthMiddleware(
+			cfg.Auth.Issuer, cfg.Auth.ClientID, kimlikSunucu.APIAcikAnahtar()).Authenticate()
+	case middleware.ModGateway:
 		// Behind Traefik: auth is handled by ForwardAuth, read X-User-* headers
 		log.Println("Info: Gateway mode enabled — using header-based auth")
 		apiAuthMiddleware = middleware.GatewayAuthMiddleware()
-	} else {
+	default:
 		// Direct mode: auth is handled by the backend itself
 		var authMiddleware *middleware.AuthMiddleware
 		if jwksVerifier != nil && cfg.JWT.Secret != "" {
@@ -173,8 +228,11 @@ func main() {
 	isDebug := strings.EqualFold(cfg.Server.LogLevel, "debug")
 	logFormat := "[${time}] ${status} - ${latency} ${method} ${path}\n"
 	if isDebug {
-		logFormat = "[${time}] ${status} - ${latency} ${method} ${path} ${queryParams} ${body} ${reqHeaders}\n"
-		log.Println("Debug logging enabled")
+		// ${reqHeaders} ve ${body} BILINCLI olarak yok: birincisi
+		// Authorization header'ini, ikincisi giris/kayit formlarinin duz
+		// metin sifresini loga kalici hale getirirdi.
+		logFormat = "[${time}] ${status} - ${latency} ${method} ${path} ${queryParams}\n"
+		log.Println("Debug logging enabled (istek header'lari ve govdesi loglanmaz)")
 	}
 	app.Use(logger.New(logger.Config{
 		Format: logFormat,
@@ -194,14 +252,30 @@ func main() {
 
 	// Health check
 	app.Get("/health", func(c *fiber.Ctx) error {
+		// GERCEK hazirlik: "kimlikSunucu != nil" (yani Start basariyla
+		// dondu mu) YETERLI DEGIL — dinleyici sonradan cokerse pod hala
+		// "sagliklı" gorunuyordu. Hazir(), dinleyicinin su an hizmet
+		// verdigini soyler ve nil alici icin de guvenlidir.
+		kimlikHazir := kimlikSunucu.Hazir()
+
+		// AUTH_ISSUER verildiyse OP olmadan servis islevsizdir: her
+		// /api/* istegi 401 doner. Boyle bir pod "ok" demeyi birakmali,
+		// yoksa yanlis saglik sinyali sessiz bir kesintiyi gizler.
+		durum := "ok"
+		if cfg.Auth.Issuer != "" && !kimlikHazir {
+			durum = "degraded"
+			c.Status(fiber.StatusServiceUnavailable)
+		}
+
 		return c.JSON(fiber.Map{
-			"status": "ok",
+			"status": durum,
 			"services": fiber.Map{
-				"groq":  groqClient.IsConfigured(),
-				"suno":  sunoClient.IsConfigured(),
-				"r2":    r2Client != nil,
-				"audio": audioClient.IsConfigured(),
-				"auth":  jwksVerifier != nil || cfg.JWT.Secret != "",
+				"groq":   groqClient.IsConfigured(),
+				"suno":   sunoClient.IsConfigured(),
+				"r2":     r2Client != nil,
+				"audio":  audioClient.IsConfigured(),
+				"auth":   kimlikHazir || jwksVerifier != nil,
+				"kimlik": kimlikHazir,
 			},
 		})
 	})

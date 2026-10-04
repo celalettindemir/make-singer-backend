@@ -54,3 +54,40 @@ audio:
 # API Gateway Configuration
 gateway:
   enabled: false # Set to true when running behind Traefik
+
+# Custom OpenID Provider Configuration
+# When auth.issuer is empty, the service falls back to legacy HMAC JWT verification (development only).
+# When auth.issuer is set but the provider fails to start, the service exits with a fatal error (fail-closed).
+auth:
+  issuer: "" # Set via AUTH_ISSUER env var (e.g., https://makesinger-auth.celalettindemir.dev)
+  port: "8001" # Second listener port for the OpenID Provider
+  client_id: "" # Set via AUTH_CLIENT_ID env var (e.g., makesinger-mobil). MUST NOT be empty if issuer is set.
+  db_url: "" # Set via AUTH_DB_URL env var. PostgreSQL DSN for user database.
+  # RSA private key in PEM format (secret, never in this file)
+  signing_key_pem: "" # Set via AUTH_SIGNING_KEY env var (secret from Kubernetes)
+  # 32-byte encryption key (secret, never in this file)
+  crypto_key: "" # Set via AUTH_CRYPTO_KEY env var (secret from Kubernetes)
+  # Whitespace-separated redirect URIs (Set via AUTH_REDIRECT_URIS env var)
+  redirect_uris: [] # Set via AUTH_REDIRECT_URIS env var
+  access_ttl: "15m" # Set via AUTH_ACCESS_TTL env var
+  refresh_ttl: "1440h" # Set via AUTH_REFRESH_TTL env var (default: 60 days)
+  # NOTE: access_ttl / refresh_ttl must be values time.ParseDuration
+  # understands ("15m", "1440h"). Viper does NOT fall back to the default
+  # for an unparsable value such as "15min" or "60d" — it silently yields
+  # 0s. kimlik.Start refuses to start on a non-positive TTL.
+  # Rate limits for the OP listener's /giris and /kayit endpoints (GET
+  # and POST). These run on a separate net/http listener, outside the
+  # Fiber middleware chain, so internal/middleware/ratelimit.go never
+  # sees them. GET pages are counted on SEPARATE keys from POST so that
+  # opening the form does not consume the password-attempt budget.
+  login_ip_per_min: 10 # Set via AUTH_LOGIN_IP_PER_MIN
+  login_email_per_hour: 60 # Set via AUTH_LOGIN_EMAIL_PER_HOUR
+  signup_ip_per_hour: 5 # Set via AUTH_SIGNUP_IP_PER_HOUR
+  # Number of TRUSTED reverse proxies in front of the OP listener.
+  # DEFAULT 0 = X-Forwarded-For is NEVER read, RemoteAddr is used. This is
+  # the fail-safe side: with no proxy in front, a value of 1 would trust a
+  # single-element forged X-Forwarded-For and an attacker could write a
+  # different IP on every request, bypassing the IP rate limit entirely.
+  # MUST be set EXPLICITLY to the real proxy count when deployed behind a
+  # reverse proxy such as Traefik (Traefik only => 1).
+  trusted_proxies: 0 # Set via AUTH_TRUSTED_PROXIES

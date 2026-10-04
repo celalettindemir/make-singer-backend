@@ -1,0 +1,266 @@
+package kimlik
+
+import (
+	"context"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// SahteTokenStore, testler icin bellek ici TokenStore. Rotasyon, yeniden
+// kullanim tespiti ve aile iptali mantigi PostgresTokenStore ile BIREBIR
+// ayni sirada ve ayni kosullarla isler; testler iki uygulamayi ayni
+// sozlesmeye gore olcer.
+type SahteTokenStore struct {
+	mu      sync.Mutex
+	access  map[string]*AccessKayit
+	refresh map[string]*RefreshKayit // anahtar: token_hash'in string hali
+}
+
+func NewSahteTokenStore() *SahteTokenStore {
+	return &SahteTokenStore{
+		access:  map[string]*AccessKayit{},
+		refresh: map[string]*RefreshKayit{},
+	}
+}
+
+func (s *SahteTokenStore) AccessKaydet(ctx context.Context, id, userID, clientID string, scopes []string, expiresAt time.Time) error {
+	// Redis tarafinda TTL <= 0 ise kayit hic yazilmaz; burada da ayni.
+	if time.Until(expiresAt) <= 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.access[id] = &AccessKayit{
+		ID:        id,
+		UserID:    userID,
+		ClientID:  clientID,
+		Scopes:    slices.Clone(scopes),
+		ExpiresAt: expiresAt,
+	}
+	return nil
+}
+
+func (s *SahteTokenStore) AccessOku(ctx context.Context, id string) (*AccessKayit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kayit, ok := s.access[id]
+	if !ok {
+		return nil, ErrJetonYok
+	}
+	if time.Now().UTC().After(kayit.ExpiresAt) {
+		return nil, ErrJetonYok
+	}
+	return accessKopya(kayit), nil
+}
+
+// AccessSil, Postgres uygulamasiyla ayni sekilde kaydi kaldirir; kayit
+// yoksa sessizce basarili sayilir.
+func (s *SahteTokenStore) AccessSil(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.access, id)
+	return nil
+}
+
+// RefreshOlustur yeni bir AILE baslatir: family_id yeni uretilir.
+func (s *SahteTokenStore) RefreshOlustur(ctx context.Context, k *RefreshKayit) (string, error) {
+	jeton, err := jetonUret()
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ekle(k, uuid.NewString(), jeton)
+	return jeton, nil
+}
+
+// ekle, s.mu kilitliyken cagrilir. Postgres'teki INSERT ile ayni alanlari
+// doldurur; jetonun kendisi degil ozeti saklanir.
+func (s *SahteTokenStore) ekle(k *RefreshKayit, familyID, jeton string) {
+	ozet := jetonOzet(jeton)
+	s.refresh[string(ozet)] = &RefreshKayit{
+		ID:        uuid.NewString(),
+		FamilyID:  familyID,
+		UserID:    k.UserID,
+		ClientID:  k.ClientID,
+		TokenHash: ozet,
+		Scopes:    slices.Clone(k.Scopes),
+		Audience:  slices.Clone(k.Audience),
+		AMR:       slices.Clone(k.AMR),
+		AuthTime:  k.AuthTime,
+		ExpiresAt: k.ExpiresAt,
+	}
+}
+
+// RefreshDondur, Postgres uygulamasiyla ayni sirayla karar verir:
+// kayit yok -> revoked -> used (aile iptali) -> suresi gecmis -> rotasyon.
+// Bellek ici oldugu icin tek kilit, Postgres'teki islem + FOR UPDATE
+// satir kilidinin karsiligidir.
+func (s *SahteTokenStore) RefreshDondur(ctx context.Context, sunulan string, yeni *RefreshKayit) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kayit, ok := s.refresh[string(jetonOzet(sunulan))]
+	if !ok {
+		return "", ErrJetonYok
+	}
+	// Sira onemli: iptal edilmis jeton zaten olu oldugu icin (aile bir
+	// kez iptal edildikten sonra) yeniden kullanim alarmi tekrar
+	// calmasin; yeniden kullanim kontrolu ondan sonra gelir.
+	if kayit.RevokedAt != nil {
+		return "", ErrJetonYok
+	}
+	if kayit.UsedAt != nil {
+		// Yeniden kullanim: ailenin tamamini oldur ve ayri bir hata don.
+		s.aileIptal(kayit.FamilyID)
+		return "", ErrJetonTekrar
+	}
+	// Sahiplik: cagiran katmanda bir hata olursa ayni aileye baska bir
+	// kullanicinin (veya baska istemcinin) kaydi eklenmesin. Ucuz savunma,
+	// uyusmazlikta jeton hic yokmus gibi davranilir.
+	if kayit.UserID != yeni.UserID || kayit.ClientID != yeni.ClientID {
+		return "", ErrJetonYok
+	}
+	if time.Now().UTC().After(kayit.ExpiresAt) {
+		return "", ErrJetonYok
+	}
+	jeton, err := jetonUret()
+	if err != nil {
+		return "", err
+	}
+	simdi := time.Now().UTC()
+	kayit.UsedAt = &simdi
+	// Yeni kayit AYNI family_id ile eklenir: zincirin izi korunur ki
+	// sonradan bir yeniden kullanim gorulurse tum zincir iptal edilebilsin.
+	s.ekle(yeni, kayit.FamilyID, jeton)
+	return jeton, nil
+}
+
+// RefreshOku, Postgres uygulamasiyla BIREBIR ayni sirayla karar verir:
+// kayit yok -> ErrJetonYok, revoked -> ErrJetonYok, used ->
+// ErrJetonTekrar (yeniden kullanim), suresi gecmis -> ErrJetonYok.
+// Iki uygulamanin burada ayrismasi daha once bir kusura yol acti; sira ve
+// hatalar aynen korunmali.
+func (s *SahteTokenStore) RefreshOku(ctx context.Context, sunulan string) (*RefreshKayit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kayit, ok := s.refresh[string(jetonOzet(sunulan))]
+	if !ok {
+		return nil, ErrJetonYok
+	}
+	if kayit.RevokedAt != nil {
+		return nil, ErrJetonYok
+	}
+	if kayit.UsedAt != nil {
+		return nil, ErrJetonTekrar
+	}
+	if time.Now().UTC().After(kayit.ExpiresAt) {
+		return nil, ErrJetonYok
+	}
+	return refreshKopya(kayit), nil
+}
+
+// RefreshAileID, Postgres uygulamasiyla ayni sozlesme: ham jetondan aile
+// kimligi, gecerlilik filtrelemesi olmadan.
+func (s *SahteTokenStore) RefreshAileID(ctx context.Context, sunulan string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kayit, ok := s.refresh[string(jetonOzet(sunulan))]
+	if !ok {
+		return "", ErrJetonYok
+	}
+	return kayit.FamilyID, nil
+}
+
+// RefreshIDileOku, Postgres uygulamasiyla ayni sozlesmeyi karsilar: ID ile
+// arar (jetonun kendisiyle degil) ve gecerlilik filtrelemesi yapmaz.
+// Sahte depo jetonu (hash'ini) anahtar olarak tuttugu icin ID ile aramak
+// dogrusal bir tarama gerektirir; testler icin bu yeterlidir.
+func (s *SahteTokenStore) RefreshIDileOku(ctx context.Context, id string) (*RefreshKayit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, kayit := range s.refresh {
+		if kayit.ID == id {
+			return refreshKopya(kayit), nil
+		}
+	}
+	return nil, ErrJetonYok
+}
+
+func (s *SahteTokenStore) AileIptal(ctx context.Context, familyID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.aileIptal(familyID)
+	return nil
+}
+
+// aileIptal, s.mu kilitliyken cagrilir. Postgres karsiligi:
+// UPDATE ... WHERE family_id = $1 AND revoked_at IS NULL
+func (s *SahteTokenStore) aileIptal(familyID string) {
+	simdi := time.Now().UTC()
+	for _, kayit := range s.refresh {
+		if kayit.FamilyID == familyID && kayit.RevokedAt == nil {
+			iptal := simdi
+			kayit.RevokedAt = &iptal
+		}
+	}
+}
+
+// KullaniciIptal, Postgres karsiligi:
+// UPDATE ... WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL
+func (s *SahteTokenStore) KullaniciIptal(ctx context.Context, userID, clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	simdi := time.Now().UTC()
+	for _, kayit := range s.refresh {
+		if kayit.UserID == userID && kayit.ClientID == clientID && kayit.RevokedAt == nil {
+			iptal := simdi
+			kayit.RevokedAt = &iptal
+		}
+	}
+	return nil
+}
+
+// TumKayitlar, testlerin depolanan bicimi denetlemesi icindir.
+func (s *SahteTokenStore) TumKayitlar() []*RefreshKayit {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hepsi := make([]*RefreshKayit, 0, len(s.refresh))
+	for _, kayit := range s.refresh {
+		hepsi = append(hepsi, refreshKopya(kayit))
+	}
+	return hepsi
+}
+
+// refreshKopya / accessKopya / zamanKopya: sahte depo cagirana DAHILI
+// isaretci vermez. PostgresTokenStore her okumada satiri yeniden
+// tarayarak dogal olarak taze bir yapi doner; cagiran donen kaydi
+// mutasyona ugratsa (orn. RevokedAt = nil) veritabani bozulmaz. Sahte
+// deponun ayni yalitimi elle saglamasi gerekir, yoksa testler gecerken
+// uretim sasar.
+func refreshKopya(k *RefreshKayit) *RefreshKayit {
+	kopya := *k
+	kopya.TokenHash = slices.Clone(k.TokenHash)
+	kopya.Scopes = slices.Clone(k.Scopes)
+	kopya.Audience = slices.Clone(k.Audience)
+	kopya.AMR = slices.Clone(k.AMR)
+	kopya.UsedAt = zamanKopya(k.UsedAt)
+	kopya.RevokedAt = zamanKopya(k.RevokedAt)
+	return &kopya
+}
+
+func accessKopya(k *AccessKayit) *AccessKayit {
+	kopya := *k
+	kopya.Scopes = slices.Clone(k.Scopes)
+	return &kopya
+}
+
+func zamanKopya(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	k := *t
+	return &k
+}

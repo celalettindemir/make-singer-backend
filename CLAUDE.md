@@ -6,10 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Monorepo with three services:
 
-- **core-service/** — Go API backend (Fiber v2 + Asynq workers)
+- **core-service/** — Go API backend (Fiber v2 + Asynq workers). Includes `internal/kimlik/` for custom OpenID Provider.
 - **audio-service/** — Python audio processing (FFmpeg-based mastering)
-- **zitadel-service/** — Zitadel identity provider (Docker Compose config)
 - **traefik/** — Reverse proxy configuration
+
+Notes: Zitadel service was replaced in Phase 1 with a custom OpenID Provider implemented directly in core-service.
 
 ## Build & Run Commands
 
@@ -37,7 +38,7 @@ Standard Go tooling (`go fmt`, `go vet`) is used for formatting and linting.
 
 ## Architecture
 
-Go 1.22 API service using the **Fiber v2** web framework. Redis is the only data store (no SQL database). Long-running work is processed asynchronously via **Asynq** (Redis-backed task queue).
+Go 1.25 API service using the **Fiber v2** web framework. Data storage uses **Redis** (job queue, session cache, rate limits) and **PostgreSQL** (user accounts, password hashes, refresh tokens maintained by the OpenID Provider). Long-running work is processed asynchronously via **Asynq** (Redis-backed task queue).
 
 ### Request flow
 
@@ -54,7 +55,7 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 - **worker/** — Asynq job processors: `render_worker.go` (Suno API + stem splitting), `master_worker.go` (audio mastering pipeline).
 - **client/** — HTTP clients for external services: Groq (AI lyrics), Suno (music generation), R2 (Cloudflare S3-compatible storage), audio-service (local mastering).
 - **model/** — Request/response structs and enums. All enum values defined in `enums.go`.
-- **middleware/** — `auth.go` (dual JWT: Zitadel JWKS or legacy HMAC), `ratelimit.go` (Redis sliding window per user).
+- **middleware/** — `auth.go` (dual JWT: Zitadel JWKS or legacy HMAC), `ratelimit.go` (Redis fixed window per user).
 - **websocket/** — Hub for broadcasting real-time job progress to clients via `GET /ws/jobs/:jobId`.
 - **config/** — Viper-based config loading from `config.yaml` with env var overrides.
 
@@ -65,7 +66,7 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 | Groq | AI lyrics generation | Mock data |
 | Suno | Music rendering + stem splitting | Simulated render steps |
 | Cloudflare R2 | File storage | Operates without it |
-| Zitadel | OIDC authentication | Legacy HMAC JWT |
+| Custom OpenID Provider (`internal/kimlik/`) | RS256 access token authentication, user sign-up/sign-in | Legacy HMAC JWT (development only) |
 | audio-service | Audio mastering | N/A (separate container) |
 
 ### Configuration
@@ -88,4 +89,18 @@ Standard error codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED` (401), `FORBIDDEN
 
 ### Auth
 
-Bearer token required on all `/api/*` routes. The middleware tries Zitadel JWKS verification first, then falls back to legacy HMAC if configured. Extracted claims (`userId`, `email`, `name`) are stored in Fiber context locals.
+Bearer token required on all `/api/*` routes. 
+
+**When `AUTH_ISSUER` is configured:** The middleware validates RS256 access tokens issued by the custom OpenID Provider (`internal/kimlik/`). The public key is read from the provider process (no network call to a separate JWKS endpoint), avoiding circular startup dependencies. Token validation enforces:
+- Algorithm: RS256 only (no HMAC or "none")
+- Issuer (`iss`): exact match to `AUTH_ISSUER`
+- Audience (`aud`): must contain the `AUTH_CLIENT_ID` value
+- Expiration: required (`exp` claim present and valid)
+- Subject (`sub`): non-empty
+- Token type: must be an access token (has `jti` claim, no `azp` or `at_hash`). ID tokens are rejected.
+
+If `AUTH_ISSUER` is set but the OpenID Provider fails to start, the service exits with a fatal error (fail-closed design).
+
+**When `AUTH_ISSUER` is empty:** Falls back to legacy HMAC JWT verification (development only). The gateway mode can also bypass token verification using `X-User-*` headers when `GATEWAY_ENABLED=true`.
+
+Extracted claims (`userId`, `email`, `name`) are stored in Fiber context locals.

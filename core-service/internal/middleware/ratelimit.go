@@ -2,12 +2,13 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/redis/go-redis/v9"
 	"github.com/makeasinger/api/pkg/response"
+	"github.com/redis/go-redis/v9"
 )
 
 type RateLimiter struct {
@@ -23,28 +24,67 @@ func (rl *RateLimiter) Limit(keyPrefix string, maxRequests int, window time.Dura
 	return func(c *fiber.Ctx) error {
 		userID := GetUserID(c)
 		if userID == "" {
-			return c.Next() // Skip rate limiting if no user (auth middleware should catch this)
+			// Auth middleware userId'yi garanti eder; bos gelmesi bir
+			// hatadir. Eskiden burada rate limit ATLANIYORDU (return
+			// c.Next()), bu da kota bypass'i demekti.
+			return response.Unauthorized(c, "Kimlik dogrulanamadi")
 		}
 
 		key := fmt.Sprintf("ratelimit:%s:%s", keyPrefix, userID)
 		ctx := context.Background()
 
-		// Increment counter
-		count, err := rl.redis.Incr(ctx, key).Result()
-		if err != nil {
-			// If Redis fails, allow the request but log the error
-			return c.Next()
+		// Sayaci artirma ve TTL atama TEK islemde (MULTI/EXEC) yapilir.
+		// Eskiden Incr basarili olup Expire hata verdiginde hata
+		// yutuluyordu: anahtar TTL'siz kaliyor, sonraki her istekte
+		// count > maxRequests oluyor ve TTL -1 dondugu icin
+		// Retry-After: -1 ile kullanici KALICI kilitleniyordu.
+		// SET key 0 EX window NX + INCR sirasi, anahtari yalnizca yokken
+		// olusturur ve TTL'i olusturma aninda kenetler.
+		boru := rl.redis.TxPipeline()
+		boru.SetArgs(ctx, key, 0, redis.SetArgs{Mode: "NX", TTL: window})
+		artir := boru.Incr(ctx, key)
+		// redis.Nil = SET NX uygulanmadi (anahtar zaten vardi); bu
+		// normal akistir, hata degil.
+		if _, err := boru.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+			// Fail-closed: sayaci artiramadiysak kotanin asilip
+			// asilmadigini BILEMEYIZ. Eskiden istek serbest gecirilirdi;
+			// bu, Redis'i dusurebilen birine sinirsiz kota veriyordu.
+			// Hata metni loglanmaz (baglanti dizgesi sir tasiyabilir).
+			c.Set("Retry-After", "5")
+			return response.Error(c, fiber.StatusServiceUnavailable,
+				response.CodeServiceError, "Rate limit denetlenemedi", nil)
 		}
-
-		// Set expiration on first request
-		if count == 1 {
-			rl.redis.Expire(ctx, key, window)
+		count, err := artir.Result()
+		if err != nil {
+			c.Set("Retry-After", "5")
+			return response.Error(c, fiber.StatusServiceUnavailable,
+				response.CodeServiceError, "Rate limit denetlenemedi", nil)
 		}
 
 		if count > int64(maxRequests) {
-			// Get TTL for retry-after header
-			ttl, _ := rl.redis.TTL(ctx, key).Result()
-			c.Set("Retry-After", fmt.Sprintf("%d", int(ttl.Seconds())))
+			// Retry-After en az 1 saniye: TTL okunamazsa veya anahtar
+			// bir sekilde TTL'siz kaldiysa (-1) negatif/sifir deger
+			// donmemeli.
+			bekle := window
+			ttl, ttlErr := rl.redis.TTL(ctx, key).Result()
+			switch {
+			case ttlErr == nil && ttl > 0:
+				bekle = ttl
+			case ttlErr == nil && ttl < 0:
+				// MIRAS ANAHTAR IYILESTIRMESI: TTL -1 demek anahtarin
+				// suresi yok. Yeni kod boyle bir anahtar URETEMEZ
+				// (MULTI/EXEC atomik), ama eski kodun uretimde biraktigi
+				// anahtarlar olabilir: SET NX uygulanmadigi icin TTL -1
+				// kalir, sayac sonsuza buyur ve kullanici KALICI kilitli
+				// kalir — tek cikis manuel DEL. Burada pencereyi geri
+				// veriyoruz ki anahtar kendiliginden sifirlansin.
+				rl.redis.Expire(ctx, key, window)
+			}
+			saniye := int(bekle.Seconds())
+			if saniye < 1 {
+				saniye = 1
+			}
+			c.Set("Retry-After", fmt.Sprintf("%d", saniye))
 			return response.RateLimited(c)
 		}
 

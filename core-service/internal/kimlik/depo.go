@@ -1,0 +1,568 @@
+package kimlik
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	jose "github.com/go-jose/go-jose/v4"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
+	"github.com/zitadel/oidc/v3/pkg/oidc"
+	"github.com/zitadel/oidc/v3/pkg/op"
+
+	"github.com/makeasinger/api/internal/config"
+)
+
+// Depo, op.Storage arayuzunun tamamini karsilar. Kendisi hicbir depolama
+// mantigi tasimaz; UserStore, TokenStore, IstekDepo ve Anahtar'a delege
+// eder. Bu dosyanin isi mekaniktir: kutuphanenin bekledigi imzalari bizim
+// Turkce depolarimiza baglamak.
+type Depo struct {
+	cfg       *config.AuthConfig
+	kullanici UserStore
+	jetonlar  TokenStore
+	istekler  *IstekDepo
+	anahtar   *Anahtar
+	istemci   *MobilIstemci
+
+	havuz *pgxpool.Pool // Health icin; nil olabilir
+	rdb   *redis.Client // Health icin; nil olabilir
+}
+
+// NewDepo, testlerin ve uretimin ortak kurulum noktasidir. Postgres/Redis
+// baglantilarina Health icin ihtiyac varsa SaglikBagla ile sonradan
+// eklenir; boylece testler canli baglanti olmadan Depo kurabilir.
+func NewDepo(cfg *config.AuthConfig, kullanici UserStore, jetonlar TokenStore, istekler *IstekDepo, anahtar *Anahtar) *Depo {
+	return &Depo{
+		cfg:       cfg,
+		kullanici: kullanici,
+		jetonlar:  jetonlar,
+		istekler:  istekler,
+		anahtar:   anahtar,
+		istemci:   NewMobilIstemci(cfg),
+	}
+}
+
+// SaglikBagla, Health'in kullanacagi Postgres havuzunu ve Redis
+// istemcisini baglar. cagrilmazsa Health fail-closed davranir ve her
+// zaman hata doner (bkz. Health): baglanti yoksa saglikli sayilmak
+// yerine acikca basarisiz olmak tercih edilir.
+func (d *Depo) SaglikBagla(havuz *pgxpool.Pool, rdb *redis.Client) {
+	d.havuz = havuz
+	d.rdb = rdb
+}
+
+// Derleme zamaninda Depo'nun op.Storage'in TAMAMINI karsiladigini
+// dogrula. Bir metot eksik veya imzasi yanlissa derleme burada kirilir.
+var _ op.Storage = (*Depo)(nil)
+
+// ---- AuthStorage ----
+
+// CreateAuthRequest, gelen authorization request'i IstekDepo'ya devreder.
+// Ucuncu parametre (userID) genelde bostur: kullanici bu asamada henuz
+// giris yapmamistir; TamamlandiIsaretle giris tamamlaninca doldurur.
+func (d *Depo) CreateAuthRequest(ctx context.Context, authReq *oidc.AuthRequest, userID string) (op.AuthRequest, error) {
+	istek, err := d.istekler.Olustur(ctx, authReq, userID)
+	if err != nil {
+		return nil, err
+	}
+	return istek, nil
+}
+
+func (d *Depo) AuthRequestByID(ctx context.Context, id string) (op.AuthRequest, error) {
+	return d.istekler.IDileOku(ctx, id)
+}
+
+func (d *Depo) AuthRequestByCode(ctx context.Context, code string) (op.AuthRequest, error) {
+	return d.istekler.KodlaOku(ctx, code)
+}
+
+func (d *Depo) SaveAuthCode(ctx context.Context, id string, code string) error {
+	return d.istekler.KodKaydet(ctx, id, code)
+}
+
+func (d *Depo) DeleteAuthRequest(ctx context.Context, id string) error {
+	return d.istekler.Sil(ctx, id)
+}
+
+// clientIDGetter, hem AuthIstek hem refreshIstek'in ortak paydasidir:
+// CreateAccessToken/CreateAccessAndRefreshTokens'a gelen TokenRequest'in
+// somut turunu bilmeden client ID'sini cikarmak icin kullanilir.
+type clientIDGetter interface {
+	GetClientID() string
+}
+
+// amrGetter / authTimeGetter: AuthIstek ve refreshIstek bu bilgiyi tasir,
+// ama op.TokenRequest arayuzu bunlari zorunlu kilmaz (ornegin gelecekte
+// baska bir TokenRequest turu eklenirse bu bilgiler olmayabilir).
+type amrGetter interface{ GetAMR() []string }
+type authTimeGetter interface{ GetAuthTime() time.Time }
+
+// CreateAccessToken, offline_access istenmeyen authorization code
+// akisinda (ve implicit/JWT profile gibi bizim desteklemedigimiz
+// akislarda) cagrilir. Access kaydi TokenStore'a yazilir; JWT access
+// token bu ID'yi jti olarak tasir.
+func (d *Depo) CreateAccessToken(ctx context.Context, request op.TokenRequest) (string, time.Time, error) {
+	getter, uygun := request.(clientIDGetter)
+	if !uygun {
+		return "", time.Time{}, fmt.Errorf("token istegi turu desteklenmiyor: %T", request)
+	}
+	id := uuid.NewString()
+	expiresAt := time.Now().UTC().Add(d.cfg.AccessTTL)
+	if err := d.jetonlar.AccessKaydet(ctx, id, request.GetSubject(), getter.GetClientID(), request.GetScopes(), expiresAt); err != nil {
+		return "", time.Time{}, err
+	}
+	return id, expiresAt, nil
+}
+
+// CreateAccessAndRefreshTokens, hem authorization code akisinda
+// (offline_access istendiginde, currentRefreshToken bos) hem refresh_token
+// akisinda (currentRefreshToken dolu) cagrilir. Rotasyon TokenStore'a
+// devredilir: currentRefreshToken bos ise yeni bir aile baslar, doluysa
+// RefreshDondur mevcut aileyi surdurur.
+func (d *Depo) CreateAccessAndRefreshTokens(ctx context.Context, request op.TokenRequest, currentRefreshToken string) (accessTokenID string, newRefreshToken string, expiration time.Time, err error) {
+	getter, uygun := request.(clientIDGetter)
+	if !uygun {
+		return "", "", time.Time{}, fmt.Errorf("token istegi turu desteklenmiyor: %T", request)
+	}
+	clientID := getter.GetClientID()
+	userID := request.GetSubject()
+	scopes := request.GetScopes()
+	audience := request.GetAudience()
+
+	var amr []string
+	if g, uygun := request.(amrGetter); uygun {
+		amr = g.GetAMR()
+	}
+	var authTime time.Time
+	if g, uygun := request.(authTimeGetter); uygun {
+		authTime = g.GetAuthTime()
+	}
+
+	yeni := &RefreshKayit{
+		UserID:    userID,
+		ClientID:  clientID,
+		Scopes:    scopes,
+		Audience:  audience,
+		AMR:       amr,
+		AuthTime:  authTime,
+		ExpiresAt: time.Now().UTC().Add(d.cfg.RefreshTTL),
+	}
+
+	// Rotasyon ONCE yapilir, access kaydi SONRA yazilir. Sira tersine
+	// cevrilirse (once access, sonra rotasyon) ve rotasyon basarisiz
+	// olursa, TokenStore'da sahipsiz bir access kaydi 15 dakika (AccessTTL)
+	// boyunca yasar. Bu sirayla, rotasyon basarisiz olursa access kaydi
+	// hic yazilmaz.
+	var refreshToken string
+	if currentRefreshToken == "" {
+		// Authorization code akisi: sunulan jeton yok, yeni bir aile baslar.
+		refreshToken, err = d.jetonlar.RefreshOlustur(ctx, yeni)
+	} else {
+		refreshToken, err = d.jetonlar.RefreshDondur(ctx, currentRefreshToken, yeni)
+		if errors.Is(err, ErrJetonTekrar) || errors.Is(err, ErrJetonYok) {
+			// op.ErrInvalidRefreshToken duz bir errors.New'dir, *oidc.Error
+			// DEGILDIR; bu bacakta donerse kutuphane onu generic bir hata
+			// sanip istemciye 500 server_error dondurur. oidc.ErrInvalidGrant()
+			// dogru OAuth hata koduna (invalid_grant, 400) cevrilir.
+			err = oidc.ErrInvalidGrant()
+		}
+	}
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+
+	accessID := uuid.NewString()
+	accessExpiresAt := time.Now().UTC().Add(d.cfg.AccessTTL)
+	if err := d.jetonlar.AccessKaydet(ctx, accessID, userID, clientID, scopes, accessExpiresAt); err != nil {
+		return "", "", time.Time{}, err
+	}
+	return accessID, refreshToken, accessExpiresAt, nil
+}
+
+// refreshIstek, op.RefreshTokenRequest arayuzunu karsilayan, RefreshKayit
+// uzerine ince bir sarmalayicidir. SetCurrentScopes, kutuphanenin refresh
+// istegindeki scope kisitlamasini (istenen scope orijinalin alt kumesiyse)
+// uygulayabilmesi icin yazilabilir olmak zorunda.
+type refreshIstek struct {
+	userID   string
+	clientID string
+	scopes   []string
+	audience []string
+	amr      []string
+	authTime time.Time
+}
+
+var _ op.RefreshTokenRequest = (*refreshIstek)(nil)
+
+func (r *refreshIstek) GetAMR() []string                 { return r.amr }
+func (r *refreshIstek) GetAudience() []string            { return r.audience }
+func (r *refreshIstek) GetAuthTime() time.Time           { return r.authTime }
+func (r *refreshIstek) GetClientID() string              { return r.clientID }
+func (r *refreshIstek) GetScopes() []string              { return r.scopes }
+func (r *refreshIstek) GetSubject() string               { return r.userID }
+func (r *refreshIstek) SetCurrentScopes(scopes []string) { r.scopes = scopes }
+
+// TokenRequestByRefreshToken, sunulan refresh jetonunu dogrular ve okur
+// (RefreshOku); rotasyon burada YAPILMAZ, onu CreateAccessAndRefreshTokens
+// yapar.
+//
+// YENIDEN KULLANIM TESPITI URETIMDE BURADA OLUR. Kutuphane refresh
+// akisinda ONCE ValidateRefreshTokenRequest -> ... -> bu metodu cagirir ve
+// hata donerse akisi ABORT eder; CreateAccessAndRefreshTokens'a (dolayisiyla
+// RefreshDondur'a) HIC gitmez (bkz. op.RefreshTokenExchange,
+// pkg/op/token_refresh.go). Bu yuzden kullanilmis bir jeton sunuldugunda
+// aileyi BURADA iptal etmek zorundayiz: aksi halde hirsiz yalnizca 400
+// alir, ama ailenin geri kalani (mesru istemcinin elindeki guncel jeton
+// dahil) gecerli kalir ve rotasyon+tespit mimarisi anlamsizlasir.
+func (d *Depo) TokenRequestByRefreshToken(ctx context.Context, refreshToken string) (op.RefreshTokenRequest, error) {
+	kayit, err := d.jetonlar.RefreshOku(ctx, refreshToken)
+	if errors.Is(err, ErrJetonTekrar) {
+		if iptalHata := d.aileIptalEt(ctx, refreshToken); iptalHata != nil {
+			// Altyapi hatasi (orn. Postgres kesintisi) op.ErrInvalidRefreshToken
+			// ile MASKELENMEZ: "iptal edemedim" sessizce yutulursa hirsizlik
+			// cezasiz kalir ve ariza gorunmez olur. Erisim her halde reddedilir,
+			// cunku hata donmek akisi zaten abort eder.
+			return nil, iptalHata
+		}
+		// Istemciye donen hata, "bilinmeyen jeton" durumuyla AYNI: saldirgan
+		// jetonun bilinmiyor mu kullanilmis mi oldugunu cevaptan ayirt
+		// edememeli.
+		return nil, op.ErrInvalidRefreshToken
+	}
+	if err != nil {
+		if errors.Is(err, ErrJetonYok) {
+			return nil, op.ErrInvalidRefreshToken
+		}
+		return nil, err
+	}
+	return &refreshIstek{
+		userID:   kayit.UserID,
+		clientID: kayit.ClientID,
+		scopes:   kayit.Scopes,
+		audience: kayit.Audience,
+		amr:      kayit.AMR,
+		authTime: kayit.AuthTime,
+	}, nil
+}
+
+// aileIptalEt, yeniden kullanimi tespit edilen jetonun ailesini toptan
+// iptal eder. Hata donerse bu bir ALTYAPI hatasidir ve istemciye
+// oidc.ErrServerError olarak gider; jetonun gecersizligi degismediginden
+// cagiran erisimi her halde reddeder.
+func (d *Depo) aileIptalEt(ctx context.Context, refreshToken string) error {
+	familyID, err := d.jetonlar.RefreshAileID(ctx, refreshToken)
+	if err != nil {
+		// ErrJetonYok dahil her hata burada altyapi/tutarsizlik hatasidir:
+		// kaydi bir an once RefreshOku ile GORDUK (kayitlar silinmez),
+		// dolayisiyla simdi bulunamamasi normal bir durum degildir ve
+		// "gecersiz jeton" diye yutulamaz.
+		return oidc.ErrServerError().WithParent(fmt.Errorf("yeniden kullanim: aile kimligi bulunamadi: %w", err))
+	}
+	if err := d.jetonlar.AileIptal(ctx, familyID); err != nil {
+		return oidc.ErrServerError().WithParent(fmt.Errorf("yeniden kullanim: aile iptal edilemedi: %w", err))
+	}
+	// Log'a jetonun kendisi veya ozeti YAZILMAZ; yalnizca olay ve aile
+	// kimligi (sunucu tarafinda uretilmis bir kimlik, sir degil).
+	log.Printf("refresh yeniden kullanimi tespit edildi, aile iptal edildi: family_id=%s", familyID)
+	return nil
+}
+
+// TerminateSession, cikis akisinda kullanicinin o istemcideki tum refresh
+// jetonlarini iptal eder. JWT access token'lar dogal sureleriyle biter.
+func (d *Depo) TerminateSession(ctx context.Context, userID string, clientID string) error {
+	// M2: bos userID/clientID icin koruma YOKTU. Parametresiz bir
+	// GET /end_session, Postgres'e bos dizgeyi uuid olarak gonderip
+	// 500 + "invalid input syntax for type uuid" (SQLSTATE 22P02)
+	// uretiyor ve HER istekte bir ERROR log satiri basiyordu: log
+	// kirliligi ve kucuk bir amplifikasyon yuzeyi. Bos kimlikle iptal
+	// edilecek hicbir jeton zaten YOKTUR, yani erken donmek davranisi
+	// degistirmez — sadece gereksiz sorguyu ve hatayi kaldirir.
+	if userID == "" || clientID == "" {
+		return nil
+	}
+	return d.jetonlar.KullaniciIptal(ctx, userID, clientID)
+}
+
+// revokeRefresh, tokenOrTokenID'nin bir refresh token oldugunu varsayip
+// iptalini dener. bulundu=false ise deger bu turde degildi (baska bir tur
+// denenmeli); bulundu=true ise islem tamamlanmis demektir (hata nil de
+// olabilir, o zaman basarili iptal edilmis demektir).
+//
+// ONEMLI: kutuphane RevokeToken'i cagirmadan ONCE GetRefreshTokenInfo'yu
+// cagirir ve onun dondurdugu tokenID'yi (JETONUN KENDISINI DEGIL)
+// RevokeToken'a gecirir (bkz. zitadel/oidc pkg/op/token_revocation.go
+// ve server_legacy.go: "token = tokenID; subject = userID"). Bu yuzden
+// ONCE ID ile ariyoruz (RefreshIDileOku); ham jetonla arama (RefreshOku)
+// yalnizca ID ile bulunamadiginda denenen bir fallback'tir (ornegin
+// dogrudan bu depoyu cagiran baska bir yol icin).
+func (d *Depo) revokeRefresh(ctx context.Context, tokenOrTokenID, clientID string) (bulundu bool, hata *oidc.Error) {
+	kayit, err := d.jetonlar.RefreshIDileOku(ctx, tokenOrTokenID)
+	if err != nil && errors.Is(err, ErrJetonYok) {
+		kayit, err = d.jetonlar.RefreshOku(ctx, tokenOrTokenID)
+	}
+	if err != nil {
+		// ErrJetonTekrar (kullanilmis jeton) burada ErrJetonYok ile ayni
+		// kefeye konur: /revoke akisinda kutuphane ZATEN once
+		// GetRefreshTokenInfo'nun dondurdugu ID ile gelir ve o yol
+		// RefreshIDileOku ile kaydi gecerlilik filtresi olmadan bulup
+		// aileyi iptal eder. Bu ham-jeton bacagi yalnizca bir fallback'tir;
+		// kullanilmis bir jetonun iptal istegi RFC 7009'a gore 200 ile
+		// yanitlanabilir ve bu, duzeltme oncesi davranisin aynisidir.
+		if errors.Is(err, ErrJetonYok) || errors.Is(err, ErrJetonTekrar) {
+			return false, nil
+		}
+		// Gercek bir depolama hatasi (orn. Postgres kesintisi):
+		// ErrJetonYok ile karistirilirsa DB olu iken /revoke sessizce 200
+		// doner ve sorun gorunmez olur.
+		return true, oidc.ErrServerError().WithParent(err)
+	}
+	if kayit.ClientID != clientID {
+		return true, oidc.ErrInvalidClient().WithDescription("jeton bu istemci icin verilmemis")
+	}
+	if err := d.jetonlar.AileIptal(ctx, kayit.FamilyID); err != nil {
+		return true, oidc.ErrServerError().WithParent(err)
+	}
+	return true, nil
+}
+
+// revokeAccess, tokenOrTokenID'nin bir access tokenID oldugunu varsayip
+// TokenStore kaydini siler. Semantigi revokeRefresh ile ayni: bulundu
+// false ise baska bir tur denenmeli.
+func (d *Depo) revokeAccess(ctx context.Context, tokenOrTokenID, clientID string) (bulundu bool, hata *oidc.Error) {
+	kayit, err := d.jetonlar.AccessOku(ctx, tokenOrTokenID)
+	if err != nil {
+		if errors.Is(err, ErrJetonYok) {
+			return false, nil
+		}
+		return true, oidc.ErrServerError().WithParent(err)
+	}
+	if kayit.ClientID != clientID {
+		return true, oidc.ErrInvalidClient().WithDescription("jeton bu istemci icin verilmemis")
+	}
+	if err := d.jetonlar.AccessSil(ctx, tokenOrTokenID); err != nil {
+		return true, oidc.ErrServerError().WithParent(err)
+	}
+	return true, nil
+}
+
+// RevokeToken, RFC 7009 /revoke uc noktasindan cagrilir. Refresh token
+// icin tum aile iptal edilir (tek jetonu degil): aksi halde ayni aileden
+// baska bir jeton hala gecerli kalir. Access token icin sadece TokenStore
+// kaydi silinir; JWT'nin kendisi imza gecerliyse gecerliligini korur,
+// ama introspection/userinfo artik onu bulamaz.
+//
+// userID parametresi kutuphane sozlesmesi geregi YALNIZCA access token
+// iptalinde doludur (refresh icin bos gelir); bu ipucu, hangi turu once
+// deneyecegimizi secip gereksiz bir depolama sorgusundan kacinmamizi
+// saglar.
+func (d *Depo) RevokeToken(ctx context.Context, tokenOrTokenID string, userID string, clientID string) *oidc.Error {
+	if userID != "" {
+		if bulundu, hata := d.revokeAccess(ctx, tokenOrTokenID, clientID); bulundu {
+			return hata
+		}
+		if bulundu, hata := d.revokeRefresh(ctx, tokenOrTokenID, clientID); bulundu {
+			return hata
+		}
+		// Ne access ne refresh: RFC 7009 idempotent iptal geregi basarili
+		// sayilir.
+		return nil
+	}
+	if bulundu, hata := d.revokeRefresh(ctx, tokenOrTokenID, clientID); bulundu {
+		return hata
+	}
+	if bulundu, hata := d.revokeAccess(ctx, tokenOrTokenID, clientID); bulundu {
+		return hata
+	}
+	return nil
+}
+
+// GetRefreshTokenInfo, sunulan degerin gercekten bir refresh token olup
+// olmadigini kontrol eder; degilse (veya tuketilmis/iptal edilmisse ya da
+// baska bir istemciye aitse) op.ErrInvalidRefreshToken donmek ZORUNLUDUR
+// (kutuphane sozlesmesi). Gercek bir depolama hatasi (orn. Postgres
+// kesintisi) BUNUNLA KARISTIRILMAZ: kutuphane yalnizca ErrInvalidRefreshToken
+// gormezse 500 server_error'a duser, bu ayrimi yutmak DB olu iken
+// revoke/refresh akislarinin sessizce "gecersiz jeton" gibi gorunmesine
+// (ve gercek arizanin gizlenmesine) yol acar.
+func (d *Depo) GetRefreshTokenInfo(ctx context.Context, clientID string, token string) (userID string, tokenID string, err error) {
+	kayit, err := d.jetonlar.RefreshOku(ctx, token)
+	if err != nil {
+		if errors.Is(err, ErrJetonTekrar) {
+			// M7: yeniden kullanim BURADA da aileyi oldurur. Mimarinin
+			// tamami "yeniden kullanim => aileyi iptal et" ilkesine
+			// dayaniyor; bu yolda sessizce kaybolan bir tespit kanali
+			// vardi (somurulebilir degildi, ama kanal kaybi gercekti).
+			//
+			// Hata YOLU BILINCLI OLARAK DEGISMEZ: iptal basarisiz olsa
+			// bile op.ErrInvalidRefreshToken donuyoruz. Gerekce: bu
+			// fonksiyon /revoke akisinda da cagrilir ve RFC 7009 §2.2
+			// gecersiz jeton icin 200 ister. Iptal hatasini yukari
+			// tasimak /revoke'u 500'e cevirir ve "kullanilmis jeton" ile
+			// "bilinmeyen jeton" durumlarini yanitlardan ayirt
+			// edilebilir kilardi (bilgi sizmasi). Ariza bunun yerine
+			// aileIptalEt'in kendi log'una ve asagidaki satira dusuyor;
+			// log'a jeton veya ozeti YAZILMAZ.
+			if iptalHata := d.aileIptalEt(ctx, token); iptalHata != nil {
+				log.Printf("refresh yeniden kullanimi: aile iptal edilemedi (erisim yine reddedildi): %v", iptalHata)
+			}
+			return "", "", op.ErrInvalidRefreshToken
+		}
+		if errors.Is(err, ErrJetonYok) {
+			return "", "", op.ErrInvalidRefreshToken
+		}
+		return "", "", fmt.Errorf("refresh jetonu okunamadi: %w", err)
+	}
+	if kayit.ClientID != clientID {
+		return "", "", op.ErrInvalidRefreshToken
+	}
+	return kayit.UserID, kayit.ID, nil
+}
+
+func (d *Depo) SigningKey(ctx context.Context) (op.SigningKey, error) {
+	return d.anahtar, nil
+}
+
+func (d *Depo) SignatureAlgorithms(ctx context.Context) ([]jose.SignatureAlgorithm, error) {
+	return []jose.SignatureAlgorithm{d.anahtar.SignatureAlgorithm()}, nil
+}
+
+// KeySet, JWKS yayini icin acik anahtari doner. d.anahtar dogrudan
+// donulemez: *Anahtar op.Key'i KASITLI OLARAK karsilamaz (Algorithm/Use
+// metotlari yok), boylece ozel anahtarin yanlislikla JWKS'e sizmasi
+// derleme zamaninda engellenir.
+func (d *Depo) KeySet(ctx context.Context) ([]op.Key, error) {
+	return []op.Key{d.anahtar.AcikAnahtar()}, nil
+}
+
+// ---- OPStorage ----
+
+// GetClientByClientID, tek yapilandirilmis istemcimiz disinda HER SEYI
+// reddeder: makesinger'in ikinci bir istemcisi yok, olsa da burada
+// tanimlanmadan kabul edilmemeli.
+func (d *Depo) GetClientByClientID(ctx context.Context, clientID string) (op.Client, error) {
+	if clientID != d.cfg.ClientID {
+		return nil, fmt.Errorf("istemci bulunamadi: %s", clientID)
+	}
+	return d.istemci, nil
+}
+
+// AuthorizeClientIDSecret HER ZAMAN hata doner: tek istemcimiz public
+// (native, AuthMethodNone) oldugu icin secret tasimaz. Basarili donerse
+// bos secret ile istemci taklit edilebilir.
+func (d *Depo) AuthorizeClientIDSecret(ctx context.Context, clientID, clientSecret string) error {
+	return fmt.Errorf("istemci %q secret tasimaz (public client)", clientID)
+}
+
+// SetUserinfoFromScopes kutuphane tarafindan deprecated ilan edildi;
+// bos implementasyon beklenen davranis (SetUserinfoFromRequest onun
+// yerini alir, ama op.Storage'in zorunlu kildigi minimum arayuz bu).
+func (d *Depo) SetUserinfoFromScopes(ctx context.Context, userinfo *oidc.UserInfo, userID, clientID string, scopes []string) error {
+	return nil
+}
+
+// SetUserinfoFromToken, /userinfo uc noktasi tarafindan cagrilir: access
+// token kaydini bulur ve claim'leri scope'a gore doldurur.
+func (d *Depo) SetUserinfoFromToken(ctx context.Context, userinfo *oidc.UserInfo, tokenID, subject, origin string) error {
+	kayit, err := d.jetonlar.AccessOku(ctx, tokenID)
+	if err != nil {
+		return err
+	}
+	// subject, kutuphanenin id_token/erisim baglaminda bagimsiz olarak
+	// bildigi kullanici; kayit.UserID ile uyusmuyorsa jeton BASKA bir
+	// kullaniciya ait demektir (orn. tokenID cakismasi ya da cagiran
+	// katmanda bir hata) -- sessizce baska birinin bilgisini donmemeliyiz.
+	if kayit.UserID != subject {
+		return fmt.Errorf("jeton bu kullanici icin verilmemis")
+	}
+	return d.userinfoDoldur(ctx, userinfo, kayit.UserID, kayit.Scopes)
+}
+
+// SetIntrospectionFromToken, /introspect uc noktasi tarafindan cagrilir.
+func (d *Depo) SetIntrospectionFromToken(ctx context.Context, introspection *oidc.IntrospectionResponse, tokenID, subject, clientID string) error {
+	kayit, err := d.jetonlar.AccessOku(ctx, tokenID)
+	if err != nil {
+		return err
+	}
+	if kayit.ClientID != clientID {
+		return fmt.Errorf("jeton bu istemci icin verilmemis")
+	}
+	introspection.Scope = kayit.Scopes
+	introspection.ClientID = kayit.ClientID
+
+	userinfo := new(oidc.UserInfo)
+	if err := d.userinfoDoldur(ctx, userinfo, kayit.UserID, kayit.Scopes); err != nil {
+		return err
+	}
+	introspection.SetUserInfo(userinfo)
+	return nil
+}
+
+// userinfoDoldur, kullanici bilgisini scope'a gore claim'lere yazar.
+// profile scope'u ad, email scope'u eposta ve dogrulanma durumunu acar;
+// baska scope tanimli degil (makesinger'in tek kimlik dogrulama yontemi
+// eposta+sifre, ek profil verisi yok).
+func (d *Depo) userinfoDoldur(ctx context.Context, userinfo *oidc.UserInfo, userID string, scopes []string) error {
+	kullanici, err := d.kullanici.ByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	userinfo.Subject = kullanici.ID
+	for _, scope := range scopes {
+		switch scope {
+		case oidc.ScopeProfile:
+			userinfo.Name = kullanici.Name
+		case oidc.ScopeEmail:
+			userinfo.Email = kullanici.Email
+			userinfo.EmailVerified = oidc.Bool(kullanici.EmailVerified)
+		}
+	}
+	return nil
+}
+
+// GetPrivateClaimsFromScopes, JWT access token'a ozel claim eklemek
+// icindir. Makesinger'in ozel scope'u yok; standart scope'lar id_token ve
+// userinfo uzerinden zaten tasiniyor.
+func (d *Depo) GetPrivateClaimsFromScopes(ctx context.Context, userID, clientID string, scopes []string) (map[string]any, error) {
+	return nil, nil
+}
+
+// GetKeyByIDAndClientID, JWT profile / private_key_jwt istemci
+// dogrulamasi icindir. Desteklenmiyor: tek istemcimiz public ve secret'siz.
+func (d *Depo) GetKeyByIDAndClientID(ctx context.Context, keyID, clientID string) (*jose.JSONWebKey, error) {
+	return nil, fmt.Errorf("private_key_jwt destegi yok")
+}
+
+// ValidateJWTProfileScopes, JWT Profile Authorization Grant (RFC 7523)
+// icindir. Desteklenmiyor: makesinger yalnizca authorization code + PKCE
+// ve refresh_token kullanir.
+func (d *Depo) ValidateJWTProfileScopes(ctx context.Context, userID string, scopes []string) ([]string, error) {
+	return nil, fmt.Errorf("JWT profile grant desteklenmiyor")
+}
+
+// Health, ikincil dinleyicinin /healthz'i tarafindan cagrilir.
+//
+// FAIL-CLOSED: SaglikBagla hic cagrilmadiysa (havuz veya rdb nil), Health
+// bunu ACIKCA hata sayar. Onceki bir surumde bu durumda "basarili"
+// donuluyordu; bu, uretimde SaglikBagla cagrilmasi UNUTULURSA (ki bu
+// dosyada hicbir yerden cagrilmiyor -- bootstrap kodu ayri bir gorevin
+// isi) /healthz'in Postgres ve Redis olu iken bile "sagliklı" demesine
+// yol acardi. Bagimliliklar baglanmadan Depo yine de test edilebilsin
+// diye testler SaglikBagla'yi gercek baglantilarla cagirir ya da bu
+// hatayi bekler.
+func (d *Depo) Health(ctx context.Context) error {
+	if d.havuz == nil || d.rdb == nil {
+		return fmt.Errorf("saglik bagimliliklari baglanmadi: SaglikBagla cagrilmadi")
+	}
+	if err := d.havuz.Ping(ctx); err != nil {
+		return fmt.Errorf("postgres saglik kontrolu basarisiz: %w", err)
+	}
+	if err := d.rdb.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("redis saglik kontrolu basarisiz: %w", err)
+	}
+	return nil
+}

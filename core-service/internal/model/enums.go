@@ -145,11 +145,11 @@ const (
 type MixPreset string
 
 const (
-	MixPresetDefault      MixPreset = "default"
+	MixPresetDefault       MixPreset = "default"
 	MixPresetVocalFriendly MixPreset = "vocal_friendly"
-	MixPresetBassHeavy    MixPreset = "bass_heavy"
-	MixPresetBright       MixPreset = "bright"
-	MixPresetWarm         MixPreset = "warm"
+	MixPresetBassHeavy     MixPreset = "bass_heavy"
+	MixPresetBright        MixPreset = "bright"
+	MixPresetWarm          MixPreset = "warm"
 )
 
 // Language
