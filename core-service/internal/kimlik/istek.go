@@ -23,6 +23,11 @@ const (
 // olabilir.
 var ErrIstekYok = errors.New("auth istegi bulunamadi")
 
+// ErrIstekZatenTamamlandi, zaten tamamlanmis bir auth istegi BASKA bir
+// kullaniciya yeniden baglanmak istendiginde donulur (bkz.
+// TamamlandiIsaretle).
+var ErrIstekZatenTamamlandi = errors.New("auth istegi zaten tamamlandi")
+
 // AuthIstek, op.AuthRequest arayuzunu karsilayan, Redis'te JSON olarak
 // saklanan authorization request kaydidir. Tum alanlar disa acik
 // (buyuk harfli) olmali; aksi halde encoding/json sessizce atlar ve
@@ -38,6 +43,13 @@ type AuthIstek struct {
 	Nonce               string
 	CodeChallenge       string
 	CodeChallengeMethod oidc.CodeChallengeMethod
+
+	// IpucuSubject, id_token_hint ile gelen "sub" degeridir (kutuphane
+	// CreateAuthRequest'in userID parametresinde verir). SADECE ipucu
+	// olarak tutulur: ne istek ID'si olarak kullanilir ne de Done()'u
+	// etkiler. Istek ID'si olarak kullanilmasi es zamanli iki akisin
+	// ayni Redis anahtarini ezmesine yol acardi.
+	IpucuSubject string
 
 	// Giris tamamlaninca doldurulur.
 	Subject  string
@@ -66,8 +78,17 @@ func (a *AuthIstek) GetClientID() string { return a.ClientID }
 
 // GetCodeChallenge: Challenge bos ise PKCE kullanilmiyor demektir, nil
 // donmek zorunlu (op kutuphanesi nil'i "PKCE yok" olarak yorumlar).
+//
+// FAIL-CLOSED: method S256 DEGILSE (plain veya bos) challenge'i
+// AKTARMIYORUZ. Kutuphane bos/plain method'da duz string
+// karsilastirmasi yapar (pkg/oidc/code_challenge.go VerifyCodeChallenge)
+// ve bu, PKCE'yi fiilen etkisiz kilar. nil donmek, public client'ta
+// token ucunun istegi "PKCE required" ile reddetmesini saglar
+// (pkg/op/token_code.go, AuthMethodNone dali). Birinci katman
+// /authorize'da reddetmektir (bkz. pkceZorlayici, sunucu.go); bu ikinci
+// katman o kontrol atlanirsa bile kod degisimini kapatir.
 func (a *AuthIstek) GetCodeChallenge() *oidc.CodeChallenge {
-	if a.CodeChallenge == "" {
+	if a.CodeChallenge == "" || a.CodeChallengeMethod != oidc.CodeChallengeMethodS256 {
 		return nil
 	}
 	return &oidc.CodeChallenge{
@@ -114,14 +135,16 @@ func istekAnahtar(id string) string { return "kimlik:istek:" + id }
 func kodAnahtar(kod string) string  { return "kimlik:kod:" + kod }
 
 // Olustur, gelen authorization request'i AuthIstek'e cevirir ve Redis'e
-// yazar. id parametresi bos gecilirse yeni bir UUID uretilir (op
-// kutuphanesi bazi cagrilarda hazir id vermez).
-func (d *IstekDepo) Olustur(ctx context.Context, req *oidc.AuthRequest, id string) (*AuthIstek, error) {
-	if id == "" {
-		id = uuid.NewString()
-	}
+// yazar. Istek ID'si HER ZAMAN burada uretilir: kutuphanenin
+// CreateAuthRequest'e verdigi userID parametresi id_token_hint'in "sub"
+// degeridir, bir istek ID'si DEGILDIR (pkg/op/auth_request.go,
+// ValidateAuthReqIDTokenHint). Onu ID olarak kullanmak, es zamanli iki
+// akisin ayni Redis anahtarini ezmesine yol acardi; bu yuzden ipucu
+// yalnizca IpucuSubject alaninda saklanir.
+func (d *IstekDepo) Olustur(ctx context.Context, req *oidc.AuthRequest, ipucuSubject string) (*AuthIstek, error) {
 	istek := &AuthIstek{
-		ID:                  id,
+		ID:                  uuid.NewString(),
+		IpucuSubject:        ipucuSubject,
 		ClientID:            req.ClientID,
 		RedirectURI:         req.RedirectURI,
 		Scopes:              []string(req.Scopes),
@@ -202,10 +225,27 @@ func (d *IstekDepo) Sil(ctx context.Context, id string) error {
 // geri yazar. Kalan TTL okunup ayni sure ile yeniden uygulanir; aksi
 // halde her yeniden yazma TTL'i sifirlar ve istek gerekenden uzun
 // yasar (ya da suresi dolmus bir kayit sonsuza kadar kalir).
+//
+// IKINCI CAGRI: zaten tamamlanmis bir istegin Subject'i EZILMEZ.
+//   - Ayni kullanici icin: NO-OP (nil doner, yeniden yazilmaz).
+//     Gerekce: durust bir cift gonderim (formu iki kez yollamak,
+//     geri tusu) kullaniciya hata gostermemeli; sonuc zaten istenen
+//     durumun aynisi. Yeniden yazmamak AuthTime'in gercek giris anini
+//     korumasini da saglar.
+//   - BASKA bir kullanici icin: REDDEDILIR (ErrIstekZatenTamamlandi).
+//     Gerekce: bu, bekleyen bir auth istegini kod uretilene kadar
+//     istenildigi kadar farkli kimlige yeniden yonlendirme yolunun
+//     kendisiydi; sessizce ezmek yerine acikca basarisiz olmali.
 func (d *IstekDepo) TamamlandiIsaretle(ctx context.Context, id string, userID string) error {
 	istek, err := d.IDileOku(ctx, id)
 	if err != nil {
 		return err
+	}
+	if istek.Done() {
+		if istek.Subject == userID {
+			return nil
+		}
+		return ErrIstekZatenTamamlandi
 	}
 	ttl, err := d.rdb.TTL(ctx, istekAnahtar(id)).Result()
 	if err != nil {
@@ -217,4 +257,44 @@ func (d *IstekDepo) TamamlandiIsaretle(ctx context.Context, id string, userID st
 	istek.Subject = userID
 	istek.AuthTime = time.Now()
 	return d.yaz(ctx, istek, ttl)
+}
+
+// ---- OturumDepo ----
+//
+// Cerez baglamasi, auth istegiyle AYNI depoda ve AYNI TTL ile tutulur:
+// baglamanin istekten uzun yasamasi anlamsiz, kisa yasamasi akisi
+// ortasinda kirar.
+
+func oturumAnahtar(oturum string) string { return "kimlik:oturum:" + oturum }
+
+var _ OturumDepo = (*IstekDepo)(nil)
+
+// OturumYaz, cerez degerini (oturum) auth istegi ve CSRF jetonuna
+// esler.
+func (d *IstekDepo) OturumYaz(ctx context.Context, oturum string, baglama OturumBaglama, ttl time.Duration) error {
+	veri, err := json.Marshal(baglama)
+	if err != nil {
+		return fmt.Errorf("oturum serilenemedi: %w", err)
+	}
+	if err := d.rdb.Set(ctx, oturumAnahtar(oturum), veri, ttl).Err(); err != nil {
+		return fmt.Errorf("oturum yazilamadi: %w", err)
+	}
+	return nil
+}
+
+// OturumOku, cerez degerine bagli auth istegi ve CSRF jetonunu doner.
+// Kayit yoksa ErrOturumYok doner.
+func (d *IstekDepo) OturumOku(ctx context.Context, oturum string) (OturumBaglama, error) {
+	veri, err := d.rdb.Get(ctx, oturumAnahtar(oturum)).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return OturumBaglama{}, ErrOturumYok
+	}
+	if err != nil {
+		return OturumBaglama{}, fmt.Errorf("oturum okunamadi: %w", err)
+	}
+	var baglama OturumBaglama
+	if err := json.Unmarshal(veri, &baglama); err != nil {
+		return OturumBaglama{}, fmt.Errorf("oturum cozumlenemedi: %w", err)
+	}
+	return baglama, nil
 }

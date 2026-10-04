@@ -19,6 +19,7 @@
   {{if .Hata}}<p class="hata">{{.Hata}}</p>{{end}}
   <form method="post" action="{{.KayitYolu}}">
     <input type="hidden" name="authRequestID" value="{{.AuthRequestID}}">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label for="ad">Ad</label>
     <input type="text" id="ad" name="ad" value="{{.Ad}}" required autofocus>
     <label for="eposta">E-posta</label>
@@ -27,6 +28,6 @@
     <input type="password" id="sifre" name="sifre" required minlength="10">
     <button type="submit">Kayit ol</button>
   </form>
-  <p class="alt">Zaten hesabin var mi? <a href="{{.GirisYolu}}">Giris yap</a></p>
+  <p class="alt">Zaten hesabin var mi? <a href="{{.GirisYolu}}?authRequestID={{.AuthRequestID}}">Giris yap</a></p>
 </body>
 </html>

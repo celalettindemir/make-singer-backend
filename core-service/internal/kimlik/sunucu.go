@@ -79,8 +79,18 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 	depo.SaglikBagla(havuz, rdb)
 
 	opCfg := &op.Config{
-		CryptoKey:             cryptoAnahtar,
-		CodeMethodS256:        true,  // PKCE S256 zorunlu
+		CryptoKey: cryptoAnahtar,
+		// DIKKAT: CodeMethodS256 YALNIZCA discovery belgesini besler
+		// (pkg/op/op.go CodeMethodS256Supported -> pkg/op/discovery.go);
+		// hicbir dogrulamada kullanilmaz, yani tek basina HICBIR SEY
+		// ZORLAMAZ. S256 zorunlulugunu BIZ zorluyoruz, iki katmanda:
+		//   1. /authorize: pkceZorlayici (pkce.go), op.AuthorizeValidator
+		//      uzanti noktasi uzerinden — code_challenge yoksa veya
+		//      method S256 degilse (bos dahil) istek reddedilir.
+		//   2. Token ucu: AuthIstek.GetCodeChallenge (istek.go)
+		//      fail-closed; S256 disindaki method'da nil doner ve
+		//      kutuphane public client'ta "PKCE required" ile reddeder.
+		CodeMethodS256:        true,
 		AuthMethodPost:        false, // public client, secret yok
 		GrantTypeRefreshToken: true,
 		SupportedUILocales:    []language.Tag{language.Turkish, language.English},
@@ -104,19 +114,12 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 		return nil, fmt.Errorf("OpenID Provider kurulamadi: %w", err)
 	}
 
-	mux := http.NewServeMux()
+	// Cerezin Secure bayragi issuer'a gore: https'te ACIK, http://
+	// yerel gelistirmede KAPALI (aksi halde tarayici cerezi hic
+	// saklamaz ve yerel akis kirilir).
+	cerezGuvenli := !strings.HasPrefix(cfg.Issuer, "http://")
 
-	// /giris ve /kayit sayfalarini baglar. POST handler'lari
-	// op.NewIssuerInterceptor ile sarilir: araci issuer'i istek
-	// baglamina koyar, geriCagirma (op.AuthCallbackURL) onu oradan
-	// okur. Sarmadan baglamak akisi yonlendirme asamasinda kirar.
-	araci := op.NewIssuerInterceptor(saglayici.IssuerFromRequest)
-	sayfalar := NewSayfalar(kullaniciDepo, istekDepo, op.AuthCallbackURL(saglayici))
-	sayfalar.Bagla(mux, araci)
-
-	// Kok yol en sona baglanir: kutuphanenin kendi uclari (/authorize,
-	// /oauth/token, /userinfo, /keys, /end_session) buradan gecer.
-	mux.Handle("/", saglayici)
+	mux := muxKur(saglayici, kullaniciDepo, istekDepo, cerezGuvenli)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -137,6 +140,63 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 	}()
 
 	return &Sunucu{srv: srv, havuz: havuz, anahtar: anahtar}, nil
+}
+
+// muxKur, OP'nin HTTP yuzeyini kurar. Start'tan ayri bir fonksiyon:
+// testler ayni kablolamayi (sahte depolarla) kurup gercek bir
+// dinleyici uzerinde akisi ucan uca olcebilsin.
+//
+// Yol ONCELIKLERI (Go 1.22+ ServeMux spesiflik kurali): "/authorize" ve
+// "/authorize/callback" TAM yol desenleridir ve "/" subtree desenini
+// yener; yani ikisi de kutuphaneye gitmek yerine bizim sarmalayicimizdan
+// gecer. Kutuphane kodu DEGISTIRILMEZ veya KOPYALANMAZ: her iki
+// sarmalayici dogrulamadan sonra kutuphanenin kendi handler'ina delege
+// eder.
+func muxKur(
+	saglayici *op.Provider,
+	kullaniciDepo UserStore,
+	istekDepo *IstekDepo,
+	cerezGuvenli bool,
+) *http.ServeMux {
+	mux := http.NewServeMux()
+
+	// /giris ve /kayit sayfalarini baglar. POST handler'lari
+	// op.NewIssuerInterceptor ile sarilir: araci issuer'i istek
+	// baglamina koyar, geriCagirma (op.AuthCallbackURL) onu oradan
+	// okur. Sarmadan baglamak akisi yonlendirme asamasinda kirar.
+	araci := op.NewIssuerInterceptor(saglayici.IssuerFromRequest)
+	sayfalar := NewSayfalar(
+		kullaniciDepo,
+		istekDepo,
+		istekDepo, // IstekDepo ayni zamanda OturumDepo'yu karsilar
+		op.AuthCallbackURL(saglayici),
+		cerezGuvenli,
+	)
+	sayfalar.CallbackDelege(http.HandlerFunc(op.AuthorizeCallbackHandler(saglayici)))
+	sayfalar.Bagla(mux, araci)
+
+	yolAuthorize := saglayici.AuthorizationEndpoint().Relative()
+
+	// /authorize: kutuphanenin AuthorizeValidator uzanti noktasiyla
+	// S256 PKCE zorunlu kilinir (bkz. pkce.go). op.Authorize'i kendimiz
+	// cagiriyoruz cunku kutuphanenin kendi router'i validator'u degil
+	// saglayicinin kendisini kullanir.
+	zorlayici := &pkceZorlayici{Provider: saglayici}
+	mux.Handle(yolAuthorize, araci.Handler(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			op.Authorize(w, r, zorlayici)
+		})))
+
+	// /authorize/callback: cerez baglamasi dogrulanmadan kutuphaneye
+	// GECILMEZ (bkz. Sayfalar.Callback).
+	mux.HandleFunc(yolAuthorize+"/callback", araci.HandlerFunc(sayfalar.Callback))
+
+	// Kok yol en sona baglanir: kutuphanenin diger uclari
+	// (/oauth/token, /userinfo, /keys, /end_session, discovery)
+	// buradan gecer.
+	mux.Handle("/", saglayici)
+
+	return mux
 }
 
 // issuerGuvensizIzniDogrula, issuer http:// ile basliyorsa guvensiz moda
