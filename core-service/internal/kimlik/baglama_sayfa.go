@@ -526,11 +526,10 @@ func (f *FedereSayfalar) baglamaPost(w http.ResponseWriter, r *http.Request) {
 	if err := f.istekler.TamamlandiIsaretle(r.Context(), b.AuthRequestID, b.UserID, []string{amrFederasyon}); err != nil {
 		// authRequestID LOGLANMAZ.
 		log.Printf("federasyon: istek tamamlanamadi: %v", err)
-		if errors.Is(err, ErrIstekZatenTamamlandi) {
-			f.hataSayfasi(w, http.StatusConflict, hataIstekBagli)
-			return
-		}
-		f.hataSayfasi(w, http.StatusInternalServerError, hataSunucu)
+		// Geri bacagiyla AYNI siniflandirma: 409 / 400 (TTL ile dustu) /
+		// 500. baglamaBeklemeTTL ile istekTTL ust uste bindigi icin bu
+		// bacak da auth istegini GECEBILIR.
+		f.istekTamamlamaHatasi(w, err)
 		return
 	}
 	http.Redirect(w, r, f.geriCagirma(r.Context(), b.AuthRequestID), http.StatusFound)

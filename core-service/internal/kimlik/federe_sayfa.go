@@ -58,6 +58,22 @@ const cerezAdFederasyon = "kimlik_fed"
 // bir auth istegi icin baslatilmak istendiginde gosterilir.
 const hataIstekGecersiz = "Giris istegi gecersiz, lutfen uygulamadan tekrar deneyin."
 
+// hataIstekSuresiDoldu, bekleyen auth isteginin TTL ile Redis'ten
+// dusmesi durumunda gosterilir.
+//
+// NEDEN AYRI BIR SINIF: istekTTL (10dk) sayaci EN BASTA, /authorize'da
+// baslar ve hicbir yolda uzatilmaz; federasyonDurumTTL ve
+// baglamaBeklemeTTL de 10dk'dir ama SIRALI tuketilir. Yani federasyon
+// zinciri, isaret ettigi auth istegini GECEBILIR: T=9dk50sn'de Baslat
+// gecer (istek VAR), kullanici yukari akista 30 saniye gecirir, T=10dk20sn'de
+// Geri'de TamamlandiIsaretle ErrIstekYok doner. Bu SIRADAN bir
+// suresi-dolmadir; eskiden hataSunucu'ya dusup 500 ureterek gercek
+// sunucu hatalariyla AYNI alarmi caliyordu ve kullaniciya ne oldugunu
+// soylemiyordu. TTL degerleri BILEREK degistirilmedi: istekTTL'i
+// buyutmek bir UX sorunu icin bir guvenlik penceresini genisletmek
+// olurdu.
+const hataIstekSuresiDoldu = "Giris isteginin suresi doldu. Lutfen uygulamaya donup girisi yeniden baslatin."
+
 // federasyonZamanAsimi, yukari akisa yapilan HTTP cagrilarinin ust
 // siniri. JetonDegis kendi ic zaman asimini da uygular; bu, istemci
 // seviyesindeki ikinci kemerdir.
@@ -217,6 +233,35 @@ func (f *FedereSayfalar) federasyonCerezi(deger string) *http.Cookie {
 // nonce / imza) tutmadigini ayirmak saldirgana yol gosterir.
 func (f *FedereSayfalar) hataSayfasi(w http.ResponseWriter, kod int, metin string) {
 	http.Error(w, metin, kod)
+}
+
+// istekTamamlamaHatasi, TamamlandiIsaretle'nin hatasini UC SINIFA ayirir
+// ve tek bicimli yaniti yazar. Iki bacakta da (Geri ve baglamaPost) ayni
+// siniflandirma kullanilir; eskiden yalnizca ErrIstekZatenTamamlandi
+// ayriliyordu ve geri kalan HER SEY, siradan bir suresi-dolma dahil,
+// 500 uretiyordu.
+//
+//	ErrIstekZatenTamamlandi -> 409: istek baska bir kimlige bagli,
+//	                           Subject EZILMEZ.
+//	ErrIstekYok             -> 400: kayit TTL ile dustu. Kullaniciya ne
+//	                           oldugu ve ne yapacagi soylenir.
+//	digerleri               -> 500: GERCEK sunucu hatasi. Suresi-dolmayi
+//	                           buradan cikarmak, gercek olaylarin
+//	                           gurultuye gommesini de onler.
+//
+// Bu ayrim GUVENLIK REDLERINI KAPSAMAZ: capraz-site reddi, cerez
+// eslesmemesi, oturum baglamasi ve CSRF 403 + GENEL mesajda KALIR
+// (saldirgana hangi kontrolun caldigini soylemek istemiyoruz). Burada
+// 400'e giden tek sinif "kayit TTL ile dustu"dur.
+func (f *FedereSayfalar) istekTamamlamaHatasi(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrIstekZatenTamamlandi):
+		f.hataSayfasi(w, http.StatusConflict, hataIstekBagli)
+	case errors.Is(err, ErrIstekYok):
+		f.hataSayfasi(w, http.StatusBadRequest, hataIstekSuresiDoldu)
+	default:
+		f.hataSayfasi(w, http.StatusInternalServerError, hataSunucu)
+	}
 }
 
 // Baslat, federasyon akisini baslatir: state/nonce/PKCE dogrulayicisi
@@ -415,13 +460,10 @@ func (f *FedereSayfalar) Geri(w http.ResponseWriter, r *http.Request) {
 	if err := f.istekler.TamamlandiIsaretle(r.Context(), d.AuthRequestID, ku.ID, []string{amrFederasyon}); err != nil {
 		// authRequestID LOGLANMAZ.
 		log.Printf("federasyon: istek tamamlanamadi: %v", err)
-		if errors.Is(err, ErrIstekZatenTamamlandi) {
-			// Istek baska bir kimlige bagli; Subject EZILMEZ (Faz 1'in
-			// kurali federasyonda da gecerli).
-			f.hataSayfasi(w, http.StatusConflict, hataIstekBagli)
-			return
-		}
-		f.hataSayfasi(w, http.StatusInternalServerError, hataSunucu)
+		// Siniflandirma istekTamamlamaHatasi'nda: 409 (baska kimlige
+		// bagli, Subject EZILMEZ), 400 (TTL ile dustu) ve 500 (gercek
+		// sunucu hatasi) birbirinden AYRI.
+		f.istekTamamlamaHatasi(w, err)
 		return
 	}
 	http.Redirect(w, r, f.geriCagirma(r.Context(), d.AuthRequestID), http.StatusFound)

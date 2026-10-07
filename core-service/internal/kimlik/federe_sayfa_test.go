@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log"
 	"math/big"
 	"net/http"
@@ -196,6 +197,16 @@ func (s *sahteFedereIstekler) ekle(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.istekler[id] = &AuthIstek{ID: id, ClientID: "mobil"}
+}
+
+// sil, istegi kayittan DUSURUR: uretimde istekTTL'in (10dk) dolmasiyla
+// Redis'in anahtari atmasinin karsiligi. TTL degerleri BILEREK
+// degistirilmedigi icin testler suresi-dolmayi boyle olcer -- 10 dakika
+// beklemek yerine.
+func (s *sahteFedereIstekler) sil(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.istekler, id)
 }
 
 func (s *sahteFedereIstekler) IDileOku(_ context.Context, id string) (*AuthIstek, error) {
@@ -1127,5 +1138,70 @@ func TestGeriLoglarSizdirmaz(t *testing.T) {
 				t.Errorf("log %d. id_token'in bir parcasini sizdirdi; loglar: %q", i, ciktilar)
 			}
 		}
+	}
+}
+
+// ---------------------------------------------------------------------
+// I3: suresi-dolma, GERCEK sunucu hatasindan ayrilmali
+// ---------------------------------------------------------------------
+
+// istekTTL (10dk) sayaci EN BASTA, /authorize'da baslar ve hicbir yolda
+// uzatilmaz; federasyonDurumTTL de 10dk'dir ama SIRALI tuketilir. Yani
+// federasyon zinciri, isaret ettigi auth istegini GECEBILIR:
+// T=9dk50sn'de Baslat gecer (istek VAR), kullanici Google'da 30 saniye
+// gecirir, T=10dk20sn'de Geri'de istek artik YOKTUR. Bu siradan bir
+// suresi-dolmadir ve eskiden 500 ureterek gercek sunucu hatalariyla
+// AYNI alarmi caliyor, ustelik kullaniciya ne oldugunu soylemiyordu.
+func TestGeriIstekTTLIleDustugunde400Doner(t *testing.T) {
+	o := testFedereSayfalar(t)
+	state, cerez, w := o.baslat(t, saglayiciGoogle, o.authReqID)
+	if state == "" {
+		t.Fatalf("baslat basarisiz: durum = %d", w.Code)
+	}
+	d := o.durumOku(t, state)
+	o.google.ayarla(func(s *sahteSaglayici) { s.nonce = d.Nonce })
+
+	// T=10dk20sn: istek TTL ile Redis'ten dustu. TTL degerleri
+	// degistirilmedigi icin kayit ELLE dusurulur.
+	o.istekler.sil(o.authReqID)
+
+	yanit := o.geri(saglayiciGoogle, state, "kod-1", cerez, false)
+	if yanit.Code == http.StatusInternalServerError {
+		t.Fatalf("siradan bir suresi-dolma 500 uretti: govde = %q", yanit.Body.String())
+	}
+	if yanit.Code != http.StatusBadRequest {
+		t.Fatalf("durum = %d, beklenen 400, govde = %q", yanit.Code, yanit.Body.String())
+	}
+	if !strings.Contains(yanit.Body.String(), hataIstekSuresiDoldu) {
+		t.Errorf("kullaniciya ne oldugu soylenmemis: govde = %q", yanit.Body.String())
+	}
+}
+
+// Siniflandirmanin UCUNU de pinler. Ozellikle son satir onemli: gercek
+// bir sunucu hatasi 500 OLARAK KALMALI, aksi halde "her seyi 400 yap"
+// mutasyonu digerlerini gecirirdi.
+func TestIstekTamamlamaHatasiSiniflandirmasi(t *testing.T) {
+	f := &FedereSayfalar{}
+	durumlar := []struct {
+		ad    string
+		hata  error
+		kod   int
+		metin string
+	}{
+		{"zaten tamamlandi", ErrIstekZatenTamamlandi, http.StatusConflict, hataIstekBagli},
+		{"TTL ile dustu", ErrIstekYok, http.StatusBadRequest, hataIstekSuresiDoldu},
+		{"gercek sunucu hatasi", errors.New("redis baglantisi dustu"), http.StatusInternalServerError, hataSunucu},
+	}
+	for _, d := range durumlar {
+		t.Run(d.ad, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			f.istekTamamlamaHatasi(w, d.hata)
+			if w.Code != d.kod {
+				t.Errorf("durum = %d, beklenen %d", w.Code, d.kod)
+			}
+			if !strings.Contains(w.Body.String(), d.metin) {
+				t.Errorf("govde = %q, beklenen %q", w.Body.String(), d.metin)
+			}
+		})
 	}
 }

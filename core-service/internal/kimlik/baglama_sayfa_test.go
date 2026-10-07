@@ -715,3 +715,36 @@ func TestBaglamaSifresizHesapIcinAcilmaz(t *testing.T) {
 		t.Error("sifresiz hesapta giris yapildi")
 	}
 }
+
+// I3, baglama bacagi: baglamaBeklemeTTL de istekTTL ile ust uste biniyor
+// ve istek sayaci EN BASTA baslayip hicbir yolda uzatilmadigi icin
+// kullanici sifresini DOGRU girdiginde bile auth istegi dusmus olabilir.
+// Bu siradan bir suresi-dolmadir ve 500 uretmemeli: kullanici ne
+// oldugunu ve uygulamadan yeniden baslamasi gerektigini okumali.
+func TestBaglamaPostIstekTTLIleDustugunde400Doner(t *testing.T) {
+	o := testFedereSayfalar(t)
+	beklemeID, csrf, cerez, _ := o.beklemeKur(t)
+
+	// Auth istegi TTL ile dustu (TTL degerleri degistirilmedigi icin
+	// kayit elle dusurulur); bekleme kaydi ve oturum baglamasi HALA
+	// gecerli, yani test gercekten SURESI-DOLMA yolunu olcuyor.
+	o.istekler.sil(o.authReqID)
+
+	w := o.baglamaPostIstek(url.Values{
+		alanBeklemeID: {beklemeID},
+		csrfAlan:      {csrf},
+		"sifre":       {testSifre},
+	}, cerez)
+	if w.Code == http.StatusInternalServerError {
+		t.Fatalf("siradan bir suresi-dolma 500 uretti: govde = %q", w.Body.String())
+	}
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("durum = %d, beklenen 400, govde = %q", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), hataIstekSuresiDoldu) {
+		t.Errorf("kullaniciya ne oldugu soylenmemis: govde = %q", w.Body.String())
+	}
+	if o.istekler.subject(o.authReqID) != "" {
+		t.Error("dusmus bir istek TAMAMLANDI")
+	}
+}
