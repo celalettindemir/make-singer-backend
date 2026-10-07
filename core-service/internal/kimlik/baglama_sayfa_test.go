@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -435,6 +436,9 @@ func TestBaglamaPostDogruSifreBaglarVeGirisYapar(t *testing.T) {
 	if s := o.istekler.subject(o.authReqID); s != mevcut.ID {
 		t.Errorf("Subject = %q, beklenen %q", s, mevcut.ID)
 	}
+	if got := o.istekler.amrOku(o.authReqID); !slices.Equal(got, []string{"fed"}) {
+		t.Errorf("amr = %v, beklenen [fed]", got)
+	}
 }
 
 func TestBaglamaPostYanlisSifreBaglamaz(t *testing.T) {
@@ -659,6 +663,9 @@ func TestBaglamaBeklemesiBaglamasizPostlaYokEdilemez(t *testing.T) {
 	}
 	if s := o.istekler.subject(o.authReqID); s != mevcut.ID {
 		t.Errorf("Subject = %q, beklenen %q", s, mevcut.ID)
+	}
+	if got := o.istekler.amrOku(o.authReqID); !slices.Equal(got, []string{"fed"}) {
+		t.Errorf("amr = %v, beklenen [fed]", got)
 	}
 }
 

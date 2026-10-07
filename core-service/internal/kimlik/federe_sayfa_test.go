@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -180,12 +181,14 @@ type sahteFedereIstekler struct {
 	mu       sync.Mutex
 	istekler map[string]*AuthIstek
 	baglanan map[string]string
+	amrler   map[string][]string
 }
 
 func newSahteFedereIstekler() *sahteFedereIstekler {
 	return &sahteFedereIstekler{
 		istekler: map[string]*AuthIstek{},
 		baglanan: map[string]string{},
+		amrler:   map[string][]string{},
 	}
 }
 
@@ -219,6 +222,7 @@ func (s *sahteFedereIstekler) TamamlandiIsaretle(_ context.Context, id string, u
 		return ErrIstekZatenTamamlandi
 	}
 	s.baglanan[id] = userID
+	s.amrler[id] = append([]string(nil), amr...)
 	return nil
 }
 
@@ -226,6 +230,12 @@ func (s *sahteFedereIstekler) subject(id string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.baglanan[id]
+}
+
+func (s *sahteFedereIstekler) amrOku(id string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.amrler[id]
 }
 
 // ---------------------------------------------------------------------
@@ -699,6 +709,9 @@ func TestGeriBilinenKimlikGirisYapar(t *testing.T) {
 	if s := o.istekler.subject(o.authReqID); s != mevcut.ID {
 		t.Errorf("Subject = %q, beklenen %q", s, mevcut.ID)
 	}
+	if got := o.istekler.amrOku(o.authReqID); !slices.Equal(got, []string{"fed"}) {
+		t.Errorf("amr = %v, beklenen [fed]", got)
+	}
 	if o.google.sayilar() != 1 {
 		t.Errorf("token ucu %d kez cagrildi, beklenen 1", o.google.sayilar())
 	}
@@ -729,6 +742,9 @@ func TestGeriYeniKimlikHesapAcar(t *testing.T) {
 	}
 	if s := o.istekler.subject(o.authReqID); s != yeni.ID {
 		t.Errorf("Subject = %q, beklenen %q", s, yeni.ID)
+	}
+	if got := o.istekler.amrOku(o.authReqID); !slices.Equal(got, []string{"fed"}) {
+		t.Errorf("amr = %v, beklenen [fed]", got)
 	}
 }
 

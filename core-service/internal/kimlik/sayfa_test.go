@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,11 +56,12 @@ func (s *sayimUserStore) sayilar() (int, int) {
 type sahteTamamlayici struct {
 	mu       sync.Mutex
 	baglanan map[string]string
+	amrler   map[string][]string
 	Hata     error
 }
 
 func newSahteTamamlayici() *sahteTamamlayici {
-	return &sahteTamamlayici{baglanan: map[string]string{}}
+	return &sahteTamamlayici{baglanan: map[string]string{}, amrler: map[string][]string{}}
 }
 
 func (t *sahteTamamlayici) TamamlandiIsaretle(_ context.Context, id string, userID string, amr []string) error {
@@ -75,6 +77,7 @@ func (t *sahteTamamlayici) TamamlandiIsaretle(_ context.Context, id string, user
 		return ErrIstekZatenTamamlandi
 	}
 	t.baglanan[id] = userID
+	t.amrler[id] = append([]string(nil), amr...)
 	return nil
 }
 
@@ -82,6 +85,12 @@ func (t *sahteTamamlayici) subject(id string) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.baglanan[id]
+}
+
+func (t *sahteTamamlayici) amrOku(id string) []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.amrler[id]
 }
 
 type sayfaTestOrtami struct {
@@ -517,6 +526,9 @@ func TestGirisGecerliCerezleCalisir(t *testing.T) {
 	}
 	if got := o.tamamlayan.subject("istek-1"); got != kullanici.ID {
 		t.Errorf("istek baglanan subject = %q, beklenen kullanici ID", got)
+	}
+	if got := o.tamamlayan.amrOku("istek-1"); !slices.Equal(got, []string{"pwd"}) {
+		t.Errorf("amr = %v, beklenen [pwd]", got)
 	}
 }
 
