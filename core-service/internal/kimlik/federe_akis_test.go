@@ -372,6 +372,15 @@ func TestUctanUcaAppleIkinciGiristeEpostaGelmez(t *testing.T) {
 // Saldirgan kendi Google yetkilendirmesinden gecerli bir state+code
 // cifti alir ve kurbanin tarayicisinda callback'i acar. Kurbanin
 // akisi saldirganin hesabina TAMAMLANMAMALI.
+//
+// NEDEN KURBAN DA KENDI FEDERASYON BACAGINI KOSTURUYOR: kurban yalnizca
+// /authorize yapsa kurbanda kimlik_fed cerezi HIC olmaz ve red
+// "cerez YOK" dalindan gelir -- yani bu test
+// TestSaldiriCerezsizCallbackReddedilir ile AYNI mekanizmayi olcer,
+// cerez DEGERI karsilastirmasi (subtle.ConstantTimeCompare, bkz.
+// FedereSayfalar.Geri) ise hic kosmaz. Kurbana kendi cerezini aldirinca
+// cerez VARDIR ama DEGERI saldirganinkiyle eslesmez: olculen sey
+// baglamanin kendisi olur.
 func TestSaldiriBaskaTarayicidaBaslatilanAkisTamamlanamaz(t *testing.T) {
 	ortam := akisOrtamiKur(t, sahteOPAyar{
 		Eposta:           "saldirgan@ornek.com",
@@ -384,11 +393,33 @@ func TestSaldiriBaskaTarayicidaBaslatilanAkisTamamlanamaz(t *testing.T) {
 	saldirganIstek := saldirgan.AuthorizeBaslat(t)
 	kurbanIstek := kurban.AuthorizeBaslat(t)
 
-	// ONKOSUL: saldirgan GECERLI bir state+code cifti elde etti.
+	// ONKOSUL 1: saldirgan GECERLI bir state+code cifti elde etti.
 	geriURL := yukariAkisKoduAl(t, saldirgan, saglayiciGoogle, saldirganIstek)
 
-	// Saldirgan o adresi kurbanin tarayicisinda actirir: federasyon
-	// cerezi SALDIRGANIN tarayicisinda oldugu icin reddedilmeli.
+	// ONKOSUL 2: kurban KENDI federasyon bacagini baslatti, yani
+	// kurbanin tarayicisinda da bir kimlik_fed cerezi VAR.
+	kurbanBaslat := kurban.FederasyonBaslat(t, saglayiciGoogle, kurbanIstek)
+	if kurbanBaslat.Durum != http.StatusFound {
+		t.Fatalf("kurbanin baslat durumu = %d, beklenen 302", kurbanBaslat.Durum)
+	}
+	if kurbanBaslat.fedCerezi() == nil {
+		t.Fatal("kurbanin baslat'i federasyon cerezi yazmadi; senaryo kurulamadi")
+	}
+
+	// ONKOSUL 3: iki cerezin DEGERLERI farkli. Esit olsalardi asagidaki
+	// red cerez baglamasindan degil baska bir seyden gelirdi.
+	kurbanCerez := kurban.kavanoz.cerezDegeri(cerezAdFederasyon)
+	saldirganCerez := saldirgan.kavanoz.cerezDegeri(cerezAdFederasyon)
+	if kurbanCerez == "" || saldirganCerez == "" {
+		t.Fatalf("cerez degerleri okunamadi (kurban %q, saldirgan %q)", kurbanCerez, saldirganCerez)
+	}
+	if kurbanCerez == saldirganCerez {
+		t.Fatal("iki tarayicinin federasyon cerezi AYNI; baglama testi bos olurdu")
+	}
+
+	// Saldirgan o adresi kurbanin tarayicisinda actirir: kurbanda cerez
+	// VAR ama DEGERI saldirganin state kaydindakiyle eslesmedigi icin
+	// reddedilmeli.
 	red := kurban.istek(t, http.MethodGet, geriURL, nil, baglamCaprazGet)
 	if red.Durum != http.StatusForbidden {
 		t.Errorf("baska tarayicida callback durumu = %d, beklenen 403. govde: %s",

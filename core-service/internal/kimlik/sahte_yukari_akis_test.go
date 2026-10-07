@@ -390,6 +390,23 @@ func (k *cerezKavanozu) cerezSil(ad string) {
 	}
 }
 
+// cerezDegeri, kavanozdaki verilen adli cerezin degerini doner (yoksa
+// bos string). Testler bunu ONKOSUL kurmak icin kullanir: iki
+// tarayicinin federasyon cerezlerinin GERCEKTEN farkli oldugunu
+// olcmeden "deger eslesmedi" iddiasi kurulamaz.
+func (k *cerezKavanozu) cerezDegeri(ad string) string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for _, host := range k.cerezler {
+		for _, c := range host {
+			if c.Name == ad {
+				return c.Value
+			}
+		}
+	}
+	return ""
+}
+
 func (k *cerezKavanozu) Cookies(u *url.URL) []*http.Cookie {
 	k.mu.Lock()
 	defer k.mu.Unlock()
