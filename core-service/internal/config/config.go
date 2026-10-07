@@ -150,6 +150,25 @@ type AuthConfig struct {
 	// proxy arkasindaysa bu deger ACIKCA proxy sayisina ayarlanmali
 	// (AUTH_TRUSTED_PROXIES).
 	TrustedProxies int
+
+	// Federasyon, yukari akis saglayicilaridir. Bos ise federasyon
+	// uclari HIC BAGLANMAZ ve giris sayfasinda buton gorunmez.
+	Federasyon []FederasyonIstemci
+}
+
+// FederasyonIstemci, bir yukari akis saglayicisinin yapilandirmasidir.
+// Ad "google" veya "apple" olmalidir; URL'ler sabittir ve koddan
+// gelir, ortamdan yalnizca kimlik bilgileri okunur.
+type FederasyonIstemci struct {
+	Ad        string // "google" | "apple"
+	IstemciID string
+	// Google icin duz client_secret. Apple icin BOS BIRAKILIR: Apple'in
+	// client_secret'i her istekte ES256 ile uretilir (bkz. K5).
+	IstemciSir string
+	// Apple icin zorunlu: .p8 ozel anahtari (PEM), Team ID ve Key ID.
+	AppleEkipID    string
+	AppleAnahtarID string
+	AppleAnahtarP8 string
 }
 
 func Load() (*Config, error) {
@@ -214,6 +233,12 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("auth.login_email_per_hour", "AUTH_LOGIN_EMAIL_PER_HOUR")
 	_ = viper.BindEnv("auth.signup_ip_per_hour", "AUTH_SIGNUP_IP_PER_HOUR")
 	_ = viper.BindEnv("auth.trusted_proxies", "AUTH_TRUSTED_PROXIES")
+	_ = viper.BindEnv("auth.fed_google_client_id", "AUTH_FED_GOOGLE_CLIENT_ID")
+	_ = viper.BindEnv("auth.fed_google_client_secret", "AUTH_FED_GOOGLE_CLIENT_SECRET")
+	_ = viper.BindEnv("auth.fed_apple_client_id", "AUTH_FED_APPLE_CLIENT_ID")
+	_ = viper.BindEnv("auth.fed_apple_team_id", "AUTH_FED_APPLE_TEAM_ID")
+	_ = viper.BindEnv("auth.fed_apple_key_id", "AUTH_FED_APPLE_KEY_ID")
+	_ = viper.BindEnv("auth.fed_apple_key_p8", "AUTH_FED_APPLE_KEY_P8")
 
 	// Defaults
 	viper.SetDefault("server.port", "8000")
@@ -362,8 +387,45 @@ func Load() (*Config, error) {
 			LoginEmailPerHour: viper.GetInt("auth.login_email_per_hour"),
 			SignupIPPerHour:   viper.GetInt("auth.signup_ip_per_hour"),
 			TrustedProxies:    viper.GetInt("auth.trusted_proxies"),
+
+			Federasyon: federasyonIstemcileriOlustur(),
 		},
 	}
 
 	return cfg, nil
+}
+
+// federasyonIstemcileriOlustur, viper'dan okunan AUTH_FED_* degerlerinden
+// federasyon saglayici listesini kurar.
+//
+// SESSIZ SIFIR KURALI: bir saglayicinin client_id'si bos ise o saglayici
+// listeye HIC EKLENMEZ. Yarim yapilandirilmis bir saglayiciyla baslamak,
+// kullanicinin butona basip hata gormesi demektir; listeye hic
+// eklenmeyince giris sayfasinda buton da gorunmez (bkz. FederasyonIstemci
+// yorumu). Apple'in uc alaninin (EkipID/AnahtarID/AnahtarP8) hepsinin
+// dolu olmasi burada DENETLENMEZ: o denetim kimlik.Start icindeki
+// yapilandirmaDogrula'da yapilir ve eksikse Start HATA DONER (startup
+// hatasi, sessiz atlama degil).
+func federasyonIstemcileriOlustur() []FederasyonIstemci {
+	var liste []FederasyonIstemci
+
+	if id := viper.GetString("auth.fed_google_client_id"); id != "" {
+		liste = append(liste, FederasyonIstemci{
+			Ad:         "google",
+			IstemciID:  id,
+			IstemciSir: viper.GetString("auth.fed_google_client_secret"),
+		})
+	}
+
+	if id := viper.GetString("auth.fed_apple_client_id"); id != "" {
+		liste = append(liste, FederasyonIstemci{
+			Ad:             "apple",
+			IstemciID:      id,
+			AppleEkipID:    viper.GetString("auth.fed_apple_team_id"),
+			AppleAnahtarID: viper.GetString("auth.fed_apple_key_id"),
+			AppleAnahtarP8: viper.GetString("auth.fed_apple_key_p8"),
+		})
+	}
+
+	return liste
 }

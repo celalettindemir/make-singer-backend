@@ -161,6 +161,43 @@ func TestGecerliYapilandirmaDogrulamayiGecer(t *testing.T) {
 	}
 }
 
+// Apple federasyonu uc alanin (EkipID/AnahtarID/AnahtarP8) hepsi
+// olmadan calisamaz: client_secret her degisimde bu uctan uretilir
+// (bkz. K5). Eksik olan BASLANGICTA (startup) hata vermeli, kullanicinin
+// Apple ile giris denedigi anda kesfedilen bir sessiz bozukluk degil.
+func TestAppleFederasyonuEksikAlanlarlaBaslamaz(t *testing.T) {
+	durumlar := []struct {
+		ad       string
+		federe   config.FederasyonIstemci
+	}{
+		{"ekip id eksik", config.FederasyonIstemci{Ad: "apple", IstemciID: "tr.makesinger.giris", AppleAnahtarID: "AB12", AppleAnahtarP8: "pem-verisi"}},
+		{"anahtar id eksik", config.FederasyonIstemci{Ad: "apple", IstemciID: "tr.makesinger.giris", AppleEkipID: "TEAM1", AppleAnahtarP8: "pem-verisi"}},
+		{"anahtar p8 eksik", config.FederasyonIstemci{Ad: "apple", IstemciID: "tr.makesinger.giris", AppleEkipID: "TEAM1", AppleAnahtarID: "AB12"}},
+	}
+	for _, d := range durumlar {
+		t.Run(d.ad, func(t *testing.T) {
+			cfg := testAuthCfg()
+			cfg.Federasyon = []config.FederasyonIstemci{d.federe}
+			if err := yapilandirmaDogrula(cfg); err == nil {
+				t.Fatal("eksik apple alanlariyla dogrulama gecti")
+			}
+		})
+	}
+}
+
+// Apple'in uc alani da doluysa dogrulama gecmeli (vacuous reddetme
+// kontrolu).
+func TestAppleFederasyonuTamAlanlarlaGecer(t *testing.T) {
+	cfg := testAuthCfg()
+	cfg.Federasyon = []config.FederasyonIstemci{{
+		Ad: "apple", IstemciID: "tr.makesinger.giris",
+		AppleEkipID: "TEAM1", AppleAnahtarID: "AB12", AppleAnahtarP8: "pem-verisi",
+	}}
+	if err := yapilandirmaDogrula(cfg); err != nil {
+		t.Errorf("tam apple yapilandirmasi reddedildi: %v", err)
+	}
+}
+
 // ---- I3: /health GERCEK hazirligi yansitsin ----
 
 // Hazir(), "Start basariyla dondu mu" degil "dinleyici su an hizmet

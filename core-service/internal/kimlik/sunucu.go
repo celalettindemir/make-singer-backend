@@ -233,6 +233,17 @@ func yapilandirmaDogrula(cfg *config.AuthConfig) error {
 	if cfg.RefreshTTL <= 0 {
 		return fmt.Errorf("refresh_ttl pozitif olmali, cozulen deger: %s (AUTH_REFRESH_TTL gecerli bir sure olmali, orn. 1440h)", cfg.RefreshTTL)
 	}
+	// Apple ucu, alanlarin UCU de dolu olmadan calisamaz: client_secret
+	// her token degisiminde bu uctan ES256 ile uretilir (bkz. K5,
+	// YukariAkis.AppleEkipID/AppleAnahtarID/AppleAnahtarP8). Bu BASTAN
+	// baslamama hatasi olmali, kullanicinin Apple ile giris denedigi anda
+	// kesfedilen bir sessiz bozukluk degil (Faz 1'in "sessiz sifir"
+	// sinifi sorunu burada tekrarlanmiyor).
+	for _, f := range cfg.Federasyon {
+		if f.Ad == "apple" && (f.AppleEkipID == "" || f.AppleAnahtarID == "" || f.AppleAnahtarP8 == "") {
+			return fmt.Errorf("apple federasyonu yapilandirmasi eksik: AUTH_FED_APPLE_TEAM_ID, AUTH_FED_APPLE_KEY_ID ve AUTH_FED_APPLE_KEY_P8 ucu de zorunlu")
+		}
+	}
 	return nil
 }
 
