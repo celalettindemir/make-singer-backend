@@ -194,6 +194,57 @@ func (h *HizLimit) SayfaGetSar(ad string, next http.Handler) http.Handler {
 	})
 }
 
+// BaglamaSar, POST /baglama handler'ini IP basina dakikalik bir
+// sayacla sarar.
+//
+// NEDEN AYRI BIR SAYAC: /baglama, bu sistemdeki IKINCI sifre deneme
+// yuzeyidir (birincisi POST /giris). Giris sayacini paylassa, federe
+// bir kullanici baglama denemeleriyle kendi giris butcesini tuketir;
+// daha kotusu, bir saldirgan hangi uctan deneyecegini secerek tek bir
+// butceyi iki kat verimli kullanirdi. Sinir degeri giris ile AYNIDIR
+// (GirisIPPerMin): her iki uc da bcrypt kosturur, yani maliyet ve
+// tehdit profili aynidir; ayri bir yapilandirma anahtari eklemeye deger
+// bir ayrisma yok.
+//
+// E-posta basina sayac YOK: baglama sayfasi e-postayi FORMDAN ALMAZ,
+// adres bekleme kaydindan gelir ve kullaniciya salt okunur gosterilir.
+// Yani "hangi hesaba deneniyor" secimi istemcide degil; IP sayaci
+// denemeleri sinirlamak icin yeterlidir. Her denemenin ustune ayrica
+// tek kullanimlik bekleme kaydi ve oturum baglamasi kontrolu biner.
+func (h *HizLimit) BaglamaSar(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !h.izinVer(w, r, sayac{
+			anahtar: h.ipAnahtar("baglama", r),
+			sinir:   h.ayar.GirisIPPerMin,
+			pencere: time.Minute,
+		}) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// FederasyonGeriSar, federasyon geri donus ucunu IP basina dakikalik
+// bir sayacla sarar. Uc kimlik dogrulamasizdir ve her istek bir Redis
+// okumasi (state) ile birlikte -- state gecerliyse -- yukari akisa bir
+// HTTP cagrisi tetikler; sinirsiz birakmak dis bir servise bizim
+// adimiza yuk bindirmenin yolu olurdu.
+//
+// Sayac GIRIS ve BAGLAMA uclarindan AYRI anahtarda tutulur: mesru
+// federasyon donusleri sifre deneme butcesini tuketmemeli.
+func (h *HizLimit) FederasyonGeriSar(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !h.izinVer(w, r, sayac{
+			anahtar: h.ipAnahtar("federasyon-geri", r),
+			sinir:   h.ayar.GirisIPPerMin,
+			pencere: time.Minute,
+		}) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // KayitSar, POST /kayit handler'ini IP basina saatlik bir sayacla sarar.
 // Burada e-posta basina sayac YOKTUR: kayitta e-posta heniz bir hesaba
 // ait degil, sayac yalnizca "ayni e-postayi tekrar denemek" durumunu
