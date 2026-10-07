@@ -37,6 +37,12 @@ type akisOrtami struct {
 	issuer    string
 	kullanici UserStore
 	istekler  *IstekDepo
+
+	// federe ve yukari YALNIZCA federasyonlu kurulumda doludur (bkz.
+	// testSunucuKurAyarli): uctan uca testler yukari akisin yanitlarini
+	// bozmak ve yazilan eslesmeleri saymak zorunda.
+	federe *SahteFedereDepo
+	yukari map[string]*sahteOP
 }
 
 // testSunucu, muxKur ile uretimdekiyle AYNI kablolamayi kurar ve gercek
@@ -75,6 +81,18 @@ func testSunucuFedere(t *testing.T, ayar HizLimitAyar) *akisOrtami {
 }
 
 func testSunucuKur(t *testing.T, ayar HizLimitAyar, federe bool) *akisOrtami {
+	t.Helper()
+	// Varsayilan sahte yukari akis ayari: hicbir alan bozulmamis.
+	return testSunucuKurAyarli(t, ayar, federe, sahteOPAyar{})
+}
+
+// testSunucuKurAyarli, testSunucuKur'un sahte yukari akis ayari da
+// verilebilen surumudur. AYRI BIR GIRIS NOKTASI: testSunucuKur ve
+// testSunucuFedere imzalari ve cagiranlari BOZULMADAN kaliyor, uctan
+// uca testler ise yukari akisin her yanitini bozabiliyor.
+func testSunucuKurAyarli(
+	t *testing.T, ayar HizLimitAyar, federe bool, opAyar sahteOPAyar,
+) *akisOrtami {
 	t.Helper()
 	rdb := testRedis(t) // Redis yoksa burada atlanir
 
@@ -129,26 +147,15 @@ func testSunucuKur(t *testing.T, ayar HizLimitAyar, federe bool) *akisOrtami {
 		akislar        map[string]*YukariAkis
 		dogrulayicilar map[string]*auth.YukariAkisDogrulayici
 		federeDepo     FedereDepo
+		sahteFedere    *SahteFedereDepo
+		oplar          map[string]*sahteOP
 	)
 	if federe {
-		yukari := yeniSahteSaglayici(t, saglayiciGoogle)
-		akislar = map[string]*YukariAkis{
-			saglayiciGoogle: {
-				Ad: saglayiciGoogle, IstemciID: yukari.istemciID, IstemciSir: "google-sir",
-				AuthURL: yukari.sunucu.URL + "/authorize", TokenURL: yukari.sunucu.URL + "/token",
-				JWKSURL: yukari.sunucu.URL + "/jwks", Issuer: yukari.sunucu.URL,
-				Kapsamlar: []string{"openid", "email", "profile"}, PKCEDestekli: true,
-			},
-		}
-		dogrulayici, err := auth.NewYukariAkisDogrulayici(
-			context.Background(), yukari.sunucu.URL+"/jwks", yukari.sunucu.URL, yukari.istemciID,
-		)
-		if err != nil {
-			t.Fatalf("yukari akis dogrulayicisi kurulamadi: %v", err)
-		}
-		t.Cleanup(func() { _ = dogrulayici.Close() })
-		dogrulayicilar = map[string]*auth.YukariAkisDogrulayici{saglayiciGoogle: dogrulayici}
-		federeDepo = NewSahteFedereDepo(kullanici)
+		// Google (302 donus) ve Apple (form_post donus) birlikte
+		// kurulur; ikisi de yerel httptest sunucularidir.
+		akislar, dogrulayicilar, oplar = federasyonKablola(t, opAyar)
+		sahteFedere = NewSahteFedereDepo(kullanici)
+		federeDepo = sahteFedere
 	}
 
 	// cerezGuvenli=false: test dinleyicisi http, Secure cerez
@@ -167,7 +174,13 @@ func testSunucuKur(t *testing.T, ayar HizLimitAyar, federe bool) *akisOrtami {
 		_ = srv.Shutdown(ctx)
 	})
 
-	return &akisOrtami{issuer: issuer, kullanici: kullanici, istekler: istekler}
+	return &akisOrtami{
+		issuer:    issuer,
+		kullanici: kullanici,
+		istekler:  istekler,
+		federe:    sahteFedere,
+		yukari:    oplar,
+	}
 }
 
 // tarayici, kendi cerez kabi olan ve yonlendirmeleri OTOMATIK TAKIP
@@ -201,11 +214,18 @@ func pkceS256(t *testing.T) (string, string) {
 // kurar. challenge veya method bos gecilirse o parametre HIC
 // EKLENMEZ (eksik parametre ile bos parametreyi ayirmak icin).
 func (o *akisOrtami) authorizeURL(challenge, method string) string {
+	return o.authorizeURLKapsamli(challenge, method, "openid offline_access")
+}
+
+// authorizeURLKapsamli, authorizeURL'in kapsam da secilebilen
+// surumudur: uctan uca testler email ve profile kapsamlarini da ister
+// (id_token ve userinfo iddialari olculuyor).
+func (o *akisOrtami) authorizeURLKapsamli(challenge, method, kapsam string) string {
 	q := url.Values{
 		"client_id":     {"makesinger-mobil"},
 		"redirect_uri":  {testRedirectURI},
 		"response_type": {"code"},
-		"scope":         {"openid offline_access"},
+		"scope":         {kapsam},
 		"state":         {"durum-1"},
 		"nonce":         {"nonce-1"},
 	}
@@ -1058,20 +1078,27 @@ func TestMuxKurFederasyonKablolamasi(t *testing.T) {
 		if sayfa.StatusCode != http.StatusOK {
 			t.Fatalf("giris sayfasi durumu = %d", sayfa.StatusCode)
 		}
-		esler := fedButonDeseni.FindStringSubmatch(govde(t, sayfa))
-		if esler == nil {
+		// TUM butonlar denetlenir: kurulumda birden fazla saglayici
+		// yapilandirilmis olabilir (bkz. federasyonKablola) ve her
+		// butonun yolu bagli bir ucun yolu olmak ZORUNDA.
+		tumEsler := fedButonDeseni.FindAllStringSubmatch(govde(t, sayfa), -1)
+		if tumEsler == nil {
 			t.Fatal("giris sayfasinda federasyon butonu yok")
 		}
-		// Sablon href icindeki "&" karakterini kacirir; yolu ayirmak
-		// icin sorgu kismini atiyoruz, iddia YOL uzerine.
-		butonYol, _, _ := strings.Cut(esler[1], "?")
-		if butonYol != federasyonBaslatYolu(saglayiciGoogle) {
-			t.Fatalf("buton yolu = %q, bagli uc yolu = %q", butonYol, federasyonBaslatYolu(saglayiciGoogle))
+		gorulen := map[string]bool{}
+		for _, esler := range tumEsler {
+			// Sablon href icindeki "&" karakterini kacirir; yolu
+			// ayirmak icin sorgu kismini atiyoruz, iddia YOL uzerine.
+			butonYol, _, _ := strings.Cut(esler[1], "?")
+			gorulen[butonYol] = true
+			// Butonun GERCEK href'i de ayni mux'ta cevap bulmali.
+			yanit := al(t, c, o.issuer+html.UnescapeString(esler[1]))
+			if yanit.StatusCode == http.StatusNotFound {
+				t.Errorf("buton href'i 404 dondu: %q", esler[1])
+			}
 		}
-		// Butonun GERCEK href'i de ayni mux'ta cevap bulmali.
-		yanit := al(t, c, o.issuer+html.UnescapeString(esler[1]))
-		if yanit.StatusCode == http.StatusNotFound {
-			t.Errorf("buton href'i 404 dondu: %q", esler[1])
+		if !gorulen[federasyonBaslatYolu(saglayiciGoogle)] {
+			t.Fatalf("Google butonu bagli ucun yoluna gitmiyor; gorulen yollar: %v", gorulen)
 		}
 	})
 
