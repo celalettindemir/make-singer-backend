@@ -240,7 +240,7 @@ func yapilandirmaDogrula(cfg *config.AuthConfig) error {
 	// kesfedilen bir sessiz bozukluk degil (Faz 1'in "sessiz sifir"
 	// sinifi sorunu burada tekrarlanmiyor).
 	for _, f := range cfg.Federasyon {
-		if f.Ad == "apple" && (f.AppleEkipID == "" || f.AppleAnahtarID == "" || f.AppleAnahtarP8 == "") {
+		if f.Ad == saglayiciApple && (f.AppleEkipID == "" || f.AppleAnahtarID == "" || f.AppleAnahtarP8 == "") {
 			return fmt.Errorf("apple federasyonu yapilandirmasi eksik: AUTH_FED_APPLE_TEAM_ID, AUTH_FED_APPLE_KEY_ID ve AUTH_FED_APPLE_KEY_P8 ucu de zorunlu")
 		}
 	}
