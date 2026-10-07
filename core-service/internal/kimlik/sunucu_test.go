@@ -186,16 +186,103 @@ func TestAppleFederasyonuEksikAlanlarlaBaslamaz(t *testing.T) {
 	}
 }
 
-// Apple'in uc alani da doluysa dogrulama gecmeli (vacuous reddetme
-// kontrolu).
+// Apple'in uc alani da doluysa VE .p8 GERCEKTEN ayristirilabiliyorsa
+// dogrulama gecmeli (vacuous reddetme kontrolu).
+//
+// Eskiden burada AppleAnahtarP8 olarak "pem-verisi" gibi bir yer tutucu
+// yetiyordu; bu test o yer tutucuyu kabul ederek I1'in actigi kapiyi
+// PINLIYORDU. Artik gercek bir anahtar uretiliyor.
 func TestAppleFederasyonuTamAlanlarlaGecer(t *testing.T) {
+	p8, _ := testP8Uret(t)
 	cfg := testAuthCfg()
 	cfg.Federasyon = []config.FederasyonIstemci{{
 		Ad: "apple", IstemciID: "tr.makesinger.giris",
-		AppleEkipID: "TEAM1", AppleAnahtarID: "AB12", AppleAnahtarP8: "pem-verisi",
+		AppleEkipID: "TEAM1", AppleAnahtarID: "AB12", AppleAnahtarP8: p8,
 	}}
 	if err := yapilandirmaDogrula(cfg); err != nil {
 		t.Errorf("tam apple yapilandirmasi reddedildi: %v", err)
+	}
+}
+
+// I1: alanlarin "bos olmamasi" YETMEZ. K8s'te PEM sirlarinin en sik
+// gercek hatasi, anahtarin tek satirda ve gercek yeni satirlar yerine
+// literal \n ile mount edilmesidir. Boyle bir deger bos DEGILDIR, yani
+// eski kontrolu gecer; pod Ready olur, "Apple ile giris" butonu gorunur
+// ve hata ancak kullanici Apple'da Face ID + iki adimli onayi
+// BITIRDIKTEN sonra anlamsiz bir 403 oturum sayfasi olarak cikar.
+// Baslangicta yakalanmak ZORUNDA.
+func TestAppleP8BaslangictaAyristirilir(t *testing.T) {
+	gercek, _ := testP8Uret(t)
+	// Gercek dagitim hatasinin birebir girdisi: ayni anahtar, yeni
+	// satirlari literal \n dizisine cevrilmis halde.
+	literalKacisli := strings.ReplaceAll(gercek, "\n", `\n`)
+
+	durumlar := []struct {
+		ad string
+		p8 string
+	}{
+		{"literal \\n ile tek satira dusmus p8", literalKacisli},
+		{"PEM olmayan yer tutucu", "pem-verisi"},
+		{"PEM govdesi bozuk", "-----BEGIN PRIVATE KEY-----\nbu-base64-degil\n-----END PRIVATE KEY-----\n"},
+	}
+	for _, d := range durumlar {
+		t.Run(d.ad, func(t *testing.T) {
+			cfg := testAuthCfg()
+			cfg.Federasyon = []config.FederasyonIstemci{{
+				Ad: "apple", IstemciID: "tr.makesinger.giris",
+				AppleEkipID: "TEAM1", AppleAnahtarID: "AB12", AppleAnahtarP8: d.p8,
+			}}
+			err := yapilandirmaDogrula(cfg)
+			if err == nil {
+				t.Fatal("ayristirilamayan .p8 ile dogrulama GECTI; baslangicta reddedilmeliydi")
+			}
+			if !strings.Contains(err.Error(), "AUTH_FED_APPLE_KEY_P8") {
+				t.Errorf("hata operatore ne yapacagini soylemiyor: %v", err)
+			}
+			// Hata mesaji anahtar ICERIGINI sizdirmamali: ne ham deger,
+			// ne base64 govdesi loglara/stderr'e dusmeli.
+			if strings.Contains(err.Error(), d.p8) {
+				t.Errorf("hata mesaji anahtar icerigini sizdiriyor: %v", err)
+			}
+		})
+	}
+}
+
+// I2: Google'in tek zorunlu sirri client_secret'tir. Bos iken token
+// degisimi 401 invalid_client ile duser ve kullanici 403 gorur; pod
+// Ready, metrikler temiz, alarm yok. Apple icin fail-closed baslangic
+// kontrolu varken Google icin olmamasi acik bir asimetriydi.
+func TestGoogleFederasyonuSecretsizBaslamaz(t *testing.T) {
+	cfg := testAuthCfg()
+	cfg.Federasyon = []config.FederasyonIstemci{{
+		Ad: "google", IstemciID: "123.apps.googleusercontent.com",
+	}}
+	err := yapilandirmaDogrula(cfg)
+	if err == nil {
+		t.Fatal("client_secret bos iken dogrulama GECTI")
+	}
+	if !strings.Contains(err.Error(), "AUTH_FED_GOOGLE_CLIENT_SECRET") {
+		t.Errorf("hata operatore ne yapacagini soylemiyor: %v", err)
+	}
+}
+
+// Vacuous reddetme kontrolu: secret doluysa Google gecmeli. Ayrica
+// kuralin DOGRU tarafini pinler: "client_id de bos" durumu bir hata
+// DEGILDIR -- o saglayici federasyonIstemcileriOlustur'da listeye hic
+// girmez, yani yapilandirmaDogrula'ya hic ulasmaz ve bos bir federasyon
+// listesi gecerlidir.
+func TestGoogleFederasyonuSecretVarsaGecer(t *testing.T) {
+	cfg := testAuthCfg()
+	cfg.Federasyon = []config.FederasyonIstemci{{
+		Ad: "google", IstemciID: "123.apps.googleusercontent.com", IstemciSir: "gizli",
+	}}
+	if err := yapilandirmaDogrula(cfg); err != nil {
+		t.Errorf("tam google yapilandirmasi reddedildi: %v", err)
+	}
+
+	cfg.Federasyon = nil
+	if err := yapilandirmaDogrula(cfg); err != nil {
+		t.Errorf("federasyon KAPALI yapilandirma reddedildi: %v", err)
 	}
 }
 

@@ -275,8 +275,44 @@ func yapilandirmaDogrula(cfg *config.AuthConfig) error {
 	// kesfedilen bir sessiz bozukluk degil (Faz 1'in "sessiz sifir"
 	// sinifi sorunu burada tekrarlanmiyor).
 	for _, f := range cfg.Federasyon {
-		if f.Ad == saglayiciApple && (f.AppleEkipID == "" || f.AppleAnahtarID == "" || f.AppleAnahtarP8 == "") {
-			return fmt.Errorf("apple federasyonu yapilandirmasi eksik: AUTH_FED_APPLE_TEAM_ID, AUTH_FED_APPLE_KEY_ID ve AUTH_FED_APPLE_KEY_P8 ucu de zorunlu")
+		if f.Ad == saglayiciApple {
+			if f.AppleEkipID == "" || f.AppleAnahtarID == "" || f.AppleAnahtarP8 == "" {
+				return fmt.Errorf("apple federasyonu yapilandirmasi eksik: AUTH_FED_APPLE_TEAM_ID, AUTH_FED_APPLE_KEY_ID ve AUTH_FED_APPLE_KEY_P8 ucu de zorunlu")
+			}
+			// "Bos degil" YETMEZ: yukaridaki yorumun yasakladigi sessiz
+			// bozukluk tam olarak burada aciliyordu. PEM sirlarinin en sik
+			// gercek dagitim hatasi, anahtarin tek satirda ve gercek yeni
+			// satirlar yerine literal \n ile mount edilmesidir; boyle bir
+			// deger BOS DEGILDIR, yani eski kontrolu GECER, ama
+			// pem.Decode nil doner. Sonuc: pod Ready, buton gorunur ve
+			// hata ancak kullanici Apple'da Face ID + iki adimli onayi
+			// bitirdikten SONRA, anlamsiz bir oturum sayfasi olarak
+			// ortaya cikar.
+			//
+			// Anahtar GERCEKTEN ayristirilir ve bunu appleIstemciSir
+			// yapar: .p8 ayristirma mantigi orada TEK bir noktada durur,
+			// burada kopyalanmasi iki yerin ayri ayri sasmasi demek olur.
+			// Uretilen sir ATILIR; aranan sey yalnizca hatanin kendisi.
+			if _, err := appleIstemciSir(f.AppleEkipID, f.AppleAnahtarID, f.IstemciID, f.AppleAnahtarP8, time.Now()); err != nil {
+				// Sarmalanan hatalar anahtar ICERIGI tasimaz (bkz.
+				// appleIstemciSir): yalnizca hata sinifi ve anahtar tipi.
+				// Mesaj operatore NE yapacagini soyler.
+				return fmt.Errorf("apple .p8 anahtari kullanilamaz: AUTH_FED_APPLE_KEY_P8 PKCS#8 PEM bloklu bir ECDSA (P-256) ozel anahtari olmali; degeri GERCEK yeni satirlarla mount edin (tek satirda literal \\n dizisi PEM olarak cozulemez): %w", err)
+			}
+		}
+		// Google'in tek zorunlu sirri client_secret'tir ve hicbir yerde
+		// denetlenmiyordu: JetonDegis onu form.Set("client_secret", sir)
+		// ile BOS gonderir, Google token ucu 401 invalid_client doner ve
+		// kullanici 403 gorur. Pod Ready, metrikler temiz, alarm yok --
+		// Apple icin fail-closed baslangic kontrolu varken Google icin
+		// olmamasi acik bir asimetriydi.
+		//
+		// Kural BILEREK "client_id dolu ama secret bos" uzerine kurulu:
+		// client_id de bos ise saglayici federasyonIstemcileriOlustur'da
+		// listeye HIC girmez (bkz. oradaki sessiz sifir kurali) ve bu bir
+		// hata DEGILDIR, "federasyon kapali" demektir.
+		if f.Ad == saglayiciGoogle && f.IstemciSir == "" {
+			return fmt.Errorf("google federasyonu yapilandirmasi eksik: AUTH_FED_GOOGLE_CLIENT_ID verildiyse AUTH_FED_GOOGLE_CLIENT_SECRET de zorunlu (bos iken token degisimi 401 invalid_client ile duser)")
 		}
 	}
 	return nil
