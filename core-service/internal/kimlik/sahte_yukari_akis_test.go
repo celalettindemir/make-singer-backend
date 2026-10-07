@@ -652,11 +652,9 @@ func otoFormCoz(govde string) (string, url.Values, bool) {
 const takipSiniri = 12
 
 // akisiTakipEt, gercek bir tarayici gibi yonlendirmeleri ve
-// kendiliginden gonderilen form_post formunu izler. Her adimda
-// capraz-site olup olmadigi HOST KARSILASTIRMASIYLA hesaplanir: ust
-// duzey navigasyonlarda tarayici da cerez baglamini her adimda yeniden
-// hesaplar, bu yuzden saglayicidan BIZE donen POST capraz-site, oradan
-// sonraki kendi yonlendirmelerimiz ayni-sitedir.
+// kendiliginden gonderilen form_post formunu izler. Cerez baglami her
+// adimda yeniden hesaplanir (bkz. adimBaglami): saglayicidan BIZE donen
+// POST capraz-site, oradan sonraki kendi yonlendirmelerimiz ayni-sitedir.
 //
 // Custom scheme (com.makesinger.app:/...) adresinde DURULUR: orada
 // tarayici isi native uygulamaya devreder, yani akisin sonudur ve kod o
@@ -698,8 +696,20 @@ func (b *fedTarayici) akisiTakipEt(t *testing.T, yanit *yanitKaydi) *yanitKaydi 
 	return nil
 }
 
-// adimBaglami, bir adimin cerez baglamini kaynak ve hedef host'tan
+// adimBaglami, bir adimin cerez baglamini kaynak ve hedef HOST'undan
 // hesaplar.
+//
+// MODEL, TARAYICI DEGIL: gercek bir tarayicinin "site"i scheme +
+// registrable domain'dir, port ONEMSIZDIR. Burada host ayrimini site
+// ayrimi olarak MODELLIYORUZ, cunku uretimde Apple/Google ile kendi
+// issuer'imiz gercekten ayri site; testte ise hepsi 127.0.0.1'de farkli
+// portlarda duruyor ve ayirt edilebilir tek sey host'tur.
+//
+// Model Chrome'dan DAHA SIKI: Chrome'un Lax+POST iki dakika muafiyeti
+// YENI yazilmis bir Lax cerezi Apple'in form_post donusunda TASIRDI,
+// bu kavanoz tasimaz. Sapma GUVENLI yondedir -- yanlis YESIL uretmez,
+// yalnizca cerezin SameSite=None olmasini sart kosar (K2'nin tam
+// istedigi sey).
 func adimBaglami(kaynak, hedef *url.URL, yontem string) cerezBaglam {
 	if kaynak != nil && kaynak.Host == hedef.Host {
 		return baglamAyniSite
