@@ -78,7 +78,7 @@ func main() {
 	// legacy dogrulama ne exp ne iss ne aud istedigi icin, varsayilan
 	// sirla (`change-me-in-production`) imzalanmis SURESIZ bir jeton
 	// kabul ediliyordu. Yani gecici bir Postgres kesintisi tum API'yi
-	// aciyordu. Her istege 401 donen ama /health'te sagliklı gorunen
+	// aciyordu. Her istege 401 donen ama /health'te saglikli gorunen
 	// bir pod sessiz bir kesintidir; CrashLoopBackOff dogru ve gorunur
 	// sinyal, yeniden baslatma da gecici kesinti icin dogru kurtarma.
 	var kimlikSunucu *kimlik.Sunucu
@@ -254,7 +254,7 @@ func main() {
 	app.Get("/health", func(c *fiber.Ctx) error {
 		// GERCEK hazirlik: "kimlikSunucu != nil" (yani Start basariyla
 		// dondu mu) YETERLI DEGIL — dinleyici sonradan cokerse pod hala
-		// "sagliklı" gorunuyordu. Hazir(), dinleyicinin su an hizmet
+		// "saglikli" gorunuyordu. Hazir(), dinleyicinin su an hizmet
 		// verdigini soyler ve nil alici icin de guvenlidir.
 		kimlikHazir := kimlikSunucu.Hazir()
 
