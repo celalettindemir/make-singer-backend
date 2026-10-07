@@ -64,6 +64,30 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      # Postgres de ZORUNLU: depo sozlesme testleri
+      # (TestUserStoreSozlesmesi/postgres, TestFedereDepoSozlesmesi/postgres,
+      # TestJetonDepoPostgres, TestMigrate) Postgres yoksa t.Skip eder --
+      # yani Faz 1'den beri CI'da HIC kosmadilar ve sahte depolarin
+      # Postgres ile ayni davrandigi iddiasi CI'da hic sinanmadi.
+      #
+      # PORT 55432 ve sifre KASITLI olarak testlerdeki varsayilan DSN ile
+      # AYNI: "postgres://postgres:kimlik-test-yerel@localhost:55432/postgres".
+      # KIMLIK_TEST_DB_URL ortam degiskeni BILEREK AYARLANMIYOR -- bir env
+      # degiskeni eklemek, degisken yanlis yazildiginda testin SESSIZCE
+      # atlanmasi demektir ve tam o hata sinifi (sessiz SKIP) Faz 1'de
+      # gercek bir guvenlik hatasini sakladi. Yerelde ve CI'da AYNI DSN,
+      # "yerelde kosuyor ama CI'da atliyor" sinifini bastan imkansiz kilar.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: kimlik-test-yerel
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
