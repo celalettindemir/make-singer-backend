@@ -3,6 +3,7 @@ package kimlik
 import (
 	"context"
 	"encoding/json"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/makeasinger/api/internal/auth"
 	"github.com/zitadel/oidc/v3/pkg/oidc"
 	"github.com/zitadel/oidc/v3/pkg/op"
 	"golang.org/x/text/language"
@@ -55,6 +57,24 @@ func testSunucu(t *testing.T) *akisOrtami {
 }
 
 func testSunucuAyarli(t *testing.T, ayar HizLimitAyar) *akisOrtami {
+	t.Helper()
+	return testSunucuKur(t, ayar, false)
+}
+
+// testSunucuFedere, AYNI kablolamayi federasyon YAPILANDIRILMIS halde
+// kurar: muxKur'un "akislar dolu" dali kosar, yani federasyon uclari ve
+// giris sayfasindaki butonlar gercekten vardir.
+//
+// NEDEN AYRI BIR GIRIS NOKTASI: akis testlerinin cogu federasyonsuz
+// kurulumu olcer ve her birine iki RSA anahtari + iki sahte saglayici
+// maliyeti yuklemek gereksiz. Federasyon kablolamasini olcen testler bu
+// varyanti cagirir.
+func testSunucuFedere(t *testing.T, ayar HizLimitAyar) *akisOrtami {
+	t.Helper()
+	return testSunucuKur(t, ayar, true)
+}
+
+func testSunucuKur(t *testing.T, ayar HizLimitAyar, federe bool) *akisOrtami {
 	t.Helper()
 	rdb := testRedis(t) // Redis yoksa burada atlanir
 
@@ -101,10 +121,43 @@ func testSunucuAyarli(t *testing.T, ayar HizLimitAyar) *akisOrtami {
 		t.Fatalf("NewHizLimit: %v", err)
 	}
 
+	// Federasyon parametreleri: federe=false iken nil (muxKur
+	// federasyon ucunu HIC baglamaz), true iken SAHTE bir yukari akis
+	// ile dolu. Sahte saglayici yerel bir httptest sunucusudur; test
+	// hicbir zaman Apple/Google'a cikmaz.
+	var (
+		akislar        map[string]*YukariAkis
+		dogrulayicilar map[string]*auth.YukariAkisDogrulayici
+		federeDepo     FedereDepo
+	)
+	if federe {
+		yukari := yeniSahteSaglayici(t, saglayiciGoogle)
+		akislar = map[string]*YukariAkis{
+			saglayiciGoogle: {
+				Ad: saglayiciGoogle, IstemciID: yukari.istemciID, IstemciSir: "google-sir",
+				AuthURL: yukari.sunucu.URL + "/authorize", TokenURL: yukari.sunucu.URL + "/token",
+				JWKSURL: yukari.sunucu.URL + "/jwks", Issuer: yukari.sunucu.URL,
+				Kapsamlar: []string{"openid", "email", "profile"}, PKCEDestekli: true,
+			},
+		}
+		dogrulayici, err := auth.NewYukariAkisDogrulayici(
+			context.Background(), yukari.sunucu.URL+"/jwks", yukari.sunucu.URL, yukari.istemciID,
+		)
+		if err != nil {
+			t.Fatalf("yukari akis dogrulayicisi kurulamadi: %v", err)
+		}
+		t.Cleanup(func() { _ = dogrulayici.Close() })
+		dogrulayicilar = map[string]*auth.YukariAkisDogrulayici{saglayiciGoogle: dogrulayici}
+		federeDepo = NewSahteFedereDepo(kullanici)
+	}
+
 	// cerezGuvenli=false: test dinleyicisi http, Secure cerez
 	// tasinmazdi.
 	srv := &http.Server{
-		Handler:           muxKur(saglayici, kullanici, istekler, nil, nil, nil, issuer, false, hizLimit),
+		Handler: muxKur(
+			saglayici, kullanici, istekler, federeDepo,
+			akislar, dogrulayicilar, issuer, false, hizLimit,
+		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() { _ = srv.Serve(dinleyici) }()
@@ -936,4 +989,119 @@ func TestFederasyonsuzKurulumUclariBaglamaz(t *testing.T) {
 	if strings.Contains(govdeMetni, "/federasyon/") {
 		t.Errorf("federasyonsuz kurulumda buton cikti:\n%s", govdeMetni)
 	}
+}
+
+// ---- Federasyon kablolamasi (muxKur uzerinden) ----
+
+// fedButonDeseni, giris sayfasindaki federasyon butonunun href'ini alir.
+var fedButonDeseni = regexp.MustCompile(`href="(/federasyon/[^"]*)"`)
+
+// Federasyon uclarinin URETIM KABLOLAMASINDA, yani muxKur icinde
+// GERCEKTEN baglandigini ve hiz limitli olduklarini olcer.
+//
+// NEDEN BU TEST VAR: muxKur'un "akislar dolu" dali hicbir testte
+// kosmuyordu (tek cagiran federasyon parametrelerine nil geciyordu),
+// yani fedSayfalar.Bagla / BaglamaBagla cagrilari TUMUYLE SILINSE bile
+// paket yesil kaliyordu. Somut sonuc: AUTH_FED_GOOGLE_CLIENT_ID dolu bir
+// surecte giris sayfasinda buton GORUNUR ama uc mux'ta olmadigi icin
+// istek mux.Handle("/", saglayici)'ya duser ve kullanici 404 alir. Ayni
+// sekilde iki cagriya hizLimit yerine nil gecmek de yesil kaliyordu,
+// yani uc kimlik dogrulamasiz uc sinirsiz yayina girebilirdi.
+//
+// Her alt test testSunucuFedere'yi KENDI govdesinde cagirir: Redis yoksa
+// atlanmasi gereken sey o alt testtir, ustteki test degil (bir ust
+// seviyede cagirmak butun olcumu sessizce atlatan bir hataya yol acar).
+func TestMuxKurFederasyonKablolamasi(t *testing.T) {
+	// Sinirlari YUKSEK tutan ayar: baglilik alt testleri hiz limitine
+	// takilmamali; hiz limitini olcen alt testler kendi dar ayarini
+	// kurar.
+	gevsek := HizLimitAyar{
+		GirisIPPerMin:      50,
+		GirisEpostaPerSaat: 50,
+		KayitIPPerSaat:     50,
+	}
+
+	t.Run("baslat ve baglama uclari mux'a bagli", func(t *testing.T) {
+		o := testSunucuFedere(t, gevsek)
+		c := tarayici(t)
+
+		// authRequestID YOK: Baslat'in kontrol sirasinda (saglayici 404
+		// -> bos id 400 -> capraz-site 403 -> oturum baglamasi 403 ->
+		// IDileOku 400) bu, saglayici COZULDUKTEN sonraki ilk
+		// kontroldur. Yani 400 ancak handler CALISTIYSA donebilir;
+		// uc baglanmamis olsa istek mux.Handle("/", saglayici)'ya duser.
+		baslat := al(t, c, o.issuer+federasyonBaslatYolu(saglayiciGoogle))
+		if baslat.StatusCode == http.StatusNotFound {
+			t.Errorf("%s mux'a BAGLI DEGIL: 404 dondu", federasyonBaslatYolu(saglayiciGoogle))
+		} else if baslat.StatusCode != http.StatusBadRequest {
+			t.Errorf("baslat durumu = %d, beklenen 400 (bos authRequestID)", baslat.StatusCode)
+		}
+
+		// beklemeID YOK: baglamaGet gecerli bir bekleme baglamasi
+		// bulamayinca 403 doner (oturumRed). 404 ise ucun hic
+		// baglanmadigi anlamina gelir.
+		baglama := al(t, c, o.issuer+yolBaglama)
+		if baglama.StatusCode == http.StatusNotFound {
+			t.Errorf("%s mux'a BAGLI DEGIL: 404 dondu", yolBaglama)
+		} else if baglama.StatusCode != http.StatusForbidden {
+			t.Errorf("baglama durumu = %d, beklenen 403 (bekleme yok)", baglama.StatusCode)
+		}
+	})
+
+	t.Run("giris sayfasindaki buton bagli ucun yoluna gider", func(t *testing.T) {
+		o := testSunucuFedere(t, gevsek)
+		c := tarayici(t)
+		_, challenge := pkceS256(t)
+		id := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge, "S256")))
+
+		sayfa := al(t, c, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
+		if sayfa.StatusCode != http.StatusOK {
+			t.Fatalf("giris sayfasi durumu = %d", sayfa.StatusCode)
+		}
+		esler := fedButonDeseni.FindStringSubmatch(govde(t, sayfa))
+		if esler == nil {
+			t.Fatal("giris sayfasinda federasyon butonu yok")
+		}
+		// Sablon href icindeki "&" karakterini kacirir; yolu ayirmak
+		// icin sorgu kismini atiyoruz, iddia YOL uzerine.
+		butonYol, _, _ := strings.Cut(esler[1], "?")
+		if butonYol != federasyonBaslatYolu(saglayiciGoogle) {
+			t.Fatalf("buton yolu = %q, bagli uc yolu = %q", butonYol, federasyonBaslatYolu(saglayiciGoogle))
+		}
+		// Butonun GERCEK href'i de ayni mux'ta cevap bulmali.
+		yanit := al(t, c, o.issuer+html.UnescapeString(esler[1]))
+		if yanit.StatusCode == http.StatusNotFound {
+			t.Errorf("buton href'i 404 dondu: %q", esler[1])
+		}
+	})
+
+	t.Run("baslat ucu hiz limitli", func(t *testing.T) {
+		o := testSunucuFedere(t, HizLimitAyar{
+			GirisIPPerMin: 1, GirisEpostaPerSaat: 50, KayitIPPerSaat: 50,
+		})
+		c := tarayici(t)
+		yol := o.issuer + federasyonBaslatYolu(saglayiciGoogle)
+
+		if ilk := al(t, c, yol); ilk.StatusCode == http.StatusTooManyRequests {
+			t.Fatal("ilk baslatma 429 aldi; sinir yanlis kurulmus")
+		}
+		if ikinci := al(t, c, yol); ikinci.StatusCode != http.StatusTooManyRequests {
+			t.Errorf("ikinci baslatma durumu = %d, beklenen 429", ikinci.StatusCode)
+		}
+	})
+
+	t.Run("baglama ucu hiz limitli", func(t *testing.T) {
+		o := testSunucuFedere(t, HizLimitAyar{
+			GirisIPPerMin: 1, GirisEpostaPerSaat: 50, KayitIPPerSaat: 50,
+		})
+		c := tarayici(t)
+		yol := o.issuer + yolBaglama
+
+		if ilk := al(t, c, yol); ilk.StatusCode == http.StatusTooManyRequests {
+			t.Fatal("ilk baglama 429 aldi; sinir yanlis kurulmus")
+		}
+		if ikinci := al(t, c, yol); ikinci.StatusCode != http.StatusTooManyRequests {
+			t.Errorf("ikinci baglama durumu = %d, beklenen 429", ikinci.StatusCode)
+		}
+	})
 }

@@ -164,6 +164,10 @@ func (s *Sayfalar) FederasyonSaglayicilari(adlar []string) { s.federasyonlar = a
 // YAPILMAZ. authRequestID kacissiz girerse en iyi durumda baglanti
 // bozulur, en kotusunde icindeki "&" sorgu dizisine yabanci bir
 // parametre enjekte eder.
+//
+// Yolun GOVDESI ise federasyonBaslatYolu'ndan gelir, yani ucun mux'a
+// baglandigi sabitten turetilir: buton ile uc tek dogruluk kaynagini
+// paylasir (bkz. yolFederasyonBaslat).
 func (s *Sayfalar) federasyonButonlari(id string) []SaglayiciButon {
 	if len(s.federasyonlar) == 0 {
 		return nil
@@ -171,7 +175,7 @@ func (s *Sayfalar) federasyonButonlari(id string) []SaglayiciButon {
 	butonlar := make([]SaglayiciButon, 0, len(s.federasyonlar))
 	for _, ad := range s.federasyonlar {
 		yol := url.URL{
-			Path:     "/federasyon/" + ad + "/baslat",
+			Path:     federasyonBaslatYolu(ad),
 			RawQuery: url.Values{"authRequestID": {id}}.Encode(),
 		}
 		butonlar = append(butonlar, SaglayiciButon{

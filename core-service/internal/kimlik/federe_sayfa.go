@@ -22,6 +22,25 @@ const (
 	yolFederasyonGeri   = "/federasyon/{saglayici}/geri"
 )
 
+// saglayiciYerTutucu, yukaridaki desenlerde saglayici adinin yerini
+// tutan ServeMux yol degeridir.
+const saglayiciYerTutucu = "{saglayici}"
+
+// federasyonBaslatYolu, bir saglayicinin baslatma ucunun GERCEK yolunu
+// uretir.
+//
+// NEDEN BU YARDIMCI VAR: giris sayfasindaki buton yolu (bkz.
+// Sayfalar.federasyonButonlari) ile mux'a baglanan uc yolu AYNI olmak
+// zorunda. Ikisi ayri ayri elle kurulurken uc yolunun yeniden
+// adlandirilmasi butonlari sessizce eski yola, yani 404'e birakiyordu.
+// Buton yolu artik ucun KENDI sabitinden turetiliyor: tek dogruluk
+// kaynagi yolFederasyonBaslat'tir. Yardimci tercih edildi (sabiti
+// cagiran yerde elle Replace etmek yerine) cunku yer tutucunun bicimi
+// de boylece tek yerde kaliyor.
+func federasyonBaslatYolu(saglayici string) string {
+	return strings.Replace(yolFederasyonBaslat, saglayiciYerTutucu, saglayici, 1)
+}
+
 // cerezAdFederasyon, federasyon akisini BASLATAN tarayiciya verilen
 // cerezin adidir (K2).
 //
