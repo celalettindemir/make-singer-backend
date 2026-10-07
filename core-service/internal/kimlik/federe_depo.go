@@ -18,17 +18,6 @@ var (
 	ErrKimlikKullanimda = errors.New("federe kimlik baska hesaba bagli")
 )
 
-// FedereKimlik, (saglayici, sub) -> user_id eslesmesinin satir karsiligi.
-// Suan icin depo katmaninin disina (Go seviyesinde) donmuyor; sorgular
-// dogrudan User doner. FedereDepo'nun saklama bicimini belgelemek icin
-// burada tutuluyor.
-type FedereKimlik struct {
-	Saglayici string
-	Sub       string
-	UserID    string
-	CreatedAt time.Time
-}
-
 // FedereDepo, (saglayici, sub) ile kullanici arasindaki eslesmeyi
 // yonetir. Faz 2'nin federasyon akislari (Apple/Google) bu depoyu
 // kullanarak bizim User'imizi bulur veya olusturur.
