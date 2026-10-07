@@ -86,10 +86,10 @@ func TestAppleIstemciSirOmru(t *testing.T) {
 	if iat == nil || exp == nil {
 		t.Fatalf("iat/exp eksik: iat=%v exp=%v", iat, exp)
 	}
-	if !iat.Time.Equal(simdi) {
+	if !iat.Equal(simdi) {
 		t.Errorf("iat = %v, beklenen %v", iat.Time, simdi)
 	}
-	if got := exp.Time.Sub(iat.Time); got != 5*time.Minute {
+	if got := exp.Sub(iat.Time); got != 5*time.Minute {
 		t.Errorf("exp - iat = %v, beklenen 5m", got)
 	}
 }
