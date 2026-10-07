@@ -82,6 +82,9 @@ type sahteSaglayici struct {
 	tokenSayisi      int
 	sonKod           string
 	sonDogrulayici   string
+	// uretilenTokenlar, token ucunun dondurdugu TUM id_token'lar:
+	// loglarin hicbirinde gecmedigini dogrulamak icin tutulur.
+	uretilenTokenlar []string
 }
 
 func yeniSahteSaglayici(t *testing.T, ad string) *sahteSaglayici {
@@ -147,6 +150,7 @@ func (s *sahteSaglayici) idToken(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("id_token imzalanamadi: %v", err)
 	}
+	s.uretilenTokenlar = append(s.uretilenTokenlar, imzali)
 	return imzali
 }
 
@@ -154,6 +158,13 @@ func (s *sahteSaglayici) ayarla(f func(*sahteSaglayici)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f(s)
+}
+
+// tokenlar, token ucunun dondurdugu id_token'larin kopyasini doner.
+func (s *sahteSaglayici) tokenlar() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.uretilenTokenlar...)
 }
 
 func (s *sahteSaglayici) sayilar() int {
@@ -234,6 +245,11 @@ type fedOrtam struct {
 	google    *sahteSaglayici
 	apple     *sahteSaglayici
 	authReqID string
+
+	// oturumCerez, authReqID'yi BU tarayiciya baglayan Faz 1 oturum
+	// cerezi: /authorize bacaginin uretecegi cerezin karsiligi. Baslat
+	// onu ZORUNLU kilar (bkz. C1).
+	oturumCerez *http.Cookie
 }
 
 // testFedereSayfalar, federasyon uclarini GERCEK Redis (durum ve
@@ -297,6 +313,7 @@ func testFedereSayfalar(t *testing.T) *fedOrtam {
 		authReqID: "istek-1",
 	}
 	istekler.ekle(o.authReqID)
+	o.oturumCerez = o.oturumBagla(t, o.authReqID)
 	return o
 }
 
@@ -316,13 +333,49 @@ func (o *fedOrtam) durumOku(t *testing.T, state string) FedereDurum {
 	return d
 }
 
+// baslatHam, baslat ucunu VERILEN oturum cerezi ve istege gore cagirir.
+// capraz=true ise Sec-Fetch-Site: cross-site gonderir.
+func (o *fedOrtam) baslatHam(saglayici, authReqID string, cerez *http.Cookie, capraz bool) *httptest.ResponseRecorder {
+	hedef := "/federasyon/" + saglayici + "/baslat?" + url.Values{"authRequestID": {authReqID}}.Encode()
+	r := httptest.NewRequest(http.MethodGet, hedef, nil)
+	if cerez != nil {
+		r.AddCookie(cerez)
+	}
+	if capraz {
+		r.Header.Set(baslikFetchSite, fetchSiteCapraz)
+	}
+	w := httptest.NewRecorder()
+	o.mux.ServeHTTP(w, r)
+	return w
+}
+
+// durumSayisi, Redis'te kac federasyon state kaydi oldugunu doner:
+// "reddedilen bir baslatma HICBIR kayit yazmadi" iddiasinin kaniti.
+func (o *fedOrtam) durumSayisi(t *testing.T) int {
+	t.Helper()
+	anahtarlar, err := o.depo.rdb.Keys(context.Background(), durumAnahtar("*")).Result()
+	if err != nil {
+		t.Fatalf("durum anahtarlari okunamadi: %v", err)
+	}
+	return len(anahtarlar)
+}
+
+// fedCerezVarMi, yanitta kimlik_fed cerezi olup olmadigini soyler.
+func fedCerezVarMi(w *httptest.ResponseRecorder) bool {
+	for _, c := range w.Result().Cookies() {
+		if c.Name == cerezAdFederasyon {
+			return true
+		}
+	}
+	return false
+}
+
 // baslat, GET /federasyon/<saglayici>/baslat cagirir ve (state, fed
-// cerezi, yanit) doner.
+// cerezi, yanit) doner. Istegi BASLATAN tarayicinin oturum cerezi
+// GONDERILIR: Baslat onu zorunlu kilar (C1).
 func (o *fedOrtam) baslat(t *testing.T, saglayici, authReqID string) (string, *http.Cookie, *httptest.ResponseRecorder) {
 	t.Helper()
-	hedef := "/federasyon/" + saglayici + "/baslat?" + url.Values{"authRequestID": {authReqID}}.Encode()
-	w := httptest.NewRecorder()
-	o.mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, hedef, nil))
+	w := o.baslatHam(saglayici, authReqID, o.oturumCerez, false)
 	if w.Code != http.StatusFound {
 		return "", nil, w
 	}
@@ -489,25 +542,118 @@ func TestBaslatBilinmeyenSaglayici404(t *testing.T) {
 
 func TestBaslatGecersizAuthRequestIDReddedilir(t *testing.T) {
 	o := testFedereSayfalar(t)
+	// "var olmayan id" icin oturum baglamasi KURULUR: aksi halde test
+	// 403'te durur ve "istek var mi" kontrolunu hic olcmez.
+	yokCerez := o.oturumBagla(t, "yok-boyle-bir-istek")
 	for _, d := range []struct {
-		ad string
-		id string
+		ad    string
+		id    string
+		cerez *http.Cookie
 	}{
-		{"bos id", ""},
-		{"var olmayan id", "yok-boyle-bir-istek"},
+		{"bos id", "", o.oturumCerez},
+		{"var olmayan id", "yok-boyle-bir-istek", yokCerez},
 	} {
 		t.Run(d.ad, func(t *testing.T) {
-			_, cerez, w := o.baslat(t, saglayiciGoogle, d.id)
+			w := o.baslatHam(saglayiciGoogle, d.id, d.cerez, false)
 			if w.Code != http.StatusBadRequest {
 				t.Errorf("durum = %d, beklenen 400", w.Code)
 			}
-			if cerez != nil {
+			if fedCerezVarMi(w) {
 				t.Error("gecersiz istekte federasyon cerezi konmamali")
 			}
 			if !strings.Contains(w.Body.String(), hataIstekGecersiz) {
 				t.Errorf("govde = %q", w.Body.String())
 			}
 		})
+	}
+}
+
+// C1: authRequestID TEK BASINA yetki girdisi DEGILDIR. Baslat, istegi
+// /authorize'da BASLATAN tarayicinin oturum baglamasini ZORUNLU kilar.
+// Aksi halde canli bir authRequestID'yi ogrenen biri federasyon
+// bacagini KENDI tarayicisinda kosturup Geri'de istegi KENDI hesabina
+// tamamlatabilir (Faz 1'in C1 hesap devralmasi, yeni bir kapidan).
+func TestBaslatOturumBaglamasiZorunlu(t *testing.T) {
+	for _, d := range []struct {
+		ad    string
+		cerez func(o *fedOrtam, t *testing.T) *http.Cookie
+	}{
+		{"oturum cerezi yok", func(*fedOrtam, *testing.T) *http.Cookie { return nil }},
+		{"uydurma oturum cerezi", func(*fedOrtam, *testing.T) *http.Cookie {
+			return &http.Cookie{Name: cerezAdOturum, Value: "saldirganin-uydurdugu-deger"}
+		}},
+		{"BASKA bir istege bagli oturum", func(o *fedOrtam, t *testing.T) *http.Cookie {
+			return o.oturumBagla(t, "saldirganin-kendi-istegi")
+		}},
+	} {
+		t.Run(d.ad, func(t *testing.T) {
+			o := testFedereSayfalar(t)
+			oncekiKayit := o.durumSayisi(t)
+
+			w := o.baslatHam(saglayiciGoogle, o.authReqID, d.cerez(o, t), false)
+			if w.Code != http.StatusForbidden {
+				t.Errorf("durum = %d, beklenen 403", w.Code)
+			}
+			if fedCerezVarMi(w) {
+				t.Error("baglamasiz istege federasyon cerezi KONMAMALI")
+			}
+			if sonra := o.durumSayisi(t); sonra != oncekiKayit {
+				t.Errorf("state kaydi yazildi (%d -> %d); baglamasiz istek HICBIR kayit uretmemeli",
+					oncekiKayit, sonra)
+			}
+			if w.Header().Get("Location") != "" {
+				t.Errorf("yukari akisa yonlendirildi: %q", w.Header().Get("Location"))
+			}
+		})
+	}
+}
+
+// C1 (b): K3'un muafiyeti YALNIZCA geri donus ucuna aittir. Baslat
+// capraz-siteden cagrilamaz; AuthorizeSar'in capraz-site dalinda
+// baglama KURMAMA karari ancak tamamlama yollarinin HEPSI baglama
+// aradiginda ise yarar.
+func TestBaslatCaprazSiteReddedilir(t *testing.T) {
+	o := testFedereSayfalar(t)
+	oncekiKayit := o.durumSayisi(t)
+
+	// Oturum cerezi GECERLI: reddin TEK sebebi capraz-site olmali.
+	w := o.baslatHam(saglayiciGoogle, o.authReqID, o.oturumCerez, true)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("durum = %d, beklenen 403", w.Code)
+	}
+	if fedCerezVarMi(w) {
+		t.Error("capraz-site istege federasyon cerezi KONMAMALI")
+	}
+	if sonra := o.durumSayisi(t); sonra != oncekiKayit {
+		t.Errorf("state kaydi yazildi (%d -> %d)", oncekiKayit, sonra)
+	}
+}
+
+// C1 (b)'nin degismezi: AuthorizeSar, /authorize'a capraz-siteden
+// gelindiginde baglama KURMAZ ve "auth istegi olusur ama hicbir
+// tarayici ona bagli olmadigi icin ... istek TAMAMLANAMAZ" varsayimina
+// guvenir. Federasyon bacagi o varsayimi KIRMAMALI: baglamasiz bir
+// istek federasyon uzerinden de tamamlanamaz.
+func TestBaslatBaglamasizIstekFederasyonlaTamamlanamaz(t *testing.T) {
+	o := testFedereSayfalar(t)
+	// AuthorizeSar'in geride biraktigi durum: istek VAR, baglama YOK.
+	baglamasiz := "baglamasiz-istek"
+	o.istekler.ekle(baglamasiz)
+
+	w := o.baslatHam(saglayiciGoogle, baglamasiz, nil, false)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("durum = %d, beklenen 403", w.Code)
+	}
+	// Tamamlanabilecek hicbir sey uretilmedi: state yok, cerez yok.
+	if fedCerezVarMi(w) {
+		t.Error("federasyon cerezi konmus")
+	}
+	if n := o.durumSayisi(t); n != 0 {
+		t.Errorf("state kaydi sayisi = %d, beklenen 0", n)
+	}
+	// Ve istek HICBIR kullaniciya baglanmadi.
+	if s := o.istekler.subject(baglamasiz); s != "" {
+		t.Errorf("Subject = %q, beklenen bos (TamamlandiIsaretle'ye ULASILMAMALI)", s)
 	}
 }
 
@@ -899,6 +1045,23 @@ func TestGeriLoglarSizdirmaz(t *testing.T) {
 		}
 		if strings.Contains(ciktilar, deger) {
 			t.Errorf("log %s degerini sizdirdi; loglar: %q", ad, ciktilar)
+		}
+	}
+	// id_token: hem mutlu yolda hem dogrulamanin DUSTUGU yolda uretildi;
+	// hicbiri (ne tamami ne de bir parcasi) loga girmemeli.
+	tokenlar := o.google.tokenlar()
+	if len(tokenlar) == 0 {
+		t.Fatal("hic id_token uretilmedi; test id_token sizmasini OLCMUYOR")
+	}
+	for i, jeton := range tokenlar {
+		if strings.Contains(ciktilar, jeton) {
+			t.Errorf("log %d. id_token'i sizdirdi; loglar: %q", i, ciktilar)
+		}
+		// Imza parcasi da aranir: kirpilmis bir token da sizmadir.
+		for _, parca := range strings.Split(jeton, ".") {
+			if len(parca) > 16 && strings.Contains(ciktilar, parca) {
+				t.Errorf("log %d. id_token'in bir parcasini sizdirdi; loglar: %q", i, ciktilar)
+			}
 		}
 	}
 }

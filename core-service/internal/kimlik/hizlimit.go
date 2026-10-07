@@ -206,11 +206,10 @@ func (h *HizLimit) SayfaGetSar(ad string, next http.Handler) http.Handler {
 // tehdit profili aynidir; ayri bir yapilandirma anahtari eklemeye deger
 // bir ayrisma yok.
 //
-// E-posta basina sayac YOK: baglama sayfasi e-postayi FORMDAN ALMAZ,
-// adres bekleme kaydindan gelir ve kullaniciya salt okunur gosterilir.
-// Yani "hangi hesaba deneniyor" secimi istemcide degil; IP sayaci
-// denemeleri sinirlamak icin yeterlidir. Her denemenin ustune ayrica
-// tek kullanimlik bekleme kaydi ve oturum baglamasi kontrolu biner.
+// HESAP BASINA sayac BURADA DEGIL, handler'da: hangi hesaba deneme
+// yapildigi ancak bekleme kaydi OKUNDUKTAN sonra bilinir ve o kaydi
+// middleware'de ikinci kez okumak tek kullanimlik okuma disiplinini
+// bozardi. Bkz. HesapSayaci ve baglamaPost.
 func (h *HizLimit) BaglamaSar(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !h.izinVer(w, r, sayac{
@@ -221,6 +220,38 @@ func (h *HizLimit) BaglamaSar(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// HesapSayaci, TEK bir hesaba yonelen sifre denemelerini saatlik olarak
+// sinirlar ve istegin devam edip edemeyecegini soyler; false donduyse
+// yanit ZATEN yazilmistir (429 veya 503).
+//
+// NEDEN GEREKLI: IP basina sayac, her istegi farkli bir IP'den yapan
+// dagitik bir denemeyi durdurmaz -- POST /giris'te bu yuzden e-posta
+// basina ikinci bir sayac var (bkz. GirisSar). /baglama ayni tehdide
+// aciktir ve orada ek bir yol daha var: bekleme kaydi tek kullanimlik
+// olsa bile, federasyon turu tekrarlanarak YENI bir kayit istenildigi
+// kadar alinabilir. Yani kaydin tekilligi deneme sayisini sinirlamaz;
+// sinirlayan sey bu sayactir.
+//
+// NEDEN WRAPPER DEGIL: hangi hesaba deneme yapildigi, bekleme kaydi
+// okunmadan bilinemez. Kaydi middleware'de okumak ya ikinci bir okuma
+// ya da tek kullanimlik okumanin yerinin degismesi demek olurdu.
+//
+// hesapKimligi (kullanici ID'si) Redis anahtarina DUZ METIN yazilmaz:
+// e-posta sayacindaki ile AYNI gerekce ve AYNI HMAC yolu kullanilir
+// (bkz. epostaAnahtar).
+func (h *HizLimit) HesapSayaci(w http.ResponseWriter, r *http.Request, hesapKimligi string) bool {
+	if hesapKimligi == "" {
+		// Kimliksiz bir deneme sayilacak bir hesap belirtmiyor; IP
+		// sayaci onu zaten saydi.
+		return true
+	}
+	return h.izinVer(w, r, sayac{
+		anahtar: h.epostaAnahtar("baglama-hesap", hesapKimligi),
+		sinir:   h.ayar.GirisEpostaPerSaat,
+		pencere: time.Hour,
 	})
 }
 

@@ -95,6 +95,11 @@ type FedereSayfalar struct {
 	// istemci, yukari akis token ucuna yapilan cagrilarda kullanilir.
 	// Alan olarak tutulur ki testler httptest istemcisini gecirebilsin.
 	istemci *http.Client
+
+	// hiz, HESAP BASINA sifre deneme sayaci icin /baglama handler'inda
+	// kullanilir; BaglamaBagla tarafindan kurulur ve nil OLABILIR
+	// (yalnizca birim testler).
+	hiz *HizLimit
 }
 
 // NewFedereSayfalar, federasyon uclarini kurar.
@@ -154,6 +159,8 @@ func (f *FedereSayfalar) Bagla(mux *http.ServeMux, araci *op.IssuerInterceptor, 
 	if hiz != nil {
 		// Baslat, kimlik dogrulamasiz ve ucuz bir uctur ama Redis'e
 		// yazar; GET sayaci onu da kapsar.
+		// SayfaGetSar anahtarin sonuna "-get" EKLER (bkz. hizlimit.go),
+		// bu yuzden ad tekrar "-get" tasimaz.
 		baslat = hiz.SayfaGetSar("federasyon-baslat", baslat)
 		geri = hiz.FederasyonGeriSar(geri)
 	}
@@ -197,6 +204,31 @@ func (f *FedereSayfalar) hataSayfasi(w http.ResponseWriter, kod int, metin strin
 // Baslat, federasyon akisini baslatir: state/nonce/PKCE dogrulayicisi
 // uretir, akisi BASLATAN tarayiciya cerez verir ve kullaniciyi yukari
 // akisin authorize adresine yonlendirir.
+//
+// BU BACAK K3'TEN MUAF DEGILDIR. Muafiyet YALNIZCA geri donus ucuna
+// aittir (bkz. Geri): orada donus TANIM GEREGI capraz-sitedir. Baslat
+// ise /giris sayfasindaki butondan gelen AYNI SITE ust-duzey bir
+// GET'tir, yani Faz 1'in iki korumasi burada oldugu gibi gecerlidir ve
+// ikisi de ZORUNLUDUR:
+//
+//  1. OTURUM BAGLAMASI (oturumBaglamaDogrula): authRequestID tek basina
+//     yetki girdisi DEGILDIR. Baglama olmadan, canli bir
+//     authRequestID'yi ogrenen biri federasyon bacagini KENDI
+//     tarayicisinda kosturup Geri'de istegi KENDI hesabina
+//     tamamlayabilir; kurbanin uygulamasi saldirganin hesabina ait
+//     jetonlari alir. kimlik_fed cerezi baslat ile geri'yi birbirine
+//     baglar ama hicbirini /authorize'i BASLATAN tarayiciya baglamaz;
+//     bunu yapan tek sey Faz 1'in kimlik_oturum baglamasidir.
+//
+//  2. CAPRAZ-SITE REDDI (caprazSiteIstek): AuthorizeSar, /authorize'a
+//     CAPRAZ-SITEDEN gelindiginde baglamayi BILEREK KURMAZ ve guvendigi
+//     degismez sudur: "auth istegi olusur ama hicbir tarayici ona bagli
+//     olmadigi icin GET /giris 403 doner ve istek TAMAMLANAMAZ".
+//     Baslat'ta baglama aranmasi bu degismezi zaten korur; capraz-site
+//     reddi ikinci kemerdir ve niyeti okunur kilar.
+//
+// Mesru akis etkilenmez: kimlik_oturum SameSite=Lax'tir ve /giris'ten
+// gelen ayni-site ust-duzey GET'te TASINIR.
 func (f *FedereSayfalar) Baslat(w http.ResponseWriter, r *http.Request) {
 	akis, ok := f.akislar[r.PathValue("saglayici")]
 	if !ok {
@@ -206,6 +238,23 @@ func (f *FedereSayfalar) Baslat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.URL.Query().Get("authRequestID")
+	if id == "" {
+		f.hataSayfasi(w, http.StatusBadRequest, hataIstekGecersiz)
+		return
+	}
+	if caprazSiteIstek(r) {
+		// authRequestID ve cerez degeri LOGLANMAZ.
+		log.Print("federasyon: capraz-site baslatma reddedildi")
+		f.hataSayfasi(w, http.StatusForbidden, hataOturum)
+		return
+	}
+	// Baglama TALEP edilir, MINTLENMEZ (Faz 1'in girisGet kurali): yeni
+	// bir baglama kurmak, saldirganin kendi tarayicisinda baglama alip
+	// linki kurbana yollamasina izin verirdi.
+	if _, err := oturumBaglamaDogrula(r.Context(), f.oturumlar, r, id); err != nil {
+		oturumRed(w, "federasyon-baslat", err)
+		return
+	}
 	// Istek GERCEKTEN var olmali: var olmayan bir id ile yukari akisa
 	// gitmek, donuste tamamlanacak hicbir sey olmadigi icin kullaniciyi
 	// anlamsiz bir hataya goturur.

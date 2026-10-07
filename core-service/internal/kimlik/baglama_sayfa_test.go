@@ -111,7 +111,7 @@ func (o *fedOrtam) beklemeKur(t *testing.T) (string, string, *http.Cookie, *User
 		t.Fatal("cakisma varken istek TAMAMLANMAMALI")
 	}
 
-	cerez := o.oturumBagla(t, o.authReqID)
+	cerez := o.oturumCerez
 	form := o.baglamaGetIstek(beklemeID, cerez)
 	if form.Code != http.StatusOK {
 		t.Fatalf("baglama formu acilamadi: durum = %d, govde = %q", form.Code, form.Body.String())
@@ -554,6 +554,114 @@ func TestBaglamaHizLimitiUygulanir(t *testing.T) {
 	}
 }
 
+// Sifre denemeleri HESAP BASINA da sinirli olmali: IP sayacini IP
+// degistirerek asan bir saldirgan, her denemede yeni bir bekleme kaydi
+// almak icin federasyon turunu tekrarlayabilir. Tek bir hesaba yonelen
+// deneme sayisini sinirlayan sey hesap sayacidir.
+func TestBaglamaHesapHizLimitiUygulanir(t *testing.T) {
+	o := testFedereSayfalar(t)
+	beklemeID, csrf, cerez, _ := o.beklemeKur(t)
+
+	// IP siniri BOL (100/dk), hesap siniri 1/saat: reddin TEK sebebi
+	// hesap sayaci olmali.
+	hiz, err := NewHizLimit(o.depo.rdb, HizLimitAyar{
+		GirisIPPerMin: 100, GirisEpostaPerSaat: 1, KayitIPPerSaat: 100,
+	}, []byte("test-anahtari"))
+	if err != nil {
+		t.Fatalf("hiz limiti kurulamadi: %v", err)
+	}
+	mux := http.NewServeMux()
+	araci := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
+	o.f.Bagla(mux, araci, hiz)
+	o.f.BaglamaBagla(mux, araci, hiz)
+	o.mux = mux
+
+	ilk := o.baglamaPostIstek(url.Values{
+		alanBeklemeID: {beklemeID}, csrfAlan: {csrf}, "sifre": {"yanlis-sifre-degeri"},
+	}, cerez)
+	if ilk.Code != http.StatusUnauthorized {
+		t.Fatalf("ilk deneme durum = %d, beklenen 401", ilk.Code)
+	}
+
+	// Saldirgan YENI bir bekleme kaydi alir (federasyon turunu
+	// tekrarlar): kaydin tekilligi deneme sayisini sinirlamaz.
+	ikinciAkis := o.akisKos(t, saglayiciGoogle, false)
+	if ikinciAkis.Code != http.StatusFound {
+		t.Fatalf("ikinci akis durum = %d, beklenen 302", ikinciAkis.Code)
+	}
+	konum, err := url.Parse(ikinciAkis.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("Location cozumlenemedi: %v", err)
+	}
+	yeniID := konum.Query().Get(alanBeklemeID)
+	if yeniID == "" || yeniID == beklemeID {
+		t.Fatalf("yeni bekleme kaydi alinamadi: %q", yeniID)
+	}
+	yeniForm := o.baglamaGetIstek(yeniID, cerez)
+	if yeniForm.Code != http.StatusOK {
+		t.Fatalf("yeni form acilamadi: durum = %d", yeniForm.Code)
+	}
+	esler := csrfDeseni.FindStringSubmatch(yeniForm.Body.String())
+	if esler == nil {
+		t.Fatal("yeni formda CSRF jetonu yok")
+	}
+
+	ikinci := o.baglamaPostIstek(url.Values{
+		alanBeklemeID: {yeniID}, csrfAlan: {esler[1]}, "sifre": {"yanlis-sifre-degeri"},
+	}, cerez)
+	if ikinci.Code != http.StatusTooManyRequests {
+		t.Errorf("ikinci deneme durum = %d, beklenen 429 (hesap sayaci)", ikinci.Code)
+	}
+
+	anahtarlar, err := o.depo.rdb.Keys(context.Background(), hizLimitOnEki+":*").Result()
+	if err != nil {
+		t.Fatalf("anahtarlar okunamadi: %v", err)
+	}
+	var hesapVar bool
+	for _, a := range anahtarlar {
+		if strings.Contains(a, ":baglama-hesap:") {
+			hesapVar = true
+		}
+	}
+	if !hesapVar {
+		t.Errorf("hesap sayaci olusmadi; anahtarlar: %v", anahtarlar)
+	}
+	// Hesap kimligi Redis anahtarinda DUZ METIN gecmemeli.
+	for _, a := range anahtarlar {
+		if strings.Contains(a, o.google.eposta) {
+			t.Errorf("sayac anahtari e-postayi duz metin tasiyor: %q", a)
+		}
+	}
+}
+
+// Bekleme kaydi, DOGRULAMALARDAN ONCE tuketilmemeli: beklemeID'yi
+// ogrenen ucuncu bir taraf, cerezsiz tek bir POST ile kurbanin bekleyen
+// baglamasini YOK EDEMEMELI (yoksa kurban tum federasyon turunu bastan
+// yapmak zorunda kalirdi).
+func TestBaglamaBeklemesiBaglamasizPostlaYokEdilemez(t *testing.T) {
+	o := testFedereSayfalar(t)
+	beklemeID, csrf, cerez, mevcut := o.beklemeKur(t)
+
+	// Saldirgan: cerez YOK, CSRF YOK.
+	saldiri := o.baglamaPostIstek(url.Values{
+		alanBeklemeID: {beklemeID}, "sifre": {"herhangi"},
+	}, nil)
+	if saldiri.Code != http.StatusForbidden {
+		t.Fatalf("saldiri durum = %d, beklenen 403", saldiri.Code)
+	}
+
+	// Kurban kendi akisini HALA tamamlayabilmeli.
+	w := o.baglamaPostIstek(url.Values{
+		alanBeklemeID: {beklemeID}, csrfAlan: {csrf}, "sifre": {testSifre},
+	}, cerez)
+	if w.Code != http.StatusFound {
+		t.Fatalf("kurbanin beklemesi yok edildi: durum = %d, govde = %q", w.Code, w.Body.String())
+	}
+	if s := o.istekler.subject(o.authReqID); s != mevcut.ID {
+		t.Errorf("Subject = %q, beklenen %q", s, mevcut.ID)
+	}
+}
+
 // Sifresiz hesap baglama sayfasina HIC gelmemeli; gelirse 409.
 func TestBaglamaSifresizHesapIcinAcilmaz(t *testing.T) {
 	o := testFedereSayfalar(t)
@@ -579,12 +687,11 @@ func TestBaglamaSifresizHesapIcinAcilmaz(t *testing.T) {
 		Sub:           "apple-sub",
 		Eposta:        "sifresiz@ornek.com",
 		CSRF:          csrf,
-		Biter:         time.Now().Add(baglamaBeklemeTTL),
 	}
 	if err := o.f.durum.BeklemeYaz(ctx, beklemeID, bekleme, baglamaBeklemeTTL); err != nil {
 		t.Fatalf("bekleme yazilamadi: %v", err)
 	}
-	cerez := o.oturumBagla(t, o.authReqID)
+	cerez := o.oturumCerez
 
 	w := o.baglamaPostIstek(url.Values{
 		alanBeklemeID: {beklemeID},

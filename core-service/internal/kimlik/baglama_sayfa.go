@@ -58,11 +58,6 @@ type BaglamaBekleme struct {
 	Eposta string
 	// CSRF, bu kayda ve bu tarayiciya ozel jeton.
 	CSRF string
-	// Biter, kaydin son gecerlilik ani. Yanlis sifre denemesinden sonra
-	// kayit YENIDEN yazilir (kullanici bir yazim hatasiyla akisi bastan
-	// baslamasin) ve TTL buradan hesaplanir: her deneme TTL'i
-	// sifirlasa, tahmin penceresi sinirsiz uzardi.
-	Biter time.Time
 }
 
 // ErrBeklemeYok, beklenen baglama kaydi yok (hic olusmamis, suresi
@@ -286,7 +281,6 @@ func (f *FedereSayfalar) cakismaYonlendir(
 		Sub:           c.sub,
 		Eposta:        c.Eposta,
 		CSRF:          c.csrf,
-		Biter:         time.Now().Add(baglamaBeklemeTTL),
 	}
 	if err := f.durum.BeklemeYaz(r.Context(), c.BeklemeID, bekleme, baglamaBeklemeTTL); err != nil {
 		// beklemeID, csrf ve e-posta LOGLANMAZ.
@@ -388,34 +382,37 @@ func (f *FedereSayfalar) baglamaRender(w http.ResponseWriter, kod int, b Baglama
 //
 // hiz nil GECILEBILIR (yalnizca birim testler icin).
 func (f *FedereSayfalar) BaglamaBagla(mux *http.ServeMux, araci *op.IssuerInterceptor, hiz *HizLimit) {
+	// hiz, HESAP BASINA sayac icin handler'da da gerekir: o sayacin
+	// anahtari ancak bekleme kaydi okunduktan sonra bilinir (bkz.
+	// HizLimit.HesapSayaci).
+	f.hiz = hiz
 	var get http.Handler = http.HandlerFunc(f.baglamaGet)
 	post := araci.Handler(http.HandlerFunc(f.baglamaPost))
 	if hiz != nil {
-		get = hiz.SayfaGetSar("baglama-get", get)
+		get = hiz.SayfaGetSar("baglama", get)
 		post = hiz.BaglamaSar(post)
 	}
 	mux.Handle("GET "+yolBaglama, get)
 	mux.Handle("POST "+yolBaglama, post)
 }
 
-// baglamaBaglamaDogrula, /baglama istegi icin UC kosulu birlikte
+// baglamaBaglamaDogrula, /baglama istegi icin IKI kosulu birlikte
 // dogrular: (1) gecerli bir bekleme kaydi var, (2) kaydin bagli oldugu
 // auth istegi BU tarayiciya bagli (Faz 1'in oturum cerezi; federasyon
-// cerezi Path=/federasyon oldugu icin /baglama'ya HIC gonderilmez),
-// (3) kayit heniz tuketilmemis.
+// cerezi Path=/federasyon oldugu icin /baglama'ya HIC gonderilmez).
 //
-// tuket=true ise kayit ATOMIK olarak tuketilir (POST yolu).
+// KAYIT BURADA TUKETILMEZ. GETDEL'i dogrulamalardan ONCE yapmak, bir
+// beklemeID'yi ogrenen ucuncu bir tarafin CEREZSIZ tek bir POST ile
+// kurbanin bekleyen baglamasini YOK ETMESINE izin verirdi (kurban tum
+// federasyon turunu bastan yapmak zorunda kalirdi). Tuketme, sifre
+// dogrulandiktan SONRA baglamaPost'ta ACIKCA yapilir.
 func (f *FedereSayfalar) baglamaBaglamaDogrula(
-	r *http.Request, beklemeID string, tuket bool,
+	r *http.Request, beklemeID string,
 ) (BaglamaBekleme, error) {
 	if beklemeID == "" {
 		return BaglamaBekleme{}, ErrBeklemeYok
 	}
-	oku := f.durum.BeklemeOku
-	if tuket {
-		oku = f.durum.BeklemeAl
-	}
-	b, err := oku(r.Context(), beklemeID)
+	b, err := f.durum.BeklemeOku(r.Context(), beklemeID)
 	if err != nil {
 		return BaglamaBekleme{}, err
 	}
@@ -435,7 +432,7 @@ func (f *FedereSayfalar) baglamaBaglamaDogrula(
 // TALEP edilir.
 func (f *FedereSayfalar) baglamaGet(w http.ResponseWriter, r *http.Request) {
 	beklemeID := r.URL.Query().Get(alanBeklemeID)
-	b, err := f.baglamaBaglamaDogrula(r, beklemeID, false)
+	b, err := f.baglamaBaglamaDogrula(r, beklemeID)
 	if err != nil {
 		oturumRed(w, "baglama-get", err)
 		return
@@ -451,8 +448,9 @@ func (f *FedereSayfalar) baglamaPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	beklemeID := r.FormValue(alanBeklemeID)
-	// Kayit GETDEL ile okunur: TEK KULLANIMLIK.
-	b, err := f.baglamaBaglamaDogrula(r, beklemeID, true)
+	// Kayit TUKETILMEDEN okunur; tuketme asagida, sifre dogrulandiktan
+	// SONRA yapilir (bkz. baglamaBaglamaDogrula).
+	b, err := f.baglamaBaglamaDogrula(r, beklemeID)
 	if err != nil {
 		oturumRed(w, "baglama", err)
 		return
@@ -481,21 +479,35 @@ func (f *FedereSayfalar) baglamaPost(w http.ResponseWriter, r *http.Request) {
 		f.cakismaRender(w, b.AuthRequestID, b.Eposta, f.saglayicilar(r.Context(), mevcut.ID))
 		return
 	}
+	// HESAP BASINA hiz limiti: sifre dogrulamasindan ONCE. IP sayaci
+	// dagitik bir denemeyi (her istek farkli IP) durdurmaz; bu sayac
+	// TEK bir hesaba yonelen denemeleri, kaynaktan ve kullanilan
+	// bekleme kaydindan BAGIMSIZ olarak sinirlar. Yeni bir bekleme
+	// kaydi federasyon turunu tekrarlayarak istenildigi kadar
+	// alinabildigi icin tek basina IP sayaci yeterli DEGILDIR.
+	// hiz nil GECILEBILIR (yalnizca birim testler); uretimde Start her
+	// zaman bir limit kurar ve kurulamazsa HIC BASLAMAZ.
+	if f.hiz != nil && !f.hiz.HesapSayaci(w, r, b.UserID) {
+		return
+	}
 	if !mevcut.SifreDogru(r.FormValue("sifre")) {
-		// Kayit YENIDEN yazilir ki bir yazim hatasi tum akisi
-		// bastan baslatmak zorunda birakmasin. TTL kalan sureden
-		// hesaplanir: her deneme TTL'i sifirlasa tahmin penceresi
-		// sinirsiz uzardi. Deneme sayisini sinirlayan sey hiz
-		// limitidir (bkz. BaglamaBagla).
+		// Kayit TUKETILMEZ: bir yazim hatasi tum federasyon turunu
+		// bastan yapmayi gerektirmesin. Denemeleri sinirlayan sey hiz
+		// limitleridir (IP basina + yukaridaki hesap basina sayac).
 		//
 		// Sifre LOGLANMAZ ve hata metni hesabin varligini sizdirmaz:
 		// hataGirisBasarisiz, giris sayfasiyla AYNI tek mesajdir.
-		if kalan := time.Until(b.Biter); kalan > 0 {
-			if err := f.durum.BeklemeYaz(r.Context(), beklemeID, b, kalan); err != nil {
-				log.Printf("federasyon: baglama beklemesi yenilenemedi: %v", err)
-			}
-		}
 		f.baglamaRender(w, http.StatusUnauthorized, b, beklemeID, hataGirisBasarisiz)
+		return
+	}
+
+	// Sifre DOGRU: kayit ancak simdi ATOMIK olarak tuketilir (GETDEL).
+	// TEK KULLANIMLIK olmasi, dogru sifre bir kez girildikten sonra ayni
+	// kayitla ikinci bir baglamanin (baska bir auth istegini tamamlamak
+	// dahil) yapilmasini engeller.
+	if _, err := f.durum.BeklemeAl(r.Context(), beklemeID); err != nil {
+		// Yaris: kayit arada tuketilmis. Baglamayi YAPMADAN durulur.
+		oturumRed(w, "baglama", err)
 		return
 	}
 
