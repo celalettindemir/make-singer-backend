@@ -276,7 +276,7 @@ func TestIDTokenUretimiKullaniciOkunamazsaBasarisiz(t *testing.T) {
 }
 
 // Health FAIL-CLOSED olmali: SaglikBagla hic cagrilmadiysa (testlerdeki
-// gibi), /healthz'in Postgres/Redis olu iken bile "sagliklı" demesini
+// gibi), /healthz'in Postgres/Redis olu iken bile "saglikli" demesini
 // engellemek icin acikca hata donmeli.
 func TestHealthBaglantisizHataDoner(t *testing.T) {
 	d := testDepo(t)

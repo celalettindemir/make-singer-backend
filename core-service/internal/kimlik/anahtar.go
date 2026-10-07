@@ -80,7 +80,7 @@ func (k *AcikAnahtarKey) Algorithm() jose.SignatureAlgorithm { return jose.RS256
 func (k *AcikAnahtarKey) Use() string                        { return "sig" }
 func (k *AcikAnahtarKey) Key() any                           { return &k.a.ozel.PublicKey }
 
-// Tiklamak ve derleme zamanında arayuz uyumunu kontrol et
+// Tiklamak ve derleme zamaninda arayuz uyumunu kontrol et
 var (
 	_ op.SigningKey = (*Anahtar)(nil)
 	_ op.Key        = (*AcikAnahtarKey)(nil)

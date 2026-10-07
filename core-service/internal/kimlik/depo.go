@@ -591,7 +591,7 @@ func (d *Depo) ValidateJWTProfileScopes(ctx context.Context, userID string, scop
 // bunu ACIKCA hata sayar. Onceki bir surumde bu durumda "basarili"
 // donuluyordu; bu, uretimde SaglikBagla cagrilmasi UNUTULURSA (ki bu
 // dosyada hicbir yerden cagrilmiyor -- bootstrap kodu ayri bir gorevin
-// isi) /healthz'in Postgres ve Redis olu iken bile "sagliklı" demesine
+// isi) /healthz'in Postgres ve Redis olu iken bile "saglikli" demesine
 // yol acardi. Bagimliliklar baglanmadan Depo yine de test edilebilsin
 // diye testler SaglikBagla'yi gercek baglantilarla cagirir ya da bu
 // hatayi bekler.
