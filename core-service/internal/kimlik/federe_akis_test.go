@@ -29,10 +29,10 @@ import (
 
 // kullaniciBilgisi, access token ile /userinfo ucunu cagirir.
 //
-// NEDEN BURADAN OKUNUYOR: kendi id_token'imiz email ve sub claim'lerini
-// TASIMAZ (Depo.SetUserinfoFromScopes bos; kutuphane id_token'i
-// oradan besler), bu yuzden "federasyon dogru kullaniciyi cozdu"
-// iddiasinin gozlenebilir yeri userinfo'dur.
+// NEDEN AYRI BIR YUZEY: id_token ve /userinfo, claim'leri BIRBIRINDEN
+// BAGIMSIZ iki yoldan doldurur (id_token: Depo.SetUserinfoFromRequest,
+// userinfo: Depo.SetUserinfoFromToken). Birinin dogru olmasi digerini
+// kanitlamaz, bu yuzden mutlu yol testleri IKISINI de olcer.
 func (o *akisOrtami) kullaniciBilgisi(t *testing.T, erisimJetonu string) map[string]any {
 	t.Helper()
 	b := o.YeniTarayici(t)
@@ -179,7 +179,21 @@ func TestUctanUcaGoogleGirisi(t *testing.T) {
 		t.Errorf("amr = %v, beklenen [%s]", amr, amrFederasyon)
 	}
 
-	// 3) Federasyon DOGRU kullaniciyi cozdu: userinfo'da yukari
+	// 3) id_token OIDC Core 1.0 §2'nin REQUIRED claim'ini TASIMALI:
+	//    sub DOLU ve access token'in sub'uyla AYNI kullanici. Ayrica
+	//    email scope'u istendigi icin email de id_token'da olmali.
+	//    Bu iddia ayri bir yuzeydir: kutuphane id_token userinfo'sunu
+	//    Depo.SetUserinfoFromRequest'ten besler, /userinfo ucunu ise
+	//    Depo.SetUserinfoFromToken'dan.
+	beklenenSub := erisimJetonuSub(t, jeton)
+	if idSub, _ := idIddia["sub"].(string); idSub != beklenenSub {
+		t.Errorf("id_token sub = %v, beklenen %q (access token'in sub'u)", idIddia["sub"], beklenenSub)
+	}
+	if idIddia["email"] != eposta {
+		t.Errorf("id_token email = %v, beklenen %q", idIddia["email"], eposta)
+	}
+
+	// 4) Federasyon DOGRU kullaniciyi cozdu: userinfo'da yukari
 	//    akisin e-postasi ve bizim sub'umuz dolu.
 	bilgi := ortam.kullaniciBilgisi(t, erisim)
 	if bilgi["sub"] == "" || bilgi["sub"] == nil {
@@ -189,7 +203,7 @@ func TestUctanUcaGoogleGirisi(t *testing.T) {
 		t.Errorf("userinfo email = %v, beklenen %q", bilgi["email"], eposta)
 	}
 
-	// 4) refresh_token verildi ve BIR KEZ donebilir; donen jetonla
+	// 5) refresh_token verildi ve BIR KEZ donebilir; donen jetonla
 	//    eski jeton gecersizlesir (aile rotasyonu).
 	refresh, _ := jeton["refresh_token"].(string)
 	if refresh == "" {
@@ -315,9 +329,11 @@ func TestUctanUcaAppleIkinciGiristeEpostaGelmez(t *testing.T) {
 		t.Fatalf("ilk giristen sonra eslesme sayisi = %d, beklenen 1", sayi)
 	}
 
-	// ONKOSUL: Apple ikinci turda e-postayi HIC gondermez.
+	// ONKOSUL: Apple ikinci turda e-postayi HIC gondermez. TEK DEGISEN
+	// budur: Ad gibi diger alanlar DOGRU kalir, yoksa testin hangi
+	// eksikligi olctugu belirsizlesir.
 	apple := ortam.YukariAkis(t, saglayiciApple)
-	apple.ayarla(func(a *sahteOPAyar) { a.Eposta = ""; a.Ad = "" })
+	apple.ayarla(func(a *sahteOPAyar) { a.Eposta = "" })
 
 	ikinci, _ := ortam.federasyonJetonu(t, saglayiciApple)
 	if ikinciSub := erisimJetonuSub(t, ikinci); ikinciSub != ilkSub {
@@ -330,6 +346,22 @@ func TestUctanUcaAppleIkinciGiristeEpostaGelmez(t *testing.T) {
 	erisim, _ := ikinci["access_token"].(string)
 	if bilgi := ortam.kullaniciBilgisi(t, erisim); bilgi["email"] != "apple-ilk@ornek.com" {
 		t.Errorf("userinfo email = %v, beklenen ilk turdaki adres", bilgi["email"])
+	}
+	// BIZIM id_token'imiz de e-postayi TASIR. Celiski degil: claim'in
+	// kaynagi yukari akisin bu turdaki yaniti DEGIL, kendi
+	// veritabanimizdaki kullanici kaydidir (Depo.userinfoDoldur,
+	// kullanici.ByID uzerinden). Yukari akisin e-postayi bir daha hic
+	// gondermemesi kendi jetonlarimizi fakirlestirmez.
+	idJeton, _ := ikinci["id_token"].(string)
+	if idJeton == "" {
+		t.Fatal("id_token yok")
+	}
+	_, idIddia := jwtIddialari(t, idJeton)
+	if idIddia["email"] != "apple-ilk@ornek.com" {
+		t.Errorf("id_token email = %v, beklenen ilk turdaki adres", idIddia["email"])
+	}
+	if idSub, _ := idIddia["sub"].(string); idSub != ilkSub {
+		t.Errorf("id_token sub = %v, beklenen %q", idIddia["sub"], ilkSub)
 	}
 }
 
