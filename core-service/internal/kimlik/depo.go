@@ -60,6 +60,13 @@ func (d *Depo) SaglikBagla(havuz *pgxpool.Pool, rdb *redis.Client) {
 // dogrula. Bir metot eksik veya imzasi yanlissa derleme burada kirilir.
 var _ op.Storage = (*Depo)(nil)
 
+// op.CanSetUserinfoFromRequest OPSIYONEL bir arayuzdur: kutuphane onu
+// tip iddiasiyla arar (pkg/op/token.go:247) ve karsilanmiyorsa SESSIZCE
+// atlar. Metot adini yanlis yazmak, bu yuzden derleme hatasi degil
+// ANLASILMASI ZOR bir davranis kaybi uretir (id_token'da sub geri
+// gider). Bu satir derleyiciyi bekci yapar.
+var _ op.CanSetUserinfoFromRequest = (*Depo)(nil)
+
 // ---- AuthStorage ----
 
 // CreateAuthRequest, gelen authorization request'i IstekDepo'ya devreder.
@@ -458,11 +465,38 @@ func (d *Depo) AuthorizeClientIDSecret(ctx context.Context, clientID, clientSecr
 	return fmt.Errorf("istemci %q secret tasimaz (public client)", clientID)
 }
 
-// SetUserinfoFromScopes kutuphane tarafindan deprecated ilan edildi;
-// bos implementasyon beklenen davranis (SetUserinfoFromRequest onun
-// yerini alir, ama op.Storage'in zorunlu kildigi minimum arayuz bu).
+// SetUserinfoFromScopes kutuphane tarafindan deprecated ilan edildi ama
+// op.Storage'in zorunlu kildigi minimum arayuzun parcasi oldugu icin
+// durmak zorunda. Govdesi BOS KALABILIR, ama yalnizca asagidaki
+// SetUserinfoFromRequest ayni userinfo nesnesini dolduruyor diye: ikisi
+// de bos olursa id_token'daki sub SILINIR (bkz. oradaki aciklama).
 func (d *Depo) SetUserinfoFromScopes(ctx context.Context, userinfo *oidc.UserInfo, userID, clientID string, scopes []string) error {
 	return nil
+}
+
+// SetUserinfoFromRequest, id_token'in userinfo claim'lerini (sub, name,
+// email, email_verified) doldurur. Kutuphanenin dokumante ettigi
+// yerine koyma noktasi burasidir (pkg/op/storage.go:147-151).
+//
+// NEDEN ZORUNLU -- kutuphane zinciri (zitadel/oidc/v3@v3.51.8):
+//
+//   - pkg/op/token.go:241: "else if len(scopes) > 0" dali. openid her
+//     zaman scope'ta oldugu icin HER id_token uretiminde girilir.
+//   - :242-246: BOS bir oidc.UserInfo olusturulur ve
+//     SetUserinfoFromScopes cagrilir (bizimki bos doner).
+//   - :247-251: depo op.CanSetUserinfoFromRequest'i uyguluyorsa bu
+//     metot cagrilir -- tek doldurma sansi budur.
+//   - :252: claims.SetUserInfo(userInfo).
+//   - pkg/oidc/token.go:158-159: SetUserInfo govdesi
+//     "t.Subject = i.Subject" -- KOSULSUZ atama.
+//
+// Yani bu metot olmazsa bos userinfo, NewIDTokenClaims'in daha once
+// yazdigi Subject'i EZER ve id_token sub'suz cikar. sub, OIDC Core 1.0
+// §2'de ID Token icin REQUIRED: standart bir RP (AppAuth,
+// oidc-client-ts, zitadel'in kendi rp paketi) boyle bir jetonu reddeder
+// ya da kullanici kimligini bos okur.
+func (d *Depo) SetUserinfoFromRequest(ctx context.Context, userinfo *oidc.UserInfo, request op.IDTokenRequest, scopes []string) error {
+	return d.userinfoDoldur(ctx, userinfo, request.GetSubject(), scopes)
 }
 
 // SetUserinfoFromToken, /userinfo uc noktasi tarafindan cagrilir: access
