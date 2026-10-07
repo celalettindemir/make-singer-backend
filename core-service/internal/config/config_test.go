@@ -158,3 +158,152 @@ func TestLoad_HizLimitiOrtamDegiskeniEzer(t *testing.T) {
 		t.Errorf("TrustedProxies = %d, beklenen 2", cfg.Auth.TrustedProxies)
 	}
 }
+
+// federasyonEnvTemizle, AUTH_FED_* ortam degiskenlerinin HICBIRINI
+// birakmadan silinmesini saglar. Her federasyon testi bunu hem basta hem
+// defer ile cagirir: aksi halde bir testin birakttigi deger baska bir
+// testi yanlis sebepten gecirir/dusurur (ornegin paralel calisan baska
+// bir paket testi degil ama bu paket icindeki sonraki test).
+func federasyonEnvTemizle() {
+	for _, ad := range []string{
+		"AUTH_FED_GOOGLE_CLIENT_ID", "AUTH_FED_GOOGLE_CLIENT_SECRET",
+		"AUTH_FED_APPLE_CLIENT_ID", "AUTH_FED_APPLE_TEAM_ID",
+		"AUTH_FED_APPLE_KEY_ID", "AUTH_FED_APPLE_KEY_P8",
+	} {
+		os.Unsetenv(ad)
+	}
+}
+
+// federasyonBul, listede verilen Ad'a sahip girdiyi (varsa) doner. Testler
+// bunu kullanarak "hangi saglayicilar VAR" sorusunu "liste uzunlugu kac"
+// sorusundan ayri test eder; uzunluk-only bir kontrol, fonksiyon yanlis
+// saglayiciyi dondurse de gecerdi.
+func federasyonBul(liste []FederasyonIstemci, ad string) (FederasyonIstemci, bool) {
+	for _, f := range liste {
+		if f.Ad == ad {
+			return f, true
+		}
+	}
+	return FederasyonIstemci{}, false
+}
+
+// Her iki saglayici da tam yapilandirilmisken ikisi de listede olmali ve
+// alanlari (Apple'in ucu dahil) BOZULMADAN tasinmali: Gorev 4'teki
+// JetonDegis, Apple client_secret'ini tam bu uc alandan uretir.
+func TestLoad_FederasyonIkisiTamYapilandirilinca(t *testing.T) {
+	federasyonEnvTemizle()
+	os.Setenv("AUTH_FED_GOOGLE_CLIENT_ID", "google-cid")
+	os.Setenv("AUTH_FED_GOOGLE_CLIENT_SECRET", "google-sir")
+	os.Setenv("AUTH_FED_APPLE_CLIENT_ID", "apple-cid")
+	os.Setenv("AUTH_FED_APPLE_TEAM_ID", "team-1")
+	os.Setenv("AUTH_FED_APPLE_KEY_ID", "key-1")
+	os.Setenv("AUTH_FED_APPLE_KEY_P8", "-----BEGIN PRIVATE KEY-----p8-verisi")
+	defer federasyonEnvTemizle()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load hata verdi: %v", err)
+	}
+	if len(cfg.Auth.Federasyon) != 2 {
+		t.Fatalf("Federasyon uzunlugu = %d, beklenen 2: %+v", len(cfg.Auth.Federasyon), cfg.Auth.Federasyon)
+	}
+
+	google, ok := federasyonBul(cfg.Auth.Federasyon, "google")
+	if !ok {
+		t.Fatalf("google saglayicisi listede yok: %+v", cfg.Auth.Federasyon)
+	}
+	if google.IstemciID != "google-cid" || google.IstemciSir != "google-sir" {
+		t.Errorf("google = %+v, beklenen IstemciID=google-cid IstemciSir=google-sir", google)
+	}
+
+	apple, ok := federasyonBul(cfg.Auth.Federasyon, "apple")
+	if !ok {
+		t.Fatalf("apple saglayicisi listede yok: %+v", cfg.Auth.Federasyon)
+	}
+	if apple.IstemciID != "apple-cid" {
+		t.Errorf("apple.IstemciID = %q, beklenen apple-cid", apple.IstemciID)
+	}
+	if apple.AppleEkipID != "team-1" || apple.AppleAnahtarID != "key-1" || apple.AppleAnahtarP8 != "-----BEGIN PRIVATE KEY-----p8-verisi" {
+		t.Errorf("apple'in uc alani bozulmus tasindi: %+v", apple)
+	}
+}
+
+// Google'in client_id'si bossa Google listeye HIC EKLENMEMELI (bos
+// girdiyle degil, yoklukla). Apple tek basina kalmali.
+func TestLoad_FederasyonGoogleBossaEklenmez(t *testing.T) {
+	federasyonEnvTemizle()
+	os.Setenv("AUTH_FED_APPLE_CLIENT_ID", "apple-cid")
+	os.Setenv("AUTH_FED_APPLE_TEAM_ID", "team-1")
+	os.Setenv("AUTH_FED_APPLE_KEY_ID", "key-1")
+	os.Setenv("AUTH_FED_APPLE_KEY_P8", "p8-verisi")
+	defer federasyonEnvTemizle()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load hata verdi: %v", err)
+	}
+	if _, ok := federasyonBul(cfg.Auth.Federasyon, "google"); ok {
+		t.Errorf("google client_id bossa listede olmamali: %+v", cfg.Auth.Federasyon)
+	}
+	apple, ok := federasyonBul(cfg.Auth.Federasyon, "apple")
+	if !ok {
+		t.Fatalf("apple listede yok: %+v", cfg.Auth.Federasyon)
+	}
+	if apple.IstemciID != "apple-cid" {
+		t.Errorf("apple.IstemciID = %q, beklenen apple-cid", apple.IstemciID)
+	}
+	if len(cfg.Auth.Federasyon) != 1 {
+		t.Errorf("Federasyon uzunlugu = %d, beklenen 1 (sadece apple)", len(cfg.Auth.Federasyon))
+	}
+}
+
+// Apple'in client_id'si bossa Apple listeye HIC EKLENMEMELI, uc alani
+// (team/key/p8) dolu olsa bile. Google tek basina kalmali.
+func TestLoad_FederasyonAppleBossaEklenmez(t *testing.T) {
+	federasyonEnvTemizle()
+	os.Setenv("AUTH_FED_GOOGLE_CLIENT_ID", "google-cid")
+	os.Setenv("AUTH_FED_GOOGLE_CLIENT_SECRET", "google-sir")
+	// Apple'in client_id'si BILEREK bos; uc alani dolu olsa da Apple
+	// eklenmemeli (client_id eksikse digerleri anlamsiz).
+	os.Setenv("AUTH_FED_APPLE_TEAM_ID", "team-1")
+	os.Setenv("AUTH_FED_APPLE_KEY_ID", "key-1")
+	os.Setenv("AUTH_FED_APPLE_KEY_P8", "p8-verisi")
+	defer federasyonEnvTemizle()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load hata verdi: %v", err)
+	}
+	if _, ok := federasyonBul(cfg.Auth.Federasyon, "apple"); ok {
+		t.Errorf("apple client_id bossa listede olmamali: %+v", cfg.Auth.Federasyon)
+	}
+	google, ok := federasyonBul(cfg.Auth.Federasyon, "google")
+	if !ok {
+		t.Fatalf("google listede yok: %+v", cfg.Auth.Federasyon)
+	}
+	if google.IstemciID != "google-cid" {
+		t.Errorf("google.IstemciID = %q, beklenen google-cid", google.IstemciID)
+	}
+	if len(cfg.Auth.Federasyon) != 1 {
+		t.Errorf("Federasyon uzunlugu = %d, beklenen 1 (sadece google)", len(cfg.Auth.Federasyon))
+	}
+}
+
+// Ikisi de bossa liste bos/nil olmali ve hic bir sey panik atmamali.
+func TestLoad_FederasyonIkisiDeBossaBos(t *testing.T) {
+	federasyonEnvTemizle()
+	defer federasyonEnvTemizle()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load hata verdi: %v", err)
+	}
+	if len(cfg.Auth.Federasyon) != 0 {
+		t.Errorf("Federasyon uzunlugu = %d, beklenen 0: %+v", len(cfg.Auth.Federasyon), cfg.Auth.Federasyon)
+	}
+	// Erisim panik atmamali (nil dilimde indeksleme yapilmiyor, ama
+	// range ve len guvenle calismali).
+	for _, f := range cfg.Auth.Federasyon {
+		t.Errorf("beklenmeyen girdi: %+v", f)
+	}
+}
