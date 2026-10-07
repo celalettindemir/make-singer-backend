@@ -206,7 +206,7 @@ func (s *sahteFedereIstekler) IDileOku(_ context.Context, id string) (*AuthIstek
 	return &kopya, nil
 }
 
-func (s *sahteFedereIstekler) TamamlandiIsaretle(_ context.Context, id string, userID string) error {
+func (s *sahteFedereIstekler) TamamlandiIsaretle(_ context.Context, id string, userID string, amr []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, varMi := s.istekler[id]; !varMi {
@@ -902,7 +902,7 @@ func TestGeriYanlisAudienceReddedilir(t *testing.T) {
 // federasyonda da gecerli).
 func TestGeriTamamlanmisIstekBaskaKullaniciyaReddedilir(t *testing.T) {
 	o := testFedereSayfalar(t)
-	if err := o.istekler.TamamlandiIsaretle(context.Background(), o.authReqID, "baska-kullanici"); err != nil {
+	if err := o.istekler.TamamlandiIsaretle(context.Background(), o.authReqID, "baska-kullanici", []string{amrFederasyon}); err != nil {
 		t.Fatalf("on tamamlama: %v", err)
 	}
 	w := o.akisKos(t, saglayiciGoogle, false)

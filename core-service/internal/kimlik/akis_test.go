@@ -694,7 +694,7 @@ func TestPlainChallengeTokenUcundaReddedilir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := o.istekler.TamamlandiIsaretle(ctx, istek.GetID(), kullanici.ID); err != nil {
+	if err := o.istekler.TamamlandiIsaretle(ctx, istek.GetID(), kullanici.ID, []string{amrSifre}); err != nil {
 		t.Fatalf("TamamlandiIsaretle: %v", err)
 	}
 	const kod = "test-kod-plain"

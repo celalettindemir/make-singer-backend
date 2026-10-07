@@ -62,7 +62,7 @@ func newSahteTamamlayici() *sahteTamamlayici {
 	return &sahteTamamlayici{baglanan: map[string]string{}}
 }
 
-func (t *sahteTamamlayici) TamamlandiIsaretle(_ context.Context, id string, userID string) error {
+func (t *sahteTamamlayici) TamamlandiIsaretle(_ context.Context, id string, userID string, amr []string) error {
 	if t.Hata != nil {
 		return t.Hata
 	}

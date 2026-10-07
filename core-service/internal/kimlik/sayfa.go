@@ -26,7 +26,7 @@ const csrfAlan = "csrf"
 // kullaniciya baglar. Arayuz olmasinin nedeni testlerin mutlu yolu AG
 // OLMADAN olcebilmesi; uretimde *IstekDepo karsilar.
 type IstekTamamlayici interface {
-	TamamlandiIsaretle(ctx context.Context, id string, userID string) error
+	TamamlandiIsaretle(ctx context.Context, id string, userID string, amr []string) error
 }
 
 //go:embed sablonlar/*.html
@@ -489,7 +489,7 @@ func (s *Sayfalar) girisPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.istekler.TamamlandiIsaretle(r.Context(), id, kullanici.ID); err != nil {
+	if err := s.istekler.TamamlandiIsaretle(r.Context(), id, kullanici.ID, []string{amrSifre}); err != nil {
 		// authRequestID loglanmaz: TamamlandiIsaretle ile birlesince
 		// bekleyen bir istegi belirli bir kullaniciya baglayan, 10
 		// dakika gecerli bir yetki jetonu gibi davranir.
@@ -583,7 +583,7 @@ func (s *Sayfalar) kayitPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.istekler.TamamlandiIsaretle(r.Context(), id, kullanici.ID); err != nil {
+	if err := s.istekler.TamamlandiIsaretle(r.Context(), id, kullanici.ID, []string{amrSifre}); err != nil {
 		// authRequestID loglanmaz (bkz. girisPost'taki ayni not).
 		log.Printf("kayit: istek tamamlanamadi: %v", err)
 		if errors.Is(err, ErrIstekZatenTamamlandi) {

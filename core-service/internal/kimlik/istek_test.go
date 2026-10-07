@@ -103,7 +103,7 @@ func TestIstekBaslangictaTamamlanmamis(t *testing.T) {
 	if istek.GetSubject() != "" {
 		t.Errorf("subject = %q, bos olmali", istek.GetSubject())
 	}
-	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1"); err != nil {
+	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrSifre}); err != nil {
 		t.Fatalf("TamamlandiIsaretle: %v", err)
 	}
 	okunan, err := depo.IDileOku(ctx, istek.GetID())
@@ -124,12 +124,12 @@ func TestTamamlandiIsaretleSubjectEzmez(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1"); err != nil {
+	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrSifre}); err != nil {
 		t.Fatalf("ilk TamamlandiIsaretle: %v", err)
 	}
 	// 15 kez ust uste baska kimliklerle dene: hepsi reddedilmeli.
 	for i := 0; i < 15; i++ {
-		if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "saldirgan"); !errors.Is(err, ErrIstekZatenTamamlandi) {
+		if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "saldirgan", []string{amrSifre}); !errors.Is(err, ErrIstekZatenTamamlandi) {
 			t.Fatalf("%d. deneme hatasi = %v, beklenen ErrIstekZatenTamamlandi", i+1, err)
 		}
 	}
@@ -152,14 +152,14 @@ func TestTamamlandiIsaretleAyniKullaniciNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1"); err != nil {
+	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrSifre}); err != nil {
 		t.Fatalf("ilk TamamlandiIsaretle: %v", err)
 	}
 	ilk, err := depo.IDileOku(ctx, istek.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
-	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1"); err != nil {
+	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrSifre}); err != nil {
 		t.Fatalf("ikinci TamamlandiIsaretle (ayni kullanici) hata dondu: %v", err)
 	}
 	ikinci, err := depo.IDileOku(ctx, istek.GetID())
@@ -199,6 +199,134 @@ func TestIstekIDIpucuSubjectOlmaz(t *testing.T) {
 	}
 	if ikinci.GetID() == birinci.GetID() {
 		t.Fatal("ayni ipucu ile iki istek ayni ID'yi aldi")
+	}
+}
+
+// K6: sifreyle giris sonrasi GetAMR() ["pwd"] donmeli.
+func TestAMRSifreyleGiristePwd(t *testing.T) {
+	depo := NewIstekDepo(testRedis(t))
+	ctx := context.Background()
+	istek, err := depo.Olustur(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	if err != nil {
+		t.Fatalf("Olustur: %v", err)
+	}
+	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrSifre}); err != nil {
+		t.Fatalf("TamamlandiIsaretle: %v", err)
+	}
+	okunan, err := depo.IDileOku(ctx, istek.GetID())
+	if err != nil {
+		t.Fatalf("IDileOku: %v", err)
+	}
+	if got := okunan.GetAMR(); len(got) != 1 || got[0] != "pwd" {
+		t.Errorf("GetAMR() = %v, beklenen [pwd]", got)
+	}
+}
+
+// K6: Google ile giren kullanicinin tokeninda "pwd" YAZMAMALI.
+func TestAMRFederasyondaPwdDegil(t *testing.T) {
+	depo := NewIstekDepo(testRedis(t))
+	ctx := context.Background()
+	istek, err := depo.Olustur(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	if err != nil {
+		t.Fatalf("Olustur: %v", err)
+	}
+	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrFederasyon}); err != nil {
+		t.Fatalf("TamamlandiIsaretle: %v", err)
+	}
+	okunan, err := depo.IDileOku(ctx, istek.GetID())
+	if err != nil {
+		t.Fatalf("IDileOku: %v", err)
+	}
+	got := okunan.GetAMR()
+	if len(got) != 1 || got[0] != amrFederasyon {
+		t.Errorf("GetAMR() = %v, beklenen [%s]", got, amrFederasyon)
+	}
+	for _, v := range got {
+		if v == "pwd" {
+			t.Errorf("GetAMR() = %v, 'pwd' ICERMEMELI", got)
+		}
+	}
+}
+
+// Varsayilan sessizce "pwd" OLMAMALI: amr vermeyi unutan bir cagiran
+// yanlis bir beyan uretmemeli, bos uretmeli.
+func TestAMRVarsayilanPwdDegil(t *testing.T) {
+	istek := &AuthIstek{}
+	if len(istek.GetAMR()) != 0 {
+		t.Errorf("GetAMR() = %v, beklenen bos", istek.GetAMR())
+	}
+}
+
+// amr ikinci (no-op) cagrida EZILMEMELI: ilk gercek giris yonteminin
+// dogru olani kaydeder.
+func TestAMRNoOpdaEzilmez(t *testing.T) {
+	depo := NewIstekDepo(testRedis(t))
+	ctx := context.Background()
+	istek, err := depo.Olustur(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	if err != nil {
+		t.Fatalf("Olustur: %v", err)
+	}
+	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrSifre}); err != nil {
+		t.Fatalf("ilk TamamlandiIsaretle: %v", err)
+	}
+	// Ayni kullanici icin ikinci cagri, FARKLI bir amr ile gelse bile
+	// NO-OP olmali ve ilk amr'i EZMEMELI.
+	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrFederasyon}); err != nil {
+		t.Fatalf("ikinci TamamlandiIsaretle (no-op): %v", err)
+	}
+	okunan, err := depo.IDileOku(ctx, istek.GetID())
+	if err != nil {
+		t.Fatalf("IDileOku: %v", err)
+	}
+	if got := okunan.GetAMR(); len(got) != 1 || got[0] != amrSifre {
+		t.Errorf("GetAMR() = %v, beklenen [%s] (ezilmemis olmali)", got, amrSifre)
+	}
+}
+
+// amr Postgres'teki refresh_tokens.amr kolonuna da dogru dusmeli:
+// yenileme sonrasi token'da hala dogru amr olmali. Sahte (bellek ici)
+// TokenStore kullanilir: olculen Depo'nun AuthIstek -> RefreshKayit ->
+// refresh rotasyonu uzerinden amr'i tasima mantigi, Postgres suruculugu
+// degil (o ayri bir testle, jeton_depo_pg_test.go'da olculuyor).
+func TestAMRRefreshYenilemesindeKorunur(t *testing.T) {
+	d := testDepo(t)
+	ctx := context.Background()
+	istek := &AuthIstek{
+		ID:       "istek-amr-1",
+		ClientID: "makesinger-mobil",
+		Subject:  "kullanici-1",
+		Scopes:   []string{"openid", "offline_access"},
+		AuthTime: time.Now().UTC(),
+		AMR:      []string{amrFederasyon},
+	}
+	_, refreshToken, _, err := d.CreateAccessAndRefreshTokens(ctx, istek, "")
+	if err != nil {
+		t.Fatalf("CreateAccessAndRefreshTokens: %v", err)
+	}
+	kayit, err := d.jetonlar.RefreshOku(ctx, refreshToken)
+	if err != nil {
+		t.Fatalf("RefreshOku: %v", err)
+	}
+	if len(kayit.AMR) != 1 || kayit.AMR[0] != amrFederasyon {
+		t.Fatalf("ilk kayitta amr = %v, beklenen [%s]", kayit.AMR, amrFederasyon)
+	}
+	// Kutuphanenin gercek cagri sirasini taklit et: refresh akisinda
+	// TokenRequestByRefreshToken amr'i tasiyan RefreshTokenRequest'i
+	// uretir, CreateAccessAndRefreshTokens onu rotasyona verir.
+	refreshIstegi, err := d.TokenRequestByRefreshToken(ctx, refreshToken)
+	if err != nil {
+		t.Fatalf("TokenRequestByRefreshToken: %v", err)
+	}
+	_, yeniRefreshToken, _, err := d.CreateAccessAndRefreshTokens(ctx, refreshIstegi, refreshToken)
+	if err != nil {
+		t.Fatalf("CreateAccessAndRefreshTokens (rotasyon): %v", err)
+	}
+	yeniKayit, err := d.jetonlar.RefreshOku(ctx, yeniRefreshToken)
+	if err != nil {
+		t.Fatalf("RefreshOku (yeni): %v", err)
+	}
+	if len(yeniKayit.AMR) != 1 || yeniKayit.AMR[0] != amrFederasyon {
+		t.Errorf("rotasyon sonrasi amr = %v, beklenen [%s]", yeniKayit.AMR, amrFederasyon)
 	}
 }
 

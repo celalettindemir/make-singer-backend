@@ -523,7 +523,7 @@ func (f *FedereSayfalar) baglamaPost(w http.ResponseWriter, r *http.Request) {
 		f.hataSayfasi(w, http.StatusInternalServerError, hataSunucu)
 		return
 	}
-	if err := f.istekler.TamamlandiIsaretle(r.Context(), b.AuthRequestID, b.UserID); err != nil {
+	if err := f.istekler.TamamlandiIsaretle(r.Context(), b.AuthRequestID, b.UserID, []string{amrFederasyon}); err != nil {
 		// authRequestID LOGLANMAZ.
 		log.Printf("federasyon: istek tamamlanamadi: %v", err)
 		if errors.Is(err, ErrIstekZatenTamamlandi) {

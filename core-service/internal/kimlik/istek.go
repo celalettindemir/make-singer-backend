@@ -18,6 +18,16 @@ const (
 	kodTTL   = 60 * time.Second
 )
 
+// amr claim degerleri: kullanicinin NASIL dogrulandigini soyler.
+// amrSifre, hosted eposta+sifre giris/kayit yolunda kullanilir;
+// amrFederasyon, Apple/Google ile giris ve mevcut hesaba baglama
+// yollarinda kullanilir. Bu iki deger, TamamlandiIsaretle'ye gecirilen
+// TUM amr degerleridir (bkz. K6).
+const (
+	amrSifre      = "pwd"
+	amrFederasyon = "fed"
+)
+
 // ErrIstekYok, istenen auth istegi (veya kod) Redis'te bulunamadiginda
 // donulur. Suresi dolmus, hic olusmamis ya da (kod icin) zaten tuketilmis
 // olabilir.
@@ -54,6 +64,13 @@ type AuthIstek struct {
 	// Giris tamamlaninca doldurulur.
 	Subject  string
 	AuthTime time.Time
+
+	// AMR, giris tamamlaninca doldurulur (bkz. TamamlandiIsaretle) ve
+	// kullanicinin NASIL dogrulandigini soyler (amrSifre veya
+	// amrFederasyon). Disa acik olmak ZORUNDA: encoding/json kucuk
+	// harfli alanlari sessizce atlar, bu da amr'in Redis'ten geri
+	// okundugunda kaybolmasina yol acardi.
+	AMR []string
 }
 
 var _ op.AuthRequest = (*AuthIstek)(nil)
@@ -64,9 +81,21 @@ func (a *AuthIstek) GetID() string { return a.ID }
 // yuzden sabit/bos donuyoruz. Coklu ACR gerekirse burada genisletilir.
 func (a *AuthIstek) GetACR() string { return "" }
 
-// GetAMR: su an tek giris yontemi eposta+sifre oldugu icin sabit "pwd"
-// donuyoruz.
-func (a *AuthIstek) GetAMR() []string { return []string{"pwd"} }
+// GetAMR, kullanicinin NASIL dogrulandigini soyler ve istek basina
+// hesaplanir. Eskiden sabit []string{"pwd"} donuyordu; Google ile
+// giren bir kullanicinin tokeninda "pwd" yazmasi YANLIS BIR BEYANDIR.
+//
+// Alan bossa "pwd" varsayilmaz: amr vermeyi unutan bir cagirani
+// sessizce yanlis beyana cevirmek, hatayi gizlemenin en pahali
+// bicimidir. Bu yuzden bos dilim donulur, "pwd" degil -- bir sonraki
+// okuyucu burayi "daha mantikli" bir varsayilanla "duzeltme" istegi
+// duyabilir, duymamali.
+func (a *AuthIstek) GetAMR() []string {
+	if len(a.AMR) == 0 {
+		return []string{}
+	}
+	return a.AMR
+}
 
 // GetAudience: en az client ID'yi icermeli (op kutuphanesi bunu jetonun
 // "aud" alaninda kullanir).
@@ -236,7 +265,12 @@ func (d *IstekDepo) Sil(ctx context.Context, id string) error {
 //     Gerekce: bu, bekleyen bir auth istegini kod uretilene kadar
 //     istenildigi kadar farkli kimlige yeniden yonlendirme yolunun
 //     kendisiydi; sessizce ezmek yerine acikca basarisiz olmali.
-func (d *IstekDepo) TamamlandiIsaretle(ctx context.Context, id string, userID string) error {
+//
+// amr de NO-OP durumunda EZILMEZ: ilk gercek giris yontemi dogru
+// olandir. (Ikinci cagri zaten reddediliyorsa amr'in ne oldugu
+// onemsizdir; sadece NO-OP dalinda yeniden yazma hic yapilmadigi icin
+// amr de kendiliginden korunur.)
+func (d *IstekDepo) TamamlandiIsaretle(ctx context.Context, id string, userID string, amr []string) error {
 	istek, err := d.IDileOku(ctx, id)
 	if err != nil {
 		return err
@@ -256,6 +290,7 @@ func (d *IstekDepo) TamamlandiIsaretle(ctx context.Context, id string, userID st
 	}
 	istek.Subject = userID
 	istek.AuthTime = time.Now()
+	istek.AMR = amr
 	return d.yaz(ctx, istek, ttl)
 }
 
