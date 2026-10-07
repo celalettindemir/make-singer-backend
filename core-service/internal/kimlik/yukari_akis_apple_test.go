@@ -42,8 +42,14 @@ func TestAppleIstemciSirAlanlari(t *testing.T) {
 		t.Fatalf("client_secret uretilemedi: %v", err)
 	}
 
+	// WithoutClaimsValidation ZORUNLU: jwt.Parse exp'i DUVAR SAATINE gore
+	// dogrular, oysa sabit bir `simdi` kullaniyoruz. Onsuz bu test
+	// 2026-10-07T12:05:00Z'den sonra SONSUZA KADAR "token is expired" ile
+	// duser -- ve bir kez surekli kirmizi olunca iddialari OLU olur, yani
+	// K5'in omur karari regresyon korumasiz kalir. Burada kaybettigimiz
+	// bir sey yok: iat ve exp'i asagida KENDIMIZ iddia ediyoruz.
 	jeton, err := jwt.Parse(sir, func(t *jwt.Token) (any, error) { return acikAnahtar, nil },
-		jwt.WithValidMethods([]string{"ES256"}))
+		jwt.WithValidMethods([]string{"ES256"}), jwt.WithoutClaimsValidation())
 	if err != nil {
 		t.Fatalf("client_secret dogrulanamadi: %v", err)
 	}
@@ -75,8 +81,11 @@ func TestAppleIstemciSirOmru(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client_secret uretilemedi: %v", err)
 	}
+	// WithoutClaimsValidation: bkz. TestAppleIstemciSirAlanlari'daki
+	// gerekce -- sabit `simdi` ile duvar saati dogrulamasi bir zaman
+	// bombasidir ve omur iddiasini biz zaten asagida yapiyoruz.
 	jeton, err := jwt.Parse(sir, func(t *jwt.Token) (any, error) { return acikAnahtar, nil },
-		jwt.WithValidMethods([]string{"ES256"}))
+		jwt.WithValidMethods([]string{"ES256"}), jwt.WithoutClaimsValidation())
 	if err != nil {
 		t.Fatalf("client_secret dogrulanamadi: %v", err)
 	}
