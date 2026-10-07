@@ -187,7 +187,7 @@ func TestCerezKavanozuSilme(t *testing.T) {
 		t.Errorf("silmeden sonra kalan = %v, beklenen yalnizca \"baska\"", kalan)
 	}
 	if kavanoz.cerezDegeri(cerezAdFederasyon) != "" {
-		t.Error("cerezDegeri silinmis cerezi hala doneruyor")
+		t.Error("cerezDegeri silinmis cerezi hala donduruyor")
 	}
 }
 

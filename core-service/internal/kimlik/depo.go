@@ -486,7 +486,7 @@ func (d *Depo) SetUserinfoFromScopes(ctx context.Context, userinfo *oidc.UserInf
 //     SetUserinfoFromScopes cagrilir (bizimki bos doner).
 //   - :247-251: depo op.CanSetUserinfoFromRequest'i uyguluyorsa bu
 //     metot cagrilir -- tek doldurma sansi budur.
-//   - :252: claims.SetUserInfo(userInfo).
+//   - :253: claims.SetUserInfo(userInfo).
 //   - pkg/oidc/token.go:158-159: SetUserInfo govdesi
 //     "t.Subject = i.Subject" -- KOSULSUZ atama.
 //
@@ -495,6 +495,13 @@ func (d *Depo) SetUserinfoFromScopes(ctx context.Context, userinfo *oidc.UserInf
 // §2'de ID Token icin REQUIRED: standart bir RP (AppAuth,
 // oidc-client-ts, zitadel'in kendi rp paketi) boyle bir jetonu reddeder
 // ya da kullanici kimligini bos okur.
+//
+// DAVRANIS DEGISIKLIGI: userinfoDoldur'un ByID hatasi artik kutuphaneye
+// GERI DONER, yani kullanici kaydi okunamazsa jeton uretimi BASARISIZ
+// olur. Oncesinde SetUserinfoFromScopes kosulsuz nil donuyordu ve
+// sub'suz bir id_token uretiliyordu. Fail-closed olan yon budur:
+// kullanicisi dogrulanamayan bir kimlik jetonu vermemek, eksik bir
+// jeton vermekten iyidir.
 func (d *Depo) SetUserinfoFromRequest(ctx context.Context, userinfo *oidc.UserInfo, request op.IDTokenRequest, scopes []string) error {
 	return d.userinfoDoldur(ctx, userinfo, request.GetSubject(), scopes)
 }
