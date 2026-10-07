@@ -15,54 +15,74 @@ type federeKurulum struct {
 	kullanici UserStore
 }
 
-// federeDepoKurulumlari, sahte uygulamayi her zaman ekler; Postgres
-// uygulamasini ise testPostgresUserStore ile BIREBIR AYNI kalipla kurar:
+// federeKurulumKurucu, bir federeKurulum'u KENDI alt testinin t'siyle
+// kurar. Baglanti/Skip bu kurucu cagrilana kadar HIC denenmez: aksi
+// halde (eskiden oldugu gibi) t.Skip ust test fonksiyonunun goroutine'ini
+// runtime.Goexit ile sonlandirir ve range dongusune hic girilmeden TUM
+// alt testler -- sahte dahil -- sessizce atlanir. CI'da Postgres servisi
+// olmadigi icin bu, agsiz calismasi gereken sahte kapsamini da yok ederdi.
+type federeKurulumKurucu struct {
+	ad  string
+	kur func(t *testing.T) federeKurulum
+}
+
+// federeDepoKurulumlari, sahte kurucuyu her zaman ekler; Postgres
+// kurucusu ise testPostgresUserStore ile BIREBIR AYNI kalipla baglanir:
 // KIMLIK_TEST_DB_URL ortam degiskeni, yoksa varsayilan yerel DSN, Baglan +
 // Migrate, baglanamazsa t.Skip, t.Cleanup(havuz.Close). Postgres kaliciydir,
-// bu yuzden her kosuda federe_kimlikler ve users temizlenir.
-func federeDepoKurulumlari(t *testing.T) []federeKurulum {
-	t.Helper()
-
-	sahteKullanici := NewSahteUserStore()
-	kurulumlar := []federeKurulum{
+// bu yuzden her kosuda federe_kimlikler ve users temizlenir. Baglanti
+// denemesi, cagiran t.Run icindeki alt test t'si verilene kadar
+// YAPILMAZ -- boylece olmayan bir Postgres yalnizca "postgres" alt
+// testini atlar, "sahte" alt testi her halde kosar.
+func federeDepoKurulumlari() []federeKurulumKurucu {
+	return []federeKurulumKurucu{
 		{
-			ad:        "sahte",
-			depo:      NewSahteFedereDepo(sahteKullanici),
-			kullanici: sahteKullanici,
+			ad: "sahte",
+			kur: func(t *testing.T) federeKurulum {
+				sahteKullanici := NewSahteUserStore()
+				return federeKurulum{
+					ad:        "sahte",
+					depo:      NewSahteFedereDepo(sahteKullanici),
+					kullanici: sahteKullanici,
+				}
+			},
+		},
+		{
+			ad: "postgres",
+			kur: func(t *testing.T) federeKurulum {
+				t.Helper()
+				dsn := os.Getenv("KIMLIK_TEST_DB_URL")
+				if dsn == "" {
+					dsn = "postgres://postgres:kimlik-test-yerel@localhost:55432/postgres?sslmode=disable"
+				}
+				ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
+				defer iptal()
+				havuz, err := Baglan(ctx, dsn)
+				if err != nil {
+					t.Skip("yerel Postgres yok, atlaniyor")
+				}
+				if err := Migrate(ctx, havuz); err != nil {
+					havuz.Close()
+					t.Fatalf("Migrate: %v", err)
+				}
+				t.Cleanup(havuz.Close)
+				if _, err := havuz.Exec(ctx, `TRUNCATE federe_kimlikler, users CASCADE`); err != nil {
+					t.Fatalf("tablolar temizlenemedi: %v", err)
+				}
+				return federeKurulum{
+					ad:        "postgres",
+					depo:      NewPostgresFedereDepo(havuz),
+					kullanici: NewPostgresUserStore(havuz),
+				}
+			},
 		},
 	}
-
-	dsn := os.Getenv("KIMLIK_TEST_DB_URL")
-	if dsn == "" {
-		dsn = "postgres://postgres:kimlik-test-yerel@localhost:55432/postgres?sslmode=disable"
-	}
-	ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
-	defer iptal()
-	havuz, err := Baglan(ctx, dsn)
-	if err != nil {
-		t.Skip("yerel Postgres yok, atlaniyor")
-	}
-	if err := Migrate(ctx, havuz); err != nil {
-		havuz.Close()
-		t.Fatalf("Migrate: %v", err)
-	}
-	t.Cleanup(havuz.Close)
-	if _, err := havuz.Exec(ctx, `TRUNCATE federe_kimlikler, users CASCADE`); err != nil {
-		t.Fatalf("tablolar temizlenemedi: %v", err)
-	}
-
-	kurulumlar = append(kurulumlar, federeKurulum{
-		ad:        "postgres",
-		depo:      NewPostgresFedereDepo(havuz),
-		kullanici: NewPostgresUserStore(havuz),
-	})
-
-	return kurulumlar
 }
 
 func TestFedereDepoSozlesmesi(t *testing.T) {
-	for _, k := range federeDepoKurulumlari(t) {
-		t.Run(k.ad, func(t *testing.T) {
+	for _, kurucu := range federeDepoKurulumlari() {
+		t.Run(kurucu.ad, func(t *testing.T) {
+			k := kurucu.kur(t)
 			ctx := context.Background()
 
 			// Bilinmeyen kimlik ErrKimlikYok doner, nil kullanici degil.
