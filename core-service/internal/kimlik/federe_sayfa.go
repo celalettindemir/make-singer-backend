@@ -157,11 +157,10 @@ func (f *FedereSayfalar) Bagla(mux *http.ServeMux, araci *op.IssuerInterceptor, 
 	var baslat http.Handler = http.HandlerFunc(f.Baslat)
 	geri := araci.Handler(http.HandlerFunc(f.Geri))
 	if hiz != nil {
-		// Baslat, kimlik dogrulamasiz ve ucuz bir uctur ama Redis'e
-		// yazar; GET sayaci onu da kapsar.
-		// SayfaGetSar anahtarin sonuna "-get" EKLER (bkz. hizlimit.go),
-		// bu yuzden ad tekrar "-get" tasimaz.
-		baslat = hiz.SayfaGetSar("federasyon-baslat", baslat)
+		// Baslat, kimlik dogrulamasiz bir uctur ve her kabul edilen
+		// istek Redis'e bir state kaydi yazar; kendi sayacini hak
+		// ediyor (bkz. HizLimit.FederasyonBaslatSar).
+		baslat = hiz.FederasyonBaslatSar(baslat)
 		geri = hiz.FederasyonGeriSar(geri)
 	}
 	mux.Handle("GET "+yolFederasyonBaslat, baslat)

@@ -12,6 +12,10 @@
   button { margin-top: 1.5rem; padding: 0.6rem 1.2rem; font-size: 1rem; width: 100%; }
   .hata { color: #b00020; margin-top: 1rem; }
   .alt { margin-top: 1.5rem; font-size: 0.9rem; }
+  .federasyon { margin-top: 1.5rem; }
+  .ayirici { text-align: center; color: #666; font-size: 0.9rem; margin: 1.5rem 0 1rem; }
+  .fed-buton { display: block; text-align: center; padding: 0.6rem 1.2rem; margin-top: 0.5rem;
+               border: 1px solid #888; border-radius: 0.25rem; text-decoration: none; color: #222; }
 </style>
 </head>
 <body>
@@ -26,6 +30,14 @@
     <input type="password" id="sifre" name="sifre" required>
     <button type="submit">Giris yap</button>
   </form>
+  {{if .Saglayicilar}}
+  <div class="federasyon">
+    <p class="ayirici">veya</p>
+    {{range .Saglayicilar}}
+    <a class="fed-buton" href="{{.Yol}}">{{.Etiket}}</a>
+    {{end}}
+  </div>
+  {{end}}
   <p class="alt">Hesabin yok mu? <a href="{{.KayitYolu}}?authRequestID={{.AuthRequestID}}">Kayit ol</a></p>
 </body>
 </html>

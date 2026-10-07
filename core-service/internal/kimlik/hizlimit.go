@@ -255,6 +255,37 @@ func (h *HizLimit) HesapSayaci(w http.ResponseWriter, r *http.Request, hesapKiml
 	})
 }
 
+// FederasyonBaslatSar, GET /federasyon/{saglayici}/baslat ucunu IP
+// basina dakikalik bir sayacla sarar.
+//
+// NEDEN AYRI BIR SAYAC: uc kimlik dogrulamasizdir ve her kabul edilen
+// istek Redis'e bir state kaydi YAZAR; sinirsiz birakmak Redis'i
+// doldurmanin ucuz bir yolu olurdu. Sayac GIRIS, KAYIT ve BAGLAMA
+// uclarindan AYRI anahtarda tutulur: federasyon denemeleri sifre deneme
+// butcesini tuketirse mesru kullanici kendi giris akisini kilitler.
+//
+// NEDEN SayfaGetSar DEGIL: o sarmalayici anahtarin sonuna "-get" ekler
+// ve "sayfa uretimi" sinifindaki GET'ler icindir; bu uc bir sayfa
+// uretmez, Redis'e yazar ve bir yonlendirme doner. Ayri bir ad, sayacin
+// neyi olctugunu anahtarda da okunur kilar ve FederasyonGeriSar ile
+// ayni kalibi izler.
+//
+// Sinir degeri GirisIPPerMin ile AYNIDIR: ikisi de elle kullanimin cok
+// uzerinde, otomatik taramanin belirgin altinda; ayri bir yapilandirma
+// anahtari eklemeye deger bir ayrisma yok.
+func (h *HizLimit) FederasyonBaslatSar(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !h.izinVer(w, r, sayac{
+			anahtar: h.ipAnahtar("federasyon-baslat", r),
+			sinir:   h.ayar.GirisIPPerMin,
+			pencere: time.Minute,
+		}) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // FederasyonGeriSar, federasyon geri donus ucunu IP basina dakikalik
 // bir sayacla sarar. Uc kimlik dogrulamasizdir ve her istek bir Redis
 // okumasi (state) ile birlikte -- state gecerliyse -- yukari akisa bir

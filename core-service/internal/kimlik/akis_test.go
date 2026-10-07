@@ -104,7 +104,7 @@ func testSunucuAyarli(t *testing.T, ayar HizLimitAyar) *akisOrtami {
 	// cerezGuvenli=false: test dinleyicisi http, Secure cerez
 	// tasinmazdi.
 	srv := &http.Server{
-		Handler:           muxKur(saglayici, kullanici, istekler, false, hizLimit),
+		Handler:           muxKur(saglayici, kullanici, istekler, nil, nil, nil, issuer, false, hizLimit),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() { _ = srv.Serve(dinleyici) }()
@@ -896,5 +896,44 @@ func TestCaprazSiteIstekMevcutBaglamalariBozmaz(t *testing.T) {
 		if kod := kodCikar(t, al(t, kurban, yanit.Header.Get("Location"))); kod == "" {
 			t.Fatal("mesru sekme kod uretmedi: capraz-site istek baglamayi bozdu")
 		}
+	}
+}
+
+// Federasyon HIC yapilandirilmamissa (testSunucu akislari bos gecer)
+// hicbir federasyon ucu baglanmamali ve giris sayfasi butonsuz ama
+// BOZULMADAN calismali.
+//
+// NEDEN ONEMLI: baglanmamis bir uc ile gorunen bir buton, ya da gorunmez
+// bir butonla cagrilabilir bir uc, iki yonde de kullaniciyi hataya
+// goturur. Uretim kablolamasi (muxKur) bu kurali kendisi uygulamali.
+func TestFederasyonsuzKurulumUclariBaglamaz(t *testing.T) {
+	o := testSunucu(t)
+	c := tarayici(t)
+
+	for _, yol := range []string{
+		"/federasyon/google/baslat?authRequestID=x",
+		"/federasyon/apple/baslat?authRequestID=x",
+		"/federasyon/google/geri?state=x&code=y",
+		"/baglama?beklemeID=x",
+	} {
+		yanit := al(t, c, o.issuer+yol)
+		if yanit.StatusCode != http.StatusNotFound {
+			t.Errorf("%s durumu = %d, beklenen 404 (uc baglanmamali)", yol, yanit.StatusCode)
+		}
+	}
+
+	// Giris sayfasi hala calisir ve HICBIR federasyon butonu tasimaz.
+	_, challenge := pkceS256(t)
+	id := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge, "S256")))
+	formYanit := al(t, c, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
+	if formYanit.StatusCode != http.StatusOK {
+		t.Fatalf("giris formu durumu = %d, beklenen 200", formYanit.StatusCode)
+	}
+	govdeMetni := govde(t, formYanit)
+	if !strings.Contains(govdeMetni, `name="sifre"`) {
+		t.Errorf("giris formu bozuldu:\n%s", govdeMetni)
+	}
+	if strings.Contains(govdeMetni, "/federasyon/") {
+		t.Errorf("federasyonsuz kurulumda buton cikti:\n%s", govdeMetni)
 	}
 }

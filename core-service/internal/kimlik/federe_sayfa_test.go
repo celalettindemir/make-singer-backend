@@ -1010,6 +1010,54 @@ func TestGeriHizLimitiUygulanir(t *testing.T) {
 	}
 }
 
+// /federasyon/{saglayici}/baslat IP basina sayilmali ve giris/kayit/
+// baglama/geri sayaclarindan AYRI anahtarda olmali: aksi halde
+// federasyon denemeleri sifre deneme butcesini tuketir ve mesru
+// kullanici kendi giris akisini kilitler.
+func TestFederasyonBaslatHizLimitiAyriSayilir(t *testing.T) {
+	o := testFedereSayfalar(t)
+	hiz, err := NewHizLimit(o.depo.rdb, HizLimitAyar{
+		GirisIPPerMin: 1, GirisEpostaPerSaat: 100, KayitIPPerSaat: 100,
+	}, []byte("test-anahtari"))
+	if err != nil {
+		t.Fatalf("hiz limiti kurulamadi: %v", err)
+	}
+	mux := http.NewServeMux()
+	araci := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
+	o.f.Bagla(mux, araci, hiz)
+	o.mux = mux
+
+	ilk := o.baslatHam(saglayiciGoogle, o.authReqID, o.oturumCerez, false)
+	if ilk.Code == http.StatusTooManyRequests {
+		t.Fatal("ilk baslatma 429 aldi; sinir yanlis kurulmus")
+	}
+	ikinci := o.baslatHam(saglayiciGoogle, o.authReqID, o.oturumCerez, false)
+	if ikinci.Code != http.StatusTooManyRequests {
+		t.Errorf("ikinci baslatma durumu = %d, beklenen 429", ikinci.Code)
+	}
+
+	anahtarlar, err := o.depo.rdb.Keys(context.Background(), hizLimitOnEki+":*").Result()
+	if err != nil {
+		t.Fatalf("anahtarlar okunamadi: %v", err)
+	}
+	var baslatVar bool
+	for _, a := range anahtarlar {
+		if strings.Contains(a, ":federasyon-baslat:") {
+			baslatVar = true
+		}
+		// Diger uclarin sayaclari TUKETILMEMIS olmali. ":federasyon-geri:"
+		// de dahil: baslat ile geri ayri butceler.
+		for _, yabanci := range []string{":giris:", ":kayit:", ":baglama:", ":federasyon-geri:"} {
+			if strings.Contains(a, yabanci) {
+				t.Errorf("federasyon baslatma baska bir ucun sayacini tuketti: %q", a)
+			}
+		}
+	}
+	if !baslatVar {
+		t.Errorf("federasyon-baslat sayaci olusmadi; anahtarlar: %v", anahtarlar)
+	}
+}
+
 // Hicbir log satirinda state, kod, id_token, cerez veya e-posta
 // GECMEMELI. Faz 1'de bu bir Critical'di.
 func TestGeriLoglarSizdirmaz(t *testing.T) {

@@ -2,6 +2,7 @@ package kimlik
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -167,8 +168,8 @@ func TestGecerliYapilandirmaDogrulamayiGecer(t *testing.T) {
 // Apple ile giris denedigi anda kesfedilen bir sessiz bozukluk degil.
 func TestAppleFederasyonuEksikAlanlarlaBaslamaz(t *testing.T) {
 	durumlar := []struct {
-		ad       string
-		federe   config.FederasyonIstemci
+		ad     string
+		federe config.FederasyonIstemci
 	}{
 		{"ekip id eksik", config.FederasyonIstemci{Ad: "apple", IstemciID: "tr.makesinger.giris", AppleAnahtarID: "AB12", AppleAnahtarP8: "pem-verisi"}},
 		{"anahtar id eksik", config.FederasyonIstemci{Ad: "apple", IstemciID: "tr.makesinger.giris", AppleEkipID: "TEAM1", AppleAnahtarP8: "pem-verisi"}},
@@ -221,5 +222,68 @@ func TestHazirDinleyiciDurumunuYansitir(t *testing.T) {
 	s.hazir.Store(false)
 	if s.Hazir() {
 		t.Error("dinleyici durduktan sonra hala hazir gorunuyor")
+	}
+}
+
+// Faz 1'in fail-closed kurali: hiz limiti KURULAMAZSA Start hic
+// basarili olmamali. Limitsiz bir giris ucuyla ayaga kalkmak hem
+// sinirsiz brute-force hem de ana API'yi dusuren bir CPU DoS yuzeyi
+// demektir (bkz. hizlimit.go).
+//
+// NEDEN BU KADAR KURULUM: hiz limiti Start icinde veritabani ve
+// migration'dan SONRA kurulur. Yapilandirmanin geri kalani eksik
+// birakilirsa Start zaten daha once duser ve test hiz limiti yolunu HIC
+// olcmez. Bu yuzden burada gercek Postgres ve Redis kullanilir;
+// yoksa test atlanir (bkz. testRedis, testPostgres).
+func TestHizLimitiKurulamazsaStartBasarisiz(t *testing.T) {
+	rdb := testRedis(t)
+	dsn := os.Getenv("KIMLIK_TEST_DB_URL")
+	if dsn == "" {
+		dsn = "postgres://postgres:kimlik-test-yerel@localhost:55432/postgres?sslmode=disable"
+	}
+
+	temel := func() *config.AuthConfig {
+		c := testAuthCfg()
+		c.DBURL = dsn
+		c.SigningKeyPEM = testPEM(t)
+		c.CryptoKey = testCryptoAnahtari
+		c.Port = "0"
+		c.LoginIPPerMin = 10
+		c.LoginEmailPerHour = 10
+		c.SignupIPPerHour = 10
+		return c
+	}
+
+	// Once SAGLIK kontrolu: ayni yapilandirma limit degerleri GECERLI
+	// iken Start'i hiz limitine KADAR goturebiliyor olmali. Aksi halde
+	// asagidaki iddia, limitle ilgisiz bir hatayi dogrulamis olurdu.
+	sunucu, err := Start(context.Background(), temel(), rdb, "development")
+	if err != nil {
+		if strings.Contains(err.Error(), "veritabanina baglanilamadi") {
+			t.Skip("yerel Postgres yok, atlaniyor")
+		}
+		t.Fatalf("gecerli yapilandirma hiz limitine gelemeden dustu: %v", err)
+	}
+	ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
+	defer iptal()
+	if kapatmaHata := sunucu.Kapat(ctx); kapatmaHata != nil {
+		t.Fatalf("Kapat: %v", kapatmaHata)
+	}
+
+	// Simdi YALNIZCA limit degerini bozuyoruz.
+	bozuk := temel()
+	bozuk.LoginIPPerMin = 0
+	s, err := Start(context.Background(), bozuk, rdb, "development")
+	if err == nil {
+		if s != nil {
+			_ = s.Kapat(context.Background())
+		}
+		t.Fatal("hiz limiti kurulamadigi halde Start basarili oldu")
+	}
+	if s != nil {
+		t.Error("Start hata dondu ama Sunucu da dondurdu")
+	}
+	if !strings.Contains(err.Error(), "hiz limiti kurulamadi") {
+		t.Errorf("hata hiz limitiyle ilgili degil: %v", err)
 	}
 }

@@ -56,6 +56,7 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 - **client/** — HTTP clients for external services: Groq (AI lyrics), Suno (music generation), R2 (Cloudflare S3-compatible storage), audio-service (local mastering).
 - **model/** — Request/response structs and enums. All enum values defined in `enums.go`.
 - **middleware/** — `auth.go` (RS256 tokens from `internal/kimlik`, or legacy HMAC in development), `ratelimit.go` (Redis fixed window per user).
+- **auth/** — `jwks_verifier.go`: token verifiers. `YukariAkisDogrulayici` validates **upstream** (Apple/Google) `id_token`s for the federation flow — RS256 pinned, `iss`/`aud`/`exp` enforced, `nonce` required and compared in constant time. `JWKSVerifier` is the legacy Zitadel-era path (to be removed in Phase 5).
 - **websocket/** — Hub for broadcasting real-time job progress to clients via `GET /ws/jobs/:jobId`.
 - **config/** — Viper-based config loading from `config.yaml` with env var overrides.
 
@@ -104,3 +105,5 @@ If `AUTH_ISSUER` is set but the OpenID Provider fails to start, the service exit
 **When `AUTH_ISSUER` is empty:** Falls back to legacy HMAC JWT verification (development only). The gateway mode can also bypass token verification using `X-User-*` headers when `GATEWAY_ENABLED=true`.
 
 Extracted claims (`userId`, `email`, `name`) are stored in Fiber context locals.
+
+**Federation (Phase 2):** The hosted login page offers Apple and Google. Buttons and endpoints appear **only** for providers that are actually configured (`AUTH_FED_GOOGLE_CLIENT_ID` / `AUTH_FED_APPLE_CLIENT_ID`); with none configured, `/federasyon/*` and `/baglama` are not bound at all (404). Upstream URLs are constants in the code — only credentials come from the environment. The provider acts as an RP: the upstream `id_token` is verified against the provider's JWKS (`internal/auth/jwks_verifier.go`, RS256 pinned, `nonce` required) and the user is located by `(provider, sub)` in the `federe_kimlikler` table. Email is never used to link accounts automatically — on conflict the user is asked for the existing account's password once (`/baglama`), or told to use the original provider (409) when that account has no password. Apple private relay addresses are never trusted for linking. The federation callback uses a dedicated `SameSite=None` cookie because Apple returns via a cross-site `form_post`. Each federation endpoint has its own Redis rate-limit counter (`federasyon-baslat`, `federasyon-geri`, `baglama`) so federation traffic cannot drain the password-attempt budget of `/giris`. Mobile carries no Apple/Google SDK and is unaware of this flow.

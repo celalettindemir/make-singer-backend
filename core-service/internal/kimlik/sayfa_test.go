@@ -2,6 +2,7 @@ package kimlik
 
 import (
 	"context"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -980,5 +981,63 @@ func TestAuthorizeCaprazSiteOlmayanlardaBaglamaKurulur(t *testing.T) {
 				t.Fatalf("form durumu = %d, beklenen 200", g.Code)
 			}
 		})
+	}
+}
+
+// Butonlar YALNIZCA yapilandirilmis saglayicilar icin cikar: olmayan
+// bir saglayicinin butonuna basan kullanici 404 gorurdu, cunku o ucun
+// handler'i hic baglanmaz (bkz. muxKur).
+func TestGirisSayfasiYalnizcaYapilandirilmisSaglayicilariGosterir(t *testing.T) {
+	o := testSayfalar(t)
+	o.sayfalar.FederasyonSaglayicilari([]string{saglayiciGoogle})
+	cerez := baglamaKur(t, o, "abc", nil)
+	w := formIstek(o, yolGiris, "abc", cerez)
+	if w.Code != http.StatusOK {
+		t.Fatalf("durum = %d, beklenen 200", w.Code)
+	}
+	govde := w.Body.String()
+	if !strings.Contains(govde, "/federasyon/google/baslat") {
+		t.Errorf("yapilandirilmis google butonu yok:\n%s", govde)
+	}
+	if !strings.Contains(govde, "Google ile giris yap") {
+		t.Errorf("google butonunun etiketi yok:\n%s", govde)
+	}
+	// "apple" HICBIR bicimde gecmemeli: ne yol, ne etiket.
+	if strings.Contains(strings.ToLower(govde), saglayiciApple) {
+		t.Errorf("yapilandirilmamis apple sayfada gecti:\n%s", govde)
+	}
+}
+
+// Buton baglantisi authRequestID TASIMALI: tasimazsa donuste
+// tamamlanacak istek bulunamaz. Deger URL kacisi GEREKTIREN karakterler
+// icerir: sablonda elle birlestirilse icindeki "&" sorgu dizisine
+// yabanci bir parametre enjekte ederdi.
+func TestGirisSayfasiButonuAuthRequestIDTasir(t *testing.T) {
+	o := testSayfalar(t)
+	o.sayfalar.FederasyonSaglayicilari([]string{saglayiciGoogle})
+	const id = "istek 1&yabanci=1"
+	cerez := baglamaKur(t, o, id, nil)
+	w := formIstek(o, yolGiris, id, cerez)
+	if w.Code != http.StatusOK {
+		t.Fatalf("durum = %d, beklenen 200", w.Code)
+	}
+	govde := w.Body.String()
+	desen := regexp.MustCompile(`href="(/federasyon/google/baslat[^"]*)"`)
+	esler := desen.FindStringSubmatch(govde)
+	if esler == nil {
+		t.Fatalf("google buton baglantisi bulunamadi:\n%s", govde)
+	}
+	// Baglanti tarayicinin gorecegi haliyle cozulur: html/template'in
+	// attribute kacisi geri alinir, sonra URL ayristirilir.
+	ham := html.UnescapeString(esler[1])
+	u, err := url.Parse(ham)
+	if err != nil {
+		t.Fatalf("buton baglantisi cozulemedi (%q): %v", ham, err)
+	}
+	if bulunan := u.Query().Get("authRequestID"); bulunan != id {
+		t.Errorf("authRequestID = %q, beklenen %q (ham: %q)", bulunan, id, ham)
+	}
+	if u.Query().Get("yabanci") != "" {
+		t.Errorf("kacissiz birlestirme yabanci parametre sizdirdi: %q", ham)
 	}
 }

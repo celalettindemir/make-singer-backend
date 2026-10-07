@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/op"
 	"golang.org/x/text/language"
 
+	"github.com/makeasinger/api/internal/auth"
 	"github.com/makeasinger/api/internal/config"
 )
 
@@ -42,6 +44,15 @@ type Sunucu struct {
 	// dongusunun hata ile durmasi) hic yakalamiyor ve hala
 	// "kimlik": true donuyordu: tam kesinti + yanlis saglik sinyali.
 	hazir atomic.Bool
+
+	// fedIptal, yukari akis dogrulayicilarinin JWKS arka plan yenileme
+	// ctx'ini iptal eder. SUNUCUNUN omrune baglidir (K7): Kapat onu
+	// cagirir, boylece surec yasarken yenileme yasar.
+	fedIptal context.CancelFunc
+
+	// dogrulayicilar, kapanista Close edilmek uzere tutulur. Federasyon
+	// yapilandirilmamissa BOS olur.
+	dogrulayicilar map[string]*auth.YukariAkisDogrulayici
 }
 
 // Hazir, OP dinleyicisinin su an hizmet verdigini soyler. /health bunu
@@ -138,6 +149,22 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 	// saklamaz ve yerel akis kirilir).
 	cerezGuvenli := !strings.HasPrefix(cfg.Issuer, "http://")
 
+	// Yukari akis dogrulayicilari (Faz 2). ctx iptal zinciri BILEREK
+	// KESILIR (context.WithoutCancel): Start'a verilen ctx bir baslatma
+	// zaman asimi olabilir ve o dolunca JWKS'in saatlik arka plan
+	// yenilemesi de olurdu. Iptal Kapat'a baglanir, yani yenileme
+	// sunucunun omru kadar yasar (K7; gerekcesi
+	// auth.NewYukariAkisDogrulayici yorumunda).
+	fedCtx, fedIptal := context.WithCancel(context.WithoutCancel(ctx))
+	akislar, dogrulayicilar, err := federasyonKur(fedCtx, cfg)
+	if err != nil {
+		fedIptal()
+		havuz.Close()
+		return nil, err
+	}
+
+	federeDepo := NewPostgresFedereDepo(havuz)
+
 	// Hiz limiti: POST /giris ve POST /kayit icin. Kurulamazsa Start
 	// HATA DONER (fail-closed): limitsiz bir giris ucu ile ayaga kalkmak
 	// hem sinirsiz brute-force hem de ana API'yi de dusuren bir CPU DoS
@@ -149,11 +176,15 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 		GuvenilenProxy:     cfg.TrustedProxies,
 	}, cryptoAnahtar[:])
 	if err != nil {
+		fedIptal()
 		havuz.Close()
 		return nil, fmt.Errorf("hiz limiti kurulamadi: %w", err)
 	}
 
-	mux := muxKur(saglayici, kullaniciDepo, istekDepo, cerezGuvenli, hizLimit)
+	mux := muxKur(
+		saglayici, kullaniciDepo, istekDepo, federeDepo,
+		akislar, dogrulayicilar, cfg.Issuer, cerezGuvenli, hizLimit,
+	)
 
 	// Dinleyici Start ICINDE, SENKRON acilir. Eskiden ListenAndServe bir
 	// goroutine icinde cagriliyordu; port cakismasi gibi bir hata Start
@@ -162,6 +193,7 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 	// ile durur: CrashLoopBackOff dogru ve gorunur sinyaldir.
 	dinleyici, err := net.Listen("tcp", ":"+cfg.Port)
 	if err != nil {
+		fedIptal()
 		havuz.Close()
 		return nil, fmt.Errorf("kimlik dinleyicisi acilamadi (port %s): %w", cfg.Port, err)
 	}
@@ -179,7 +211,10 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 		IdleTimeout:       60 * time.Second,
 	}
 
-	sunucu := &Sunucu{srv: srv, havuz: havuz, anahtar: anahtar}
+	sunucu := &Sunucu{
+		srv: srv, havuz: havuz, anahtar: anahtar,
+		fedIptal: fedIptal, dogrulayicilar: dogrulayicilar,
+	}
 	sunucu.hazir.Store(true)
 	go func() {
 		if err := srv.Serve(dinleyici); err != nil && err != http.ErrServerClosed {
@@ -247,6 +282,89 @@ func yapilandirmaDogrula(cfg *config.AuthConfig) error {
 	return nil
 }
 
+// yukariAkisSabitleri, Apple ve Google'in adreslerini ve kapsamlarini
+// tasir.
+//
+// Yukari akis adresleri SABITTIR ve koddan gelir; ortamdan YALNIZCA
+// kimlik bilgileri okunur. Her giriste discovery cekmek gereksiz bir ag
+// turu ve fazladan bir hata kaynagidir; adresleri ortam degiskenine
+// birakmak ise yanlis yapilandirilmis bir issuer/JWKS ciftiyle (yani
+// baska bir tarafa guvenerek) ayaga kalkabilmek demektir.
+var yukariAkisSabitleri = map[string]YukariAkis{
+	saglayiciGoogle: {
+		Ad:           saglayiciGoogle,
+		Issuer:       "https://accounts.google.com",
+		AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth",
+		TokenURL:     "https://oauth2.googleapis.com/token",
+		JWKSURL:      "https://www.googleapis.com/oauth2/v3/certs",
+		Kapsamlar:    []string{"openid", "email", "profile"},
+		PKCEDestekli: true,
+		FormPost:     false,
+	},
+	saglayiciApple: {
+		Ad:        saglayiciApple,
+		Issuer:    "https://appleid.apple.com",
+		AuthURL:   "https://appleid.apple.com/auth/authorize",
+		TokenURL:  "https://appleid.apple.com/auth/token",
+		JWKSURL:   "https://appleid.apple.com/auth/keys",
+		Kapsamlar: []string{"openid", "email", "name"},
+		// K4: Apple'in PKCE destegi dokumante degil.
+		PKCEDestekli: false,
+		// name/email istenince Apple form_post ile doner (bkz. K2).
+		FormPost: true,
+	},
+}
+
+// federasyonKur, yapilandirmadaki saglayicilari koddaki sabit adreslerle
+// birlestirir ve her biri icin bir yukari akis dogrulayicisi acar.
+//
+// Bilinmeyen bir saglayici adi HATA doner: sessizce atlamak, kullanicinin
+// basmadigi bir butonun eksikligini kimsenin fark etmemesi demektir
+// (Faz 1'in "sessiz sifir" sinifi).
+//
+// ctx, dogrulayicilarin JWKS arka plan yenilemesinin yasam suresidir ve
+// CAGIRANIN sunucu omrune bagli ctx'i olmalidir (bkz. Start).
+func federasyonKur(
+	ctx context.Context, cfg *config.AuthConfig,
+) (map[string]*YukariAkis, map[string]*auth.YukariAkisDogrulayici, error) {
+	if len(cfg.Federasyon) == 0 {
+		return nil, nil, nil
+	}
+	akislar := make(map[string]*YukariAkis, len(cfg.Federasyon))
+	dogrulayicilar := make(map[string]*auth.YukariAkisDogrulayici, len(cfg.Federasyon))
+	// Yarim kurulmus bir kume geride birakilmaz: ilk hatada o ana kadar
+	// acilan dogrulayicilar kapatilir.
+	temizle := func() {
+		for _, d := range dogrulayicilar {
+			_ = d.Close()
+		}
+	}
+	for _, f := range cfg.Federasyon {
+		sabit, ok := yukariAkisSabitleri[f.Ad]
+		if !ok {
+			temizle()
+			return nil, nil, fmt.Errorf("bilinmeyen federasyon saglayicisi: %q (desteklenenler: %s, %s)", f.Ad, saglayiciApple, saglayiciGoogle)
+		}
+		akis := sabit // kopya: sabit tablo DEGISTIRILMEZ
+		akis.IstemciID = f.IstemciID
+		akis.IstemciSir = f.IstemciSir
+		akis.AppleEkipID = f.AppleEkipID
+		akis.AppleAnahtarID = f.AppleAnahtarID
+		akis.AppleAnahtarP8 = f.AppleAnahtarP8
+
+		// audience = BIZIM istemci kimligimiz: saglayicinin baska bir
+		// uygulama icin verdigi id_token bize kabul edilmemeli.
+		dogrulayici, err := auth.NewYukariAkisDogrulayici(ctx, akis.JWKSURL, akis.Issuer, akis.IstemciID)
+		if err != nil {
+			temizle()
+			return nil, nil, fmt.Errorf("%s dogrulayicisi kurulamadi: %w", f.Ad, err)
+		}
+		akislar[f.Ad] = &akis
+		dogrulayicilar[f.Ad] = dogrulayici
+	}
+	return akislar, dogrulayicilar, nil
+}
+
 // muxKur, OP'nin HTTP yuzeyini kurar. Start'tan ayri bir fonksiyon:
 // testler ayni kablolamayi (sahte depolarla) kurup gercek bir
 // dinleyici uzerinde akisi ucan uca olcebilsin.
@@ -257,10 +375,21 @@ func yapilandirmaDogrula(cfg *config.AuthConfig) error {
 // gecer. Kutuphane kodu DEGISTIRILMEZ veya KOPYALANMAZ: her iki
 // sarmalayici dogrulamadan sonra kutuphanenin kendi handler'ina delege
 // eder.
+// FEDERASYON (Faz 2): akislar BOS ise federasyon uclari HIC BAGLANMAZ ve
+// giris sayfasinda buton gorunmez. Yarim bir yuzey birakmak -- buton yok
+// ama uc cagrilabilir, ya da buton var ama uc yok -- iki yonde de
+// kullaniciyi hataya goturur. Baglandiklarinda yol oncelikleri yukaridaki
+// kurali izler: "/federasyon/{saglayici}/baslat",
+// "/federasyon/{saglayici}/geri" ve "/baglama" tam yol desenleridir ve
+// "/" subtree desenini yener.
 func muxKur(
 	saglayici *op.Provider,
 	kullaniciDepo UserStore,
 	istekDepo *IstekDepo,
+	federeDepo FedereDepo,
+	akislar map[string]*YukariAkis,
+	dogrulayicilar map[string]*auth.YukariAkisDogrulayici,
+	issuer string,
 	cerezGuvenli bool,
 	hizLimit *HizLimit,
 ) *http.ServeMux {
@@ -279,6 +408,41 @@ func muxKur(
 		cerezGuvenli,
 	)
 	sayfalar.CallbackDelege(http.HandlerFunc(op.AuthorizeCallbackHandler(saglayici)))
+
+	if len(akislar) > 0 {
+		adlar := make([]string, 0, len(akislar))
+		for ad := range akislar {
+			adlar = append(adlar, ad)
+		}
+		// Buton sirasi DETERMINISTIK olmali: map yinelemesi Go'da
+		// bilerek rasgeledir, siralamazsak butonlar her sayfa
+		// yuklemesinde yer degistirir.
+		sort.Strings(adlar)
+		sayfalar.FederasyonSaglayicilari(adlar)
+
+		// istekDepo UC arayuzu birden karsilar (FederasyonDepo =
+		// DurumDepo + BeklemeDepo, FedereIstekDepo ve OturumDepo);
+		// hepsi ayni akisin kisa omurlu Redis durumudur ve ayri ayri
+		// kablolamak iki yerde ayri bozulabilen bir kurulum olurdu.
+		fedSayfalar := NewFedereSayfalar(
+			akislar,
+			dogrulayicilar,
+			istekDepo,
+			federeDepo,
+			kullaniciDepo,
+			istekDepo,
+			istekDepo,
+			op.AuthCallbackURL(saglayici),
+			issuer,
+			cerezGuvenli,
+		)
+		// Ikisi de POST handler'larini araci ile sarar (bkz. Bagla ve
+		// BaglamaBagla); hizLimit nil GECILMEZ, uretimde Start limit
+		// kurulamazsa hic baslamaz.
+		fedSayfalar.Bagla(mux, araci, hizLimit)
+		fedSayfalar.BaglamaBagla(mux, araci, hizLimit)
+	}
+
 	sayfalar.Bagla(mux, araci, hizLimit)
 
 	yolAuthorize := saglayici.AuthorizationEndpoint().Relative()
@@ -421,6 +585,17 @@ func (s *Sunucu) Kapat(ctx context.Context) error {
 		shutdownErr = fmt.Errorf("dinleyici kapatilamadi: %w", shutdownErr)
 	}
 	s.havuz.Close()
+	// JWKS yenileme goroutine'leri surec yasadigi surece yasar; kapanista
+	// ACIKCA durdurulur, aksi halde kapatilmis bir sunucunun arkasinda
+	// saatlik ag cagrilari surer.
+	if s.fedIptal != nil {
+		s.fedIptal()
+	}
+	for ad, d := range s.dogrulayicilar {
+		if err := d.Close(); err != nil {
+			log.Printf("%s dogrulayicisi kapatilamadi: %v", ad, err)
+		}
+	}
 	return shutdownErr
 }
 

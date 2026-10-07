@@ -68,6 +68,17 @@ type girisVeri struct {
 	Hata          string
 	GirisYolu     string
 	KayitYolu     string
+
+	// Saglayicilar, giris sayfasinda buton gosterilecek YUKARI AKIS
+	// saglayicilaridir. Bos ise hic buton cikmaz.
+	Saglayicilar []SaglayiciButon
+}
+
+// SaglayiciButon, giris sayfasindaki tek bir yukari akis butonudur.
+type SaglayiciButon struct {
+	Ad     string // "google" | "apple"
+	Etiket string // "Google ile giris yap"
+	Yol    string // /federasyon/google/baslat?authRequestID=...
 }
 
 // kayitVeri, kayit.html sablonuna verilen veridir.
@@ -105,6 +116,11 @@ type Sayfalar struct {
 	// Kutuphane kodu degistirilmez veya kopyalanmaz; yalnizca onune
 	// gecilir.
 	callbackDelege http.Handler
+
+	// federasyonlar, giris sayfasinda buton cikacak saglayici
+	// adlaridir. BOS birakilabilir ve o zaman hic buton cikmaz; bu,
+	// federasyon yapilandirilmamis kurulumun dogru davranisidir.
+	federasyonlar []string
 }
 
 // NewSayfalar, gecerli bir UserStore, IstekDepo, OturumDepo ve
@@ -132,6 +148,40 @@ func NewSayfalar(
 // kutuphane handler'ini baglar. Ayri bir setter: handler kutuphane
 // saglayicisindan gelir ve saglayici NewSayfalar'dan sonra kurulur.
 func (s *Sayfalar) CallbackDelege(h http.Handler) { s.callbackDelege = h }
+
+// FederasyonSaglayicilari, giris sayfasinda buton gosterilecek yukari
+// akis saglayicilarini belirler. Ayri bir setter: liste yapilandirmadan
+// gelir ve sirasi cagiranin verdigi siradir (bkz. muxKur; map yinelemesi
+// rasgele oldugu icin orada siralanir).
+//
+// Liste YALNIZCA GERCEKTEN yapilandirilmis saglayicilari icermeli:
+// baglanmamis bir uca giden buton, kullaniciya 404 gosterir.
+func (s *Sayfalar) FederasyonSaglayicilari(adlar []string) { s.federasyonlar = adlar }
+
+// federasyonButonlari, verilen auth istegi icin buton listesini kurar.
+//
+// Yol BURADA, url paketiyle kurulur; sablonda elle string birlestirme
+// YAPILMAZ. authRequestID kacissiz girerse en iyi durumda baglanti
+// bozulur, en kotusunde icindeki "&" sorgu dizisine yabanci bir
+// parametre enjekte eder.
+func (s *Sayfalar) federasyonButonlari(id string) []SaglayiciButon {
+	if len(s.federasyonlar) == 0 {
+		return nil
+	}
+	butonlar := make([]SaglayiciButon, 0, len(s.federasyonlar))
+	for _, ad := range s.federasyonlar {
+		yol := url.URL{
+			Path:     "/federasyon/" + ad + "/baslat",
+			RawQuery: url.Values{"authRequestID": {id}}.Encode(),
+		}
+		butonlar = append(butonlar, SaglayiciButon{
+			Ad:     ad,
+			Etiket: saglayiciEtiket(ad) + " ile giris yap",
+			Yol:    yol.String(),
+		})
+	}
+	return butonlar
+}
 
 // Bagla, sayfalari mux'a baglar. POST handler'lari issuer aracisiyla
 // SARILIR: araci issuer'i istek baglamina koyar ve geriCagirma onu
@@ -513,6 +563,7 @@ func (s *Sayfalar) girisRender(w http.ResponseWriter, kod int, id, csrf, eposta,
 		Hata:          hata,
 		GirisYolu:     yolGiris,
 		KayitYolu:     yolKayit,
+		Saglayicilar:  s.federasyonButonlari(id),
 	}
 	w.WriteHeader(kod)
 	if err := sablonlar.ExecuteTemplate(w, "giris.html", veri); err != nil {
