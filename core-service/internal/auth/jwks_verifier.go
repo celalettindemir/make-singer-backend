@@ -192,13 +192,36 @@ type YukariAkisDogrulayici struct {
 // tarafindan verilir: Apple ve Google'in jwks_uri'si sabittir, her giriste
 // discovery cekmek gereksiz bir ag turu ve bir hata kaynagidir.
 //
-// ctx, arka plan anahtar yenilemesinin yasam suresidir ve CAGIRANIN omru
-// kadar yasamalidir. Eski NewJWKSVerifier'da oldugu gibi burada 30 saniyelik
-// bir timeout ctx'i kurup "defer cancel()" ile hemen iptal etmek, anahtar
-// kumesinin bir daha HIC yenilenmemesi demektir. Zitadel'de bu fark
-// edilmedi cunku imzalama anahtari degismiyordu. Google anahtarlarini
-// duzenli dondurur: olu yenileme, rotasyondan sonra butun federe girislerin
-// sessizce kirilmasi demektir. (TestAnahtarRotasyonuTakipEdilir bunu olcer.)
+// ctx, keyfunc.NewDefaultCtx'e OLDUGU GIBI iletilir ve CAGIRANIN omru
+// kadar yasamalidir. Eski NewJWKSVerifier'daki gibi burada 30 saniyelik bir
+// timeout ctx'i kurup "defer cancel()" ile hemen iptal etmek YANLISTIR --
+// ama ONEMLI: bunun bedeli, ilk okumada tahmin edilenden daha dar.
+//
+// ctx SADECE saatlik periyodik arka plan yenilemesinin yasam suresidir
+// (bkz. jwkset@v0.5.17 http.go:89 dogrudan: "NewDefaultHTTPClientCtx is
+// the same as NewDefaultHTTPClient, but with a context that can end the
+// refresh goroutine."; storage.go:278-295 bu goroutine'in options.Ctx'in
+// Done()'ina gore CIKTIGINI gosterir). Rotasyonun kendisi -- yeni bir kid
+// gorulmesi -- BU CTX'E BAGLI DEGILDIR: jwkset'in varsayilan davranisi
+// (http.go:83, "3. Refresh remote HTTP resources if a key with an
+// unknown key ID is trying to be read, with a rate limit of 5 minutes.")
+// bilinmeyen kid'i ANINDA, ctx'ten bagimsiz bir ic context ile yeniden
+// ceker. (TestAnahtarRotasyonuTakipEdilir bunu olcer -- ve ctx iptal
+// edilmis olsa bile gecer; bkz. o testin yanindaki not.)
+//
+// ctx iptal edilirse/olu kalirsa gercek bedel budur:
+//
+//	(a) saglayicinin ARTIK YAYINLAMADIGI (orn. ele gecirildigi icin geri
+//	    cekilen) bir anahtar, surec yeniden baslamadan bellekte sonsuza
+//	    kadar GECERLI SAYILIR -- hic bir zaman silinmez;
+//	(b) saatlik proaktif yenileme olu oldugundan, 5 dakikalik pencere
+//	    icinde arka arkaya IKI YENI kid gelirse ikincisi dogrulanamaz
+//	    (ayni rate limiter, tazelenmeden ikinci bir anlik yenilemeye izin
+//	    vermez).
+//
+// Ikisi de ciddi ama "rotasyon aninda butun girisler kirilir" kadar
+// dramatik degil; bu metodun ctx'i cagiranin verdigi gibi tutmasi yeterli,
+// ayrica bir yapilandirma/clock enjeksiyonu GEREKMEZ.
 func NewYukariAkisDogrulayici(ctx context.Context, jwksURL, issuer, audience string) (*YukariAkisDogrulayici, error) {
 	if jwksURL == "" || issuer == "" || audience == "" {
 		return nil, fmt.Errorf("jwksURL, issuer ve audience zorunlu")

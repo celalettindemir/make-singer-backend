@@ -23,7 +23,7 @@ import (
 // hem JWKS'te yayinlanirken hem de token imzalanirken ayni kid'i tasimali,
 // aksi halde keyfunc dogru anahtari secemez.
 func kidIcin(anahtar *rsa.PrivateKey) string {
-	toplam := sha256.Sum256(anahtar.PublicKey.N.Bytes())
+	toplam := sha256.Sum256(anahtar.N.Bytes())
 	return base64.RawURLEncoding.EncodeToString(toplam[:8])
 }
 
@@ -336,11 +336,24 @@ func TestYukariAkisDogrulayiciZorunluAlanlar(t *testing.T) {
 	}
 }
 
-// --- Step 3: anahtar rotasyonu (K7'nin kaniti) ------------------------------
+// --- Step 3: anahtar rotasyonu ----------------------------------------------
 
-// Google imzalama anahtarlarini duzenli dondurur. Yenileme olu ise bu test,
-// rotasyondan sonraki ilk tokende DUSER -- ve uretimde bu, haftalar sonra
-// butun girislerin sessizce kirilmasi demektir.
+// TestAnahtarRotasyonuTakipEdilir'in OLCTUGU SEY: daha once hic
+// gorulmemis bir kid ile imzalanmis bir id_token kabul edilir -- yani
+// jwkset'in "bilinmeyen kid" aninda yeniden cekme davranisi (varsayilan,
+// 5 dakikada bir sinirli) calisir.
+//
+// Bu test NewYukariAkisDogrulayici'ye verilen ctx'in iptal/olu kalma
+// regresyonunu OLCMEZ: olcup olcmedigi dogrulandi (bkz. jwks_verifier.go
+// NewYukariAkisDogrulayici yorumu ve jwkset@v0.5.17 http.go:83,89) --
+// bilinmeyen-kid yenilemesi ctx'ten bagimsiz kendi ic context'ini
+// kullanir. NewYukariAkisDogrulayici icinde ctx'i tekrar
+// "context.WithTimeout(ctx, 30*time.Second); defer cancel()" ile
+// degistirip bu testi calistirirsaniz GECER -- test bu mutasyonu
+// yakalamaz. Bu bilerek boyle: ctx'in gercek bedeli (eski anahtarin
+// sonsuza kadar cache'de kalmasi, 5 dakikalik pencerede ikinci bir yeni
+// kid'in reddedilmesi) bu testin suresi icinde gozlenemez; sahte bir
+// "ctx'i korur" etiketi, hicbir test olmamasindan daha kotu olurdu.
 func TestAnahtarRotasyonuTakipEdilir(t *testing.T) {
 	eski, _ := rsa.GenerateKey(rand.Reader, 2048)
 	yeni, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -371,9 +384,10 @@ func TestAnahtarRotasyonuTakipEdilir(t *testing.T) {
 	kume = []*rsa.PrivateKey{yeni}
 	kilit.Unlock()
 
-	// Yeni anahtarla imzali token da gecmeli. keyfunc bilinmeyen bir kid
-	// gordugunde kumeyi yeniden ceker; yenileme ctx'i iptal edilmis olsa bu
-	// ADIM DUSER.
+	// Yeni anahtarla imzali token da gecmeli: kid daha once gorulmedigi
+	// icin jwkset bilinmeyen-kid yenilemesini tetikler. Bu yenileme
+	// kendi (ctx'ten bagimsiz) ic context'ini kullanir -- dosyanin
+	// basindaki not bunu neden olcmedigini aciklar.
 	if _, err := v.DogrulaNonce(tokenUret(t, yeni, denemeIssuer, denemeIstemci, "n2"), "n2"); err != nil {
 		t.Fatalf("rotasyon sonrasi token reddedildi (yenileme olu mu?): %v", err)
 	}
