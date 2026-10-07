@@ -64,6 +64,12 @@ type BaglamaBekleme struct {
 // dolmus veya ZATEN TUKETILMIS).
 var ErrBeklemeYok = errors.New("baglama beklemesi bulunamadi")
 
+// ErrYukariAkisEpostaYok, yukari akis dogrulanmis id_token'da e-posta
+// GONDERMEDIGI icin yeni bir federe hesap acilamadiginda donulur
+// (bkz. kullaniciCoz'daki gerekce: bos e-posta ile en fazla BIR hesap
+// olusabilir ve ikincisi kullaniciyi KALICI olarak kilitler).
+var ErrYukariAkisEpostaYok = errors.New("yukari akis e-posta gondermedi")
+
 // BeklemeDepo, bekleyen baglama kaydinin yazilmasini ve okunmasini
 // tanimlar. Uretimde *IstekDepo karsilar.
 //
@@ -212,6 +218,22 @@ func (f *FedereSayfalar) kullaniciCoz(
 	}
 
 	// 3) Hesap yok (veya gizli aktarma adresi) -> yeni federe hesap.
+	//
+	// AMA e-posta BOS ise hesap ACILMAZ. users tablosunda "email NOT
+	// NULL" ve "UNIQUE (lower(email))" var (migrations/001_kullanici.sql),
+	// yani e-postasiz EN FAZLA BIR federe hesap olusabilir. Yukari akis
+	// bir kez e-posta gondermezse ikinci boyle kullanici 23505 ->
+	// ErrEpostaKullanimda ile duser ve BOS e-posta gosteren bir 409
+	// cakisma sayfasina cakilir; o kullanici bir daha HIC kaydolamaz,
+	// yani KALICI olarak kilitlenir. Olasilik dusuk, acilan kapi agir.
+	//
+	// Cozum semayi degistirmek DEGIL (email NULL'lanabilir yapmak
+	// calisir bir uretim tablosunu etkiler ve bu turun kapsami disi),
+	// sessizce bos e-postayla hesap acmak yerine ACIKCA reddetmek ve
+	// kullaniciya ne yapacagini soylemek.
+	if eposta == "" {
+		return nil, nil, ErrYukariAkisEpostaYok
+	}
 	yeni, err := f.federe.FedereKullaniciOlustur(
 		ctx, saglayici, iddia.UserID, eposta, iddia.Name, bool(iddia.EmailVerified))
 	if errors.Is(err, ErrEpostaKullanimda) {

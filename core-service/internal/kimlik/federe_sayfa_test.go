@@ -1205,3 +1205,90 @@ func TestIstekTamamlamaHatasiSiniflandirmasi(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------
+// M-b: yukari akis e-posta vermezse hesap ACILMAZ
+// ---------------------------------------------------------------------
+
+// users tablosunda "email NOT NULL" + "UNIQUE (lower(email))" var, yani
+// e-postasiz EN FAZLA BIR federe hesap olusabilir; ikincisi
+// ErrEpostaKullanimda ile BOS e-posta gosteren bir 409'a cakilir ve o
+// kullanici bir daha HIC kaydolamaz. Bu yuzden bos e-postayla hesap
+// acmak SESSIZCE kabul edilmez, ACIKCA reddedilir.
+//
+// Iki AYRI sub ile kosulur: ikisi de ayni aciklayici yaniti almali.
+// Eski davranista birincisi hesap acar, IKINCISI kalici olarak
+// kilitlenirdi.
+func TestYukariAkisEpostaVermezseHesapAcilmaz(t *testing.T) {
+	for _, sub := range []string{"epostasiz-1", "epostasiz-2"} {
+		t.Run(sub, func(t *testing.T) {
+			o := testFedereSayfalar(t)
+			o.google.ayarla(func(s *sahteSaglayici) {
+				s.eposta = ""
+				s.sub = sub
+			})
+
+			w := o.akisKos(t, saglayiciGoogle, false)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("durum = %d, beklenen 400, govde = %q", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), hataEpostaYok) {
+				t.Errorf("kullaniciya ne yapacagi soylenmemis: govde = %q", w.Body.String())
+			}
+			// Hicbir hesap ACILMAMIS ve giris YAPILMAMIS olmali.
+			if _, err := o.federe.KimlikleKullanici(context.Background(), saglayiciGoogle, sub); !errors.Is(err, ErrKimlikYok) {
+				t.Errorf("bos e-postayla hesap ACILDI (hata = %v)", err)
+			}
+			if o.istekler.subject(o.authReqID) != "" {
+				t.Error("bos e-postayla giris YAPILDI")
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------
+// M-c: kimlik_fed cerezi donuste temizlenir (HIJYEN)
+// ---------------------------------------------------------------------
+
+// Bu bir guvenlik duzeltmesi DEGIL: guvenlik dayanagi state kaydinin
+// GETDEL ile tek kullanimlik olmasidir, yani geride kalan cerez tek
+// basina hicbir akisi yeniden oynatamaz. Yine de akis bitince cerezin
+// 10 dakika daha tarayicida durmasi icin bir neden yok.
+func TestGeriBasarilidaFederasyonCereziSilinir(t *testing.T) {
+	o := testFedereSayfalar(t)
+	w := o.akisKos(t, saglayiciGoogle, false)
+	if w.Code != http.StatusFound {
+		t.Fatalf("akis basarisiz: durum = %d, govde = %q", w.Code, w.Body.String())
+	}
+
+	var silme *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == cerezAdFederasyon {
+			silme = c
+		}
+	}
+	if silme == nil {
+		t.Fatal("basarili donuste kimlik_fed silme cerezi YOK")
+	}
+	if silme.MaxAge >= 0 {
+		t.Errorf("MaxAge = %d, beklenen negatif (MaxAge=0 cerezi OTURUM cerezi olarak yasatir)", silme.MaxAge)
+	}
+	if silme.Value != "" {
+		t.Errorf("silme cerezi hala deger tasiyor: %q", silme.Value)
+	}
+	// Oznitelikler YAZMA anindakiyle ayni olmak ZORUNDA, aksi halde
+	// tarayici eskisini silmek yerine yanina IKINCI bir cerez yazar.
+	yazma := o.f.federasyonCerezi("deger")
+	if silme.Path != yazma.Path {
+		t.Errorf("Path = %q, beklenen %q", silme.Path, yazma.Path)
+	}
+	if silme.Secure != yazma.Secure {
+		t.Errorf("Secure = %v, beklenen %v", silme.Secure, yazma.Secure)
+	}
+	if silme.HttpOnly != yazma.HttpOnly {
+		t.Errorf("HttpOnly = %v, beklenen %v", silme.HttpOnly, yazma.HttpOnly)
+	}
+	if silme.SameSite != yazma.SameSite {
+		t.Errorf("SameSite = %v, beklenen %v", silme.SameSite, yazma.SameSite)
+	}
+}

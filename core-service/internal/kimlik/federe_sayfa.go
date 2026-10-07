@@ -74,6 +74,12 @@ const hataIstekGecersiz = "Giris istegi gecersiz, lutfen uygulamadan tekrar dene
 // olurdu.
 const hataIstekSuresiDoldu = "Giris isteginin suresi doldu. Lutfen uygulamaya donup girisi yeniden baslatin."
 
+// hataEpostaYok, yukari akis e-posta gondermedigi icin yeni hesap
+// acilamadiginda gosterilir (bkz. ErrYukariAkisEpostaYok). Mesaj
+// kullaniciya NE YAPACAGINI soyler; "bir hata olustu" demek kullaniciyi
+// sonsuza kadar ayni butona basmaya birakirdi.
+const hataEpostaYok = "Saglayici e-posta adresinizi bize vermedigi icin yeni bir hesap olusturulamadi. Lutfen e-posta ve sifre ile giris yapin ya da diger giris yontemini kullanin."
+
 // federasyonZamanAsimi, yukari akisa yapilan HTTP cagrilarinin ust
 // siniri. JetonDegis kendi ic zaman asimini da uygular; bu, istemci
 // seviyesindeki ikinci kemerdir.
@@ -216,6 +222,16 @@ func (f *FedereSayfalar) geriURL(saglayici string) string {
 // ile CAPRAZ-SITE POST yapar ve Lax cerez o POST'ta gonderilmez.
 // HttpOnly ve Secure'dan vazgecilmez; Path federasyon altina SINIRLANIR
 // ki oturum cerezinin yuzeyini genisletmesin.
+//
+// YEREL GELISTIRME TUZAGI: cerezGuvenli, http:// issuer'da false'tur
+// (bkz. NewFedereSayfalar) ve SameSite=None + Secure OLMAYAN bir cerezi
+// MODERN TARAYICILAR REDDEDER. Yani yerelde bu cerez hic saklanmaz ve
+// geri donus "cerez baglamasi tutmadi" ile 403 verir. Pratikte
+// uretimi etkilemez: Apple ve Google redirect_uri'nin https olmasini
+// zorunlu kilar, yani federasyon akisi yerelde ZATEN elle denenemez.
+// Kod BILEREK degistirilmedi -- Secure'u http'de true yapmak cerezi
+// baska bir sekilde (bu kez her ortamda) kirar; yerelde denemek isteyen
+// kisinin bilmesi gereken sey, bu akisin https bir issuer gerektirdigidir.
 func (f *FedereSayfalar) federasyonCerezi(deger string) *http.Cookie {
 	return &http.Cookie{
 		Name:     cerezAdFederasyon,
@@ -226,6 +242,22 @@ func (f *FedereSayfalar) federasyonCerezi(deger string) *http.Cookie {
 		SameSite: http.SameSiteNoneMode,
 		MaxAge:   int(federasyonDurumTTL.Seconds()),
 	}
+}
+
+// federasyonCereziSil, kimlik_fed cerezini SILEN cerezi uretir.
+//
+// Ozniteliklerin yazma anindakiyle birebir ayni olmasi ZORUNLU
+// (ozellikle Path ve SameSite/Secure): tarayici cerezi ad+Path+Domain
+// ucluyle esler ve uyusmayan bir silme cerezi ESKISINI SILMEZ, yanina
+// IKINCI bir cerez yazar. Bu yuzden deger federasyonCerezi'nden
+// turetilir, elle yeniden kurulmaz.
+func (f *FedereSayfalar) federasyonCereziSil() *http.Cookie {
+	c := f.federasyonCerezi("")
+	// MaxAge < 0 "simdi sil" demektir (net/http bunu Max-Age=0 olarak
+	// yazar); MaxAge = 0 ise "oznitelik yok" anlamina gelir ve cerez
+	// oturum cerezi olarak YASAMAYA DEVAM EDER.
+	c.MaxAge = -1
+	return c
 }
 
 // hataSayfasi, federasyon akisindaki hatalari tek bicimli yazar. Metin
@@ -449,6 +481,14 @@ func (f *FedereSayfalar) Geri(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// E-posta ve sub LOGLANMAZ.
 		log.Printf("federasyon: kullanici cozulemedi: %v", err)
+		// Yukari akis e-posta gondermemesi bir SUNUCU hatasi degildir ve
+		// bos e-posta gosteren 409 cakisma sayfasina da gitmez: kullanici
+		// ne oldugunu ve ne yapacagini okumali (bkz.
+		// ErrYukariAkisEpostaYok).
+		if errors.Is(err, ErrYukariAkisEpostaYok) {
+			f.hataSayfasi(w, http.StatusBadRequest, hataEpostaYok)
+			return
+		}
 		f.hataSayfasi(w, http.StatusInternalServerError, hataSunucu)
 		return
 	}
@@ -466,5 +506,14 @@ func (f *FedereSayfalar) Geri(w http.ResponseWriter, r *http.Request) {
 		f.istekTamamlamaHatasi(w, err)
 		return
 	}
+	// HIJYEN: akis bitti, kimlik_fed cerezinin tarayicida kalmasi icin
+	// bir neden yok. Bu bir GUVENLIK duzeltmesi DEGIL -- guvenlik
+	// dayanagi state kaydinin GETDEL ile tek kullanimlik olmasidir
+	// (bkz. DurumAl), yani geride kalan cerez tek basina hicbir akisi
+	// yeniden oynatamaz. Silme cerezinin Name/Path/Secure/SameSite
+	// ozniteliklerinin yazma anindakiyle AYNI olmasi ZORUNLU: aksi
+	// halde tarayici silmeyi hic uygulamaz, bu yuzden ayni yapici
+	// (federasyonCerezi) kullanilir.
+	http.SetCookie(w, f.federasyonCereziSil())
 	http.Redirect(w, r, f.geriCagirma(r.Context(), d.AuthRequestID), http.StatusFound)
 }

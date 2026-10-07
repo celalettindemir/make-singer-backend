@@ -183,6 +183,98 @@ func TestSetUserinfoFromScopesBos(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------
+// M-a: SetUserinfoFromRequest'in FAIL-CLOSED hata yolu
+// ---------------------------------------------------------------------
+
+// hataliByIDUserStore, ByID'de HER ZAMAN hata donduren bir UserStore:
+// kullanici satiri okunamayan (DB dustu, satir silindi) durumun
+// karsiligi. Diger metotlar bu testlerde cagrilmaz; cagrilirlarsa
+// AYNI hatayi donerler, yani sessizce "basarili" gorunmezler.
+type hataliByIDUserStore struct{}
+
+var errKullaniciOkunamadi = errors.New("kullanici satiri okunamadi")
+
+func (hataliByIDUserStore) Create(context.Context, string, string, string) (*User, error) {
+	return nil, errKullaniciOkunamadi
+}
+
+func (hataliByIDUserStore) ByEmail(context.Context, string) (*User, error) {
+	return nil, errKullaniciOkunamadi
+}
+
+func (hataliByIDUserStore) ByID(context.Context, string) (*User, error) {
+	return nil, errKullaniciOkunamadi
+}
+
+// sahteIDTokenIstek, op.IDTokenRequest'in en kucuk karsiligidir:
+// op.CreateIDToken'i GERCEKTEN cagirabilmek icin gerekir.
+type sahteIDTokenIstek struct {
+	sub string
+}
+
+func (sahteIDTokenIstek) GetAMR() []string       { return []string{"pwd"} }
+func (sahteIDTokenIstek) GetAudience() []string  { return []string{"makesinger-mobil"} }
+func (sahteIDTokenIstek) GetAuthTime() time.Time { return time.Now() }
+func (sahteIDTokenIstek) GetClientID() string    { return "makesinger-mobil" }
+func (sahteIDTokenIstek) GetScopes() []string    { return []string{oidc.ScopeOpenID, oidc.ScopeProfile} }
+func (s sahteIDTokenIstek) GetSubject() string   { return s.sub }
+
+// SetUserinfoFromRequest, userinfoDoldur'un ByID hatasini kutuphaneye
+// GERI DONDURMEK zorunda: kutuphane zincirinde (pkg/op/token.go:247-251)
+// bu metodun hatasi jeton uretimini IPTAL eder.
+//
+// NEDEN BU TEST VAR: hatayi yutmak (_ = d.userinfoDoldur(...); return nil)
+// tum paketi YESIL birakiyordu. Oysa bos bir userinfo,
+// claims.SetUserInfo'nun KOSULSUZ "t.Subject = i.Subject" atamasiyla
+// (pkg/oidc/token.go:158-159) id_token'in sub'unu EZER ve sub'suz bir
+// id_token cikar -- Faz 1'in Critical'inin AYNISI. Yani "en kotusu
+// eksik claim olur" diye yapilan bir refactor sessizce o acigi geri
+// acabiliyordu.
+//
+// Olcum op.CreateIDToken uzerinden yapilir, metodu dogrudan cagirarak
+// degil: boylece kutuphanenin hatayi GERCEKTEN jeton uretimini
+// durdurmak icin kullandigi da kanitlanir.
+func TestIDTokenUretimiKullaniciOkunamazsaBasarisiz(t *testing.T) {
+	a, err := AnahtarYukle(testPEM(t))
+	if err != nil {
+		t.Fatalf("AnahtarYukle: %v", err)
+	}
+	cfg := testAuthCfg()
+	istek := sahteIDTokenIstek{sub: "k1"}
+	ctx := context.Background()
+
+	// 1) Vacuous gecis kontrolu: CALISAN bir depoyla jeton URETILIR ve
+	//    sub'u tasir. Aksi halde asagidaki iddia "CreateIDToken hep
+	//    patliyor" diye de gecerdi.
+	saglam := NewDepo(cfg, NewSahteUserStore(), NewSahteTokenStore(), nil, a)
+	kullanici, err := saglam.kullanici.Create(ctx, "k@ornek.com", "K", "cok-gizli-sifre")
+	if err != nil {
+		t.Fatalf("kullanici olusturulamadi: %v", err)
+	}
+	jeton, err := op.CreateIDToken(ctx, cfg.Issuer, sahteIDTokenIstek{sub: kullanici.ID},
+		time.Hour, "", "", saglam, saglam.istemci)
+	if err != nil {
+		t.Fatalf("saglam depoyla id_token uretilemedi: %v", err)
+	}
+	if jeton == "" {
+		t.Fatal("saglam depoyla bos id_token uretildi")
+	}
+
+	// 2) ByID hata donduren depoda jeton uretimi BASARISIZ olmali.
+	bozuk := NewDepo(cfg, hataliByIDUserStore{}, NewSahteTokenStore(), nil, a)
+	bozukJeton, err := op.CreateIDToken(ctx, cfg.Issuer, istek, time.Hour, "", "", bozuk, bozuk.istemci)
+	if err == nil {
+		t.Fatalf("kullanici okunamazken id_token URETILDI: %q", bozukJeton)
+	}
+	if !errors.Is(err, errKullaniciOkunamadi) {
+		t.Errorf("hata = %v, beklenen depo hatasinin sarmalanmis hali", err)
+	}
+	if bozukJeton != "" {
+		t.Errorf("hata ile birlikte jeton da dondu: %q", bozukJeton)
+	}
+}
+
 // Health FAIL-CLOSED olmali: SaglikBagla hic cagrilmadiysa (testlerdeki
 // gibi), /healthz'in Postgres/Redis olu iken bile "sagliklı" demesini
 // engellemek icin acikca hata donmeli.
