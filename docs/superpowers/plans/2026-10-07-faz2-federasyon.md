@@ -44,7 +44,16 @@ Karar: federasyon akışı **kendi çerezini** kullanır — `kimlik_fed`, `Http
 
 **K6 — `amr` claim'i istek başına hesaplanır.** `istek.go:69` bugün `GetAMR()` için sabit `[]string{"pwd"}` dönüyor. Google ile giren bir kullanıcının token'ında "pwd" yazması yanlış bir beyandır. `AuthIstek`'e `AMR []string` alanı eklenir: şifreyle giriş `["pwd"]`, federasyonla giriş `["fed"]`. Sağlayıcı adı `amr`'ye konmaz (RFC 8176 kayıtlı değerler listesi tutar); hangi sağlayıcı olduğu `federe_kimlikler` tablosunda zaten duruyor.
 
-**K7 — `jwks_verifier.go`'nun arka plan yenilemesi bugün ÖLÜ ve bu düzeltilmeli.** `NewJWKSVerifier` (`internal/auth/jwks_verifier.go:43-46`) 30 saniyelik bir `context.WithTimeout` kurup `defer cancel()` ile hemen iptal ediyor, ve `keyfunc.NewDefaultCtx`'e o ctx'i veriyor. Yani anahtar kümesi bir daha yenilenmez. Zitadel'de fark edilmedi; Google anahtarlarını düzenli döndürdüğü için federasyonda bu, haftalar sonra bütün girişlerin sessizce kırılması demektir. Görev 2 bunu uzun ömürlü bir ctx'e çevirir ve **rotasyonu kanıtlayan bir test** yazar — kütüphane semantiği hakkındaki okumama değil, teste güveniyoruz.
+**K7 — `jwks_verifier.go`'nun periyodik anahtar yenilemesi bugün ÖLÜ.** `NewJWKSVerifier` (`internal/auth/jwks_verifier.go:43-46`) 30 saniyelik bir `context.WithTimeout` kurup `defer cancel()` ile hemen iptal ediyor ve `keyfunc.NewDefaultCtx`'e o ctx'i veriyor.
+
+**DÜZELTME (Görev 2'de ölçüldü):** Bu kararın ilk hali "yani rotasyondan sonra bütün girişler sessizce kırılır" diyordu. **Yanlıştı.** Sabitlenmiş kütüphane kaynağı iki yolu ayırıyor:
+
+- `jwkset@v0.5.17/http.go:89` kendi doküman yorumunda: *"a context that can end the refresh goroutine"* — verdiğimiz ctx YALNIZCA saatlik periyodik yenilemeyi yönetiyor (`storage.go:278-295`, `case <-options.Ctx.Done(): return`).
+- Rotasyonun gerçekten dayandığı mekanizma başka: `http.go:83`'te belgelenen "bilinmeyen `kid` okunmaya çalışılırsa uzak kaynağı yenile, 5 dakika hız sınırıyla" yolu. O yol bizim ctx'imizden bağımsız.
+
+Yani iptal edilmiş ctx **rotasyonu kırmıyor**. Gerçek bedeli daha mütevazı ve hâlâ gerçek: (a) kümeden **çıkarılan** bir anahtar bellekte süresiz kalır, yani sağlayıcının emekliye ayırdığı (belki ele geçtiği için ayırdığı) bir anahtarı süreç yeniden başlayana kadar kabul etmeye devam ederiz; (b) bilinmeyen-kid yolu 5 dakikada bir ile sınırlı olduğundan, periyodik yenileme ölüyken o pencerede gelen ikinci bir yeni kid doğrulanamaz. Düzeltme bu yüzden korunur ama ciddiyeti "bütün girişler kırılır" değil.
+
+Bunun bir sonucu daha var: **rotasyon testi K7 için bir regresyon testi DEĞİLDİR.** Ctx hatası yeniden konduğunda test geçmeye devam eder, çünkü ölçtüğü şey bilinmeyen-kid yolu. Test yine değerli — rotasyonun fiilen çalıştığını kanıtlıyor — ama hangi korumayı ölçtüğü konusunda yoruma güvenilmemeli. Periyodik yenilemeyi saniye altı bir birim testiyle gözlemlemek mümkün değil; kurucunun imzasını genişletmek veya kütüphanenin dışa açık olmayan iç yapılarına uzanmak bu kadar mütevazı bir sorun için kapsam kayması olurdu.
 
 **K8 — Apple'ın `email_verified` claim'i string veya bool gelebilir.** Apple bu claim'i bazı akışlarda `"true"` (string) olarak gönderir. `bool` olarak çözümlemeye çalışan kod sessizce hata verir ve giriş kırılır. Özel bir `EsnekBool` tipi yazılır ve ikisini de kabul eder.
 
