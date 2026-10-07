@@ -572,6 +572,11 @@ func TestIkinciKayitSubjectEzmez(t *testing.T) {
 	if ilkSubject == "" {
 		t.Fatal("ilk kayit istegi baglamadi")
 	}
+	// kayitPost DORDUNCU amr cagri yeri (sayfa.go:586). girisPost'un
+	// iddiasi bu satiri KAPSAMAZ: ayri bir cagri, ayri sabit.
+	if got := o.tamamlayan.amrOku(id); !slices.Equal(got, []string{"pwd"}) {
+		t.Errorf("kayit sonrasi amr = %v, beklenen [pwd]", got)
+	}
 
 	w := kayitOl("ikinci@ornek.com")
 	if w.Code == http.StatusFound {
