@@ -72,6 +72,10 @@ type GroqConfig struct {
 	APIKey  string
 	BaseURL string
 	Model   string
+	// MaxTokens reasoning token'larini da kapsar (gpt-oss once dusunur).
+	MaxTokens           int
+	TemperatureGenerate float64
+	TemperatureRewrite  float64
 }
 
 // R2Config, Cloudflare R2 icin genel (public) ve ozel (private) bucket
@@ -204,6 +208,9 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("groq.api_key", "GROQ_API_KEY")
 	_ = viper.BindEnv("groq.base_url", "GROQ_BASE_URL")
 	_ = viper.BindEnv("groq.model", "GROQ_MODEL")
+	_ = viper.BindEnv("groq.max_tokens", "GROQ_MAX_TOKENS")
+	_ = viper.BindEnv("groq.temperature_generate", "GROQ_TEMPERATURE_GENERATE")
+	_ = viper.BindEnv("groq.temperature_rewrite", "GROQ_TEMPERATURE_REWRITE")
 	_ = viper.BindEnv("r2.account_id", "R2_ACCOUNT_ID")
 	_ = viper.BindEnv("r2.access_key_id", "R2_ACCESS_KEY_ID")
 	_ = viper.BindEnv("r2.secret_access_key", "R2_SECRET_ACCESS_KEY")
@@ -257,7 +264,10 @@ func Load() (*Config, error) {
 
 	// Groq defaults
 	viper.SetDefault("groq.base_url", "https://api.groq.com/openai/v1")
-	viper.SetDefault("groq.model", "llama-3.3-70b-versatile")
+	viper.SetDefault("groq.model", "openai/gpt-oss-120b")
+	viper.SetDefault("groq.max_tokens", 4000)
+	viper.SetDefault("groq.temperature_generate", 0.8)
+	viper.SetDefault("groq.temperature_rewrite", 0.6)
 
 	// Suno defaults
 	viper.SetDefault("suno.base_url", "https://api.sunoapi.org")
@@ -346,6 +356,10 @@ func Load() (*Config, error) {
 			APIKey:  viper.GetString("groq.api_key"),
 			BaseURL: viper.GetString("groq.base_url"),
 			Model:   viper.GetString("groq.model"),
+
+			MaxTokens:           viper.GetInt("groq.max_tokens"),
+			TemperatureGenerate: viper.GetFloat64("groq.temperature_generate"),
+			TemperatureRewrite:  viper.GetFloat64("groq.temperature_rewrite"),
 		},
 		R2: R2Config{
 			AccountID:       viper.GetString("r2.account_id"),

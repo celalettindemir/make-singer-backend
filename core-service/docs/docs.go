@@ -1585,6 +1585,18 @@ const docTemplate = `{
                     "type": "string",
                     "maxLength": 500
                 },
+                "language": {
+                    "enum": [
+                        "en",
+                        "tr",
+                        "fr"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Language"
+                        }
+                    ]
+                },
                 "sectionType": {
                     "enum": [
                         "intro",
@@ -2053,6 +2065,9 @@ const docTemplate = `{
                 "duration": {
                     "type": "number"
                 },
+                "expiresAt": {
+                    "type": "string"
+                },
                 "fileUrl": {
                     "type": "string"
                 },
@@ -2112,6 +2127,10 @@ const docTemplate = `{
                 },
                 "duration": {
                     "type": "number"
+                },
+                "expiresAt": {
+                    "description": "ExpiresAt: fileUrl presigned ve SURELI. Istemci bu adresi onbellege\nalip sonra kirik link gostermesin.",
+                    "type": "string"
                 },
                 "fileUrl": {
                     "type": "string"

@@ -18,6 +18,10 @@ type GroqClient struct {
 	baseURL    string
 	apiKey     string
 	model      string
+	maxTokens  int
+
+	temperatureGenerate float64
+	temperatureRewrite  float64
 }
 
 // ChatMessage represents a message in the chat completion request
@@ -28,10 +32,17 @@ type ChatMessage struct {
 
 // ChatCompletionRequest represents the request body for chat completion
 type ChatCompletionRequest struct {
-	Model       string        `json:"model"`
-	Messages    []ChatMessage `json:"messages"`
-	Temperature float64       `json:"temperature,omitempty"`
-	MaxTokens   int           `json:"max_tokens,omitempty"`
+	Model          string          `json:"model"`
+	Messages       []ChatMessage   `json:"messages"`
+	Temperature    float64         `json:"temperature,omitempty"`
+	MaxTokens      int             `json:"max_tokens,omitempty"`
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+}
+
+// ResponseFormat, Groq'un JSON modunu acar. json_object gecerli JSON
+// sozdizimini garanti eder, semayi degil; sema prompt'ta tarif edilir.
+type ResponseFormat struct {
+	Type string `json:"type"`
 }
 
 // ChatCompletionResponse represents the response from chat completion
@@ -64,21 +75,31 @@ func NewGroqClient(cfg *config.GroqConfig) *GroqClient {
 		baseURL: cfg.BaseURL,
 		apiKey:  cfg.APIKey,
 		model:   cfg.Model,
+
+		maxTokens:           cfg.MaxTokens,
+		temperatureGenerate: cfg.TemperatureGenerate,
+		temperatureRewrite:  cfg.TemperatureRewrite,
 	}
 }
 
-// ChatCompletion sends a chat completion request to Groq
-func (c *GroqClient) ChatCompletion(ctx context.Context, system, user string) (string, error) {
+// Temperatures, uretim ve yeniden yazma icin yapilandirilmis sicakliklari doner.
+func (c *GroqClient) Temperatures() (generate, rewrite float64) {
+	return c.temperatureGenerate, c.temperatureRewrite
+}
+
+// ChatCompletion sends a chat completion request to Groq in JSON mode
+func (c *GroqClient) ChatCompletion(ctx context.Context, system, user string, temperature float64) (string, error) {
 	messages := []ChatMessage{
 		{Role: "system", Content: system},
 		{Role: "user", Content: user},
 	}
 
 	reqBody := ChatCompletionRequest{
-		Model:       c.model,
-		Messages:    messages,
-		Temperature: 0.7,
-		MaxTokens:   1024,
+		Model:          c.model,
+		Messages:       messages,
+		Temperature:    temperature,
+		MaxTokens:      c.maxTokens,
+		ResponseFormat: &ResponseFormat{Type: "json_object"},
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)

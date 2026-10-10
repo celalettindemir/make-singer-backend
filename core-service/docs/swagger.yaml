@@ -459,6 +459,13 @@ definitions:
       instructions:
         maxLength: 500
         type: string
+      language:
+        allOf:
+        - $ref: '#/definitions/model.Language'
+        enum:
+        - en
+        - tr
+        - fr
       sectionType:
         allOf:
         - $ref: '#/definitions/model.SectionType'
@@ -785,6 +792,8 @@ definitions:
     properties:
       duration:
         type: number
+      expiresAt:
+        type: string
       fileUrl:
         type: string
       id:
@@ -832,6 +841,11 @@ definitions:
         type: string
       duration:
         type: number
+      expiresAt:
+        description: |-
+          ExpiresAt: fileUrl presigned ve SURELI. Istemci bu adresi onbellege
+          alip sonra kirik link gostermesin.
+        type: string
       fileUrl:
         type: string
       id:

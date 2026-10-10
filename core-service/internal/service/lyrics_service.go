@@ -43,7 +43,8 @@ func (s *LyricsService) Generate(ctx context.Context, req *model.LyricsGenerateR
 	systemPrompt := s.buildSystemPrompt(language)
 	userPrompt := s.buildGeneratePrompt(req, language)
 
-	response, err := s.groqClient.ChatCompletion(ctx, systemPrompt, userPrompt)
+	temperature, _ := s.groqClient.Temperatures()
+	response, err := s.groqClient.ChatCompletion(ctx, systemPrompt, userPrompt, temperature)
 	if err != nil {
 		return nil, fmt.Errorf("AI generation failed: %w", err)
 	}
@@ -65,10 +66,16 @@ func (s *LyricsService) Rewrite(ctx context.Context, req *model.LyricsRewriteReq
 		return s.rewriteMock(req)
 	}
 
-	systemPrompt := s.buildSystemPrompt(model.LanguageEN)
+	language := req.Language
+	if language == "" {
+		language = model.LanguageEN
+	}
+
+	systemPrompt := s.buildSystemPrompt(language)
 	userPrompt := s.buildRewritePrompt(req)
 
-	response, err := s.groqClient.ChatCompletion(ctx, systemPrompt, userPrompt)
+	_, temperature := s.groqClient.Temperatures()
+	response, err := s.groqClient.ChatCompletion(ctx, systemPrompt, userPrompt, temperature)
 	if err != nil {
 		return nil, fmt.Errorf("AI rewrite failed: %w", err)
 	}

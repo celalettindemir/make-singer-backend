@@ -23,7 +23,10 @@ ratelimit:
 groq:
   api_key: "" # Set via GROQ_API_KEY env var
   base_url: "https://api.groq.com/openai/v1"
-  model: "llama-3.3-70b-versatile"
+  model: "openai/gpt-oss-120b"
+  max_tokens: 4000
+  temperature_generate: 0.8
+  temperature_rewrite: 0.6
 
 # Cloudflare R2 Storage Configuration
 r2:
