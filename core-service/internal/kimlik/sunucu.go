@@ -68,8 +68,8 @@ func (s *Sunucu) Hazir() bool {
 // Start, kendi OpenID Provider'imizi ayaga kaldirir ve ikinci bir HTTP
 // dinleyicisinde (cfg.Port) discovery belgesini, JWKS'i ve OIDC
 // uclarini yayinlamaya baslar. Issuer bos ise hic baslamaz: bos issuer
-// ile uretilen discovery belgesi kullanilamaz ve API eski auth yolunda
-// kalmalidir. env, cfg.Server.Env'dir (SERVER_ENV); issuer http:// ise
+// ile uretilen discovery belgesi kullanilamaz (main zaten bos issuer ile
+// baslamayi reddeder). env, cfg.Server.Env'dir (SERVER_ENV); issuer http:// ise
 // guvensiz modun sadece yerel gelistirmede acilabilmesi icin kullanilir
 // (bkz. issuerGuvensizIzniDogrula).
 func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env string) (*Sunucu, error) {
