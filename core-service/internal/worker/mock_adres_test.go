@@ -57,7 +57,7 @@ func TestRenderWorker_MockStemAdresiCozulebilir(t *testing.T) {
 	cfg := testR2Cfg()
 	w := &RenderWorker{}
 
-	payload := &model.RenderJobPayload{OwnerID: "kullanici-a", ProjectID: "p1"}
+	payload := &model.RenderJobPayload{OwnerID: "kullanici-a", ProjectID: "p1", StemMode: model.StemModeStems}
 	payload.Arrangement.Instruments = []model.Instrument{model.Instrument("drums")}
 
 	record, err := w.generateMockResult(payload)
@@ -100,5 +100,40 @@ func TestBuildMixSettings_AdresTasimaz(t *testing.T) {
 	govde := string(b)
 	if strings.Contains(govde, "X-Amz-Signature") || strings.Contains(govde, "stem_url") || strings.Contains(govde, "GIZLI") {
 		t.Errorf("mix ayarlarinda adres/imza var: %s", govde)
+	}
+}
+
+func TestRenderWorker_MockModlari(t *testing.T) {
+	w := &RenderWorker{}
+	davul := model.InstrumentDrums
+	durumlar := []struct {
+		mod      model.StemMode
+		odak     *model.Instrument
+		beklenen []model.Instrument
+	}{
+		{model.StemModeMix, nil, []model.Instrument{model.InstrumentMix}},
+		{"", nil, []model.Instrument{model.InstrumentMix}},
+		{model.StemModeFocus, &davul, []model.Instrument{model.InstrumentDrums, model.InstrumentRest}},
+		{model.StemModeStems, nil, []model.Instrument{model.InstrumentDrums, model.InstrumentBass}},
+	}
+	for _, d := range durumlar {
+		p := &model.RenderJobPayload{OwnerID: "kullanici-a", ProjectID: "p1", StemMode: d.mod, FocusInstrument: d.odak}
+		p.Arrangement.Instruments = []model.Instrument{model.InstrumentDrums, model.InstrumentBass}
+		rec, err := w.generateMockResult(p)
+		if err != nil {
+			t.Fatalf("%q: %v", d.mod, err)
+		}
+		var got []model.Instrument
+		for _, s := range rec.Stems {
+			got = append(got, s.Instrument)
+		}
+		if len(got) != len(d.beklenen) {
+			t.Fatalf("%q: stemler = %v, beklenen %v", d.mod, got, d.beklenen)
+		}
+		for i := range got {
+			if got[i] != d.beklenen[i] {
+				t.Errorf("%q: stemler = %v, beklenen %v", d.mod, got, d.beklenen)
+			}
+		}
 	}
 }

@@ -24,6 +24,14 @@ type sahteSuno struct {
 	uretimSayisi                 int
 	stemBekleHata                error
 	bolArgs                      [2]string
+	bolSayisi                    int
+
+	// focus modu
+	ayirArgs       [3]string
+	ayirSayisi     int
+	ayirHata       error
+	ayrik          *client.IsolatedStem
+	ayrikBekleHata error
 }
 
 func (s *sahteSuno) GenerateMusic(_ context.Context, r *client.GenerateMusicRequest) (string, error) {
@@ -35,6 +43,7 @@ func (s *sahteSuno) WaitMusic(context.Context, string, time.Duration, time.Durat
 	return s.track, s.bekleHata
 }
 func (s *sahteSuno) SplitStems(_ context.Context, taskID, audioID string) (string, error) {
+	s.bolSayisi++
 	s.bolArgs = [2]string{taskID, audioID}
 	return "s1", s.bolHata
 }
@@ -42,10 +51,12 @@ func (s *sahteSuno) WaitStems(context.Context, string, time.Duration, time.Durat
 	return s.stems, s.stemBekleHata
 }
 func (s *sahteSuno) IsolateStem(_ context.Context, taskID, audioID, stemName string) (string, error) {
-	return "i1", nil
+	s.ayirSayisi++
+	s.ayirArgs = [3]string{taskID, audioID, stemName}
+	return "i1", s.ayirHata
 }
 func (s *sahteSuno) WaitIsolated(context.Context, string, time.Duration, time.Duration) (*client.IsolatedStem, error) {
-	return nil, nil
+	return s.ayrik, s.ayrikBekleHata
 }
 func (s *sahteSuno) IsConfigured() bool { return true }
 
@@ -83,7 +94,7 @@ func sesSunucusu(t *testing.T) *httptest.Server {
 }
 
 func testPayload() *model.RenderJobPayload {
-	return &model.RenderJobPayload{OwnerID: "kullanici-a", ProjectID: "p1", Brief: model.Brief{Genre: model.Genre("pop"), Vibes: []string{"x"}}}
+	return &model.RenderJobPayload{OwnerID: "kullanici-a", ProjectID: "p1", StemMode: model.StemModeStems, Brief: model.Brief{Genre: model.Genre("pop"), Vibes: []string{"x"}}}
 }
 
 func testWorker(s *sahteSuno, d client.StorageClient) *RenderWorker {
@@ -232,6 +243,108 @@ func TestSunoIleUret_UcretSonrasiPanicTekrarDenenmez(t *testing.T) {
 		stems: []client.Stem{{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"}},
 	}
 	_, err := testWorker(s, &panikleyenDepo{}).sunoIleUret(context.Background(), testPayload(), hic)
+	if !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+	}
+}
+
+func TestSunoIleUret_MixModuAyirmaYapmaz(t *testing.T) {
+	srv := sesSunucusu(t)
+	s := &sahteSuno{track: &client.Track{ID: "a1", AudioURL: srv.URL + "/tam.mp3", Duration: 120}}
+	d := &sahteDepo{}
+	p := testPayload()
+	p.StemMode = model.StemModeMix
+
+	res, err := testWorker(s, d).sunoIleUret(context.Background(), p, hic)
+	if err != nil {
+		t.Fatalf("sunoIleUret: %v", err)
+	}
+	if s.bolSayisi != 0 || s.ayirSayisi != 0 {
+		t.Errorf("mix modunda ayirma cagrildi: split=%d advanced=%d", s.bolSayisi, s.ayirSayisi)
+	}
+	if res.StemMode != model.StemModeMix || len(res.Stems) != 1 || res.Stems[0].Instrument != model.InstrumentMix {
+		t.Fatalf("sonuc = %+v", res)
+	}
+	if len(d.yuklemeler) != 1 || !bytes.Equal(d.yuklemeler[0].veri, []byte("ses:/tam.mp3")) || d.yuklemeler[0].tip != "audio/mpeg" {
+		t.Errorf("yukleme = %+v", d.yuklemeler)
+	}
+	if !strings.HasPrefix(d.yuklemeler[0].key, "stems/kullanici-a/p1/") {
+		t.Errorf("anahtar = %q", d.yuklemeler[0].key)
+	}
+}
+
+func TestSunoIleUret_BosModMixGibi(t *testing.T) {
+	srv := sesSunucusu(t)
+	s := &sahteSuno{track: &client.Track{ID: "a1", AudioURL: srv.URL + "/tam.mp3", Duration: 120}}
+	p := testPayload()
+	p.StemMode = ""
+	res, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
+	if err != nil {
+		t.Fatalf("sunoIleUret: %v", err)
+	}
+	if s.bolSayisi != 0 || res.StemMode != model.StemModeMix {
+		t.Errorf("bos mod mix gibi islenmeli: split=%d mod=%q", s.bolSayisi, res.StemMode)
+	}
+}
+
+func TestSunoIleUret_MixModuParcaAdresiYoksaTekrarYok(t *testing.T) {
+	s := &sahteSuno{track: &client.Track{ID: "a1", Duration: 120}}
+	p := testPayload()
+	p.StemMode = model.StemModeMix
+	_, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
+	if !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+	}
+}
+
+func TestSunoIleUret_FocusModuIkiStem(t *testing.T) {
+	srv := sesSunucusu(t)
+	s := &sahteSuno{
+		track: &client.Track{ID: "a1", Duration: 141},
+		ayrik: &client.IsolatedStem{ExtractURL: srv.URL + "/davul.mp3", RemoveURL: srv.URL + "/kalan.mp3", Duration: 141},
+	}
+	d := &sahteDepo{}
+	p := testPayload()
+	p.StemMode = model.StemModeFocus
+	davul := model.InstrumentDrums
+	p.FocusInstrument = &davul
+
+	res, err := testWorker(s, d).sunoIleUret(context.Background(), p, hic)
+	if err != nil {
+		t.Fatalf("sunoIleUret: %v", err)
+	}
+	if s.ayirArgs != [3]string{"t1", "a1", "Drum Kit"} || s.bolSayisi != 0 {
+		t.Errorf("ayirma argumanlari = %v, split=%d", s.ayirArgs, s.bolSayisi)
+	}
+	if res.StemMode != model.StemModeFocus || len(res.Stems) != 2 {
+		t.Fatalf("sonuc = %+v", res)
+	}
+	if res.Stems[0].Instrument != model.InstrumentDrums || res.Stems[1].Instrument != model.InstrumentRest {
+		t.Errorf("enstrumanlar = %v, %v", res.Stems[0].Instrument, res.Stems[1].Instrument)
+	}
+	if len(d.yuklemeler) != 2 || !bytes.Equal(d.yuklemeler[1].veri, []byte("ses:/kalan.mp3")) {
+		t.Errorf("yuklemeler = %+v", d.yuklemeler)
+	}
+}
+
+func TestSunoIleUret_FocusEnstrumaniEslenmiyorsaSunoCagrilmaz(t *testing.T) {
+	s := &sahteSuno{}
+	p := testPayload()
+	p.StemMode = model.StemModeFocus
+	p.FocusInstrument = nil
+	_, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
+	if !errors.Is(err, asynq.SkipRetry) || s.uretimSayisi != 0 {
+		t.Fatalf("ucret oncesi SkipRetry ve sifir uretim bekleniyordu: err=%v uretim=%d", err, s.uretimSayisi)
+	}
+}
+
+func TestSunoIleUret_FocusAyirmaHatasiTekrarYok(t *testing.T) {
+	s := &sahteSuno{track: &client.Track{ID: "a1"}, ayrikBekleHata: errors.New("katalog eslesmesi")}
+	p := testPayload()
+	p.StemMode = model.StemModeFocus
+	davul := model.InstrumentDrums
+	p.FocusInstrument = &davul
+	_, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
 	if !errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
 	}

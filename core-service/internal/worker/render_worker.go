@@ -117,6 +117,13 @@ func (w *RenderWorker) sunoIleUret(ctx context.Context, payload *model.RenderJob
 		return nil, fmt.Errorf("is sahibi/proje anahtara uygun degil, Suno cagrilmadi: %w: %w", err, asynq.SkipRetry)
 	}
 
+	// Mod ucretli cagridan ONCE cozulur: focus enstrumani eslenemiyorsa
+	// 12 kredi harcanip sonra dusulmesin.
+	mod, odakAdi, err := stemPlani(payload)
+	if err != nil {
+		return nil, fmt.Errorf("stem ayari gecersiz, Suno cagrilmadi: %w: %w", err, asynq.SkipRetry)
+	}
+
 	ilerleme(5, "Building music prompt...")
 	req := &client.GenerateMusicRequest{
 		Style:        buildMusicStyle(payload),
@@ -148,25 +155,51 @@ func (w *RenderWorker) sunoIleUret(ctx context.Context, payload *model.RenderJob
 		return nil, ucretli("music generation failed", err)
 	}
 
-	ilerleme(60, "Splitting stems...")
-	stemTaskID, err := w.music.SplitStems(ctx, taskID, track.ID)
-	if err != nil {
-		return nil, ucretli("stem splitting failed", err)
-	}
-
-	ilerleme(75, "Waiting for stem separation...")
-	stems, err := w.music.WaitStems(ctx, stemTaskID, w.pollAraligi, 5*time.Minute)
-	if err != nil {
-		return nil, ucretli("stem splitting failed", err)
-	}
-	if len(stems) == 0 {
-		return nil, ucretli("stem splitting failed", errors.New("suno hic enstruman stem'i donmedi"))
-	}
-
 	// Suno sure donmezse yapidan tahmin edilir.
 	sure := track.Duration
 	if sure <= 0 {
 		sure = tahminiSure(payload)
+	}
+
+	var stems []client.Stem
+	switch mod {
+	case model.StemModeMix:
+		// Uretim instrumental; parcanin kendisi tek stem'dir, ayirma yok.
+		if track.AudioURL == "" {
+			return nil, ucretli("mix render failed", errors.New("suno parca adresi donmedi"))
+		}
+		stems = []client.Stem{{Instrument: model.InstrumentMix, URL: track.AudioURL}}
+
+	case model.StemModeFocus:
+		ilerleme(60, "Isolating instrument...")
+		ayirID, err := w.music.IsolateStem(ctx, taskID, track.ID, odakAdi)
+		if err != nil {
+			return nil, ucretli("instrument isolation failed", err)
+		}
+		ilerleme(75, "Waiting for instrument isolation...")
+		ayrik, err := w.music.WaitIsolated(ctx, ayirID, w.pollAraligi, 5*time.Minute)
+		if err != nil {
+			return nil, ucretli("instrument isolation failed", err)
+		}
+		stems = []client.Stem{
+			{Instrument: *payload.FocusInstrument, URL: ayrik.ExtractURL},
+			{Instrument: model.InstrumentRest, URL: ayrik.RemoveURL},
+		}
+
+	default: // stems
+		ilerleme(60, "Splitting stems...")
+		stemTaskID, err := w.music.SplitStems(ctx, taskID, track.ID)
+		if err != nil {
+			return nil, ucretli("stem splitting failed", err)
+		}
+		ilerleme(75, "Waiting for stem separation...")
+		stems, err = w.music.WaitStems(ctx, stemTaskID, w.pollAraligi, 5*time.Minute)
+		if err != nil {
+			return nil, ucretli("stem splitting failed", err)
+		}
+		if len(stems) == 0 {
+			return nil, ucretli("stem splitting failed", errors.New("suno hic enstruman stem'i donmedi"))
+		}
 	}
 
 	ilerleme(90, "Uploading stems...")
@@ -176,7 +209,28 @@ func (w *RenderWorker) sunoIleUret(ctx context.Context, payload *model.RenderJob
 	}
 
 	ilerleme(95, "Finalizing...")
-	return w.generateResult(payload, sure, records), nil
+	return w.generateResult(payload, mod, sure, records), nil
+}
+
+// stemPlani, payload'in stem modunu cozer. Bos ya da bilinmeyen mod mix
+// sayilir (ucuz taraf; ozellik oncesi kuyruga girmis gorevler dahil). focus
+// icin enstrumanin Suno stemName karsiligi doner.
+func stemPlani(payload *model.RenderJobPayload) (model.StemMode, string, error) {
+	switch payload.StemMode {
+	case model.StemModeStems:
+		return model.StemModeStems, "", nil
+	case model.StemModeFocus:
+		if payload.FocusInstrument == nil {
+			return "", "", errors.New("focus modu enstruman ister")
+		}
+		ad, ok := client.SunoStemAdi(*payload.FocusInstrument)
+		if !ok {
+			return "", "", fmt.Errorf("enstruman ayrilamaz: %s", *payload.FocusInstrument)
+		}
+		return model.StemModeFocus, ad, nil
+	default:
+		return model.StemModeMix, "", nil
+	}
 }
 
 // processWithMock handles rendering with mock data for development
@@ -279,7 +333,7 @@ func (w *RenderWorker) stemAktar(ctx context.Context, adres, key string) error {
 	return err
 }
 
-func (w *RenderWorker) generateResult(payload *model.RenderJobPayload, duration float64, stems []model.StemResultRecord) *model.RenderResultRecord {
+func (w *RenderWorker) generateResult(payload *model.RenderJobPayload, mod model.StemMode, duration float64, stems []model.StemResultRecord) *model.RenderResultRecord {
 	tonic := model.TonicC
 	scale := model.ScaleMajor
 	if payload.Brief.Key.Tonic != nil {
@@ -299,6 +353,7 @@ func (w *RenderWorker) generateResult(payload *model.RenderJobPayload, duration 
 		BPM:       bpm,
 		Duration:  duration,
 		Key:       model.KeyResult{Tonic: tonic, Scale: scale},
+		StemMode:  mod,
 		CreatedAt: time.Now(),
 		Stems:     stems,
 	}
@@ -334,8 +389,22 @@ func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) (*mod
 		scale = *payload.Brief.Key.Scale
 	}
 
+	mod, _, err := stemPlani(payload)
+	if err != nil {
+		return nil, err
+	}
+	var enstrumanlar []model.Instrument
+	switch mod {
+	case model.StemModeMix:
+		enstrumanlar = []model.Instrument{model.InstrumentMix}
+	case model.StemModeFocus:
+		enstrumanlar = []model.Instrument{*payload.FocusInstrument, model.InstrumentRest}
+	default:
+		enstrumanlar = payload.Arrangement.Instruments
+	}
+
 	var stems []model.StemResultRecord
-	for _, instrument := range payload.Arrangement.Instruments {
+	for _, instrument := range enstrumanlar {
 		stemID := uuid.New().String()
 		key, err := client.KullaniciAnahtari("stems", payload.OwnerID, payload.ProjectID, string(instrument)+".wav")
 		if err != nil {
@@ -355,6 +424,7 @@ func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) (*mod
 		BPM:       bpm,
 		Duration:  duration,
 		Key:       model.KeyResult{Tonic: tonic, Scale: scale},
+		StemMode:  mod,
 		CreatedAt: time.Now(),
 		Stems:     stems,
 	}, nil
