@@ -52,7 +52,7 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 
 - **handler/** — Fiber route handlers. One file per domain: `lyrics`, `render`, `master`, `export`, `upload`.
 - **service/** — Business logic. Mirrors handler structure. Services enqueue Asynq jobs for render/master operations.
-- **worker/** — Asynq job processors: `render_worker.go` (Suno `/api/v1/generate` + `split_stem`, stems downloaded and uploaded to R2 as `stems/{projectId}/{stemId}.mp3`; any failure after the paid generate call is wrapped in `asynq.SkipRetry` so a retry never re-bills Suno), `master_worker.go` (audio mastering pipeline).
+- **worker/** — Asynq job processors: `render_worker.go` (Suno `/api/v1/generate` + `split_stem`, stems downloaded and uploaded to R2 as `stems/{userId}/{projectId}/{stemId}.mp3` via `client.KullaniciAnahtari`; any failure after the paid generate call is wrapped in `asynq.SkipRetry` so a retry never re-bills Suno), `master_worker.go` (audio mastering pipeline).
 - **client/** — HTTP clients for external services: Groq (AI lyrics), Suno (music generation), R2 (Cloudflare S3-compatible storage), audio-service (local mastering).
 - **model/** — Request/response structs and enums. All enum values defined in `enums.go`.
 - **middleware/** — `auth.go` (RS256 tokens from `internal/kimlik`, or legacy HMAC in development), `ratelimit.go` (Redis fixed window per user).

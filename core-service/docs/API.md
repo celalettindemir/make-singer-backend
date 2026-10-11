@@ -709,6 +709,7 @@ No response body. The object key is built under the caller's own prefix (`vocals
 | Status | Code | Condition |
 |---|---|---|
 | `400` | `VALIDATION_ERROR` | Missing `takeId`, `projectId` or `sectionId` |
+| `400` | `VALIDATION_ERROR` | Invalid `takeId`, `projectId` or `sectionId` (empty, contains `/`, `..`, or is otherwise not a plain segment) |
 
 ---
 
