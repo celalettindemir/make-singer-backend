@@ -1,10 +1,14 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,21 +19,28 @@ import (
 	"github.com/makeasinger/api/internal/websocket"
 )
 
+// stemBoyutTavani: tek stem dosyasi icin indirme siniri.
+const stemBoyutTavani = 50 << 20
+
 // RenderWorker processes render jobs
 type RenderWorker struct {
 	renderService *service.RenderService
-	sunoClient    *client.SunoClient
+	music         client.MusicGenerator
 	r2Client      client.StorageClient
 	hub           *websocket.Hub
+	indirici      *http.Client
+	pollAraligi   time.Duration
 }
 
 // NewRenderWorker creates a new render worker
-func NewRenderWorker(renderService *service.RenderService, sunoClient *client.SunoClient, r2Client client.StorageClient, hub *websocket.Hub) *RenderWorker {
+func NewRenderWorker(renderService *service.RenderService, music client.MusicGenerator, r2Client client.StorageClient, hub *websocket.Hub) *RenderWorker {
 	return &RenderWorker{
 		renderService: renderService,
-		sunoClient:    sunoClient,
+		music:         music,
 		r2Client:      r2Client,
 		hub:           hub,
+		indirici:      &http.Client{Timeout: 30 * time.Second},
+		pollAraligi:   5 * time.Second,
 	}
 }
 
@@ -54,7 +65,7 @@ func (w *RenderWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	}
 
 	// Check if Suno client is configured
-	if w.sunoClient == nil || !w.sunoClient.IsConfigured() {
+	if w.music == nil || !w.music.IsConfigured() {
 		return w.processWithMock(ctx, jobID, &payload)
 	}
 
@@ -63,61 +74,14 @@ func (w *RenderWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 
 // processWithSuno handles real rendering using Suno API
 func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, payload *model.RenderJobPayload) error {
-	// Step 1: Build prompt from brief
-	w.updateProgress(ctx, jobID, 5, "Building music prompt...")
-	prompt := w.buildMusicPrompt(payload)
-
-	// Step 2: Generate music via Suno
-	w.updateProgress(ctx, jobID, 10, "Generating music...")
-	musicReq := &client.GenerateMusicRequest{
-		Prompt:           prompt,
-		Style:            string(payload.Brief.Genre),
-		MakeInstrumental: true,
-	}
-
-	musicResp, err := w.sunoClient.GenerateMusic(ctx, musicReq)
+	result, err := w.sunoIleUret(ctx, payload, func(p int, adim string) {
+		w.updateProgress(ctx, jobID, p, adim)
+	})
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Music generation failed: %v", err))
+		w.failJob(ctx, jobID, err.Error())
 		return err
 	}
 
-	// Step 3: Poll for music completion
-	w.updateProgress(ctx, jobID, 30, "Waiting for music generation...")
-	musicResult, err := w.sunoClient.PollMusicStatus(ctx, musicResp.TaskID, 5*time.Second, 10*time.Minute)
-	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Music generation timed out: %v", err))
-		return err
-	}
-
-	// Step 4: Split stems
-	w.updateProgress(ctx, jobID, 60, "Splitting stems...")
-	stemResp, err := w.sunoClient.SplitStems(ctx, musicResult.AudioURL)
-	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Stem splitting failed: %v", err))
-		return err
-	}
-
-	// Step 5: Poll for stem split completion
-	w.updateProgress(ctx, jobID, 75, "Waiting for stem separation...")
-	stemResult, err := w.sunoClient.PollStemSplitStatus(ctx, stemResp.TaskID, 5*time.Second, 5*time.Minute)
-	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Stem splitting timed out: %v", err))
-		return err
-	}
-
-	// Step 6: Upload stems to R2
-	w.updateProgress(ctx, jobID, 90, "Uploading stems...")
-	stems, err := w.uploadStems(ctx, payload.ProjectID, stemResult.Stems)
-	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Stem upload failed: %v", err))
-		return err
-	}
-
-	// Step 7: Generate result
-	w.updateProgress(ctx, jobID, 95, "Finalizing...")
-	result := w.generateResult(payload, musicResult, stems)
-
-	// Complete the job
 	if err := w.renderService.CompleteJob(ctx, jobID, result); err != nil {
 		w.failJob(ctx, jobID, "Failed to save result")
 		return err
@@ -132,6 +96,64 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, payloa
 	w.hub.BroadcastComplete(jobID, resp)
 	log.Printf("Render job %s completed", jobID)
 	return nil
+}
+
+// sunoIleUret, Suno'da uretip stem'leri R2'ye aktarir. renderService ve
+// hub'a dokunmaz; ilerleme geri cagrimla bildirilir.
+//
+// Tekrar deneme: GenerateMusic basarili olunca kredi harcanmistir. Bundan
+// sonraki her hata asynq.SkipRetry ile sarilir; aksi halde asynq isi bastan
+// calistirip Suno'yu yeniden ucretlendirir (MaxRetry(3) ile 4 x 62 kredi).
+func (w *RenderWorker) sunoIleUret(ctx context.Context, payload *model.RenderJobPayload, ilerleme func(int, string)) (*model.RenderResultRecord, error) {
+	if w.r2Client == nil {
+		return nil, fmt.Errorf("depolama yapilandirilmamis, Suno cagrilmadi: %w", asynq.SkipRetry)
+	}
+
+	ilerleme(5, "Building music prompt...")
+	req := &client.GenerateMusicRequest{
+		Style:        buildMusicStyle(payload),
+		Title:        fmt.Sprintf("%s instrumental", payload.Brief.Genre),
+		Instrumental: true,
+	}
+
+	ilerleme(10, "Generating music...")
+	taskID, err := w.music.GenerateMusic(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("music generation failed: %w", err)
+	}
+	ucretli := func(ne string, err error) error {
+		return fmt.Errorf("%s: %w: %w", ne, err, asynq.SkipRetry)
+	}
+
+	ilerleme(30, "Waiting for music generation...")
+	track, err := w.music.WaitMusic(ctx, taskID, w.pollAraligi, 10*time.Minute)
+	if err != nil {
+		return nil, ucretli("music generation failed", err)
+	}
+
+	ilerleme(60, "Splitting stems...")
+	stemTaskID, err := w.music.SplitStems(ctx, taskID, track.ID)
+	if err != nil {
+		return nil, ucretli("stem splitting failed", err)
+	}
+
+	ilerleme(75, "Waiting for stem separation...")
+	stems, err := w.music.WaitStems(ctx, stemTaskID, w.pollAraligi, 5*time.Minute)
+	if err != nil {
+		return nil, ucretli("stem splitting failed", err)
+	}
+	if len(stems) == 0 {
+		return nil, ucretli("stem splitting failed", errors.New("suno hic enstruman stem'i donmedi"))
+	}
+
+	ilerleme(90, "Uploading stems...")
+	records, err := w.uploadStems(ctx, payload.ProjectID, stems, track.Duration)
+	if err != nil {
+		return nil, ucretli("stem upload failed", err)
+	}
+
+	ilerleme(95, "Finalizing...")
+	return w.generateResult(payload, track.Duration, records), nil
 }
 
 // processWithMock handles rendering with mock data for development
@@ -180,48 +202,54 @@ func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, payloa
 	return nil
 }
 
-func (w *RenderWorker) buildMusicPrompt(payload *model.RenderJobPayload) string {
-	bpm := 120
-	if payload.Brief.BPM.Value != nil {
-		bpm = *payload.Brief.BPM.Value
-	}
-
-	key := "C major"
-	if payload.Brief.Key.Tonic != nil && payload.Brief.Key.Scale != nil {
-		key = fmt.Sprintf("%s %s", *payload.Brief.Key.Tonic, *payload.Brief.Key.Scale)
-	}
-
-	return fmt.Sprintf("Create a %s instrumental track at %d BPM in %s. Style: %s. Vibes: %v",
-		payload.Brief.Genre,
-		bpm,
-		key,
-		payload.Brief.Genre,
-		payload.Brief.Vibes,
-	)
-}
-
-// uploadStems, stem kayitlarini uretir. Kayda imzali URL degil ANAHTAR
-// yazilir; adres okuma aninda (RenderService.GetResult) taze uretilir.
-func (w *RenderWorker) uploadStems(ctx context.Context, projectID string, stems []client.Stem) ([]model.StemResultRecord, error) {
-	var results []model.StemResultRecord
-
+// uploadStems, Suno stem'lerini indirip R2'ye yazar. Kayda imzali URL degil
+// ANAHTAR yazilir; adres okuma aninda (RenderService.GetResult) taze uretilir.
+func (w *RenderWorker) uploadStems(ctx context.Context, projectID string, stems []client.Stem, duration float64) ([]model.StemResultRecord, error) {
+	results := make([]model.StemResultRecord, 0, len(stems))
 	for _, stem := range stems {
 		stemID := uuid.New().String()
-
-		// In a real implementation, download from stem.URL and upload to R2
+		key := fmt.Sprintf("stems/%s/%s.mp3", projectID, stemID)
+		if err := w.stemAktar(ctx, stem.URL, key); err != nil {
+			return nil, fmt.Errorf("%s stem'i aktarilamadi: %w", stem.Instrument, err)
+		}
 		results = append(results, model.StemResultRecord{
 			ID:           stemID,
-			Instrument:   model.Instrument(stem.Name),
-			FileKey:      fmt.Sprintf("stems/%s/%s.wav", projectID, stemID),
-			Duration:     stem.Duration,
+			Instrument:   stem.Instrument,
+			FileKey:      key,
+			Duration:     duration,
 			WaveformData: generateWaveform(100),
 		})
 	}
-
 	return results, nil
 }
 
-func (w *RenderWorker) generateResult(payload *model.RenderJobPayload, musicResult *client.MusicResult, stems []model.StemResultRecord) *model.RenderResultRecord {
+// stemAktar, adresi indirip anahtara yukler. Govde bellege alinir: S3
+// PutObject icerik uzunlugu ister ve tavani asan dosya yarim yuklenmemeli.
+func (w *RenderWorker) stemAktar(ctx context.Context, adres, key string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, adres, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := w.indirici.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("indirme durumu %d", resp.StatusCode)
+	}
+	veri, err := io.ReadAll(io.LimitReader(resp.Body, stemBoyutTavani+1))
+	if err != nil {
+		return err
+	}
+	if len(veri) > stemBoyutTavani {
+		return fmt.Errorf("stem %d bayt tavanini asiyor", stemBoyutTavani)
+	}
+	_, _, err = w.r2Client.Upload(ctx, key, bytes.NewReader(veri), "audio/mpeg")
+	return err
+}
+
+func (w *RenderWorker) generateResult(payload *model.RenderJobPayload, duration float64, stems []model.StemResultRecord) *model.RenderResultRecord {
 	tonic := model.TonicC
 	scale := model.ScaleMajor
 	if payload.Brief.Key.Tonic != nil {
@@ -239,7 +267,7 @@ func (w *RenderWorker) generateResult(payload *model.RenderJobPayload, musicResu
 	return &model.RenderResultRecord{
 		ID:        uuid.New().String(),
 		BPM:       bpm,
-		Duration:  musicResult.Duration,
+		Duration:  duration,
 		Key:       model.KeyResult{Tonic: tonic, Scale: scale},
 		CreatedAt: time.Now(),
 		Stems:     stems,
