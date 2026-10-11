@@ -104,6 +104,8 @@ All errors share the same envelope:
 | `SERVICE_ERROR` | `500` | Internal server error |
 | `AI_ERROR` | `502` | Upstream AI service error |
 
+**Ownership:** Job endpoints (`status`, `result`, `cancel`, `POST /api/ws/ticket`) answer `404 NOT_FOUND` — not `403` — when the job belongs to another user. Records without an owner are visible to nobody. File URLs sent back to the API (master stems and vocals, export inputs) must be the URLs the API returned; a key outside the caller's own prefix answers `404`.
+
 ### Validation error details
 
 When validation fails, `details` is an object mapping field names to the violated constraint tag:
@@ -691,29 +693,74 @@ Delete a previously uploaded vocal take.
 |---|---|---|
 | `takeId` | string | Take identifier |
 
+**Query parameters** (both required)
+
+| Param | Type | Description |
+|---|---|---|
+| `projectId` | string | Project the take belongs to |
+| `sectionId` | string | Section the take belongs to |
+
 **Response** `204 No Content`
 
-No response body.
+No response body. The object key is built under the caller's own prefix (`vocals/<userId>/<projectId>/<sectionId>/<takeId>.wav`), so another user's take is never addressed.
 
 **Errors**
 
 | Status | Code | Condition |
 |---|---|---|
-| `400` | `VALIDATION_ERROR` | Missing `takeId` |
+| `400` | `VALIDATION_ERROR` | Missing `takeId`, `projectId` or `sectionId` |
 
 ---
 
 ## WebSocket
 
-### `GET /ws/jobs/:jobId`
+### `POST /api/ws/ticket`
 
-Subscribe to real-time updates for a background job (render or master). The connection must be a WebSocket upgrade request.
+Issue a single-use WebSocket ticket for one job. Requires Bearer authentication and is open to the job's owner only. Tickets live 30 seconds and are bound to the `jobId` they were issued for. Request a new ticket for every (re)connection.
+
+**Request body**
+
+```json
+{
+  "jobId": "uuid"
+}
+```
+
+**Response** `200`
+
+```json
+{
+  "ticket": "string",
+  "expiresAt": "2026-10-11T12:00:30Z"
+}
+```
+
+**Errors**
+
+| Status | Code | Condition |
+|---|---|---|
+| `400` | `VALIDATION_ERROR` | Missing or malformed `jobId` |
+| `401` | `UNAUTHORIZED` | Missing or invalid Bearer token |
+| `404` | `NOT_FOUND` | Job does not exist or belongs to another user |
+| `500` | `SERVICE_ERROR` | Ticket could not be issued |
+
+### `GET /ws/jobs/:jobId?ticket=`
+
+Subscribe to real-time updates for a background job (render or master). The connection must be a WebSocket upgrade request. No Bearer header is used here; the ticket is the credential.
 
 **Path parameters**
 
 | Param | Type | Description |
 |---|---|---|
 | `jobId` | string | Job identifier to subscribe to |
+
+**Query parameters** (required)
+
+| Param | Type | Description |
+|---|---|---|
+| `ticket` | string | Single-use ticket from `POST /api/ws/ticket` for this `jobId` |
+
+The ticket is consumed before the upgrade. A missing, expired, already-used, or mismatched ticket is rejected with `401 UNAUTHORIZED` (JSON, before the upgrade). A job owned by another user cannot be subscribed to because no ticket can be issued for it.
 
 **Note:** If the request is not a WebSocket upgrade, the server responds with `426 Upgrade Required`.
 

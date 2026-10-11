@@ -57,7 +57,7 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 - **model/** — Request/response structs and enums. All enum values defined in `enums.go`.
 - **middleware/** — `auth.go` (RS256 tokens from `internal/kimlik`, or legacy HMAC in development), `ratelimit.go` (Redis fixed window per user).
 - **auth/** — `jwks_verifier.go`: token verifiers. `YukariAkisDogrulayici` validates **upstream** (Apple/Google) `id_token`s for the federation flow — RS256 pinned, `iss`/`aud`/`exp` enforced, `nonce` required and compared in constant time. `JWKSVerifier` is the legacy Zitadel-era path (to be removed in Phase 5).
-- **websocket/** — Hub for broadcasting real-time job progress to clients via `GET /ws/jobs/:jobId`.
+- **websocket/** — Hub for broadcasting real-time job progress to clients via `GET /ws/jobs/:jobId?ticket=` (ticket from `POST /api/ws/ticket`).
 - **config/** — Viper-based config loading from `config.yaml` with env var overrides.
 
 ### External services
@@ -77,6 +77,7 @@ Config priority: environment variables > `config.yaml` > Viper defaults. See `co
 ### Job lifecycle
 
 Jobs are stored in Redis as JSON with key `job:{jobId}` and 24-hour TTL. States: `queued` → `running` → `succeeded` / `failed` / `canceled`. Progress updates (0-100%) are pushed to WebSocket subscribers. Asynq runs two queues: `render` (concurrency 6) and `master` (concurrency 4).
+Each job record carries `ownerId` (the `sub` of the user who started it). `status`, `result` and `cancel` load the job through `sahipliJobOku` (`internal/service/job_kayit.go`) and answer **404** — not 403 — when the caller is not the owner; records without `ownerId` are visible to nobody.
 
 ### API response conventions
 
@@ -105,5 +106,9 @@ If `AUTH_ISSUER` is set but the OpenID Provider fails to start, the service exit
 **When `AUTH_ISSUER` is empty:** Falls back to legacy HMAC JWT verification (development only). The gateway mode can also bypass token verification using `X-User-*` headers when `GATEWAY_ENABLED=true`.
 
 Extracted claims (`userId`, `email`, `name`) are stored in Fiber context locals.
+
+**Ownership (Phase 3):** R2 keys are prefixed with the owner: `vocals/<userId>/<projectId>/<sectionId>/<takeId>.wav`, `masters/<userId>/<projectId>/<id>.wav`, `stems/<userId>/<projectId>/<id>.mp3`, `exports/<userId>/<exportId>.<ext>`, `previews/<userId>/<id>.mp3`. Keys are only built with `client.KullaniciAnahtari`, which rejects any client-supplied segment containing `/` or `..`. Every URL a client sends back (master stems/vocals, export inputs) is resolved with `client.SahipliAnahtarCoz`; a key outside the caller's prefix answers 404. `DELETE /api/upload/vocal/:takeId` requires `?projectId=&sectionId=`.
+
+**WebSocket:** `GET /ws/jobs/:jobId` requires `?ticket=` from `POST /api/ws/ticket` (body `{"jobId"}`, owner only). Tickets live 30 s in Redis (`wsbilet:<ticket>`) and are consumed with `GETDEL` before the upgrade.
 
 **Federation (Phase 2):** The hosted login page offers Apple and Google. Buttons and endpoints appear **only** for providers that are actually configured (`AUTH_FED_GOOGLE_CLIENT_ID` / `AUTH_FED_APPLE_CLIENT_ID`); with none configured, `/federasyon/*` and `/baglama` are not bound at all (404). Upstream URLs are constants in the code — only credentials come from the environment. The provider acts as an RP: the upstream `id_token` is verified against the provider's JWKS (`internal/auth/jwks_verifier.go`, RS256 pinned, `nonce` required) and the user is located by `(provider, sub)` in the `federe_kimlikler` table. Email is never used to link accounts automatically — on conflict the user is asked for the existing account's password once (`/baglama`), or told to use the original provider (409) when that account has no password. Apple private relay addresses are never trusted for linking. The federation callback uses a dedicated `SameSite=None` cookie because Apple returns via a cross-site `form_post`. Each federation endpoint has its own Redis rate-limit counter so federation traffic cannot drain the password-attempt budget of `/giris`. Counter name suffixes under the `kimlik:hizlimit:` prefix: `federasyon-baslat` (GET start), `federasyon-geri` (callback), `baglama-get` (GET `/baglama` — `SayfaGetSar` appends `-get`), `baglama` (POST `/baglama`, per IP) and `baglama-hesap` (POST `/baglama`, per target account). Mobile carries no Apple/Google SDK and is unaware of this flow.

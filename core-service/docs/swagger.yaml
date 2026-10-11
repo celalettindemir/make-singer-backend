@@ -868,6 +868,20 @@ definitions:
     - sectionId
     - takeId
     type: object
+  model.WSTicketRequest:
+    properties:
+      jobId:
+        type: string
+    required:
+    - jobId
+    type: object
+  model.WSTicketResponse:
+    properties:
+      expiresAt:
+        type: string
+      ticket:
+        type: string
+    type: object
   response.ErrorDetail:
     properties:
       code:
@@ -915,6 +929,10 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
         "429":
           description: Too Many Requests
           schema:
@@ -953,6 +971,10 @@ paths:
             $ref: '#/definitions/response.ErrorResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
           schema:
             $ref: '#/definitions/response.ErrorResponse'
         "429":
@@ -994,6 +1016,10 @@ paths:
             $ref: '#/definitions/response.ErrorResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
           schema:
             $ref: '#/definitions/response.ErrorResponse'
         "429":
@@ -1114,6 +1140,10 @@ paths:
             $ref: '#/definitions/response.ErrorResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
           schema:
             $ref: '#/definitions/response.ErrorResponse'
         "429":
@@ -1456,6 +1486,16 @@ paths:
         name: takeId
         required: true
         type: string
+      - description: Project ID
+        in: query
+        name: projectId
+        required: true
+        type: string
+      - description: Section ID
+        in: query
+        name: sectionId
+        required: true
+        type: string
       produces:
       - application/json
       responses:
@@ -1478,6 +1518,46 @@ paths:
       summary: Delete vocal take
       tags:
       - Upload
+  /api/ws/ticket:
+    post:
+      consumes:
+      - application/json
+      description: Issue a single-use, 30-second ticket for GET /ws/jobs/{jobId}?ticket=...
+      parameters:
+      - description: Ticket request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.WSTicketRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.WSTicketResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get WebSocket ticket
+      tags:
+      - WebSocket
 schemes:
 - http
 - https
