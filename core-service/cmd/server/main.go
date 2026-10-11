@@ -155,6 +155,7 @@ func main() {
 	masterService := service.NewMasterService(redisClient, asynqClient, storage, &cfg.R2)
 	exportService := service.NewExportService(storage, audioClient, &cfg.R2)
 	uploadService := service.NewUploadService(storage, &cfg.R2)
+	fileService := service.NewFileService(storage, &cfg.R2)
 	wsTicketService := service.NewWSTicketService(redisClient)
 
 	// silici: arayuz degiskeni; r2Client nil iken dogrudan atamak tipli
@@ -178,6 +179,7 @@ func main() {
 	masterHandler := handler.NewMasterHandler(masterService, validate)
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
+	fileHandler := handler.NewFileHandler(fileService, validate)
 	wsTicketHandler := handler.NewWSTicketHandler(wsTicketService, validate)
 
 	// Mod secimi YAPILANDIRMADAN yapilir, calisma zamani basarisindan
@@ -338,6 +340,9 @@ func main() {
 
 	// WebSocket bileti: kimligi dogrulanmis istekle alinir.
 	api.Post("/ws/ticket", wsTicketHandler.Issue)
+
+	// Kayitli dosya adreslerini tazeler (imza 1 saatte dolar).
+	api.Post("/files/sign", fileHandler.Sign)
 
 	if hesapHandler != nil {
 		api.Delete("/account", hesapHandler.Sil)

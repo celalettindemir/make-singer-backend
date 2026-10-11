@@ -768,6 +768,41 @@ Once the user record is gone the request cannot be retried; failures in later st
 
 ---
 
+## Files Endpoints
+
+### `POST /api/files/sign`
+
+Re-sign stored file URLs. Clients keep URLs only as object references; private signatures expire after one hour, so call this before playback.
+
+**Request**
+
+```json
+{ "urls": ["https://<bucket>.<account>.r2.cloudflarestorage.com/stems/<userId>/...?X-Amz-Signature=..."] }
+```
+
+`urls`: 1-50 entries, each a URL previously issued by this API.
+
+**Response** `200 OK`
+
+```json
+{ "files": [{ "url": "https://...", "expiresAt": "2026-10-11T12:00:00Z" }] }
+```
+
+`files` keeps the request order. Public `exports/` URLs are permanent and have no `expiresAt`.
+
+All URLs are resolved and ownership-checked first: a single key outside the caller's prefix fails the whole request with `404` and nothing is signed.
+
+**Errors**
+
+| Status | Code | Condition |
+|---|---|---|
+| `400` | `VALIDATION_ERROR` | Empty or more than 50 URLs, malformed URL, or unknown host |
+| `401` | `UNAUTHORIZED` | Missing or invalid token |
+| `404` | `NOT_FOUND` | A URL points to an object the caller does not own |
+| `500` | `SERVICE_ERROR` | Signing failed |
+
+---
+
 ## WebSocket
 
 ### `POST /api/ws/ticket`
