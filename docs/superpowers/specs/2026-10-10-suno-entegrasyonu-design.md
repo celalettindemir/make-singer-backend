@@ -74,7 +74,9 @@ type MusicGenerator interface {
   `Track{ID, AudioURL, Duration}`. Saglayici iki parca uretir; ikincisi
   bugun kullanilmaz. `*_FAILED`, `CALLBACK_EXCEPTION`,
   `SENSITIVE_WORD_ERROR` aninda hata (`errorMessage` ile). Bilinmeyen
-  durum beklemeye devam eder.
+  durum beklemeye devam eder. Poll sirasindaki gecici hatalar (ag, 5xx,
+  bozuk yanit) arka arkaya 3 kez tolere edilir; kredi harcandiktan sonra
+  tek bir ag hatasi isi bosa cikarmasin.
 - `WaitStems` `successFlag == SUCCESS`'te camelCase stem alanlarini
   `Instrument` enum'ina esler: `drumsUrl`->drums, `bassUrl`->bass,
   `guitarUrl`->guitar, `keyboardUrl`->piano, `percussionUrl`->percussion,
