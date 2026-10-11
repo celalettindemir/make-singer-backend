@@ -155,6 +155,7 @@ func main() {
 	masterService := service.NewMasterService(redisClient, asynqClient, storage, &cfg.R2)
 	exportService := service.NewExportService(storage, audioClient, &cfg.R2)
 	uploadService := service.NewUploadService(storage, &cfg.R2)
+	wsTicketService := service.NewWSTicketService(redisClient)
 
 	// Initialize handlers
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
@@ -162,6 +163,7 @@ func main() {
 	masterHandler := handler.NewMasterHandler(masterService, validate)
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
+	wsTicketHandler := handler.NewWSTicketHandler(wsTicketService, validate)
 
 	// Mod secimi YAPILANDIRMADAN yapilir, calisma zamani basarisindan
 	// degil: bkz. middleware.APIAuthModuSec. Issuer doluyken legacy ve
@@ -319,6 +321,9 @@ func main() {
 	upload.Post("/vocal", uploadHandler.Vocal)
 	upload.Delete("/vocal/:takeId", uploadHandler.DeleteVocal)
 
+	// WebSocket bileti: kimligi dogrulanmis istekle alinir.
+	api.Post("/ws/ticket", wsTicketHandler.Issue)
+
 	// WebSocket routes
 	app.Use("/ws", func(c *fiber.Ctx) error {
 		if websocket.IsWebSocketUpgrade(c) {
@@ -327,7 +332,8 @@ func main() {
 		return fiber.ErrUpgradeRequired
 	})
 
-	app.Get("/ws/jobs/:jobId", websocket.New(func(c *websocket.Conn) {
+	// Bilet upgrade'den once tuketilir; bilet yoksa ya da baska isinse 401.
+	app.Get("/ws/jobs/:jobId", wsTicketHandler.Gate, websocket.New(func(c *websocket.Conn) {
 		jobID := c.Params("jobId")
 		hub.HandleConnection(c, jobID)
 	}))

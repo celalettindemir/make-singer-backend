@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 // WebSocket message types
 const (
 	WSMessageTypeProgress = "progress"
@@ -41,4 +43,16 @@ type WSErrorMessage struct {
 type WSError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// WSTicketRequest, bir isin WebSocket yayinina baglanmak icin bilet ister.
+type WSTicketRequest struct {
+	JobID string `json:"jobId" validate:"required,uuid"`
+}
+
+// WSTicketResponse: bilet tek kullanimliktir ve ExpiresAt'e kadar gecerlidir.
+// Istemci onu GET /ws/jobs/{jobId}?ticket=<bilet> ile kullanir.
+type WSTicketResponse struct {
+	Ticket    string    `json:"ticket"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
