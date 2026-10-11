@@ -35,6 +35,12 @@ If both are configured, JWKS is attempted first; on failure the server falls bac
 | Missing `Authorization` header | `401` | `UNAUTHORIZED` |
 | Malformed header (not `Bearer <token>`) | `401` | `UNAUTHORIZED` |
 | Invalid / expired token | `401` | `UNAUTHORIZED` |
+| Token of a deleted account (see `DELETE /api/account`) | `401` | `UNAUTHORIZED` |
+| Deleted-account check unavailable (Redis unreachable) | `503` | `SERVICE_ERROR` |
+
+### Deleted-account gate
+
+After authentication, every `/api/*` route checks whether the caller's account was deleted (Redis marker `kimlik:silindi:<userId>`). A marked account answers `401`. If the check itself cannot run (Redis unreachable) the gate fails closed: `503 Service Unavailable`, `error.code` `SERVICE_ERROR`, with a `Retry-After: 5` header. Clients should retry after the given seconds.
 
 ---
 
@@ -48,7 +54,7 @@ Rate limits are enforced per authenticated user via Redis. When a rate limit is 
 |---|---|
 | `X-RateLimit-Limit` | Maximum requests allowed in the window |
 | `X-RateLimit-Remaining` | Requests remaining in the current window |
-| `Retry-After` | Seconds until the window resets (only on `429`) |
+| `Retry-After` | Seconds until the window resets (on `429`). The deleted-account gate also sends `Retry-After: 5` with its `503` (see Authentication). |
 
 ### Per-group limits (defaults from config)
 
@@ -102,6 +108,7 @@ All errors share the same envelope:
 | `RATE_LIMITED` | `429` | Rate limit exceeded |
 | `JOB_FAILED` | varies | Background job failed |
 | `SERVICE_ERROR` | `500` | Internal server error |
+| `SERVICE_ERROR` | `503` | Deleted-account check unavailable on any `/api/*` route; sent with `Retry-After: 5` |
 | `AI_ERROR` | `502` | Upstream AI service error |
 
 **Ownership:** Job endpoints (`status`, `result`, `cancel`, `POST /api/ws/ticket`) answer `404 NOT_FOUND` — not `403` — when the job belongs to another user. Records without an owner are visible to nobody. File URLs sent back to the API (master stems and vocals, export inputs) must be the URLs the API returned; a key outside the caller's own prefix answers `404`, and a malformed URL or one from an unrecognised host answers `400 VALIDATION_ERROR` (`POST /api/master/final`, `POST /api/export/mp3|wav|stems`).
@@ -754,7 +761,13 @@ Deleted, in this order:
 
 **Response** `204 No Content`
 
-No response body. After this call the same access token is rejected with `401` on every `/api/*` route (a short-lived deleted marker is kept for the access token lifetime). The R2 cleanup runs once more `AUTH_ACCESS_TTL + 5 minutes` later as a delayed job (`hesap:temizle`, `bakim` queue), which also removes files written by render/master jobs that were still running at deletion time.
+No response body. After this call the same access token is rejected with `401` on every `/api/*` route: a deleted marker (`kimlik:silindi:<userId>`) is kept in Redis for 24 hours, the job record lifetime.
+
+Render and master jobs that were queued or running at deletion time check the same marker for their owner. A render job checks before the paid Suno call (a deleted owner means Suno is never called) and again before every stem upload. A master job checks before the audio-service call that writes the master to R2. For a deleted owner the job is marked `failed` and is not retried; nothing is uploaded. If the check fails after Suno has already been paid, the job also fails without retry, so Suno is never billed twice.
+
+The R2 cleanup runs once more 1 hour later as a delayed job (`hesap:temizle`, `bakim` queue, up to 10 retries). This is well past the longest job attempt, so the second cleanup catches anything written in between.
+
+**Known limit:** job records (`job:{id}`, holding `ownerId` and the result with stored file keys) are not deleted. They expire with their normal 24-hour TTL.
 
 Once the user record is gone the request cannot be retried; failures in later steps (marker, R2 cleanup, delayed job scheduling) are logged and do not fail the request.
 

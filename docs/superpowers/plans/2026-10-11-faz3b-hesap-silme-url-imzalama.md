@@ -1325,5 +1325,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ## Bilinen sınırlar
 
-- Silme anında Redis'e ulaşılamazsa işaret yazılmaz; elde kalan token AccessTTL (15 dk) dolana kadar API'ye girebilir. Refresh imkânsız olduğu için süre sınırlıdır, yazılan dosyaları gecikmeli temizlik siler. Not: Redis yoksa `SilinmisKullaniciEngeli` zaten tüm `/api/*`'yi 503'e düşürür.
+Son inceleme düzeltmesi (I1) sonrası gerçek mekanizma: silinmiş işareti (`kimlik:silindi:<userId>`, `internal/hesapisaret`) 24 saat (iş kaydı ömrü) yaşar. Render işçisi ücretli Suno `GenerateMusic` çağrısından ve her stem yüklemesinden önce, master işçisi R2'ye yazan ses servisi çağrısından önce iş sahibini denetler; silinmiş sahip için iş `failed` olur, `SkipRetry` ile tekrar denenmez ve hiçbir dosya yazılmaz. Ücret öncesi denetim hatası tekrar denenir (ücret ödenmedi); ücret sonrası denetim hatası `SkipRetry` olur (yeniden ücretlendirme yok). Gecikmeli temizlik 1 saat sonra koşar.
+
+- `job:{id}` kayıtları (`ownerId`, sonuçtaki dosya anahtarları) silinmez; 24 saatlik TTL ile Redis'te kalır.
+
+- Silme anında Redis'e ulaşılamazsa işaret yazılmaz; elde kalan token AccessTTL (15 dk) dolana kadar API'ye girebilir. Refresh imkânsız olduğu için süre sınırlıdır, yazılan dosyaları gecikmeli temizlik siler. Not: Redis yoksa `SilinmisKullaniciEngeli` zaten tüm `/api/*`'yi 503'e düşürür. Bu durumda işçiler de işareti göremez; o anda kuyrukta ya da koşmakta olan işlerin yazdıkları 1 saatlik gecikmeli temizlikte gider.
 - Asynq görevi kurulamazsa ikinci temizlik olmaz; ilk temizlikten sonra yazılan dosyalar kalır. Log satırı `Uyari: gecikmeli temizlik gorevi kurulamadi` ile izlenir.
