@@ -77,7 +77,7 @@ func sesSunucusu(t *testing.T) *httptest.Server {
 }
 
 func testPayload() *model.RenderJobPayload {
-	return &model.RenderJobPayload{ProjectID: "p1", Brief: model.Brief{Genre: model.Genre("pop"), Vibes: []string{"x"}}}
+	return &model.RenderJobPayload{OwnerID: "kullanici-a", ProjectID: "p1", Brief: model.Brief{Genre: model.Genre("pop"), Vibes: []string{"x"}}}
 }
 
 func testWorker(s *sahteSuno, d client.StorageClient) *RenderWorker {
@@ -117,7 +117,7 @@ func TestSunoIleUret_MutluYol(t *testing.T) {
 	}
 	for i, y := range d.yuklemeler {
 		st := res.Stems[i]
-		if y.key != st.FileKey || !strings.HasPrefix(y.key, "stems/p1/") || !strings.HasSuffix(y.key, ".mp3") {
+		if y.key != st.FileKey || !strings.HasPrefix(y.key, "stems/kullanici-a/p1/") || !strings.HasSuffix(y.key, ".mp3") {
 			t.Errorf("anahtar = %q, kayit %q", y.key, st.FileKey)
 		}
 		if y.tip != "audio/mpeg" {
@@ -193,5 +193,18 @@ func TestSunoIleUret_SureYoksaTahmin(t *testing.T) {
 	}
 	if res.Duration != 16 || len(res.Stems) != 1 || res.Stems[0].Duration != 16 {
 		t.Fatalf("sure = %v, stem = %+v; 16 bekleniyordu", res.Duration, res.Stems)
+	}
+}
+
+func TestSunoIleUret_SahipsizIsteSunoCagrilmaz(t *testing.T) {
+	s := &sahteSuno{}
+	p := testPayload()
+	p.OwnerID = ""
+	_, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
+	if !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+	}
+	if s.uretimSayisi != 0 {
+		t.Errorf("sahipsiz iste Suno %d kez cagrildi", s.uretimSayisi)
 	}
 }

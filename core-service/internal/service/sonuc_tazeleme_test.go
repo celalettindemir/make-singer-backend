@@ -168,7 +168,7 @@ func TestUploadService_TekImzalama(t *testing.T) {
 	depo := &sahteDepo{}
 	s := NewUploadService(depo, &config.R2Config{})
 
-	resp, err := s.UploadVocal(context.Background(), "p1", "s1", "take1", nil, 0)
+	resp, err := s.UploadVocal(context.Background(), "kullanici-a", "p1", "s1", "take1", nil, 0)
 	if err != nil {
 		t.Fatalf("UploadVocal: %v", err)
 	}
@@ -196,12 +196,12 @@ func TestUploadService_MockAdresi_KeyFromURLIleCozulur(t *testing.T) {
 	}
 	s := NewUploadService(nil, r2Cfg)
 
-	resp, err := s.UploadVocal(context.Background(), "p1", "s1", "take1", nil, 0)
+	resp, err := s.UploadVocal(context.Background(), "kullanici-a", "p1", "s1", "take1", nil, 0)
 	if err != nil {
 		t.Fatalf("UploadVocal: %v", err)
 	}
 
-	beklenenAnahtar := fmt.Sprintf("vocals/p1/%s.wav", resp.ID)
+	beklenenAnahtar := fmt.Sprintf("vocals/kullanici-a/p1/s1/%s.wav", resp.ID)
 	gotKey, err := client.KeyFromURL(resp.FileURL, r2Cfg)
 	if err != nil {
 		t.Fatalf("mock adresi KeyFromURL ile cozulemedi: %v (adres: %s)", err, resp.FileURL)

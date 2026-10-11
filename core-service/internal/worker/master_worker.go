@@ -88,7 +88,7 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	// KeyFromURL ile anahtara donusturulur.
 	stemKeys := make([]string, 0, len(payload.StemURLs))
 	for _, u := range payload.StemURLs {
-		k, err := client.KeyFromURL(u, w.r2Cfg)
+		k, err := client.SahipliAnahtarCoz(u, payload.OwnerID, w.r2Cfg)
 		if err != nil {
 			w.failJob(ctx, jobID, fmt.Sprintf("Stem URL cozulemedi: %v", err))
 			return fmt.Errorf("stem URL cozulemedi: %w", err)
@@ -99,7 +99,11 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	// Step 4: Call audio service for mastering
 	w.updateJobStatus(ctx, jobID, model.JobStatusRunning, 20, "Starting mastering process...")
 
-	outputKey := fmt.Sprintf("masters/%s/%s.wav", payload.ProjectID, uuid.New().String())
+	outputKey, err := client.KullaniciAnahtari("masters", payload.OwnerID, payload.ProjectID, uuid.New().String()+".wav")
+	if err != nil {
+		w.failJob(ctx, jobID, "Gecersiz is sahibi veya proje")
+		return fmt.Errorf("master anahtari: %w: %w", err, asynq.SkipRetry)
+	}
 
 	masterReq := &client.MasterRequest{
 		StemKeys:    stemKeys,
@@ -177,7 +181,11 @@ func (w *MasterWorker) processWithMock(ctx context.Context, jobID string, payloa
 		time.Sleep(step.duration)
 	}
 
-	record := w.generateMockRecord(payload)
+	record, err := w.generateMockRecord(payload)
+	if err != nil {
+		w.failJob(ctx, jobID, "Gecersiz is sahibi veya proje")
+		return fmt.Errorf("mock kayit: %w: %w", err, asynq.SkipRetry)
+	}
 	fileURL, expiresAt, err := client.ResolveURL(ctx, w.r2Client, w.r2Cfg, record.FileKey)
 	if err != nil {
 		w.failJob(ctx, jobID, fmt.Sprintf("Master URL uretilemedi: %v", err))
@@ -236,7 +244,7 @@ func (w *MasterWorker) buildVocalTakes(payload *model.MasterJobPayload) ([]clien
 	var takes []client.VocalTakeInput
 
 	for _, take := range payload.VocalTakes {
-		k, err := client.KeyFromURL(take.FileURL, w.r2Cfg)
+		k, err := client.SahipliAnahtarCoz(take.FileURL, payload.OwnerID, w.r2Cfg)
 		if err != nil {
 			return nil, fmt.Errorf("vokal URL cozulemedi: %w", err)
 		}
@@ -329,12 +337,16 @@ func (w *MasterWorker) saveJob(ctx context.Context, job *model.Job) {
 // yolla ayni sekilde ANAHTAR tutar; adres ResolveURL ile uretildigi icin
 // mock ciktisi da KeyFromURL ile cozulebilir (eski sabit
 // "cdn.makeasinger.com" adresi cozulemiyordu).
-func (w *MasterWorker) generateMockRecord(payload *model.MasterJobPayload) *model.MasterResultRecord {
+func (w *MasterWorker) generateMockRecord(payload *model.MasterJobPayload) (*model.MasterResultRecord, error) {
+	key, err := client.KullaniciAnahtari("masters", payload.OwnerID, payload.ProjectID, uuid.New().String()+".wav")
+	if err != nil {
+		return nil, err
+	}
 	return &model.MasterResultRecord{
-		FileKey:  fmt.Sprintf("masters/%s/%s.wav", payload.ProjectID, uuid.New().String()),
+		FileKey:  key,
 		Duration: 180.5,
 		Profile:  payload.Profile,
 		PeakDb:   -0.3,
 		LUFS:     -14,
-	}
+	}, nil
 }

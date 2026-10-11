@@ -12,9 +12,9 @@ import (
 
 // FileExporter defines the interface for file export operations
 type FileExporter interface {
-	ExportMP3(ctx context.Context, req *model.ExportMP3Request) (*model.ExportMP3Response, error)
-	ExportWAV(ctx context.Context, req *model.ExportWAVRequest) (*model.ExportWAVResponse, error)
-	ExportStems(ctx context.Context, req *model.ExportStemsRequest) (*model.ExportStemsResponse, error)
+	ExportMP3(ctx context.Context, userID string, req *model.ExportMP3Request) (*model.ExportMP3Response, error)
+	ExportWAV(ctx context.Context, userID string, req *model.ExportWAVRequest) (*model.ExportWAVResponse, error)
+	ExportStems(ctx context.Context, userID string, req *model.ExportStemsRequest) (*model.ExportStemsResponse, error)
 }
 
 // ExportService handles file exports using the audio processing service
@@ -34,7 +34,7 @@ func NewExportService(r2Client client.StorageClient, audioClient client.AudioPro
 }
 
 // ExportMP3 exports master to MP3 format
-func (s *ExportService) ExportMP3(ctx context.Context, req *model.ExportMP3Request) (*model.ExportMP3Response, error) {
+func (s *ExportService) ExportMP3(ctx context.Context, userID string, req *model.ExportMP3Request) (*model.ExportMP3Response, error) {
 	quality := 320
 	if req.Quality != nil {
 		quality = *req.Quality
@@ -42,11 +42,14 @@ func (s *ExportService) ExportMP3(ctx context.Context, req *model.ExportMP3Reque
 
 	// Use mock response if audio client is not configured
 	if s.audioClient == nil {
-		return s.exportMP3Mock(quality)
+		return s.exportMP3Mock(userID, quality)
 	}
 
 	exportID := uuid.New().String()
-	outputKey := fmt.Sprintf("exports/%s.mp3", exportID)
+	outputKey, err := client.KullaniciAnahtari("exports", userID, exportID+".mp3")
+	if err != nil {
+		return nil, err
+	}
 
 	// Build metadata map if provided
 	var metadata map[string]string
@@ -66,7 +69,7 @@ func (s *ExportService) ExportMP3(ctx context.Context, req *model.ExportMP3Reque
 		}
 	}
 
-	inputKey, err := client.KeyFromURL(req.MasterFileURL, s.r2Cfg)
+	inputKey, err := client.SahipliAnahtarCoz(req.MasterFileURL, userID, s.r2Cfg)
 	if err != nil {
 		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
 	}
@@ -102,7 +105,7 @@ func (s *ExportService) ExportMP3(ctx context.Context, req *model.ExportMP3Reque
 }
 
 // ExportWAV exports master to WAV format
-func (s *ExportService) ExportWAV(ctx context.Context, req *model.ExportWAVRequest) (*model.ExportWAVResponse, error) {
+func (s *ExportService) ExportWAV(ctx context.Context, userID string, req *model.ExportWAVRequest) (*model.ExportWAVResponse, error) {
 	bitDepth := 24
 	sampleRate := 48000
 
@@ -115,13 +118,16 @@ func (s *ExportService) ExportWAV(ctx context.Context, req *model.ExportWAVReque
 
 	// Use mock response if audio client is not configured
 	if s.audioClient == nil {
-		return s.exportWAVMock(bitDepth, sampleRate)
+		return s.exportWAVMock(userID, bitDepth, sampleRate)
 	}
 
 	exportID := uuid.New().String()
-	outputKey := fmt.Sprintf("exports/%s.wav", exportID)
+	outputKey, err := client.KullaniciAnahtari("exports", userID, exportID+".wav")
+	if err != nil {
+		return nil, err
+	}
 
-	inputKey, err := client.KeyFromURL(req.MasterFileURL, s.r2Cfg)
+	inputKey, err := client.SahipliAnahtarCoz(req.MasterFileURL, userID, s.r2Cfg)
 	if err != nil {
 		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
 	}
@@ -158,21 +164,24 @@ func (s *ExportService) ExportWAV(ctx context.Context, req *model.ExportWAVReque
 }
 
 // ExportStems exports stems as ZIP
-func (s *ExportService) ExportStems(ctx context.Context, req *model.ExportStemsRequest) (*model.ExportStemsResponse, error) {
+func (s *ExportService) ExportStems(ctx context.Context, userID string, req *model.ExportStemsRequest) (*model.ExportStemsResponse, error) {
 	// Use mock response if audio client is not configured
 	if s.audioClient == nil {
-		return s.exportStemsMock(req)
+		return s.exportStemsMock(userID, req)
 	}
 
 	exportID := uuid.New().String()
-	outputKey := fmt.Sprintf("exports/%s.zip", exportID)
+	outputKey, err := client.KullaniciAnahtari("exports", userID, exportID+".zip")
+	if err != nil {
+		return nil, err
+	}
 
 	// Build file list for ZIP
 	files := make([]client.ZipFileEntry, 0)
 
 	// Add stems
 	for i, url := range req.StemURLs {
-		key, err := client.KeyFromURL(url, s.r2Cfg)
+		key, err := client.SahipliAnahtarCoz(url, userID, s.r2Cfg)
 		if err != nil {
 			return nil, fmt.Errorf("zip girdisi cozulemedi: %w", err)
 		}
@@ -185,7 +194,7 @@ func (s *ExportService) ExportStems(ctx context.Context, req *model.ExportStemsR
 	// Add vocals if requested
 	if req.IncludeVocals && len(req.VocalURLs) > 0 {
 		for i, url := range req.VocalURLs {
-			key, err := client.KeyFromURL(url, s.r2Cfg)
+			key, err := client.SahipliAnahtarCoz(url, userID, s.r2Cfg)
 			if err != nil {
 				return nil, fmt.Errorf("zip girdisi cozulemedi: %w", err)
 			}
@@ -198,7 +207,7 @@ func (s *ExportService) ExportStems(ctx context.Context, req *model.ExportStemsR
 
 	// Add master if requested
 	if req.IncludeMaster && req.MasterURL != "" {
-		key, err := client.KeyFromURL(req.MasterURL, s.r2Cfg)
+		key, err := client.SahipliAnahtarCoz(req.MasterURL, userID, s.r2Cfg)
 		if err != nil {
 			return nil, fmt.Errorf("zip girdisi cozulemedi: %w", err)
 		}
@@ -235,11 +244,13 @@ func (s *ExportService) ExportStems(ctx context.Context, req *model.ExportStemsR
 }
 
 // Mock implementations for development/testing
-func (s *ExportService) exportMP3Mock(quality int) (*model.ExportMP3Response, error) {
-	exportID := uuid.New().String()
-
+func (s *ExportService) exportMP3Mock(userID string, quality int) (*model.ExportMP3Response, error) {
+	key, err := client.KullaniciAnahtari("exports", userID, uuid.New().String()+".mp3")
+	if err != nil {
+		return nil, err
+	}
 	return &model.ExportMP3Response{
-		FileURL:   client.UnsignedURL(fmt.Sprintf("exports/%s.mp3", exportID), s.r2Cfg),
+		FileURL:   client.UnsignedURL(key, s.r2Cfg),
 		Size:      5242880, // ~5MB
 		Format:    "mp3",
 		Quality:   quality,
@@ -247,11 +258,13 @@ func (s *ExportService) exportMP3Mock(quality int) (*model.ExportMP3Response, er
 	}, nil
 }
 
-func (s *ExportService) exportWAVMock(bitDepth, sampleRate int) (*model.ExportWAVResponse, error) {
-	exportID := uuid.New().String()
-
+func (s *ExportService) exportWAVMock(userID string, bitDepth, sampleRate int) (*model.ExportWAVResponse, error) {
+	key, err := client.KullaniciAnahtari("exports", userID, uuid.New().String()+".wav")
+	if err != nil {
+		return nil, err
+	}
 	return &model.ExportWAVResponse{
-		FileURL:    client.UnsignedURL(fmt.Sprintf("exports/%s.wav", exportID), s.r2Cfg),
+		FileURL:    client.UnsignedURL(key, s.r2Cfg),
 		Size:       31457280, // ~30MB
 		Format:     "wav",
 		BitDepth:   bitDepth,
@@ -260,8 +273,11 @@ func (s *ExportService) exportWAVMock(bitDepth, sampleRate int) (*model.ExportWA
 	}, nil
 }
 
-func (s *ExportService) exportStemsMock(req *model.ExportStemsRequest) (*model.ExportStemsResponse, error) {
-	exportID := uuid.New().String()
+func (s *ExportService) exportStemsMock(userID string, req *model.ExportStemsRequest) (*model.ExportStemsResponse, error) {
+	key, err := client.KullaniciAnahtari("exports", userID, uuid.New().String()+".zip")
+	if err != nil {
+		return nil, err
+	}
 	fileCount := len(req.StemURLs)
 
 	if req.IncludeVocals && len(req.VocalURLs) > 0 {
@@ -272,7 +288,7 @@ func (s *ExportService) exportStemsMock(req *model.ExportStemsRequest) (*model.E
 	}
 
 	return &model.ExportStemsResponse{
-		FileURL:   client.UnsignedURL(fmt.Sprintf("exports/%s.zip", exportID), s.r2Cfg),
+		FileURL:   client.UnsignedURL(key, s.r2Cfg),
 		Size:      52428800, // ~50MB
 		FileCount: fileCount,
 		ExpiresAt: nil, // mock export de public/kalicidir, suresi yok

@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"errors"
+
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/pkg/response"
 )
@@ -39,6 +42,11 @@ func NewUploadHandler(svc *service.UploadService, v *validator.Validate) *Upload
 // @Security     BearerAuth
 // @Router       /api/upload/vocal [post]
 func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
+	userID, ok := istekSahibi(c)
+	if !ok {
+		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+	}
+
 	// Get form values
 	projectID := c.FormValue("projectId")
 	if projectID == "" {
@@ -94,8 +102,11 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 	defer f.Close()
 
 	// Upload
-	result, err := h.service.UploadVocal(c.Context(), projectID, sectionID, takeName, f, file.Size)
+	result, err := h.service.UploadVocal(c.Context(), userID, projectID, sectionID, takeName, f, file.Size)
 	if err != nil {
+		if errors.Is(err, client.ErrGecersizSegment) {
+			return response.ValidationError(c, "Invalid projectId or sectionId", nil)
+		}
 		return response.ServiceError(c, err.Error())
 	}
 
@@ -108,6 +119,8 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 // @Tags         Upload
 // @Produce      json
 // @Param        takeId path string true "Take ID"
+// @Param        projectId query string true "Project ID"
+// @Param        sectionId query string true "Section ID"
 // @Success      204 "No Content"
 // @Failure      400 {object} response.ErrorResponse
 // @Failure      401 {object} response.ErrorResponse
@@ -115,13 +128,21 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/upload/vocal/{takeId} [delete]
 func (h *UploadHandler) DeleteVocal(c *fiber.Ctx) error {
+	userID, ok := istekSahibi(c)
+	if !ok {
+		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+	}
 	takeID := c.Params("takeId")
-	if takeID == "" {
-		return response.ValidationError(c, "Take ID is required", nil)
+	projectID := c.Query("projectId")
+	sectionID := c.Query("sectionId")
+	if takeID == "" || projectID == "" || sectionID == "" {
+		return response.ValidationError(c, "takeId, projectId and sectionId are required", nil)
 	}
 
-	err := h.service.DeleteVocal(c.Context(), takeID)
-	if err != nil {
+	if err := h.service.DeleteVocal(c.Context(), userID, projectID, sectionID, takeID); err != nil {
+		if errors.Is(err, client.ErrGecersizSegment) {
+			return response.ValidationError(c, "Invalid takeId, projectId or sectionId", nil)
+		}
 		return response.ServiceError(c, err.Error())
 	}
 

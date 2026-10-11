@@ -32,15 +32,19 @@ func NewMasterService(redisClient *redis.Client, asynqClient *asynq.Client, r2Cl
 }
 
 // Preview generates a 20-second master preview
-func (s *MasterService) Preview(ctx context.Context, req *model.MasterPreviewRequest) (*model.MasterPreviewResponse, error) {
+func (s *MasterService) Preview(ctx context.Context, userID string, req *model.MasterPreviewRequest) (*model.MasterPreviewResponse, error) {
 	// TODO: Implement actual preview generation
 	// This would call your audio processing service
 
 	previewID := uuid.New().String()
+	key, err := client.KullaniciAnahtari("previews", userID, previewID+".mp3")
+	if err != nil {
+		return nil, err
+	}
 
 	// Mock adres bile ayni kurallarla uretilir: istemci bunu geri
 	// gonderdiginde KeyFromURL cozebilsin.
-	fileURL := client.UnsignedURL(fmt.Sprintf("previews/%s.mp3", previewID), s.r2Cfg)
+	fileURL := client.UnsignedURL(key, s.r2Cfg)
 
 	return &model.MasterPreviewResponse{
 		FileURL:   fileURL,
@@ -51,6 +55,19 @@ func (s *MasterService) Preview(ctx context.Context, req *model.MasterPreviewReq
 
 // StartFinal queues a final mastering job
 func (s *MasterService) StartFinal(ctx context.Context, userID string, req *model.MasterFinalRequest) (*model.MasterFinalResponse, error) {
+	// Girdi denetimi is kaydindan ONCE: worker bu anahtarlari okuyacak,
+	// yabanci bir anahtar baskasinin dosyasini master'a sokardi.
+	for _, u := range req.StemURLs {
+		if _, err := client.SahipliAnahtarCoz(u, userID, s.r2Cfg); err != nil {
+			return nil, fmt.Errorf("stem URL: %w", err)
+		}
+	}
+	for _, take := range req.VocalTakes {
+		if _, err := client.SahipliAnahtarCoz(take.FileURL, userID, s.r2Cfg); err != nil {
+			return nil, fmt.Errorf("vokal URL: %w", err)
+		}
+	}
+
 	jobID := uuid.New().String()
 	now := time.Now()
 

@@ -14,8 +14,8 @@ import (
 
 // FileUploader defines the interface for file upload operations
 type FileUploader interface {
-	UploadVocal(ctx context.Context, projectID, sectionID, takeName string, file io.Reader, fileSize int64) (*model.UploadVocalResponse, error)
-	DeleteVocal(ctx context.Context, takeID string) error
+	UploadVocal(ctx context.Context, userID, projectID, sectionID, takeName string, file io.Reader, fileSize int64) (*model.UploadVocalResponse, error)
+	DeleteVocal(ctx context.Context, userID, projectID, sectionID, takeID string) error
 }
 
 // UploadService handles file uploads to R2 storage
@@ -33,15 +33,19 @@ func NewUploadService(r2Client client.StorageClient, r2Cfg *config.R2Config) *Up
 }
 
 // UploadVocal uploads a vocal recording to R2 storage
-func (s *UploadService) UploadVocal(ctx context.Context, projectID, sectionID, takeName string, file io.Reader, fileSize int64) (*model.UploadVocalResponse, error) {
+func (s *UploadService) UploadVocal(ctx context.Context, userID, projectID, sectionID, takeName string, file io.Reader, fileSize int64) (*model.UploadVocalResponse, error) {
 	takeID := uuid.New().String()
 
-	// Generate storage key
-	key := fmt.Sprintf("vocals/%s/%s/%s.wav", projectID, sectionID, takeID)
+	// Anahtar kullaniciyla oneklenir; istemci kimlikleri segment
+	// dogrulamasindan gecer. Mock yol da ayni dogrulamayi yapar.
+	key, err := client.KullaniciAnahtari("vocals", userID, projectID, sectionID, takeID+".wav")
+	if err != nil {
+		return nil, err
+	}
 
 	// Use mock response if client is not configured
 	if s.r2Client == nil {
-		return s.uploadMock(takeID, projectID)
+		return s.uploadMock(takeID, key)
 	}
 
 	// Upload to R2. Upload adresi de dondurur; ayrica URLFor cagirmak
@@ -62,25 +66,16 @@ func (s *UploadService) UploadVocal(ctx context.Context, projectID, sectionID, t
 	}, nil
 }
 
-// DeleteVocal deletes a vocal recording from R2 storage
-func (s *UploadService) DeleteVocal(ctx context.Context, takeID string) error {
+// DeleteVocal, vokali deterministik anahtariyla siler. Eskiden anahtar
+// "vocals/*/<id>.wav" literal glob'uydu ve hicbir nesneyle eslesmiyordu.
+func (s *UploadService) DeleteVocal(ctx context.Context, userID, projectID, sectionID, takeID string) error {
+	key, err := client.KullaniciAnahtari("vocals", userID, projectID, sectionID, takeID+".wav")
+	if err != nil {
+		return err
+	}
 	if s.r2Client == nil {
 		return nil // Mock: no-op
 	}
-
-	// Note: In a real implementation, we'd need to look up the full key
-	// from a database or construct it from the takeID
-	key := fmt.Sprintf("vocals/*/%s.wav", takeID)
-
-	return s.r2Client.Delete(ctx, key)
-}
-
-// DeleteVocalByKey deletes a vocal recording by its full storage key
-func (s *UploadService) DeleteVocalByKey(ctx context.Context, key string) error {
-	if s.r2Client == nil {
-		return nil
-	}
-
 	return s.r2Client.Delete(ctx, key)
 }
 
@@ -97,8 +92,7 @@ func (s *UploadService) GetSignedURL(ctx context.Context, key string, expiry tim
 }
 
 // Mock implementation for development/testing
-func (s *UploadService) uploadMock(takeID, projectID string) (*model.UploadVocalResponse, error) {
-	key := fmt.Sprintf("vocals/%s/%s.wav", projectID, takeID)
+func (s *UploadService) uploadMock(takeID, key string) (*model.UploadVocalResponse, error) {
 	return &model.UploadVocalResponse{
 		ID: takeID,
 		// UnsignedURL kullanilir: mock ciktisi da KeyFromURL ile

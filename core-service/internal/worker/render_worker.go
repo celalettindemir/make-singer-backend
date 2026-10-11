@@ -111,6 +111,12 @@ func (w *RenderWorker) sunoIleUret(ctx context.Context, payload *model.RenderJob
 		return nil, fmt.Errorf("depolama yapilandirilmamis, Suno cagrilmadi: %w", asynq.SkipRetry)
 	}
 
+	// Ucretli cagridan ONCE: sahip/proje anahtar kurmaya uygun degilse
+	// stem'ler yuklenemez ve 62 kredi bosa gider.
+	if _, err := client.KullaniciAnahtari("stems", payload.OwnerID, payload.ProjectID, "x.mp3"); err != nil {
+		return nil, fmt.Errorf("is sahibi/proje anahtara uygun degil, Suno cagrilmadi: %w: %w", err, asynq.SkipRetry)
+	}
+
 	ilerleme(5, "Building music prompt...")
 	req := &client.GenerateMusicRequest{
 		Style:        buildMusicStyle(payload),
@@ -155,7 +161,7 @@ func (w *RenderWorker) sunoIleUret(ctx context.Context, payload *model.RenderJob
 	}
 
 	ilerleme(90, "Uploading stems...")
-	records, err := w.uploadStems(ctx, payload.ProjectID, stems, sure)
+	records, err := w.uploadStems(ctx, payload.OwnerID, payload.ProjectID, stems, sure)
 	if err != nil {
 		return nil, ucretli("stem upload failed", err)
 	}
@@ -193,7 +199,11 @@ func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, payloa
 		time.Sleep(step.duration)
 	}
 
-	result := w.generateMockResult(payload)
+	result, err := w.generateMockResult(payload)
+	if err != nil {
+		w.failJob(ctx, jobID, "Gecersiz is sahibi veya proje")
+		return fmt.Errorf("mock sonuc: %w: %w", err, asynq.SkipRetry)
+	}
 
 	if err := w.renderService.CompleteJob(ctx, jobID, result); err != nil {
 		w.failJob(ctx, jobID, "Failed to save result")
@@ -212,11 +222,14 @@ func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, payloa
 
 // uploadStems, Suno stem'lerini indirip R2'ye yazar. Kayda imzali URL degil
 // ANAHTAR yazilir; adres okuma aninda (RenderService.GetResult) taze uretilir.
-func (w *RenderWorker) uploadStems(ctx context.Context, projectID string, stems []client.Stem, duration float64) ([]model.StemResultRecord, error) {
+func (w *RenderWorker) uploadStems(ctx context.Context, ownerID, projectID string, stems []client.Stem, duration float64) ([]model.StemResultRecord, error) {
 	results := make([]model.StemResultRecord, 0, len(stems))
 	for _, stem := range stems {
 		stemID := uuid.New().String()
-		key := fmt.Sprintf("stems/%s/%s.mp3", projectID, stemID)
+		key, err := client.KullaniciAnahtari("stems", ownerID, projectID, stemID+".mp3")
+		if err != nil {
+			return nil, err
+		}
 		if err := w.stemAktar(ctx, stem.URL, key); err != nil {
 			return nil, fmt.Errorf("%s stem'i aktarilamadi: %w", stem.Instrument, err)
 		}
@@ -296,7 +309,7 @@ func (w *RenderWorker) failJob(ctx context.Context, jobID, errMsg string) {
 	w.hub.BroadcastError(jobID, "RENDER_FAILED", errMsg)
 }
 
-func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) *model.RenderResultRecord {
+func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) (*model.RenderResultRecord, error) {
 	bpm := 120
 	if payload.Brief.BPM.Value != nil {
 		bpm = *payload.Brief.BPM.Value
@@ -315,10 +328,14 @@ func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) *mode
 	var stems []model.StemResultRecord
 	for _, instrument := range payload.Arrangement.Instruments {
 		stemID := uuid.New().String()
+		key, err := client.KullaniciAnahtari("stems", payload.OwnerID, payload.ProjectID, string(instrument)+".wav")
+		if err != nil {
+			return nil, err
+		}
 		stems = append(stems, model.StemResultRecord{
 			ID:           stemID,
 			Instrument:   instrument,
-			FileKey:      fmt.Sprintf("stems/%s/%s.wav", payload.ProjectID, instrument),
+			FileKey:      key,
 			Duration:     duration,
 			WaveformData: generateWaveform(100),
 		})
@@ -331,7 +348,7 @@ func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) *mode
 		Key:       model.KeyResult{Tonic: tonic, Scale: scale},
 		CreatedAt: time.Now(),
 		Stems:     stems,
-	}
+	}, nil
 }
 
 // tahminiSure, yapidaki toplam olcu x 4 vurus / BPM x 60 ile saniye tahmini.

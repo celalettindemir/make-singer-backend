@@ -18,7 +18,7 @@ func TestMasterService_Preview_ExpiresAtConfigTTL(t *testing.T) {
 	s := NewMasterService(nil, nil, nil, r2Cfg)
 
 	before := time.Now()
-	resp, err := s.Preview(context.Background(), &model.MasterPreviewRequest{})
+	resp, err := s.Preview(context.Background(), "kullanici-a", &model.MasterPreviewRequest{})
 	if err != nil {
 		t.Fatalf("Preview hata verdi: %v", err)
 	}

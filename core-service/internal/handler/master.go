@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/pkg/response"
@@ -37,6 +38,11 @@ func NewMasterHandler(svc *service.MasterService, v *validator.Validate) *Master
 // @Security     BearerAuth
 // @Router       /api/master/preview [post]
 func (h *MasterHandler) Preview(c *fiber.Ctx) error {
+	userID, ok := istekSahibi(c)
+	if !ok {
+		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+	}
+
 	var req model.MasterPreviewRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.ValidationError(c, "Invalid request body", nil)
@@ -46,7 +52,7 @@ func (h *MasterHandler) Preview(c *fiber.Ctx) error {
 		return response.ValidationError(c, "Validation failed", formatValidationErrors(err))
 	}
 
-	result, err := h.service.Preview(c.Context(), &req)
+	result, err := h.service.Preview(c.Context(), userID, &req)
 	if err != nil {
 		return response.ServiceError(c, err.Error())
 	}
@@ -64,6 +70,7 @@ func (h *MasterHandler) Preview(c *fiber.Ctx) error {
 // @Success      202 {object} model.MasterFinalResponse
 // @Failure      400 {object} response.ErrorResponse
 // @Failure      401 {object} response.ErrorResponse
+// @Failure      404 {object} response.ErrorResponse
 // @Failure      429 {object} response.ErrorResponse
 // @Failure      500 {object} response.ErrorResponse
 // @Security     BearerAuth
@@ -85,6 +92,9 @@ func (h *MasterHandler) Final(c *fiber.Ctx) error {
 
 	result, err := h.service.StartFinal(c.Context(), userID, &req)
 	if err != nil {
+		if errors.Is(err, client.ErrYabanciAnahtar) {
+			return response.NotFound(c, "File not found")
+		}
 		return response.ServiceError(c, err.Error())
 	}
 

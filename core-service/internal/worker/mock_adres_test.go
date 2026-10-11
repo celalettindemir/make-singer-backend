@@ -28,11 +28,14 @@ func TestMasterWorker_MockCiktisiCozulebilir(t *testing.T) {
 	cfg := testR2Cfg()
 	w := &MasterWorker{r2Cfg: cfg}
 
-	record := w.generateMockRecord(&model.MasterJobPayload{ProjectID: "p1"})
+	record, err := w.generateMockRecord(&model.MasterJobPayload{OwnerID: "kullanici-a", ProjectID: "p1"})
+	if err != nil {
+		t.Fatalf("generateMockRecord: %v", err)
+	}
 	if record.FileKey == "" {
 		t.Fatal("mock kayitta nesne anahtari yok")
 	}
-	if !strings.HasPrefix(record.FileKey, "masters/") {
+	if !strings.HasPrefix(record.FileKey, "masters/kullanici-a/p1/") {
 		t.Errorf("mock anahtar = %q, masters/ onekli olmali", record.FileKey)
 	}
 
@@ -54,15 +57,18 @@ func TestRenderWorker_MockStemAdresiCozulebilir(t *testing.T) {
 	cfg := testR2Cfg()
 	w := &RenderWorker{}
 
-	payload := &model.RenderJobPayload{ProjectID: "p1"}
+	payload := &model.RenderJobPayload{OwnerID: "kullanici-a", ProjectID: "p1"}
 	payload.Arrangement.Instruments = []model.Instrument{model.Instrument("drums")}
 
-	record := w.generateMockResult(payload)
+	record, err := w.generateMockResult(payload)
+	if err != nil {
+		t.Fatalf("generateMockResult: %v", err)
+	}
 	if len(record.Stems) != 1 {
 		t.Fatalf("stem sayisi = %d", len(record.Stems))
 	}
 	key := record.Stems[0].FileKey
-	if !strings.HasPrefix(key, "stems/") {
+	if !strings.HasPrefix(key, "stems/kullanici-a/p1/") {
 		t.Fatalf("mock stem anahtari = %q", key)
 	}
 

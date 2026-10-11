@@ -117,7 +117,7 @@ func TestDeleteVocal_Success(t *testing.T) {
 	ta := setupApp(t)
 
 	takeID := uuid.New().String()
-	path := fmt.Sprintf("/api/upload/vocal/%s", takeID)
+	path := fmt.Sprintf("/api/upload/vocal/%s?projectId=%s&sectionId=s1", takeID, uuid.New().String())
 
 	resp, err := doAuthRequest(t, ta.app, http.MethodDelete, path, "")
 	if err != nil {

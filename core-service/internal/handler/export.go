@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"errors"
+
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/pkg/response"
@@ -30,11 +33,17 @@ func NewExportHandler(svc *service.ExportService, v *validator.Validate) *Export
 // @Success      200 {object} model.ExportMP3Response
 // @Failure      400 {object} response.ErrorResponse
 // @Failure      401 {object} response.ErrorResponse
+// @Failure      404 {object} response.ErrorResponse
 // @Failure      429 {object} response.ErrorResponse
 // @Failure      500 {object} response.ErrorResponse
 // @Security     BearerAuth
 // @Router       /api/export/mp3 [post]
 func (h *ExportHandler) MP3(c *fiber.Ctx) error {
+	userID, ok := istekSahibi(c)
+	if !ok {
+		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+	}
+
 	var req model.ExportMP3Request
 	if err := c.BodyParser(&req); err != nil {
 		return response.ValidationError(c, "Invalid request body", nil)
@@ -44,8 +53,11 @@ func (h *ExportHandler) MP3(c *fiber.Ctx) error {
 		return response.ValidationError(c, "Validation failed", formatValidationErrors(err))
 	}
 
-	result, err := h.service.ExportMP3(c.Context(), &req)
+	result, err := h.service.ExportMP3(c.Context(), userID, &req)
 	if err != nil {
+		if errors.Is(err, client.ErrYabanciAnahtar) {
+			return response.NotFound(c, "File not found")
+		}
 		return response.ServiceError(c, err.Error())
 	}
 
@@ -62,11 +74,17 @@ func (h *ExportHandler) MP3(c *fiber.Ctx) error {
 // @Success      200 {object} model.ExportWAVResponse
 // @Failure      400 {object} response.ErrorResponse
 // @Failure      401 {object} response.ErrorResponse
+// @Failure      404 {object} response.ErrorResponse
 // @Failure      429 {object} response.ErrorResponse
 // @Failure      500 {object} response.ErrorResponse
 // @Security     BearerAuth
 // @Router       /api/export/wav [post]
 func (h *ExportHandler) WAV(c *fiber.Ctx) error {
+	userID, ok := istekSahibi(c)
+	if !ok {
+		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+	}
+
 	var req model.ExportWAVRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.ValidationError(c, "Invalid request body", nil)
@@ -76,8 +94,11 @@ func (h *ExportHandler) WAV(c *fiber.Ctx) error {
 		return response.ValidationError(c, "Validation failed", formatValidationErrors(err))
 	}
 
-	result, err := h.service.ExportWAV(c.Context(), &req)
+	result, err := h.service.ExportWAV(c.Context(), userID, &req)
 	if err != nil {
+		if errors.Is(err, client.ErrYabanciAnahtar) {
+			return response.NotFound(c, "File not found")
+		}
 		return response.ServiceError(c, err.Error())
 	}
 
@@ -94,11 +115,17 @@ func (h *ExportHandler) WAV(c *fiber.Ctx) error {
 // @Success      200 {object} model.ExportStemsResponse
 // @Failure      400 {object} response.ErrorResponse
 // @Failure      401 {object} response.ErrorResponse
+// @Failure      404 {object} response.ErrorResponse
 // @Failure      429 {object} response.ErrorResponse
 // @Failure      500 {object} response.ErrorResponse
 // @Security     BearerAuth
 // @Router       /api/export/stems [post]
 func (h *ExportHandler) Stems(c *fiber.Ctx) error {
+	userID, ok := istekSahibi(c)
+	if !ok {
+		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+	}
+
 	var req model.ExportStemsRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.ValidationError(c, "Invalid request body", nil)
@@ -108,8 +135,11 @@ func (h *ExportHandler) Stems(c *fiber.Ctx) error {
 		return response.ValidationError(c, "Validation failed", formatValidationErrors(err))
 	}
 
-	result, err := h.service.ExportStems(c.Context(), &req)
+	result, err := h.service.ExportStems(c.Context(), userID, &req)
 	if err != nil {
+		if errors.Is(err, client.ErrYabanciAnahtar) {
+			return response.NotFound(c, "File not found")
+		}
 		return response.ServiceError(c, err.Error())
 	}
 
