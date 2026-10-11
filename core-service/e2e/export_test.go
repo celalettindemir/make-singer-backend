@@ -12,11 +12,12 @@ func TestExportMP3_Success(t *testing.T) {
 	ta := setupApp(t)
 
 	projectID := uuid.New().String()
+	masterURL := e2eURL(t, "masters", testUserID, projectID, "final.wav")
 	body := fmt.Sprintf(`{
 		"projectId": "%s",
-		"masterFileUrl": "https://cdn.example.com/master/final.wav",
+		"masterFileUrl": "%s",
 		"quality": 320
-	}`, projectID)
+	}`, projectID, masterURL)
 
 	resp, err := doAuthRequest(t, ta.app, http.MethodPost, "/api/export/mp3", body)
 	if err != nil {
@@ -42,10 +43,11 @@ func TestExportMP3_NoAuth(t *testing.T) {
 	ta := setupApp(t)
 
 	projectID := uuid.New().String()
+	masterURL := e2eURL(t, "masters", testUserID, projectID, "final.wav")
 	body := fmt.Sprintf(`{
 		"projectId": "%s",
-		"masterFileUrl": "https://cdn.example.com/master/final.wav"
-	}`, projectID)
+		"masterFileUrl": "%s"
+	}`, projectID, masterURL)
 
 	resp, err := doRequest(ta.app, http.MethodPost, "/api/export/mp3", body, nil)
 	if err != nil {
@@ -73,12 +75,13 @@ func TestExportWAV_Success(t *testing.T) {
 	ta := setupApp(t)
 
 	projectID := uuid.New().String()
+	masterURL := e2eURL(t, "masters", testUserID, projectID, "final.wav")
 	body := fmt.Sprintf(`{
 		"projectId": "%s",
-		"masterFileUrl": "https://cdn.example.com/master/final.wav",
+		"masterFileUrl": "%s",
 		"bitDepth": 24,
 		"sampleRate": 48000
-	}`, projectID)
+	}`, projectID, masterURL)
 
 	resp, err := doAuthRequest(t, ta.app, http.MethodPost, "/api/export/wav", body)
 	if err != nil {
@@ -103,14 +106,15 @@ func TestExportStems_Success(t *testing.T) {
 	ta := setupApp(t)
 
 	projectID := uuid.New().String()
+	stemURL := func(ad string) string { return e2eURL(t, "stems", testUserID, projectID, ad) }
 	body := fmt.Sprintf(`{
 		"projectId": "%s",
 		"stemUrls": [
-			"https://cdn.example.com/stems/drums.wav",
-			"https://cdn.example.com/stems/bass.wav",
-			"https://cdn.example.com/stems/piano.wav"
+			"%s",
+			"%s",
+			"%s"
 		]
-	}`, projectID)
+	}`, projectID, stemURL("drums.mp3"), stemURL("bass.mp3"), stemURL("piano.mp3"))
 
 	resp, err := doAuthRequest(t, ta.app, http.MethodPost, "/api/export/stems", body)
 	if err != nil {

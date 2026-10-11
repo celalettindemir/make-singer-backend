@@ -40,6 +40,12 @@ func (s *ExportService) ExportMP3(ctx context.Context, userID string, req *model
 		quality = *req.Quality
 	}
 
+	// Sahiplik denetimi mock dalindan once: dev ve prod ayni davranir.
+	inputKey, err := client.SahipliAnahtarCoz(req.MasterFileURL, userID, s.r2Cfg)
+	if err != nil {
+		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
+	}
+
 	// Use mock response if audio client is not configured
 	if s.audioClient == nil {
 		return s.exportMP3Mock(userID, quality)
@@ -67,11 +73,6 @@ func (s *ExportService) ExportMP3(ctx context.Context, userID string, req *model
 		if req.Metadata.Year != nil {
 			metadata["year"] = fmt.Sprintf("%d", *req.Metadata.Year)
 		}
-	}
-
-	inputKey, err := client.SahipliAnahtarCoz(req.MasterFileURL, userID, s.r2Cfg)
-	if err != nil {
-		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
 	}
 
 	encodeReq := &client.EncodeRequest{
@@ -116,6 +117,12 @@ func (s *ExportService) ExportWAV(ctx context.Context, userID string, req *model
 		sampleRate = *req.SampleRate
 	}
 
+	// Sahiplik denetimi mock dalindan once: dev ve prod ayni davranir.
+	inputKey, err := client.SahipliAnahtarCoz(req.MasterFileURL, userID, s.r2Cfg)
+	if err != nil {
+		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
+	}
+
 	// Use mock response if audio client is not configured
 	if s.audioClient == nil {
 		return s.exportWAVMock(userID, bitDepth, sampleRate)
@@ -125,11 +132,6 @@ func (s *ExportService) ExportWAV(ctx context.Context, userID string, req *model
 	outputKey, err := client.KullaniciAnahtari("exports", userID, exportID+".wav")
 	if err != nil {
 		return nil, err
-	}
-
-	inputKey, err := client.SahipliAnahtarCoz(req.MasterFileURL, userID, s.r2Cfg)
-	if err != nil {
-		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
 	}
 
 	encodeReq := &client.EncodeRequest{
@@ -165,17 +167,7 @@ func (s *ExportService) ExportWAV(ctx context.Context, userID string, req *model
 
 // ExportStems exports stems as ZIP
 func (s *ExportService) ExportStems(ctx context.Context, userID string, req *model.ExportStemsRequest) (*model.ExportStemsResponse, error) {
-	// Use mock response if audio client is not configured
-	if s.audioClient == nil {
-		return s.exportStemsMock(userID, req)
-	}
-
-	exportID := uuid.New().String()
-	outputKey, err := client.KullaniciAnahtari("exports", userID, exportID+".zip")
-	if err != nil {
-		return nil, err
-	}
-
+	// Sahiplik denetimi mock dalindan once: dev ve prod ayni davranir.
 	// Build file list for ZIP
 	files := make([]client.ZipFileEntry, 0)
 
@@ -215,6 +207,17 @@ func (s *ExportService) ExportStems(ctx context.Context, userID string, req *mod
 			Key:      key,
 			Filename: "master.wav",
 		})
+	}
+
+	// Use mock response if audio client is not configured
+	if s.audioClient == nil {
+		return s.exportStemsMock(userID, req)
+	}
+
+	exportID := uuid.New().String()
+	outputKey, err := client.KullaniciAnahtari("exports", userID, exportID+".zip")
+	if err != nil {
+		return nil, err
 	}
 
 	zipReq := &client.ZipRequest{

@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -146,6 +147,16 @@ func TestKeyFromURL_BosVeBozuk(t *testing.T) {
 	for _, u := range []string{"", "://bozuk", "https://makesinger-cdn.celalettindemir.dev/"} {
 		if _, err := KeyFromURL(u, cfg); err == nil {
 			t.Errorf("%q icin hata bekleniyordu", u)
+		}
+	}
+}
+
+func TestKeyFromURL_HatalarGecersizURLSarar(t *testing.T) {
+	cfg := testCfg()
+	for _, u := range []string{"", "://bozuk", "/sadece/yol", "https://cdn.example.com/stems/a.mp3", "https://makesinger-cdn.celalettindemir.dev/"} {
+		_, err := KeyFromURL(u, cfg)
+		if !errors.Is(err, ErrGecersizURL) {
+			t.Errorf("%q: ErrGecersizURL bekleniyordu, geldi: %v", u, err)
 		}
 	}
 }

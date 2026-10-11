@@ -8,42 +8,42 @@ import (
 	"github.com/google/uuid"
 )
 
-func validMasterPreviewBody() string {
+func validMasterPreviewBody(t *testing.T) string {
 	projectID := uuid.New().String()
 	stemID := uuid.New().String()
 	return fmt.Sprintf(`{
 		"projectId": "%s",
 		"profile": "clean",
-		"stemUrls": ["https://cdn.example.com/stems/drums.wav"],
+		"stemUrls": ["%s"],
 		"mixSnapshot": {
 			"channels": [
 				{"stemId": "%s", "volumeDb": 0, "mute": false, "solo": false}
 			],
 			"preset": "default"
 		}
-	}`, projectID, stemID)
+	}`, projectID, e2eURL(t, "stems", testUserID, projectID, "drums.mp3"), stemID)
 }
 
-func validMasterFinalBody() string {
+func validMasterFinalBody(t *testing.T) string {
 	projectID := uuid.New().String()
 	stemID := uuid.New().String()
 	return fmt.Sprintf(`{
 		"projectId": "%s",
 		"profile": "warm",
-		"stemUrls": ["https://cdn.example.com/stems/drums.wav", "https://cdn.example.com/stems/bass.wav"],
+		"stemUrls": ["%s", "%s"],
 		"mixSnapshot": {
 			"channels": [
 				{"stemId": "%s", "volumeDb": -3, "mute": false, "solo": false}
 			],
 			"preset": "vocal_friendly"
 		}
-	}`, projectID, stemID)
+	}`, projectID, e2eURL(t, "stems", testUserID, projectID, "drums.mp3"), e2eURL(t, "stems", testUserID, projectID, "bass.mp3"), stemID)
 }
 
 func TestMasterPreview_Success(t *testing.T) {
 	ta := setupApp(t)
 
-	resp, err := doAuthRequest(t, ta.app, http.MethodPost, "/api/master/preview", validMasterPreviewBody())
+	resp, err := doAuthRequest(t, ta.app, http.MethodPost, "/api/master/preview", validMasterPreviewBody(t))
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestMasterPreview_Success(t *testing.T) {
 func TestMasterPreview_NoAuth(t *testing.T) {
 	ta := setupApp(t)
 
-	resp, err := doRequest(ta.app, http.MethodPost, "/api/master/preview", validMasterPreviewBody(), nil)
+	resp, err := doRequest(ta.app, http.MethodPost, "/api/master/preview", validMasterPreviewBody(t), nil)
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestMasterPreview_NoAuth(t *testing.T) {
 func TestMasterFinal_Success(t *testing.T) {
 	ta := setupApp(t)
 
-	resp, err := doAuthRequest(t, ta.app, http.MethodPost, "/api/master/final", validMasterFinalBody())
+	resp, err := doAuthRequest(t, ta.app, http.MethodPost, "/api/master/final", validMasterFinalBody(t))
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestMasterStatus_Success(t *testing.T) {
 	ta := setupApp(t)
 
 	// Start a final master job first
-	resp, err := doAuthRequest(t, ta.app, http.MethodPost, "/api/master/final", validMasterFinalBody())
+	resp, err := doAuthRequest(t, ta.app, http.MethodPost, "/api/master/final", validMasterFinalBody(t))
 	if err != nil {
 		t.Fatalf("final request failed: %v", err)
 	}
@@ -134,4 +134,50 @@ func TestMasterStatus_NotFound(t *testing.T) {
 	if errObj["code"] != "NOT_FOUND" {
 		t.Errorf("expected error code NOT_FOUND, got %v", errObj["code"])
 	}
+}
+
+func TestMasterFinal_YabanciStem404(t *testing.T) {
+	ta := setupApp(t)
+
+	projectID := uuid.New().String()
+	body := fmt.Sprintf(`{
+		"projectId": "%s",
+		"profile": "warm",
+		"stemUrls": ["%s"],
+		"mixSnapshot": {
+			"channels": [
+				{"stemId": "%s", "volumeDb": 0, "mute": false, "solo": false}
+			],
+			"preset": "default"
+		}
+	}`, projectID, e2eURL(t, "stems", "baska-kullanici", projectID, "drums.mp3"), uuid.New().String())
+
+	resp, err := doAuthRequest(t, ta.app, http.MethodPost, "/api/master/final", body)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	assertStatus(t, resp, http.StatusNotFound)
+}
+
+func TestMasterFinal_TaninmayanKonak400(t *testing.T) {
+	ta := setupApp(t)
+
+	projectID := uuid.New().String()
+	body := fmt.Sprintf(`{
+		"projectId": "%s",
+		"profile": "warm",
+		"stemUrls": ["https://cdn.example.com/stems/drums.wav"],
+		"mixSnapshot": {
+			"channels": [
+				{"stemId": "%s", "volumeDb": 0, "mute": false, "solo": false}
+			],
+			"preset": "default"
+		}
+	}`, projectID, uuid.New().String())
+
+	resp, err := doAuthRequest(t, ta.app, http.MethodPost, "/api/master/final", body)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	assertStatus(t, resp, http.StatusBadRequest)
 }

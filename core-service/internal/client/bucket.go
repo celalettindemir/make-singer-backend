@@ -104,15 +104,15 @@ func ResolveURL(ctx context.Context, sc StorageClient, cfg *config.R2Config, key
 // WebSocket yayinina dusuyor, imzali URL de bir sirdir.
 func KeyFromURL(rawURL string, cfg *config.R2Config) (string, error) {
 	if rawURL == "" {
-		return "", fmt.Errorf("bos URL")
+		return "", fmt.Errorf("%w: bos URL", ErrGecersizURL)
 	}
 
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return "", fmt.Errorf("URL cozulemedi")
+		return "", fmt.Errorf("%w: URL cozulemedi", ErrGecersizURL)
 	}
 	if u.Host == "" {
-		return "", fmt.Errorf("URL'de konak yok")
+		return "", fmt.Errorf("%w: URL'de konak yok", ErrGecersizURL)
 	}
 
 	tanidik := false
@@ -123,12 +123,12 @@ func KeyFromURL(rawURL string, cfg *config.R2Config) (string, error) {
 		}
 	}
 	if !tanidik {
-		return "", fmt.Errorf("taninmayan konak: %s", u.Host)
+		return "", fmt.Errorf("%w: taninmayan konak: %s", ErrGecersizURL, u.Host)
 	}
 
 	key := strings.TrimPrefix(u.Path, "/")
 	if key == "" {
-		return "", fmt.Errorf("URL'de nesne anahtari yok (konak: %s)", u.Host)
+		return "", fmt.Errorf("%w: URL'de nesne anahtari yok (konak: %s)", ErrGecersizURL, u.Host)
 	}
 	return key, nil
 }

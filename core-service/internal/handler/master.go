@@ -95,6 +95,9 @@ func (h *MasterHandler) Final(c *fiber.Ctx) error {
 		if errors.Is(err, client.ErrYabanciAnahtar) {
 			return response.NotFound(c, "File not found")
 		}
+		if errors.Is(err, client.ErrGecersizURL) {
+			return response.ValidationError(c, "Gecersiz dosya URL'si", nil)
+		}
 		return response.ServiceError(c, err.Error())
 	}
 

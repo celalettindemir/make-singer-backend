@@ -13,6 +13,10 @@ import (
 // Mesaj degeri tasimaz; hata Redis is kaydina ve yanita dusebilir.
 var ErrGecersizSegment = errors.New("gecersiz anahtar segmenti")
 
+// ErrGecersizURL: istemcinin gonderdigi URL cozulemedi ya da taninmayan bir
+// konaga ait. Uclar bunu 400'e cevirir. Mesaj URL degerini tasimaz.
+var ErrGecersizURL = errors.New("gecersiz URL")
+
 // ErrYabanciAnahtar: nesne, istegi yapan kullanicinin oneki disinda. Uclar
 // bunu 404'e cevirir; 403 nesnenin var oldugunu dogrulardi.
 var ErrYabanciAnahtar = errors.New("nesne bu kullaniciya ait degil")

@@ -104,7 +104,7 @@ All errors share the same envelope:
 | `SERVICE_ERROR` | `500` | Internal server error |
 | `AI_ERROR` | `502` | Upstream AI service error |
 
-**Ownership:** Job endpoints (`status`, `result`, `cancel`, `POST /api/ws/ticket`) answer `404 NOT_FOUND` — not `403` — when the job belongs to another user. Records without an owner are visible to nobody. File URLs sent back to the API (master stems and vocals, export inputs) must be the URLs the API returned; a key outside the caller's own prefix answers `404`.
+**Ownership:** Job endpoints (`status`, `result`, `cancel`, `POST /api/ws/ticket`) answer `404 NOT_FOUND` — not `403` — when the job belongs to another user. Records without an owner are visible to nobody. File URLs sent back to the API (master stems and vocals, export inputs) must be the URLs the API returned; a key outside the caller's own prefix answers `404`, and a malformed URL or one from an unrecognised host answers `400 VALIDATION_ERROR` (`POST /api/master/final`, `POST /api/export/mp3|wav|stems`).
 
 ### Validation error details
 

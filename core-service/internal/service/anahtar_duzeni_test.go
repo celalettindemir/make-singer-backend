@@ -145,3 +145,42 @@ func TestMasterService_StartFinalYabanciStemReddedilir(t *testing.T) {
 		t.Errorf("vokal: ErrYabanciAnahtar bekleniyordu, geldi: %v", err)
 	}
 }
+
+func TestExportService_MockDaliSahiplikDenetler(t *testing.T) {
+	cfg := testR2Cfg()
+	s := NewExportService(nil, nil, cfg) // audioClient nil: mock dali
+
+	yabanci := client.UnsignedURL("masters/kullanici-b/p1/m1.wav", cfg)
+	if _, err := s.ExportMP3(context.Background(), "kullanici-a", &model.ExportMP3Request{MasterFileURL: yabanci}); !errors.Is(err, client.ErrYabanciAnahtar) {
+		t.Errorf("mp3: ErrYabanciAnahtar bekleniyordu, geldi: %v", err)
+	}
+	if _, err := s.ExportWAV(context.Background(), "kullanici-a", &model.ExportWAVRequest{MasterFileURL: yabanci}); !errors.Is(err, client.ErrYabanciAnahtar) {
+		t.Errorf("wav: ErrYabanciAnahtar bekleniyordu, geldi: %v", err)
+	}
+	stems := &model.ExportStemsRequest{StemURLs: []string{client.UnsignedURL("stems/kullanici-b/p1/s1.mp3", cfg)}}
+	if _, err := s.ExportStems(context.Background(), "kullanici-a", stems); !errors.Is(err, client.ErrYabanciAnahtar) {
+		t.Errorf("stems: ErrYabanciAnahtar bekleniyordu, geldi: %v", err)
+	}
+
+	kendi := client.UnsignedURL("masters/kullanici-a/p1/m1.wav", cfg)
+	if _, err := s.ExportMP3(context.Background(), "kullanici-a", &model.ExportMP3Request{MasterFileURL: kendi}); err != nil {
+		t.Errorf("kendi master mock: %v", err)
+	}
+}
+
+func TestService_TaninmayanKonakGecersizURL(t *testing.T) {
+	cfg := testR2Cfg()
+	kotu := "https://cdn.example.com/masters/kullanici-a/p1/m1.wav"
+
+	ex := NewExportService(nil, nil, cfg)
+	_, err := ex.ExportMP3(context.Background(), "kullanici-a", &model.ExportMP3Request{MasterFileURL: kotu})
+	if !errors.Is(err, client.ErrGecersizURL) || errors.Is(err, client.ErrYabanciAnahtar) {
+		t.Errorf("ExportMP3: ErrGecersizURL bekleniyordu, geldi: %v", err)
+	}
+
+	ms := NewMasterService(nil, nil, nil, cfg)
+	_, err = ms.StartFinal(context.Background(), "kullanici-a", &model.MasterFinalRequest{StemURLs: []string{kotu}})
+	if !errors.Is(err, client.ErrGecersizURL) || errors.Is(err, client.ErrYabanciAnahtar) {
+		t.Errorf("StartFinal: ErrGecersizURL bekleniyordu, geldi: %v", err)
+	}
+}

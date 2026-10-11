@@ -21,7 +21,30 @@ import (
 	"github.com/makeasinger/api/internal/service"
 )
 
-const testJWTSecret = "test-secret-for-e2e"
+const (
+	testJWTSecret = "test-secret-for-e2e"
+	testUserID    = "test-user-123"
+)
+
+// e2eR2Cfg, KeyFromURL'in tanidigi konaklari uretecek sahte R2 yapilandirmasi.
+func e2eR2Cfg() *config.R2Config {
+	return &config.R2Config{
+		AccountID:     "hesap123",
+		PublicBucket:  "makeasinger-public",
+		PrivateBucket: "makeasinger-private",
+		PublicURL:     "https://makesinger-cdn.celalettindemir.dev",
+	}
+}
+
+// e2eURL, sahip onekli anahtardan KeyFromURL ile cozulebilen URL uretir.
+func e2eURL(t *testing.T, tur, userID string, parcalar ...string) string {
+	t.Helper()
+	key, err := client.KullaniciAnahtari(tur, userID, parcalar...)
+	if err != nil {
+		t.Fatalf("anahtar: %v", err)
+	}
+	return client.UnsignedURL(key, e2eR2Cfg())
+}
 
 // testApp holds all components needed for testing
 type testApp struct {
@@ -56,10 +79,10 @@ func setupApp(t *testing.T) *testApp {
 
 	// Services
 	lyricsService := service.NewLyricsService(groqClient)
-	renderService := service.NewRenderService(redisClient, asynqClient, nil, &config.R2Config{})
-	masterService := service.NewMasterService(redisClient, asynqClient, nil, &config.R2Config{})
-	exportService := service.NewExportService(nil, nil, &config.R2Config{}) // nil triggers mock fallbacks
-	uploadService := service.NewUploadService(nil, &config.R2Config{})
+	renderService := service.NewRenderService(redisClient, asynqClient, nil, e2eR2Cfg())
+	masterService := service.NewMasterService(redisClient, asynqClient, nil, e2eR2Cfg())
+	exportService := service.NewExportService(nil, nil, e2eR2Cfg()) // nil triggers mock fallbacks
+	uploadService := service.NewUploadService(nil, e2eR2Cfg())
 
 	// Handlers
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)

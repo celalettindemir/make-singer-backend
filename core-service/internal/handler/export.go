@@ -58,6 +58,9 @@ func (h *ExportHandler) MP3(c *fiber.Ctx) error {
 		if errors.Is(err, client.ErrYabanciAnahtar) {
 			return response.NotFound(c, "File not found")
 		}
+		if errors.Is(err, client.ErrGecersizURL) {
+			return response.ValidationError(c, "Gecersiz dosya URL'si", nil)
+		}
 		return response.ServiceError(c, err.Error())
 	}
 
@@ -99,6 +102,9 @@ func (h *ExportHandler) WAV(c *fiber.Ctx) error {
 		if errors.Is(err, client.ErrYabanciAnahtar) {
 			return response.NotFound(c, "File not found")
 		}
+		if errors.Is(err, client.ErrGecersizURL) {
+			return response.ValidationError(c, "Gecersiz dosya URL'si", nil)
+		}
 		return response.ServiceError(c, err.Error())
 	}
 
@@ -139,6 +145,9 @@ func (h *ExportHandler) Stems(c *fiber.Ctx) error {
 	if err != nil {
 		if errors.Is(err, client.ErrYabanciAnahtar) {
 			return response.NotFound(c, "File not found")
+		}
+		if errors.Is(err, client.ErrGecersizURL) {
+			return response.ValidationError(c, "Gecersiz dosya URL'si", nil)
 		}
 		return response.ServiceError(c, err.Error())
 	}

@@ -81,7 +81,7 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	vocalTakes, err := w.buildVocalTakes(payload)
 	if err != nil {
 		w.failJob(ctx, jobID, fmt.Sprintf("Vokal URL cozulemedi: %v", err))
-		return err
+		return fmt.Errorf("vokal URL cozulemedi: %w: %w", err, asynq.SkipRetry)
 	}
 
 	// Step 3b: Stem URL'lerini anahtara cevir. Istemciden gelen her URL
@@ -91,7 +91,7 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 		k, err := client.SahipliAnahtarCoz(u, payload.OwnerID, w.r2Cfg)
 		if err != nil {
 			w.failJob(ctx, jobID, fmt.Sprintf("Stem URL cozulemedi: %v", err))
-			return fmt.Errorf("stem URL cozulemedi: %w", err)
+			return fmt.Errorf("stem URL cozulemedi: %w: %w", err, asynq.SkipRetry)
 		}
 		stemKeys = append(stemKeys, k)
 	}

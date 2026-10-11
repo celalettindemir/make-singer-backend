@@ -119,8 +119,11 @@ func TestRenderService_StartRenderSahibiYazar(t *testing.T) {
 		t.Fatalf("StartRender: %v", err)
 	}
 	job, err := jobOku(context.Background(), rdb, resp.JobID)
-	if err != nil || job.OwnerID != "kullanici-a" {
-		t.Fatalf("is kaydi sahibi = %q, hata %v", job.OwnerID, err)
+	if err != nil {
+		t.Fatalf("jobOku: %v", err)
+	}
+	if job.OwnerID != "kullanici-a" {
+		t.Fatalf("is kaydi sahibi = %q", job.OwnerID)
 	}
 	var p model.RenderJobPayload
 	bekleyenGorevPayload(t, "render", &p)
@@ -145,8 +148,11 @@ func TestMasterService_StartFinalSahibiYazar(t *testing.T) {
 		t.Fatalf("StartFinal: %v", err)
 	}
 	job, err := jobOku(context.Background(), rdb, resp.JobID)
-	if err != nil || job.OwnerID != "kullanici-a" {
-		t.Fatalf("is kaydi sahibi = %q, hata %v", job.OwnerID, err)
+	if err != nil {
+		t.Fatalf("jobOku: %v", err)
+	}
+	if job.OwnerID != "kullanici-a" {
+		t.Fatalf("is kaydi sahibi = %q", job.OwnerID)
 	}
 	var p model.MasterJobPayload
 	bekleyenGorevPayload(t, "master", &p)

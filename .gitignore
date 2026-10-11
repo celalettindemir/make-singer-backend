@@ -4,8 +4,10 @@
 *.dll
 *.so
 *.dylib
-main
-server
+/main
+/server
+/core-service/server
+/core-service/main
 
 # Test binary
 *.test
