@@ -120,3 +120,14 @@ func (rl *RateLimiter) ExportLimit(maxPerHour int) fiber.Handler {
 func (rl *RateLimiter) UploadLimit(maxPerHour int) fiber.Handler {
 	return rl.Limit("upload", maxPerHour, time.Hour)
 }
+
+// WSTicketLimit, WebSocket bileti ucu icin dakikalik limit.
+func (rl *RateLimiter) WSTicketLimit(maxPerMin int) fiber.Handler {
+	return rl.Limit("wsticket", maxPerMin, time.Minute)
+}
+
+// SignLimit, URL imzalama ucu icin dakikalik limit. Tek istek en fazla
+// 50 anahtar imzalar; sayac istek basinadir.
+func (rl *RateLimiter) SignLimit(maxPerMin int) fiber.Handler {
+	return rl.Limit("sign", maxPerMin, time.Minute)
+}

@@ -18,6 +18,8 @@ ratelimit:
   master_per_hour: 10
   export_per_hour: 20
   upload_per_hour: 50
+  ws_ticket_per_min: 60
+  sign_per_min: 60
 
 # Groq AI Configuration
 groq:

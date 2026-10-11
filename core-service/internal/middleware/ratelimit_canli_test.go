@@ -190,3 +190,45 @@ func TestCanliMirasTTLsizAnahtarIyilestirilir(t *testing.T) {
 		t.Errorf("istekten sonra TTL = %v, beklenen > 0 (miras anahtar iyilestirilmedi)", ttl)
 	}
 }
+
+// ws bileti ve imzalama uclari herkese acik API'de sinirsiz kalmamali:
+// limit asilinca 429, sayac kendi onekinde ve dakikalik pencerede.
+func TestCanliWSTicketVeSignLimit(t *testing.T) {
+	for _, d := range []struct {
+		ad   string
+		onek string
+		yap  func(rl *RateLimiter, n int) fiber.Handler
+	}{
+		{"wsticket", "wsticket", func(rl *RateLimiter, n int) fiber.Handler { return rl.WSTicketLimit(n) }},
+		{"sign", "sign", func(rl *RateLimiter, n int) fiber.Handler { return rl.SignLimit(n) }},
+	} {
+		t.Run(d.ad, func(t *testing.T) {
+			rdb := canliRedis(t)
+			ctx := context.Background()
+			kullanici := "kullanici-" + d.ad
+			rl := NewRateLimiter(rdb)
+			app := fiber.New()
+			app.Get("/uc", func(c *fiber.Ctx) error {
+				c.Locals("userId", kullanici)
+				return c.Next()
+			}, d.yap(rl, 2), func(c *fiber.Ctx) error {
+				return c.SendString("tamam")
+			})
+
+			for i := 1; i <= 2; i++ {
+				if y := canliIstek(t, app); y.durum != fiber.StatusOK {
+					t.Fatalf("istek %d: durum = %d, beklenen 200", i, y.durum)
+				}
+			}
+			if y := canliIstek(t, app); y.durum != fiber.StatusTooManyRequests {
+				t.Fatalf("3. istek: durum = %d, beklenen 429", y.durum)
+			}
+
+			anahtar := fmt.Sprintf("ratelimit:%s:%s", d.onek, kullanici)
+			ttl, err := rdb.TTL(ctx, anahtar).Result()
+			if err != nil || ttl <= 0 || ttl > time.Minute {
+				t.Errorf("TTL = %v (hata %v), beklenen 0 < ttl <= 60s", ttl, err)
+			}
+		})
+	}
+}

@@ -340,10 +340,10 @@ func main() {
 	upload.Delete("/vocal/:takeId", uploadHandler.DeleteVocal)
 
 	// WebSocket bileti: kimligi dogrulanmis istekle alinir.
-	api.Post("/ws/ticket", wsTicketHandler.Issue)
+	api.Post("/ws/ticket", rateLimiter.WSTicketLimit(cfg.RateLimit.WSTicketPerMin), wsTicketHandler.Issue)
 
 	// Kayitli dosya adreslerini tazeler (imza 1 saatte dolar).
-	api.Post("/files/sign", fileHandler.Sign)
+	api.Post("/files/sign", rateLimiter.SignLimit(cfg.RateLimit.SignPerMin), fileHandler.Sign)
 
 	if hesapHandler != nil {
 		api.Delete("/account", hesapHandler.Sil)

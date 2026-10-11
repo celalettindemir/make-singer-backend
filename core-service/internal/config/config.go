@@ -61,11 +61,13 @@ type JWTConfig struct {
 }
 
 type RateLimitConfig struct {
-	LyricsPerMin  int
-	RenderPerHour int
-	MasterPerHour int
-	ExportPerHour int
-	UploadPerHour int
+	LyricsPerMin   int
+	RenderPerHour  int
+	MasterPerHour  int
+	ExportPerHour  int
+	UploadPerHour  int
+	WSTicketPerMin int
+	SignPerMin     int
 }
 
 type GroqConfig struct {
@@ -266,6 +268,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("ratelimit.master_per_hour", 10)
 	viper.SetDefault("ratelimit.export_per_hour", 20)
 	viper.SetDefault("ratelimit.upload_per_hour", 50)
+	viper.SetDefault("ratelimit.ws_ticket_per_min", 60)
+	viper.SetDefault("ratelimit.sign_per_min", 60)
 
 	// Groq defaults
 	viper.SetDefault("groq.base_url", "https://api.groq.com/openai/v1")
@@ -353,11 +357,13 @@ func Load() (*Config, error) {
 			Expiration: viper.GetInt("jwt.expiration"),
 		},
 		RateLimit: RateLimitConfig{
-			LyricsPerMin:  viper.GetInt("ratelimit.lyrics_per_min"),
-			RenderPerHour: viper.GetInt("ratelimit.render_per_hour"),
-			MasterPerHour: viper.GetInt("ratelimit.master_per_hour"),
-			ExportPerHour: viper.GetInt("ratelimit.export_per_hour"),
-			UploadPerHour: viper.GetInt("ratelimit.upload_per_hour"),
+			LyricsPerMin:   viper.GetInt("ratelimit.lyrics_per_min"),
+			RenderPerHour:  viper.GetInt("ratelimit.render_per_hour"),
+			MasterPerHour:  viper.GetInt("ratelimit.master_per_hour"),
+			ExportPerHour:  viper.GetInt("ratelimit.export_per_hour"),
+			UploadPerHour:  viper.GetInt("ratelimit.upload_per_hour"),
+			WSTicketPerMin: viper.GetInt("ratelimit.ws_ticket_per_min"),
+			SignPerMin:     viper.GetInt("ratelimit.sign_per_min"),
 		},
 		Groq: GroqConfig{
 			APIKey:  viper.GetString("groq.api_key"),
