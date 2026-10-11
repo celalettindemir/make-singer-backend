@@ -157,6 +157,21 @@ func main() {
 	uploadService := service.NewUploadService(storage, &cfg.R2)
 	wsTicketService := service.NewWSTicketService(redisClient)
 
+	// silici: arayuz degiskeni; r2Client nil iken dogrudan atamak tipli
+	// nil tuzagini kurar (bkz. storage).
+	var silici client.OnekSilici
+	if r2Client != nil {
+		silici = r2Client
+	}
+
+	// Hesap silme yalnizca kendi OP'miz varken anlamli.
+	var hesapService *service.HesapService
+	var hesapHandler *handler.HesapHandler
+	if kimlikSunucu != nil {
+		hesapService = service.NewHesapService(kimlikSunucu, silici, redisClient, asynqClient, cfg.Auth.AccessTTL)
+		hesapHandler = handler.NewHesapHandler(hesapService)
+	}
+
 	// Initialize handlers
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
 	renderHandler := handler.NewRenderHandler(renderService, validate)
@@ -289,7 +304,7 @@ func main() {
 	app.Get("/auth/verify", authHandler.Verify)
 
 	// API routes
-	api := app.Group("/api", apiAuthMiddleware)
+	api := app.Group("/api", apiAuthMiddleware, middleware.SilinmisKullaniciEngeli(redisClient))
 
 	// Lyrics routes
 	lyrics := api.Group("/lyrics", rateLimiter.LyricsLimit(cfg.RateLimit.LyricsPerMin))
@@ -324,6 +339,10 @@ func main() {
 	// WebSocket bileti: kimligi dogrulanmis istekle alinir.
 	api.Post("/ws/ticket", wsTicketHandler.Issue)
 
+	if hesapHandler != nil {
+		api.Delete("/account", hesapHandler.Sil)
+	}
+
 	// WebSocket routes
 	app.Use("/ws", func(c *fiber.Ctx) error {
 		if websocket.IsWebSocketUpgrade(c) {
@@ -339,7 +358,7 @@ func main() {
 	}))
 
 	// Start Asynq worker server
-	go startWorkerServer(cfg, redisClient, renderService, masterService, sunoClient, audioClient, storage, hub)
+	go startWorkerServer(cfg, redisClient, renderService, masterService, sunoClient, audioClient, storage, hub, hesapService)
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
@@ -370,6 +389,7 @@ func startWorkerServer(
 	audioClient *client.AudioClient,
 	r2Client client.StorageClient,
 	hub *ws.Hub,
+	hesapService *service.HesapService,
 ) {
 	asynqLogLevel := asynq.InfoLevel
 	if strings.EqualFold(cfg.Server.LogLevel, "debug") {
@@ -391,6 +411,7 @@ func startWorkerServer(
 			Queues: map[string]int{
 				"render": 6,
 				"master": 4,
+				"bakim":  1,
 			},
 			LogLevel: asynqLogLevel,
 		},
@@ -403,6 +424,9 @@ func startWorkerServer(
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeMaster, masterWorker.ProcessTask)
+	if hesapService != nil {
+		mux.HandleFunc(service.TaskTypeHesapTemizle, worker.NewHesapWorker(hesapService).ProcessTask)
+	}
 
 	if err := srv.Run(mux); err != nil {
 		log.Printf("Asynq worker error: %v", err)

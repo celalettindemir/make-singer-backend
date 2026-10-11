@@ -77,7 +77,7 @@ Config priority: environment variables > `config.yaml` > Viper defaults. See `co
 
 ### Job lifecycle
 
-Jobs are stored in Redis as JSON with key `job:{jobId}` and 24-hour TTL. States: `queued` → `running` → `succeeded` / `failed` / `canceled`. Progress updates (0-100%) are pushed to WebSocket subscribers. Asynq runs two queues: `render` (concurrency 6) and `master` (concurrency 4).
+Jobs are stored in Redis as JSON with key `job:{jobId}` and 24-hour TTL. States: `queued` → `running` → `succeeded` / `failed` / `canceled`. Progress updates (0-100%) are pushed to WebSocket subscribers. Asynq runs three queues: `render` (weight 6), `master` (weight 4) and `bakim` (weight 1, delayed account cleanup).
 Each job record carries `ownerId` (the `sub` of the user who started it). `status`, `result` and `cancel` load the job through `sahipliJobOku` (`internal/service/job_kayit.go`) and answer **404** — not 403 — when the caller is not the owner; records without `ownerId` are visible to nobody.
 
 ### API response conventions
@@ -103,6 +103,8 @@ Bearer token required on all `/api/*` routes.
 - Token type: must be an access token (has `jti` claim, no `azp` or `at_hash`). ID tokens are rejected.
 
 If `AUTH_ISSUER` is set but the OpenID Provider fails to start, the service exits with a fatal error (fail-closed design).
+
+**Account deletion (`DELETE /api/account`):** `service.HesapService.Sil` validates the id, deletes the user via `kimlik.Sunucu.HesapSil` (a failure here aborts before R2 is touched), then, with errors only logged since the user can no longer retry, writes the `kimlik:silindi:<userId>` marker (TTL = access token lifetime), deletes all R2 prefixes (`client.KullaniciOnekleri`) and enqueues a delayed `hesap:temizle` task (`bakim` queue, `AccessTTL`+5 min, `MaxRetry(10)`) that repeats the R2 cleanup for files written by in-flight jobs. `middleware.SilinmisKullaniciEngeli` on the `/api` group rejects tokens of marked users with 401, which also blocks starting new jobs in that window.
 
 **When `AUTH_ISSUER` is empty:** Falls back to legacy HMAC JWT verification (development only). The gateway mode can also bypass token verification using `X-User-*` headers when `GATEWAY_ENABLED=true`.
 

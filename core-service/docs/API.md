@@ -741,6 +741,33 @@ No response body. The object key is built under the caller's own prefix (`vocals
 
 ---
 
+## Account Endpoints
+
+### `DELETE /api/account`
+
+Permanently delete the caller's account. Only available when the service runs its own OpenID Provider (`AUTH_ISSUER` set).
+
+Deleted, in this order:
+
+1. The user record, with linked sign-ins (Apple/Google) and refresh tokens (one transaction). If this fails nothing else is touched.
+2. Every stored file under the caller's prefixes in R2: `vocals/`, `masters/`, `stems/`, `exports/`, `previews/`.
+
+**Response** `204 No Content`
+
+No response body. After this call the same access token is rejected with `401` on every `/api/*` route (a short-lived deleted marker is kept for the access token lifetime). The R2 cleanup runs once more `AUTH_ACCESS_TTL + 5 minutes` later as a delayed job (`hesap:temizle`, `bakim` queue), which also removes files written by render/master jobs that were still running at deletion time.
+
+Once the user record is gone the request cannot be retried; failures in later steps (marker, R2 cleanup, delayed job scheduling) are logged and do not fail the request.
+
+**Errors**
+
+| Status | Code | Condition |
+|---|---|---|
+| `401` | `UNAUTHORIZED` | Missing, invalid or already-deleted account token |
+| `404` | `NOT_FOUND` | Account does not exist |
+| `500` | `SERVICE_ERROR` | The user record could not be deleted |
+
+---
+
 ## WebSocket
 
 ### `POST /api/ws/ticket`
