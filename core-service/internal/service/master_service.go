@@ -182,10 +182,6 @@ func (s *MasterService) saveJob(ctx context.Context, job *model.Job) error {
 	return jobYaz(ctx, s.redis, job)
 }
 
-func (s *MasterService) getJob(ctx context.Context, jobID string) (*model.Job, error) {
-	return jobOku(ctx, s.redis, jobID)
-}
-
 func newMasterTask(jobID string, payload []byte) (*asynq.Task, error) {
 	taskPayload := map[string]interface{}{
 		"jobId":   jobID,
