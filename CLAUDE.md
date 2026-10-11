@@ -33,6 +33,7 @@ cd core-service && swag init -g cmd/server/main.go
 
 Testler: `cd core-service && go test ./internal/...` (birim testler, ag gerekmez).
 `./e2e/...` canli Redis ve gecerli Groq/R2 anahtarlari ister; CI onu calistirmaz.
+Ucretli gercek Suno testi (`TestRenderFullPipeline_RealSuno`) yalnizca `SUNO_E2E_ONAY=1` ile kosar; tek kosu 12-62 kredi.
 audio-service: `cd audio-service && python3 -m pytest tests/ -v`.
 Standard Go tooling (`go fmt`, `go vet`) is used for formatting and linting.
 
