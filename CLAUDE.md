@@ -65,7 +65,7 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 | Service | Purpose | Fallback when unconfigured |
 |---------|---------|---------------------------|
 | Groq | AI lyrics generation | Mock data |
-| Suno (`api.sunoapi.org`, model `SUNO_MODEL`, default `V6`) | Instrumental rendering + 12-stem split (12 + 50 credits per render) | Simulated render steps |
+| Suno (`api.sunoapi.org`, model `SUNO_MODEL`, default `V6`) | Instrumental rendering + 12-stem split (10 instrument stems kept; vocals and woodwinds skipped) (12 + 50 credits per render) | Simulated render steps |
 | Cloudflare R2 | File storage | Operates without it |
 | Custom OpenID Provider (`internal/kimlik/`) | RS256 access token authentication, user sign-up/sign-in | Legacy HMAC JWT (development only) |
 | audio-service | Audio mastering | N/A (separate container) |

@@ -84,14 +84,16 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, payloa
 
 	if err := w.renderService.CompleteJob(ctx, jobID, result); err != nil {
 		w.failJob(ctx, jobID, "Failed to save result")
-		return err
+		// Suno ucreti odendi; tekrar deneme isi bastan calistirip yeniden ucretlendirir.
+		return fmt.Errorf("sonuc kaydedilemedi: %w: %w", err, asynq.SkipRetry)
 	}
 
 	// Yayin icin adresler taze uretilir; kayitta anahtar durur.
 	resp, err := w.renderService.BuildResult(ctx, result)
 	if err != nil {
 		w.failJob(ctx, jobID, fmt.Sprintf("Stem URL uretilemedi: %v", err))
-		return err
+		// Ayni neden: ucretli uretim bitti, tekrar deneme yeniden ucretlendirir.
+		return fmt.Errorf("stem URL uretilemedi: %w: %w", err, asynq.SkipRetry)
 	}
 	w.hub.BroadcastComplete(jobID, resp)
 	log.Printf("Render job %s completed", jobID)
@@ -146,14 +148,20 @@ func (w *RenderWorker) sunoIleUret(ctx context.Context, payload *model.RenderJob
 		return nil, ucretli("stem splitting failed", errors.New("suno hic enstruman stem'i donmedi"))
 	}
 
+	// Suno sure donmezse yapidan tahmin edilir.
+	sure := track.Duration
+	if sure <= 0 {
+		sure = tahminiSure(payload)
+	}
+
 	ilerleme(90, "Uploading stems...")
-	records, err := w.uploadStems(ctx, payload.ProjectID, stems, track.Duration)
+	records, err := w.uploadStems(ctx, payload.ProjectID, stems, sure)
 	if err != nil {
 		return nil, ucretli("stem upload failed", err)
 	}
 
 	ilerleme(95, "Finalizing...")
-	return w.generateResult(payload, track.Duration, records), nil
+	return w.generateResult(payload, sure, records), nil
 }
 
 // processWithMock handles rendering with mock data for development
@@ -289,16 +297,11 @@ func (w *RenderWorker) failJob(ctx context.Context, jobID, errMsg string) {
 }
 
 func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) *model.RenderResultRecord {
-	var totalBars int
-	for _, section := range payload.Brief.Structure {
-		totalBars += section.Bars
-	}
-
 	bpm := 120
 	if payload.Brief.BPM.Value != nil {
 		bpm = *payload.Brief.BPM.Value
 	}
-	duration := float64(totalBars*4) / float64(bpm) * 60
+	duration := tahminiSure(payload)
 
 	tonic := model.TonicC
 	scale := model.ScaleMajor
@@ -329,6 +332,19 @@ func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) *mode
 		CreatedAt: time.Now(),
 		Stems:     stems,
 	}
+}
+
+// tahminiSure, yapidaki toplam olcu x 4 vurus / BPM x 60 ile saniye tahmini.
+func tahminiSure(payload *model.RenderJobPayload) float64 {
+	var totalBars int
+	for _, section := range payload.Brief.Structure {
+		totalBars += section.Bars
+	}
+	bpm := 120
+	if payload.Brief.BPM.Value != nil {
+		bpm = *payload.Brief.BPM.Value
+	}
+	return float64(totalBars*4) / float64(bpm) * 60
 }
 
 func generateWaveform(points int) []float64 {

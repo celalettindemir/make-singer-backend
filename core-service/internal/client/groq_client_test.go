@@ -60,3 +60,16 @@ func TestTemperatures_ConfigDegerleriniDoner(t *testing.T) {
 		t.Errorf("Temperatures() = %v, %v", gen, rw)
 	}
 }
+
+func TestChatCompletion_SifirSicaklikGonderilir(t *testing.T) {
+	var govde map[string]any
+	srv := groqSahte(t, &govde)
+	c := NewGroqClient(&config.GroqConfig{APIKey: "k", BaseURL: srv.URL, Model: "m", MaxTokens: 10})
+	if _, err := c.ChatCompletion(context.Background(), "sys", "user", 0); err != nil {
+		t.Fatalf("ChatCompletion: %v", err)
+	}
+	v, ok := govde["temperature"]
+	if !ok || v != float64(0) {
+		t.Errorf("temperature = %v (var=%v), 0 bekleniyordu", v, ok)
+	}
+}

@@ -58,7 +58,8 @@ type Stem struct {
 
 // stemAlanlari, split_stem yanitindaki camelCase alanlarin Instrument
 // karsiliklari. Sira sonuc sirasidir. vocalUrl ve backingVocalsUrl yok:
-// uretim instrumental ve mobil enum'u vokali tanimaz.
+// uretim instrumental ve mobil enum'u vokali tanimaz. woodwindsUrl de
+// ayni nedenle atlanir: mobil enstruman enum'u woodwinds'i bilmez.
 var stemAlanlari = []struct {
 	alan       string
 	instrument model.Instrument
@@ -72,7 +73,6 @@ var stemAlanlari = []struct {
 	{"synthUrl", model.InstrumentSynth},
 	{"fxUrl", model.InstrumentFX},
 	{"brassUrl", model.InstrumentBrass},
-	{"woodwindsUrl", model.InstrumentWoodwinds},
 }
 
 // sunoHataDurumlari, beklemeyi aninda bitiren basarisizlik durumlari.
@@ -154,13 +154,17 @@ func (c *SunoClient) WaitMusic(ctx context.Context, taskID string, interval, max
 			return false, fmt.Errorf("suno: SUCCESS ama parca yok")
 		}
 		p := data.Response.SunoData[0]
+		if p.ID == "" {
+			return false, fmt.Errorf("suno: SUCCESS ama parca kimligi yok")
+		}
 		sonuc = &Track{ID: p.ID, AudioURL: p.AudioURL, Duration: p.Duration}
 		return true, nil
 	})
 	return sonuc, err
 }
 
-// SplitStems, uretilen parcayi 12 kanala boler (split_stem, 50 kredi).
+// SplitStems, uretilen parcayi 12 kanala boler (split_stem, 50 kredi);
+// 10 enstruman stem'i tutulur (bkz. stemAlanlari).
 func (c *SunoClient) SplitStems(ctx context.Context, taskID, audioID string) (string, error) {
 	body := map[string]any{
 		"taskId":      taskID,

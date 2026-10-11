@@ -22,6 +22,7 @@ type sahteSuno struct {
 	stems                        []client.Stem
 	uretimIstegi                 *client.GenerateMusicRequest
 	uretimSayisi                 int
+	stemBekleHata                error
 	bolArgs                      [2]string
 }
 
@@ -38,7 +39,7 @@ func (s *sahteSuno) SplitStems(_ context.Context, taskID, audioID string) (strin
 	return "s1", s.bolHata
 }
 func (s *sahteSuno) WaitStems(context.Context, string, time.Duration, time.Duration) ([]client.Stem, error) {
-	return s.stems, nil
+	return s.stems, s.stemBekleHata
 }
 func (s *sahteSuno) IsConfigured() bool { return true }
 
@@ -111,6 +112,9 @@ func TestSunoIleUret_MutluYol(t *testing.T) {
 	if res.Duration != 180 || len(res.Stems) != 2 {
 		t.Fatalf("sonuc = %+v", res)
 	}
+	if len(d.yuklemeler) != 2 {
+		t.Fatalf("yukleme sayisi = %d, 2 bekleniyordu", len(d.yuklemeler))
+	}
 	for i, y := range d.yuklemeler {
 		st := res.Stems[i]
 		if y.key != st.FileKey || !strings.HasPrefix(y.key, "stems/p1/") || !strings.HasSuffix(y.key, ".mp3") {
@@ -139,9 +143,10 @@ func TestSunoIleUret_UretimReddiTekrarDenenebilir(t *testing.T) {
 func TestSunoIleUret_UcretliAdimSonrasiTekrarYok(t *testing.T) {
 	srv := sesSunucusu(t)
 	durumlar := map[string]*sahteSuno{
-		"bekleme hatasi": {bekleHata: errors.New("zaman asimi")},
-		"bolme hatasi":   {track: &client.Track{ID: "a1"}, bolHata: errors.New("reddedildi")},
-		"stem yok":       {track: &client.Track{ID: "a1"}},
+		"bekleme hatasi":      {bekleHata: errors.New("zaman asimi")},
+		"bolme hatasi":        {track: &client.Track{ID: "a1"}, bolHata: errors.New("reddedildi")},
+		"stem bekleme hatasi": {track: &client.Track{ID: "a1"}, stemBekleHata: errors.New("zaman asimi")},
+		"stem yok":            {track: &client.Track{ID: "a1"}},
 		"indirme 404": {track: &client.Track{ID: "a1"}, stems: []client.Stem{
 			{Instrument: model.InstrumentDrums, URL: srv.URL + "/yok.mp3"},
 		}},
@@ -168,5 +173,25 @@ func TestSunoIleUret_DepoYoksaSunoCagrilmaz(t *testing.T) {
 	}
 	if s.uretimSayisi != 0 {
 		t.Errorf("depo yokken Suno %d kez cagrildi", s.uretimSayisi)
+	}
+}
+
+func TestSunoIleUret_SureYoksaTahmin(t *testing.T) {
+	srv := sesSunucusu(t)
+	s := &sahteSuno{
+		track: &client.Track{ID: "a1", Duration: 0},
+		stems: []client.Stem{{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"}},
+	}
+	p := testPayload()
+	bpm := 120
+	p.Brief.BPM.Value = &bpm
+	p.Brief.Structure = []model.SongSection{{ID: "s1", Type: "verse", Bars: 8}}
+
+	res, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
+	if err != nil {
+		t.Fatalf("sunoIleUret: %v", err)
+	}
+	if res.Duration != 16 || len(res.Stems) != 1 || res.Stems[0].Duration != 16 {
+		t.Fatalf("sure = %v, stem = %+v; 16 bekleniyordu", res.Duration, res.Stems)
 	}
 }

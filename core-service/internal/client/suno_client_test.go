@@ -178,6 +178,7 @@ func TestWaitStems_EnstrumanlariEslerVokaliAtlar(t *testing.T) {
 			"drumsUrl":         "https://cdn.test/davul.mp3",
 			"bassUrl":          nil,
 			"guitarUrl":        "",
+			"woodwindsUrl":     "https://cdn.test/nefesli.mp3",
 		}})
 	})
 
@@ -205,6 +206,18 @@ func TestWaitStems_HataBayragi(t *testing.T) {
 	})
 	_, err := c.WaitStems(context.Background(), "s1", time.Millisecond, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "bolunemedi") {
+		t.Fatalf("hata bekleniyordu, geldi: %v", err)
+	}
+}
+
+func TestWaitMusic_BosParcaKimligiHata(t *testing.T) {
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		zarfYaz(w, 200, map[string]any{"status": "SUCCESS", "response": map[string]any{
+			"sunoData": []any{map[string]any{"id": "", "audio_url": "u", "duration": 1.0}},
+		}})
+	})
+	_, err := c.WaitMusic(context.Background(), "t1", time.Millisecond, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "kimligi") {
 		t.Fatalf("hata bekleniyordu, geldi: %v", err)
 	}
 }

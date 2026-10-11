@@ -80,9 +80,10 @@ type MusicGenerator interface {
 - `WaitStems` `successFlag == SUCCESS`'te camelCase stem alanlarini
   `Instrument` enum'ina esler: `drumsUrl`->drums, `bassUrl`->bass,
   `guitarUrl`->guitar, `keyboardUrl`->piano, `percussionUrl`->percussion,
-  `stringsUrl`->strings, `synthUrl`->synth, `fxUrl`->fx, `brassUrl`->brass,
-  `woodwindsUrl`->woodwinds. `vocalUrl`, `backingVocalsUrl` atlanir
-  (instrumental uretimde vokal yok; mobil enum'u vokali tanimaz).
+  `stringsUrl`->strings, `synthUrl`->synth, `fxUrl`->fx, `brassUrl`->brass.
+  `vocalUrl`, `backingVocalsUrl` atlanir (instrumental uretimde vokal yok;
+  mobil enum'u vokali tanimaz). `woodwindsUrl` de atlanir (mobil enstruman
+  enum'u woodwinds'i bilmez).
   Bos URL'ler atlanir.
 - Eski `SeparateVocals`, `GetSeparationStatus`, `GetMusicStatus`,
   `GetStemSplitStatus` ve tipleri silinir; cagiran yok.
