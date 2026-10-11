@@ -90,10 +90,17 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 	groqClient := client.NewGroqClient(&cfg.Groq)
 	sunoClient := client.NewSunoClient(&cfg.Suno)
 
-	// R2 client (optional)
-	var r2Client *client.R2Client
+	// R2 client (optional). Arayuz degiskeni bilerek kullanilir: nil
+	// *R2Client'i dogrudan worker'a vermek "tipli nil" uretir, worker'in
+	// depo kontrolu onu yakalayamaz ve Suno ucreti odendikten sonra
+	// yuklemede panic olur. Anahtar verilmisse kurulum hatasi FATALDIR.
+	var r2Client client.StorageClient
 	if cfg.R2.AccessKeyID != "" && cfg.R2.SecretAccessKey != "" {
-		r2Client, _ = client.NewR2Client(&cfg.R2)
+		r2, err := client.NewR2Client(&cfg.R2)
+		if err != nil {
+			t.Fatalf("R2 istemcisi kurulamadi: %v", err)
+		}
+		r2Client = r2
 	}
 
 	// WebSocket hub

@@ -106,7 +106,7 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, payloa
 // Tekrar deneme: GenerateMusic basarili olunca kredi harcanmistir. Bundan
 // sonraki her hata asynq.SkipRetry ile sarilir; aksi halde asynq isi bastan
 // calistirip Suno'yu yeniden ucretlendirir (MaxRetry(3) ile 4 x 62 kredi).
-func (w *RenderWorker) sunoIleUret(ctx context.Context, payload *model.RenderJobPayload, ilerleme func(int, string)) (*model.RenderResultRecord, error) {
+func (w *RenderWorker) sunoIleUret(ctx context.Context, payload *model.RenderJobPayload, ilerleme func(int, string)) (sonuc *model.RenderResultRecord, hata error) {
 	if w.r2Client == nil {
 		return nil, fmt.Errorf("depolama yapilandirilmamis, Suno cagrilmadi: %w", asynq.SkipRetry)
 	}
@@ -132,6 +132,15 @@ func (w *RenderWorker) sunoIleUret(ctx context.Context, payload *model.RenderJob
 	ucretli := func(ne string, err error) error {
 		return fmt.Errorf("%s: %w: %w", ne, err, asynq.SkipRetry)
 	}
+	// Panic de bir hatadir: asynq onu yakalayip isi TEKRAR DENER ve Suno
+	// yeniden ucretlendirilir. Ucret odendikten sonraki panic SkipRetry'a
+	// cevrilir.
+	defer func() {
+		if r := recover(); r != nil {
+			sonuc = nil
+			hata = ucretli("render panic", fmt.Errorf("%v", r))
+		}
+	}()
 
 	ilerleme(30, "Waiting for music generation...")
 	track, err := w.music.WaitMusic(ctx, taskID, w.pollAraligi, 10*time.Minute)

@@ -208,3 +208,25 @@ func TestSunoIleUret_SahipsizIsteSunoCagrilmaz(t *testing.T) {
 		t.Errorf("sahipsiz iste Suno %d kez cagrildi", s.uretimSayisi)
 	}
 }
+
+// panikleyenDepo, yuklemede panic eder (ornegin tipli nil bir R2 istemcisi).
+type panikleyenDepo struct{ sahteDepo }
+
+func (d *panikleyenDepo) Upload(context.Context, string, io.Reader, string) (string, time.Time, error) {
+	panic("nil R2 istemcisi")
+}
+
+// TestSunoIleUret_UcretSonrasiPanicTekrarDenenmez: asynq panic'i yakalayip
+// isi TEKRAR DENER; bu da Suno'yu yeniden ucretlendirir (canli testte 12
+// kredi boyle bosa gitti). Ucretli adimdan sonraki panic SkipRetry olmali.
+func TestSunoIleUret_UcretSonrasiPanicTekrarDenenmez(t *testing.T) {
+	srv := sesSunucusu(t)
+	s := &sahteSuno{
+		track: &client.Track{ID: "a1", Duration: 30},
+		stems: []client.Stem{{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"}},
+	}
+	_, err := testWorker(s, &panikleyenDepo{}).sunoIleUret(context.Background(), testPayload(), hic)
+	if !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+	}
+}
