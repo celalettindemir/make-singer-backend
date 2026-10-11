@@ -307,3 +307,32 @@ func TestLoad_FederasyonIkisiDeBossaBos(t *testing.T) {
 		t.Errorf("beklenmeyen girdi: %+v", f)
 	}
 }
+
+func TestLoad_SunoVarsayilanlari(t *testing.T) {
+	os.Unsetenv("SUNO_MODEL")
+	os.Unsetenv("SUNO_CALLBACK_URL")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load hata verdi: %v", err)
+	}
+	if cfg.Suno.Model != "V6" {
+		t.Errorf("Suno.Model = %q, beklenen V6", cfg.Suno.Model)
+	}
+	if cfg.Suno.CallbackURL == "" {
+		t.Error("Suno.CallbackURL bos; saglayici zorunlu tutuyor")
+	}
+}
+
+func TestLoad_SunoModelEnvIleDegisir(t *testing.T) {
+	os.Setenv("SUNO_MODEL", "V6_MINI")
+	defer os.Unsetenv("SUNO_MODEL")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load hata verdi: %v", err)
+	}
+	if cfg.Suno.Model != "V6_MINI" {
+		t.Errorf("Suno.Model = %q, beklenen V6_MINI", cfg.Suno.Model)
+	}
+}

@@ -48,6 +48,8 @@ zitadel:
 suno:
   api_key: "" # Set via SUNO_API_KEY env var
   base_url: "https://api.sunoapi.org"
+  model: "V6"
+  callback_url: "https://makesinger-api.celalettindemir.dev/suno/callback"
 
 # Audio Processing Service Configuration
 audio:

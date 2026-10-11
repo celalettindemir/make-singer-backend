@@ -111,6 +111,9 @@ type ZitadelConfig struct {
 type SunoConfig struct {
 	APIKey  string
 	BaseURL string
+	Model   string
+	// CallbackURL: saglayici zorunlu tutuyor ama biz poll ediyoruz; uc yok.
+	CallbackURL string
 }
 
 type AudioConfig struct {
@@ -223,6 +226,8 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("zitadel.issuer", "ZITADEL_ISSUER")
 	_ = viper.BindEnv("suno.api_key", "SUNO_API_KEY")
 	_ = viper.BindEnv("suno.base_url", "SUNO_BASE_URL")
+	_ = viper.BindEnv("suno.model", "SUNO_MODEL")
+	_ = viper.BindEnv("suno.callback_url", "SUNO_CALLBACK_URL")
 	_ = viper.BindEnv("audio.service_url", "AUDIO_SERVICE_URL")
 	_ = viper.BindEnv("audio.timeout", "AUDIO_SERVICE_TIMEOUT")
 	_ = viper.BindEnv("server.api_domain", "API_DOMAIN")
@@ -271,6 +276,8 @@ func Load() (*Config, error) {
 
 	// Suno defaults
 	viper.SetDefault("suno.base_url", "https://api.sunoapi.org")
+	viper.SetDefault("suno.model", "V6")
+	viper.SetDefault("suno.callback_url", "https://makesinger-api.celalettindemir.dev/suno/callback")
 
 	// Audio service defaults
 	viper.SetDefault("audio.service_url", "http://localhost:8084")
@@ -376,8 +383,10 @@ func Load() (*Config, error) {
 			Issuer:   viper.GetString("zitadel.issuer"),
 		},
 		Suno: SunoConfig{
-			APIKey:  viper.GetString("suno.api_key"),
-			BaseURL: viper.GetString("suno.base_url"),
+			APIKey:      viper.GetString("suno.api_key"),
+			BaseURL:     viper.GetString("suno.base_url"),
+			Model:       viper.GetString("suno.model"),
+			CallbackURL: viper.GetString("suno.callback_url"),
 		},
 		Audio: AudioConfig{
 			ServiceURL: viper.GetString("audio.service_url"),
