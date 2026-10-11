@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Structure
 
-Monorepo with three services:
+Monorepo with two services plus reverse proxy configuration:
 
 - **core-service/** — Go API backend (Fiber v2 + Asynq workers). Includes `internal/kimlik/` for custom OpenID Provider.
 - **audio-service/** — Python audio processing (FFmpeg-based mastering)

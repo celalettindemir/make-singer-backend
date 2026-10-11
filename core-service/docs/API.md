@@ -65,10 +65,10 @@ Rate limits are enforced per authenticated user via Redis. When a rate limit is 
 | `/api/master/*` | `master` | per hour |
 | `/api/export/*` | `export` | per hour |
 | `/api/upload/*` | `upload` | per hour |
-| `POST /api/ws/ticket` | `ws_ticket` | 60 per minute (per user) |
+| `POST /api/ws/ticket` | `wsticket` | 60 per minute (per user) |
 | `POST /api/files/sign` | `sign` | 60 per minute (per user) |
 
-Exact numeric limits are set via server configuration (`RateLimit.LyricsPerMin`, `RateLimit.RenderPerHour`, `ratelimit.ws_ticket_per_min`, `ratelimit.sign_per_min`, etc.).
+Exact numeric limits are set via server configuration (`ratelimit.lyrics_per_min`, `ratelimit.render_per_hour`, `ratelimit.ws_ticket_per_min`, `ratelimit.sign_per_min`, etc.).
 
 ### 429 response
 
