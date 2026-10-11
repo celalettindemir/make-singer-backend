@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/hesapisaret"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/internal/websocket"
@@ -21,6 +22,32 @@ import (
 
 // stemBoyutTavani: tek stem dosyasi icin indirme siniri.
 const stemBoyutTavani = 50 << 20
+
+// errSahipSilindi: is sahibinin hesabi silindi; is ucret odemeden ve
+// dosya yazmadan durur.
+var errSahipSilindi = errors.New("is sahibinin hesabi silindi")
+
+// sahipSilinmis, is sahibinin silinmis isaretini denetler. Denetci nil
+// ise denetim yapilmaz.
+func sahipSilinmis(ctx context.Context, d hesapisaret.Denetci, ownerID string) (bool, error) {
+	if d == nil {
+		return false, nil
+	}
+	return d.Silinmis(ctx, ownerID)
+}
+
+// sahipYazabilir, is sahibinin hesabi hala varsa nil doner. Silinmisse
+// errSahipSilindi, denetim basarisizsa denetim hatasi doner.
+func sahipYazabilir(ctx context.Context, d hesapisaret.Denetci, ownerID string) error {
+	silinmis, err := sahipSilinmis(ctx, d, ownerID)
+	if err != nil {
+		return fmt.Errorf("hesap durumu denetlenemedi: %w", err)
+	}
+	if silinmis {
+		return errSahipSilindi
+	}
+	return nil
+}
 
 // RenderWorker processes render jobs
 type RenderWorker struct {
@@ -30,10 +57,11 @@ type RenderWorker struct {
 	hub           *websocket.Hub
 	indirici      *http.Client
 	pollAraligi   time.Duration
+	hesap         hesapisaret.Denetci // nil: denetim yok
 }
 
 // NewRenderWorker creates a new render worker
-func NewRenderWorker(renderService *service.RenderService, music client.MusicGenerator, r2Client client.StorageClient, hub *websocket.Hub) *RenderWorker {
+func NewRenderWorker(renderService *service.RenderService, music client.MusicGenerator, r2Client client.StorageClient, hub *websocket.Hub, hesap hesapisaret.Denetci) *RenderWorker {
 	return &RenderWorker{
 		renderService: renderService,
 		music:         music,
@@ -41,6 +69,7 @@ func NewRenderWorker(renderService *service.RenderService, music client.MusicGen
 		hub:           hub,
 		indirici:      &http.Client{Timeout: 30 * time.Second},
 		pollAraligi:   5 * time.Second,
+		hesap:         hesap,
 	}
 }
 
@@ -122,6 +151,16 @@ func (w *RenderWorker) sunoIleUret(ctx context.Context, payload *model.RenderJob
 	mod, odakAdi, err := stemPlani(payload)
 	if err != nil {
 		return nil, fmt.Errorf("stem ayari gecersiz, Suno cagrilmadi: %w: %w", err, asynq.SkipRetry)
+	}
+
+	// Ucretli cagridan ONCE: silinmis hesap icin Suno ucretlendirilmez.
+	// Denetim hatasi tekrar denenebilir (henuz ucret odenmedi); silinmis
+	// sahip kalicidir.
+	if err := sahipYazabilir(ctx, w.hesap, payload.OwnerID); err != nil {
+		if errors.Is(err, errSahipSilindi) {
+			return nil, fmt.Errorf("suno cagrilmadi: %w: %w", err, asynq.SkipRetry)
+		}
+		return nil, fmt.Errorf("suno cagrilmadi: %w", err)
 	}
 
 	ilerleme(5, "Building music prompt...")
@@ -285,12 +324,18 @@ func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, payloa
 
 // uploadStems, Suno stem'lerini indirip R2'ye yazar. Kayda imzali URL degil
 // ANAHTAR yazilir; adres okuma aninda (RenderService.GetResult) taze uretilir.
+// Her yuklemeden once is sahibi denetlenir: hesap is surerken silindiyse
+// (ya da denetim basarisizsa) hicbir dosya yazilmaz. Cagiran hatayi
+// ucretli yol gibi SkipRetry ile sarar; Suno yeniden ucretlendirilmez.
 func (w *RenderWorker) uploadStems(ctx context.Context, ownerID, projectID string, stems []client.Stem, duration float64) ([]model.StemResultRecord, error) {
 	results := make([]model.StemResultRecord, 0, len(stems))
 	for _, stem := range stems {
 		stemID := uuid.New().String()
 		key, err := client.KullaniciAnahtari("stems", ownerID, projectID, stemID+".mp3")
 		if err != nil {
+			return nil, err
+		}
+		if err := sahipYazabilir(ctx, w.hesap, ownerID); err != nil {
 			return nil, err
 		}
 		if err := w.stemAktar(ctx, stem.URL, key); err != nil {

@@ -10,8 +10,8 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/hesapisaret"
 	"github.com/makeasinger/api/internal/kimlik"
-	"github.com/makeasinger/api/internal/middleware"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -22,10 +22,12 @@ const TaskTypeHesapTemizle = "hesap:temizle"
 // ErrHesapYok, silinecek hesap bulunamadi (ya da id gecersiz).
 var ErrHesapYok = errors.New("hesap bulunamadi")
 
-// ikinciTemizlikPayi, access token omrunun ustune eklenen gecikmedir:
-// silme aninda kosan bir render/master isi bu sure icinde biter ve
-// yazdigi dosyalar ikinci temizlikte gider.
-const ikinciTemizlikPayi = 5 * time.Minute
+// gecikmeliTemizlik, ikinci R2 temizliginin silmeden ne kadar sonra
+// kosacagidir. En uzun is denemesinden (render varsayilan 30dk zaman
+// asimi) fazlasiyla uzundur. Silmeden sonraki denemeler zaten hicbir sey
+// yuklemez: isciler is sahibinin silinmis isaretini (24 saat yasar)
+// ucretli cagridan ve her R2 yaziminda once denetler.
+const gecikmeliTemizlik = time.Hour
 
 // KimlikSilici, kimlik saglayicisinin hesap silme yetenegi
 // (*kimlik.Sunucu uygular).
@@ -39,15 +41,14 @@ type Kuyruk interface {
 }
 
 type HesapService struct {
-	kimlik    KimlikSilici
-	silici    client.OnekSilici // nil: R2 yapilandirilmamis
-	redis     *redis.Client
-	kuyruk    Kuyruk
-	accessTTL time.Duration
+	kimlik KimlikSilici
+	silici client.OnekSilici // nil: R2 yapilandirilmamis
+	redis  *redis.Client
+	kuyruk Kuyruk
 }
 
-func NewHesapService(kimlikSilici KimlikSilici, silici client.OnekSilici, rdb *redis.Client, kuyruk Kuyruk, accessTTL time.Duration) *HesapService {
-	return &HesapService{kimlik: kimlikSilici, silici: silici, redis: rdb, kuyruk: kuyruk, accessTTL: accessTTL}
+func NewHesapService(kimlikSilici KimlikSilici, silici client.OnekSilici, rdb *redis.Client, kuyruk Kuyruk) *HesapService {
+	return &HesapService{kimlik: kimlikSilici, silici: silici, redis: rdb, kuyruk: kuyruk}
 }
 
 // Sil, hesabi ve tum dosyalarini siler. Kimlik kaydi silindikten sonra
@@ -65,7 +66,7 @@ func (s *HesapService) Sil(ctx context.Context, userID string) error {
 		return fmt.Errorf("hesap silinemedi: %w", err)
 	}
 
-	if err := s.redis.Set(ctx, middleware.SilinmisAnahtar(userID), "1", s.accessTTL).Err(); err != nil {
+	if err := s.redis.Set(ctx, hesapisaret.Anahtar(userID), "1", hesapisaret.Omur).Err(); err != nil {
 		log.Printf("Uyari: silinmis isareti yazilamadi (kullanici %s): %v", userID, err)
 	}
 	if err := s.Temizle(ctx, userID); err != nil {
@@ -79,7 +80,7 @@ func (s *HesapService) Sil(ctx context.Context, userID string) error {
 	}
 	if _, err := s.kuyruk.Enqueue(asynq.NewTask(TaskTypeHesapTemizle, yuk),
 		asynq.Queue("bakim"),
-		asynq.ProcessIn(s.accessTTL+ikinciTemizlikPayi),
+		asynq.ProcessIn(gecikmeliTemizlik),
 		asynq.MaxRetry(10),
 	); err != nil {
 		log.Printf("Uyari: gecikmeli temizlik gorevi kurulamadi (kullanici %s): %v", userID, err)

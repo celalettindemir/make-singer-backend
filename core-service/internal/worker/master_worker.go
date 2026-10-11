@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -12,6 +13,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
+	"github.com/makeasinger/api/internal/hesapisaret"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/internal/websocket"
@@ -26,10 +28,11 @@ type MasterWorker struct {
 	masterService *service.MasterService
 	hub           *websocket.Hub
 	r2Cfg         *config.R2Config
+	hesap         hesapisaret.Denetci // nil: denetim yok
 }
 
 // NewMasterWorker creates a new master worker
-func NewMasterWorker(redisClient *redis.Client, audioClient client.AudioProcessor, r2Client client.StorageClient, masterService *service.MasterService, hub *websocket.Hub, r2Cfg *config.R2Config) *MasterWorker {
+func NewMasterWorker(redisClient *redis.Client, audioClient client.AudioProcessor, r2Client client.StorageClient, masterService *service.MasterService, hub *websocket.Hub, r2Cfg *config.R2Config, hesap hesapisaret.Denetci) *MasterWorker {
 	return &MasterWorker{
 		redis:         redisClient,
 		audioClient:   audioClient,
@@ -37,6 +40,7 @@ func NewMasterWorker(redisClient *redis.Client, audioClient client.AudioProcesso
 		masterService: masterService,
 		hub:           hub,
 		r2Cfg:         r2Cfg,
+		hesap:         hesap,
 	}
 }
 
@@ -103,6 +107,17 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	if err != nil {
 		w.failJob(ctx, jobID, "Gecersiz is sahibi veya proje")
 		return fmt.Errorf("master anahtari: %w: %w", err, asynq.SkipRetry)
+	}
+
+	// Ses servisi ciktiyi R2'ye kendisi yazar; Master cagrisi bu isin R2
+	// yuklemesidir. Silinmis hesap icin dosya yazilmaz. Master ucretli
+	// degildir: denetim hatasi tekrar denenebilir.
+	if err := sahipYazabilir(ctx, w.hesap, payload.OwnerID); err != nil {
+		w.failJob(ctx, jobID, err.Error())
+		if errors.Is(err, errSahipSilindi) {
+			return fmt.Errorf("master yazilmadi: %w: %w", err, asynq.SkipRetry)
+		}
+		return fmt.Errorf("master yazilmadi: %w", err)
 	}
 
 	masterReq := &client.MasterRequest{

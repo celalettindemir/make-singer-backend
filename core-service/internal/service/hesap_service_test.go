@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/makeasinger/api/internal/hesapisaret"
 	"github.com/makeasinger/api/internal/kimlik"
-	"github.com/makeasinger/api/internal/middleware"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -34,10 +34,14 @@ func (s *sahteSilici) DeletePrefix(ctx context.Context, prefix string) (int, err
 	return 1, s.hata
 }
 
-type sahteKuyruk struct{ gorevler []*asynq.Task }
+type sahteKuyruk struct {
+	gorevler   []*asynq.Task
+	secenekler [][]asynq.Option
+}
 
 func (q *sahteKuyruk) Enqueue(t *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
 	q.gorevler = append(q.gorevler, t)
+	q.secenekler = append(q.secenekler, opts)
 	return &asynq.TaskInfo{}, nil
 }
 
@@ -51,7 +55,7 @@ const hesapID = "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
 
 func TestHesapSil_HerSeyiSilerVeIkinciTemizligiKurar(t *testing.T) {
 	k, s, q := &sahteKimlik{}, &sahteSilici{}, &sahteKuyruk{}
-	svc := NewHesapService(k, s, ulasilamazRedis(), q, 15*time.Minute)
+	svc := NewHesapService(k, s, ulasilamazRedis(), q)
 	if err := svc.Sil(context.Background(), hesapID); err != nil {
 		t.Fatalf("beklenmeyen hata: %v", err)
 	}
@@ -74,7 +78,7 @@ func TestHesapSil_HerSeyiSilerVeIkinciTemizligiKurar(t *testing.T) {
 
 func TestHesapSil_KimlikYoksaErrHesapYok(t *testing.T) {
 	k, s, q := &sahteKimlik{hata: kimlik.ErrKullaniciYok}, &sahteSilici{}, &sahteKuyruk{}
-	err := NewHesapService(k, s, ulasilamazRedis(), q, time.Minute).Sil(context.Background(), hesapID)
+	err := NewHesapService(k, s, ulasilamazRedis(), q).Sil(context.Background(), hesapID)
 	if !errors.Is(err, ErrHesapYok) {
 		t.Fatalf("ErrHesapYok bekleniyordu, gelen %v", err)
 	}
@@ -85,7 +89,7 @@ func TestHesapSil_KimlikYoksaErrHesapYok(t *testing.T) {
 
 func TestHesapSil_KimlikHatasindaR2yeDokunulmaz(t *testing.T) {
 	k, s, q := &sahteKimlik{hata: errors.New("pg kapali")}, &sahteSilici{}, &sahteKuyruk{}
-	err := NewHesapService(k, s, ulasilamazRedis(), q, time.Minute).Sil(context.Background(), hesapID)
+	err := NewHesapService(k, s, ulasilamazRedis(), q).Sil(context.Background(), hesapID)
 	if err == nil || errors.Is(err, ErrHesapYok) {
 		t.Fatalf("genel hata bekleniyordu, gelen %v", err)
 	}
@@ -96,7 +100,7 @@ func TestHesapSil_KimlikHatasindaR2yeDokunulmaz(t *testing.T) {
 
 func TestHesapSil_R2HatasiIstegiBozmaz(t *testing.T) {
 	k, s, q := &sahteKimlik{}, &sahteSilici{hata: errors.New("r2 kapali")}, &sahteKuyruk{}
-	if err := NewHesapService(k, s, ulasilamazRedis(), q, time.Minute).Sil(context.Background(), hesapID); err != nil {
+	if err := NewHesapService(k, s, ulasilamazRedis(), q).Sil(context.Background(), hesapID); err != nil {
 		t.Fatalf("hesap silindikten sonra hata donmemeli: %v", err)
 	}
 	if len(q.gorevler) != 1 {
@@ -106,27 +110,50 @@ func TestHesapSil_R2HatasiIstegiBozmaz(t *testing.T) {
 
 func TestHesapSil_GecersizIDHicbirSeySilmez(t *testing.T) {
 	k, s, q := &sahteKimlik{}, &sahteSilici{}, &sahteKuyruk{}
-	err := NewHesapService(k, s, ulasilamazRedis(), q, time.Minute).Sil(context.Background(), "../x")
+	err := NewHesapService(k, s, ulasilamazRedis(), q).Sil(context.Background(), "../x")
 	if !errors.Is(err, ErrHesapYok) || len(k.silinen) != 0 {
 		t.Fatalf("gecersiz id silinmemeli: err=%v silinen=%v", err, k.silinen)
 	}
 }
 
 func TestHesapTemizle_R2YoksaHataYok(t *testing.T) {
-	svc := NewHesapService(&sahteKimlik{}, nil, ulasilamazRedis(), &sahteKuyruk{}, time.Minute)
+	svc := NewHesapService(&sahteKimlik{}, nil, ulasilamazRedis(), &sahteKuyruk{})
 	if err := svc.Temizle(context.Background(), hesapID); err != nil {
 		t.Fatalf("R2 yokken temizlik no-op olmali: %v", err)
 	}
 }
 
-func TestHesapSil_IsaretAccessTTLIleYazilir(t *testing.T) {
+// Isaret is kaydi omru (24 saat) boyunca yasar: kuyrukta bekleyen ya da
+// kosan isler sahibin silindigini bu sure boyunca gorebilmeli.
+func TestHesapSil_Isaret24SaatYasar(t *testing.T) {
 	rdb := canliRedis(t)
-	svc := NewHesapService(&sahteKimlik{}, &sahteSilici{}, rdb, &sahteKuyruk{}, 15*time.Minute)
+	svc := NewHesapService(&sahteKimlik{}, &sahteSilici{}, rdb, &sahteKuyruk{})
 	if err := svc.Sil(context.Background(), hesapID); err != nil {
 		t.Fatalf("beklenmeyen hata: %v", err)
 	}
-	ttl, err := rdb.TTL(context.Background(), middleware.SilinmisAnahtar(hesapID)).Result()
-	if err != nil || ttl <= 14*time.Minute || ttl > 15*time.Minute {
-		t.Fatalf("isaret TTL = %v (err %v), ~15dk bekleniyordu", ttl, err)
+	ttl, err := rdb.TTL(context.Background(), hesapisaret.Anahtar(hesapID)).Result()
+	if err != nil || ttl <= 23*time.Hour || ttl > 24*time.Hour {
+		t.Fatalf("isaret TTL = %v (err %v), ~24 saat bekleniyordu", ttl, err)
+	}
+}
+
+// Gecikmeli temizlik bir saat sonra kosar: en uzun is denemesinden
+// (render varsayilan 30dk zaman asimi) fazlasiyla sonra.
+func TestHesapSil_GecikmeliTemizlikBirSaatSonra(t *testing.T) {
+	q := &sahteKuyruk{}
+	if err := NewHesapService(&sahteKimlik{}, &sahteSilici{}, ulasilamazRedis(), q).Sil(context.Background(), hesapID); err != nil {
+		t.Fatalf("beklenmeyen hata: %v", err)
+	}
+	if len(q.secenekler) != 1 {
+		t.Fatalf("tek gorev bekleniyordu: %d", len(q.secenekler))
+	}
+	var gecikme time.Duration
+	for _, o := range q.secenekler[0] {
+		if o.Type() == asynq.ProcessInOpt {
+			gecikme = o.Value().(time.Duration)
+		}
+	}
+	if gecikme != time.Hour {
+		t.Fatalf("gecikme = %v, 1 saat bekleniyordu", gecikme)
 	}
 }

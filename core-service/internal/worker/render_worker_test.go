@@ -13,6 +13,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/hesapisaret"
 	"github.com/makeasinger/api/internal/model"
 )
 
@@ -98,7 +99,11 @@ func testPayload() *model.RenderJobPayload {
 }
 
 func testWorker(s *sahteSuno, d client.StorageClient) *RenderWorker {
-	w := NewRenderWorker(nil, s, d, nil)
+	return denetciliWorker(s, d, nil)
+}
+
+func denetciliWorker(s *sahteSuno, d client.StorageClient, h hesapisaret.Denetci) *RenderWorker {
+	w := NewRenderWorker(nil, s, d, nil, h)
 	w.pollAraligi = time.Millisecond
 	return w
 }
@@ -363,5 +368,124 @@ func TestSunoIleUret_FocusAyirmaHatasiTekrarYok(t *testing.T) {
 	_, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
 	if !errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+	}
+}
+
+// sahteDenetci, n. denetimde (0'dan) ne donecegini fonksiyonla belirler;
+// boylece hesabin isin ortasinda silinmesi taklit edilir.
+type sahteDenetci struct {
+	yanit   func(n int) (bool, error)
+	sorulan []string
+}
+
+func (d *sahteDenetci) Silinmis(_ context.Context, userID string) (bool, error) {
+	n := len(d.sorulan)
+	d.sorulan = append(d.sorulan, userID)
+	return d.yanit(n)
+}
+
+func hepSilinmis(int) (bool, error) { return true, nil }
+
+func TestSunoIleUret_SilinmisSahipIcinSunoCagrilmaz(t *testing.T) {
+	s := &sahteSuno{}
+	h := &sahteDenetci{yanit: hepSilinmis}
+	d := &sahteDepo{}
+	_, err := denetciliWorker(s, d, h).sunoIleUret(context.Background(), testPayload(), hic)
+	if !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+	}
+	if s.uretimSayisi != 0 || len(d.yuklemeler) != 0 {
+		t.Fatalf("silinmis sahip icin uretim=%d yukleme=%d", s.uretimSayisi, len(d.yuklemeler))
+	}
+	if len(h.sorulan) == 0 || h.sorulan[0] != "kullanici-a" {
+		t.Fatalf("is sahibi denetlenmedi: %v", h.sorulan)
+	}
+}
+
+func TestSunoIleUret_DenetimHatasindaUcretOncesiTekrarDenenir(t *testing.T) {
+	s := &sahteSuno{}
+	h := &sahteDenetci{yanit: func(int) (bool, error) { return false, errors.New("redis kapali") }}
+	_, err := denetciliWorker(s, &sahteDepo{}, h).sunoIleUret(context.Background(), testPayload(), hic)
+	if err == nil || errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("ucret oncesi denetim hatasi tekrar denenebilir olmali, geldi: %v", err)
+	}
+	if s.uretimSayisi != 0 {
+		t.Fatalf("denetim hatasinda Suno %d kez cagrildi", s.uretimSayisi)
+	}
+}
+
+// Hesap ucretli cagridan sonra silinirse hicbir stem yuklenmez ve
+// asynq isi yeniden ucretlendirmez.
+func TestSunoIleUret_UcretSonrasiSilinenSahipIcinYuklemeYok(t *testing.T) {
+	srv := sesSunucusu(t)
+	durumlar := map[string]func(n int) (bool, error){
+		"silindi": func(n int) (bool, error) { return n > 0, nil },
+		"denetim hatasi": func(n int) (bool, error) {
+			if n > 0 {
+				return false, errors.New("redis kapali")
+			}
+			return false, nil
+		},
+	}
+	for ad, yanit := range durumlar {
+		t.Run(ad, func(t *testing.T) {
+			s := &sahteSuno{
+				track: &client.Track{ID: "a1", Duration: 30},
+				stems: []client.Stem{
+					{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"},
+					{Instrument: model.InstrumentPiano, URL: srv.URL + "/piyano.mp3"},
+				},
+			}
+			d := &sahteDepo{}
+			_, err := denetciliWorker(s, d, &sahteDenetci{yanit: yanit}).sunoIleUret(context.Background(), testPayload(), hic)
+			if !errors.Is(err, asynq.SkipRetry) {
+				t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+			}
+			if s.uretimSayisi != 1 || len(d.yuklemeler) != 0 {
+				t.Fatalf("uretim=%d yukleme=%d; 1 ve 0 bekleniyordu", s.uretimSayisi, len(d.yuklemeler))
+			}
+		})
+	}
+}
+
+// Ikinci stem'den once silinirse ikinci yukleme yapilmaz: denetim her
+// yuklemeden once tekrarlanir.
+func TestSunoIleUret_HerYuklemedenOnceDenetler(t *testing.T) {
+	srv := sesSunucusu(t)
+	s := &sahteSuno{
+		track: &client.Track{ID: "a1", Duration: 30},
+		stems: []client.Stem{
+			{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"},
+			{Instrument: model.InstrumentPiano, URL: srv.URL + "/piyano.mp3"},
+		},
+	}
+	d := &sahteDepo{}
+	// 0: ucret oncesi, 1: ilk yukleme oncesi, 2: ikinci yukleme oncesi
+	h := &sahteDenetci{yanit: func(n int) (bool, error) { return n >= 2, nil }}
+	_, err := denetciliWorker(s, d, h).sunoIleUret(context.Background(), testPayload(), hic)
+	if !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+	}
+	if len(d.yuklemeler) != 1 {
+		t.Fatalf("yukleme sayisi = %d, 1 bekleniyordu", len(d.yuklemeler))
+	}
+}
+
+func TestSunoIleUret_SilinmemisSahipteDenetimHerAdimdaYapilir(t *testing.T) {
+	srv := sesSunucusu(t)
+	s := &sahteSuno{
+		track: &client.Track{ID: "a1", Duration: 30},
+		stems: []client.Stem{
+			{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"},
+			{Instrument: model.InstrumentPiano, URL: srv.URL + "/piyano.mp3"},
+		},
+	}
+	d := &sahteDepo{}
+	h := &sahteDenetci{yanit: func(int) (bool, error) { return false, nil }}
+	if _, err := denetciliWorker(s, d, h).sunoIleUret(context.Background(), testPayload(), hic); err != nil {
+		t.Fatalf("sunoIleUret: %v", err)
+	}
+	if len(d.yuklemeler) != 2 || len(h.sorulan) != 3 {
+		t.Fatalf("yukleme=%d denetim=%d; 2 ve 3 bekleniyordu", len(d.yuklemeler), len(h.sorulan))
 	}
 }

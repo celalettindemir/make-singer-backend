@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/hesapisaret"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -19,7 +20,7 @@ func engelliUygulama(rdb *redis.Client, userID string) *fiber.App {
 		}
 		return c.Next()
 	})
-	app.Use(SilinmisKullaniciEngeli(rdb))
+	app.Use(SilinmisKullaniciEngeli(hesapisaret.NewRedisDenetci(rdb)))
 	app.Get("/x", func(c *fiber.Ctx) error { return c.SendString("gecti") })
 	return app
 }
@@ -49,7 +50,7 @@ func TestSilinmisEngeli_UserIDBossa401(t *testing.T) {
 
 func TestSilinmisEngeli_IsaretliKullanici401(t *testing.T) {
 	rdb := canliRedis(t)
-	if err := rdb.Set(context.Background(), SilinmisAnahtar("u1"), "1", time.Minute).Err(); err != nil {
+	if err := rdb.Set(context.Background(), hesapisaret.Anahtar("u1"), "1", time.Minute).Err(); err != nil {
 		t.Fatalf("isaret yazilamadi: %v", err)
 	}
 	if got := engelDurum(t, engelliUygulama(rdb, "u1")); got != http.StatusUnauthorized {

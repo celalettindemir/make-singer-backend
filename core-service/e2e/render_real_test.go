@@ -178,7 +178,8 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 		},
 	)
 
-	renderWorker := worker.NewRenderWorker(renderService, sunoClient, r2Client, hub)
+	// e2e hesap silmez; silinmis isaret denetimi gerekmez.
+	renderWorker := worker.NewRenderWorker(renderService, sunoClient, r2Client, hub, nil)
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 

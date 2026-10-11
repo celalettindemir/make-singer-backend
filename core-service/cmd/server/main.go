@@ -24,6 +24,7 @@ import (
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/handler"
+	"github.com/makeasinger/api/internal/hesapisaret"
 	"github.com/makeasinger/api/internal/kimlik"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/service"
@@ -169,7 +170,7 @@ func main() {
 	var hesapService *service.HesapService
 	var hesapHandler *handler.HesapHandler
 	if kimlikSunucu != nil {
-		hesapService = service.NewHesapService(kimlikSunucu, silici, redisClient, asynqClient, cfg.Auth.AccessTTL)
+		hesapService = service.NewHesapService(kimlikSunucu, silici, redisClient, asynqClient)
 		hesapHandler = handler.NewHesapHandler(hesapService)
 	}
 
@@ -306,7 +307,7 @@ func main() {
 	app.Get("/auth/verify", authHandler.Verify)
 
 	// API routes
-	api := app.Group("/api", apiAuthMiddleware, middleware.SilinmisKullaniciEngeli(redisClient))
+	api := app.Group("/api", apiAuthMiddleware, middleware.SilinmisKullaniciEngeli(hesapisaret.NewRedisDenetci(redisClient)))
 
 	// Lyrics routes
 	lyrics := api.Group("/lyrics", rateLimiter.LyricsLimit(cfg.RateLimit.LyricsPerMin))
@@ -423,8 +424,11 @@ func startWorkerServer(
 	)
 
 	// Create workers with external clients
-	renderWorker := worker.NewRenderWorker(renderService, sunoClient, r2Client, hub)
-	masterWorker := worker.NewMasterWorker(redisClient, audioClient, r2Client, masterService, hub, &cfg.R2)
+	// Isciler is sahibinin silinmis isaretini ucretli Suno cagrisindan ve
+	// her R2 yazimindan once denetler.
+	hesapDenetci := hesapisaret.NewRedisDenetci(redisClient)
+	renderWorker := worker.NewRenderWorker(renderService, sunoClient, r2Client, hub, hesapDenetci)
+	masterWorker := worker.NewMasterWorker(redisClient, audioClient, r2Client, masterService, hub, &cfg.R2, hesapDenetci)
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
