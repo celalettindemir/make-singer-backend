@@ -2,6 +2,8 @@ package client
 
 import (
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/makeasinger/api/internal/config"
@@ -85,5 +87,30 @@ func TestSahipliAnahtarCoz(t *testing.T) {
 	}
 	if _, err := SahipliAnahtarCoz("https://kotu.example.com/stems/kullanici-a/p1/s1.mp3", "kullanici-a", cfg); err == nil || errors.Is(err, ErrYabanciAnahtar) {
 		t.Errorf("taninmayan konak KeyFromURL hatasi vermeli, geldi: %v", err)
+	}
+}
+
+func TestKullaniciOnekleri(t *testing.T) {
+	got, err := KullaniciOnekleri("6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a")
+	if err != nil {
+		t.Fatalf("beklenmeyen hata: %v", err)
+	}
+	want := []string{
+		"exports/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
+		"masters/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
+		"previews/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
+		"stems/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
+		"vocals/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("onekler = %v, beklenen %v", got, want)
+	}
+}
+
+func TestKullaniciOnekleri_GecersizID(t *testing.T) {
+	for _, id := range []string{"", "..", "a/b", "x.wav", strings.Repeat("a", 65)} {
+		if _, err := KullaniciOnekleri(id); !errors.Is(err, ErrGecersizSegment) {
+			t.Errorf("%q icin ErrGecersizSegment bekleniyordu, gelen %v", id, err)
+		}
 	}
 }

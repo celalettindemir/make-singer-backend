@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/makeasinger/api/internal/config"
@@ -81,4 +82,26 @@ func SahipliAnahtarCoz(rawURL, userID string, cfg *config.R2Config) (string, err
 		return "", err
 	}
 	return key, nil
+}
+
+// KullaniciOnekleri, bir kullanicinin R2'deki tum sahipli oneklerini
+// sabit sirayla dondurur. Hesap silme bu onekleri toptan temizler; bu
+// yuzden id, KullaniciAnahtari ile ayni segment kuralindan gecer ve
+// nokta iceremez (bir dosya adi degil, bir kimliktir). Bos ya da
+// gecersiz id'de onek uretilmez: "vocals//" gibi bir onek baska
+// kullanicilarin nesnelerini kapsardi.
+func KullaniciOnekleri(userID string) ([]string, error) {
+	if !segmentDeseni.MatchString(userID) || strings.Contains(userID, ".") {
+		return nil, ErrGecersizSegment
+	}
+	turler := make([]string, 0, len(sahipliTurler))
+	for tur := range sahipliTurler {
+		turler = append(turler, tur)
+	}
+	slices.Sort(turler)
+	onekler := make([]string, 0, len(turler))
+	for _, tur := range turler {
+		onekler = append(onekler, tur+"/"+userID+"/")
+	}
+	return onekler, nil
 }

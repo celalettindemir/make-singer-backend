@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/makeasinger/api/internal/config"
 )
 
@@ -143,4 +145,57 @@ func (c *R2Client) URLFor(ctx context.Context, key string) (string, time.Time, e
 // IsConfigured returns true if the client has valid configuration
 func (c *R2Client) IsConfigured() bool {
 	return c.s3Client != nil && c.cfg != nil && c.cfg.PrivateBucket != ""
+}
+
+// OnekSilici, bir onekin altindaki tum nesneleri siler. StorageClient'tan
+// ayri tutulur: yalnizca hesap silme ihtiyac duyar ve mevcut sahte
+// depolarin hepsini bu yontemi uygulamaya zorlamak gereksizdir.
+type OnekSilici interface {
+	DeletePrefix(ctx context.Context, prefix string) (int, error)
+}
+
+var _ OnekSilici = (*R2Client)(nil)
+
+// DeletePrefix, "<tur>/<userId>/" biciminde bir onekin altindaki tum
+// nesneleri sayfa sayfa listeleyip toplu siler ve silinen sayisini
+// dondurur. Onek en az iki segment ve sonda "/" icermek ZORUNDA: "vocals/"
+// gibi bir onek tum kullanicilarin kayitlarini silerdi.
+func (c *R2Client) DeletePrefix(ctx context.Context, prefix string) (int, error) {
+	parcalar := strings.Split(prefix, "/")
+	if !strings.HasSuffix(prefix, "/") || len(parcalar) != 3 || parcalar[0] == "" || parcalar[1] == "" {
+		return 0, fmt.Errorf("guvensiz onek reddedildi: %q", prefix)
+	}
+	bucket := aws.String(BucketFor(prefix, c.cfg))
+	sayfalayici := s3.NewListObjectsV2Paginator(c.s3Client, &s3.ListObjectsV2Input{
+		Bucket: bucket,
+		Prefix: aws.String(prefix),
+	})
+	silinen := 0
+	for sayfalayici.HasMorePages() {
+		sayfa, err := sayfalayici.NextPage(ctx)
+		if err != nil {
+			return silinen, fmt.Errorf("R2 listelenemedi: %w", err)
+		}
+		if len(sayfa.Contents) == 0 {
+			continue
+		}
+		// ListObjectsV2 sayfasi en fazla 1000 nesne doner; DeleteObjects
+		// siniri da 1000'dir, yani sayfa basina tek cagri yeter.
+		nesneler := make([]types.ObjectIdentifier, 0, len(sayfa.Contents))
+		for _, o := range sayfa.Contents {
+			nesneler = append(nesneler, types.ObjectIdentifier{Key: o.Key})
+		}
+		cikti, err := c.s3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: bucket,
+			Delete: &types.Delete{Objects: nesneler, Quiet: aws.Bool(true)},
+		})
+		if err != nil {
+			return silinen, fmt.Errorf("R2 silinemedi: %w", err)
+		}
+		if len(cikti.Errors) > 0 {
+			return silinen, fmt.Errorf("R2 %d nesneyi silemedi", len(cikti.Errors))
+		}
+		silinen += len(nesneler)
+	}
+	return silinen, nil
 }
