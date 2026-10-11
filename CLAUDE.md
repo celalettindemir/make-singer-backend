@@ -52,7 +52,7 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 
 - **handler/** — Fiber route handlers. One file per domain: `lyrics`, `render`, `master`, `export`, `upload`.
 - **service/** — Business logic. Mirrors handler structure. Services enqueue Asynq jobs for render/master operations.
-- **worker/** — Asynq job processors: `render_worker.go` (Suno API + stem splitting), `master_worker.go` (audio mastering pipeline).
+- **worker/** — Asynq job processors: `render_worker.go` (Suno `/api/v1/generate` + `split_stem`, stems downloaded and uploaded to R2 as `stems/{projectId}/{stemId}.mp3`; any failure after the paid generate call is wrapped in `asynq.SkipRetry` so a retry never re-bills Suno), `master_worker.go` (audio mastering pipeline).
 - **client/** — HTTP clients for external services: Groq (AI lyrics), Suno (music generation), R2 (Cloudflare S3-compatible storage), audio-service (local mastering).
 - **model/** — Request/response structs and enums. All enum values defined in `enums.go`.
 - **middleware/** — `auth.go` (RS256 tokens from `internal/kimlik`, or legacy HMAC in development), `ratelimit.go` (Redis fixed window per user).
@@ -65,7 +65,7 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 | Service | Purpose | Fallback when unconfigured |
 |---------|---------|---------------------------|
 | Groq | AI lyrics generation | Mock data |
-| Suno | Music rendering + stem splitting | Simulated render steps |
+| Suno (`api.sunoapi.org`, model `SUNO_MODEL`, default `V6`) | Instrumental rendering + 12-stem split (12 + 50 credits per render) | Simulated render steps |
 | Cloudflare R2 | File storage | Operates without it |
 | Custom OpenID Provider (`internal/kimlik/`) | RS256 access token authentication, user sign-up/sign-in | Legacy HMAC JWT (development only) |
 | audio-service | Audio mastering | N/A (separate container) |
