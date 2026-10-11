@@ -246,8 +246,8 @@ Start a new render job. Rate limit group: `render` (per hour). Only the `/start`
 | `projectId` | string | yes | UUID of the project |
 | `brief` | [Brief](#brief) | yes | Song parameters |
 | `arrangement` | [Arrangement](#arrangement) | yes | Arrangement settings |
-| `stemMode` | string | no | `mix`, `focus`, or `stems`; default `mix` | Stem level of the render (see [Stem modes](#stem-modes)) |
-| `focusInstrument` | string | only with `focus` | One of [Instrument](#instrument) values, and must be in `arrangement.instruments` | Instrument to isolate. Required when `stemMode` is `focus`; rejected for `mix` and `stems` |
+| `stemMode` | string | no | Stem level of the render: `mix`, `focus`, or `stems`; default `mix` (see [Stem modes](#stem-modes)) |
+| `focusInstrument` | string | only with `focus` | Instrument to isolate: one of the [Instrument](#instrument) values, and it must be in `arrangement.instruments`. Required when `stemMode` is `focus`; rejected for `mix` and `stems` (see [Stem modes](#stem-modes)) |
 
 #### Stem modes
 
@@ -255,7 +255,7 @@ Start a new render job. Rate limit group: `render` (per hour). Only the `/start`
 |---|---|---|---|
 | `mix` (default) | 12 | `mix` (the whole generated track) | Also used when `stemMode` is omitted, so older clients do not pay the higher rates |
 | `focus` | 32 | `focusInstrument` and `rest` (the track minus the focus instrument) | `focusInstrument` is required |
-| `stems` | 62 | One stem per instrument (vocals and woodwinds are skipped) | `focusInstrument` must be omitted |
+| `stems` | 62 | Suno's fixed set of up to 10 instrument stems regardless of the arrangement (vocals and woodwinds are skipped) | `focusInstrument` must be omitted |
 
 #### Brief
 
@@ -400,7 +400,7 @@ Get the result of a completed render job.
 
 - `mix`: a single stem with instrument `mix`.
 - `focus`: two stems, the `focusInstrument` value and `rest` (the track minus the focus instrument).
-- `stems`: one stem per instrument.
+- `stems`: Suno's fixed set of up to 10 instrument stems regardless of the arrangement (vocals and woodwinds are skipped).
 
 `mix` and `rest` are output-only values; they are not valid in request `instruments` or `focusInstrument`.
 

@@ -78,7 +78,7 @@ type SongSection struct {
 
 // Arrangement contains arrangement settings
 type Arrangement struct {
-	Instruments     []Instrument      `json:"instruments" validate:"required,min=1,dive,oneof=drums bass piano guitar synth strings brass woodwinds percussion pads lead fx"`
+	Instruments     []Instrument      `json:"instruments" validate:"required,min=1,dive,oneof=drums bass piano guitar synth strings brass woodwinds percussion pads lead fx" enums:"drums,bass,piano,guitar,synth,strings,brass,woodwinds,percussion,pads,lead,fx"`
 	Density         Density           `json:"density" validate:"required,oneof=minimal medium full"`
 	Groove          Groove            `json:"groove" validate:"required,oneof=straight swing half_time"`
 	SectionEmphasis []SectionEmphasis `json:"sectionEmphasis" validate:"omitempty,dive"`

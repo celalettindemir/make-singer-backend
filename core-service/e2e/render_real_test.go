@@ -217,7 +217,7 @@ func TestRenderFullPipeline_RealSuno(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping real Suno API test in short mode")
 	}
-	// Ucretli test: tek kosu en az 12 kredi (split_stem ile 62). Yalnizca
+	// Ucretli test: istek stemMode gondermedigi icin varsayilan mix calisir (12 kredi). Yalnizca
 	// acik onayla calisir; -run Render gibi genis bir desen onu kazara
 	// tetiklemesin. Kontrol .env yuklenmeden yapilir: onay dosyada degil,
 	// komut satirinda verilmeli.

@@ -1078,6 +1078,20 @@ const docTemplate = `{
                     "type": "array",
                     "minItems": 1,
                     "items": {
+                        "enum": [
+                            "drums",
+                            "bass",
+                            "piano",
+                            "guitar",
+                            "synth",
+                            "strings",
+                            "brass",
+                            "woodwinds",
+                            "percussion",
+                            "pads",
+                            "lead",
+                            "fx"
+                        ],
                         "$ref": "#/definitions/model.Instrument"
                     }
                 },

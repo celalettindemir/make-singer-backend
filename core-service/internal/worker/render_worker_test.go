@@ -322,8 +322,24 @@ func TestSunoIleUret_FocusModuIkiStem(t *testing.T) {
 	if res.Stems[0].Instrument != model.InstrumentDrums || res.Stems[1].Instrument != model.InstrumentRest {
 		t.Errorf("enstrumanlar = %v, %v", res.Stems[0].Instrument, res.Stems[1].Instrument)
 	}
-	if len(d.yuklemeler) != 2 || !bytes.Equal(d.yuklemeler[1].veri, []byte("ses:/kalan.mp3")) {
+	if len(d.yuklemeler) != 2 || !bytes.Equal(d.yuklemeler[0].veri, []byte("ses:/davul.mp3")) ||
+		!bytes.Equal(d.yuklemeler[1].veri, []byte("ses:/kalan.mp3")) {
 		t.Errorf("yuklemeler = %+v", d.yuklemeler)
+	}
+}
+
+func TestSunoIleUret_FocusAyirmaHatasiSkipRetry(t *testing.T) {
+	s := &sahteSuno{
+		track:    &client.Track{ID: "a1", Duration: 141},
+		ayirHata: errors.New("ayirma reddedildi"),
+	}
+	p := testPayload()
+	p.StemMode = model.StemModeFocus
+	davul := model.InstrumentDrums
+	p.FocusInstrument = &davul
+	_, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
+	if !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
 	}
 }
 
