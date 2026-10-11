@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/makeasinger/api/internal/config"
+	"github.com/makeasinger/api/internal/model"
 )
 
 func testSuno(t *testing.T, h http.HandlerFunc) *SunoClient {
@@ -134,5 +135,76 @@ func TestWaitMusic_ZamanAsimi(t *testing.T) {
 	_, err := c.WaitMusic(context.Background(), "t1", time.Millisecond, 20*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "zaman asimi") {
 		t.Fatalf("zaman asimi bekleniyordu, geldi: %v", err)
+	}
+}
+
+var _ MusicGenerator = (*SunoClient)(nil)
+
+func TestSplitStems_SaglayiciSozlesmesi(t *testing.T) {
+	var govde map[string]any
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/vocal-removal/generate" {
+			t.Errorf("istek = %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&govde)
+		zarfYaz(w, 200, map[string]any{"taskId": "s1"})
+	})
+
+	id, err := c.SplitStems(context.Background(), "t1", "a1")
+	if err != nil {
+		t.Fatalf("SplitStems: %v", err)
+	}
+	if id != "s1" {
+		t.Errorf("stemTaskID = %q", id)
+	}
+	beklenen := map[string]any{"taskId": "t1", "audioId": "a1", "type": "split_stem", "callBackUrl": "https://ornek.test/geri"}
+	for k, v := range beklenen {
+		if govde[k] != v {
+			t.Errorf("govde[%q] = %v, beklenen %v", k, govde[k], v)
+		}
+	}
+}
+
+func TestWaitStems_EnstrumanlariEslerVokaliAtlar(t *testing.T) {
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/vocal-removal/record-info" || r.URL.Query().Get("taskId") != "s1" {
+			t.Errorf("istek = %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		zarfYaz(w, 200, map[string]any{"successFlag": "SUCCESS", "response": map[string]any{
+			"originData":       []any{map[string]any{"duration": 1.0}},
+			"vocalUrl":         "https://cdn.test/vokal.mp3",
+			"backingVocalsUrl": "https://cdn.test/geri.mp3",
+			"keyboardUrl":      "https://cdn.test/klavye.mp3",
+			"drumsUrl":         "https://cdn.test/davul.mp3",
+			"bassUrl":          nil,
+			"guitarUrl":        "",
+		}})
+	})
+
+	stems, err := c.WaitStems(context.Background(), "s1", time.Millisecond, time.Second)
+	if err != nil {
+		t.Fatalf("WaitStems: %v", err)
+	}
+	beklenen := []Stem{
+		{Instrument: model.InstrumentDrums, URL: "https://cdn.test/davul.mp3"},
+		{Instrument: model.InstrumentPiano, URL: "https://cdn.test/klavye.mp3"},
+	}
+	if len(stems) != len(beklenen) {
+		t.Fatalf("stems = %+v, beklenen %+v", stems, beklenen)
+	}
+	for i := range beklenen {
+		if stems[i] != beklenen[i] {
+			t.Errorf("stems[%d] = %+v, beklenen %+v", i, stems[i], beklenen[i])
+		}
+	}
+}
+
+func TestWaitStems_HataBayragi(t *testing.T) {
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		zarfYaz(w, 200, map[string]any{"successFlag": "GENERATE_AUDIO_FAILED", "errorMessage": "bolunemedi"})
+	})
+	_, err := c.WaitStems(context.Background(), "s1", time.Millisecond, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "bolunemedi") {
+		t.Fatalf("hata bekleniyordu, geldi: %v", err)
 	}
 }

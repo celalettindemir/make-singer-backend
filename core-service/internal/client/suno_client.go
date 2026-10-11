@@ -12,7 +12,17 @@ import (
 	"time"
 
 	"github.com/makeasinger/api/internal/config"
+	"github.com/makeasinger/api/internal/model"
 )
+
+// MusicGenerator, render worker'in Suno'dan bekledigi islemler.
+type MusicGenerator interface {
+	GenerateMusic(ctx context.Context, req *GenerateMusicRequest) (string, error)
+	WaitMusic(ctx context.Context, taskID string, interval, maxWait time.Duration) (*Track, error)
+	SplitStems(ctx context.Context, taskID, audioID string) (string, error)
+	WaitStems(ctx context.Context, stemTaskID string, interval, maxWait time.Duration) ([]Stem, error)
+	IsConfigured() bool
+}
 
 // SunoClient, api.sunoapi.org istemcisi. Saglayici her yaniti
 // {code, msg, data} zarfinda doner; HTTP 200 olsa bile code != 200 hatadir.
@@ -37,6 +47,32 @@ type Track struct {
 	ID       string
 	AudioURL string
 	Duration float64
+}
+
+// Stem, indirilmeye hazir tek bir enstruman kanali. Adres sureli; hemen
+// indirilmeli.
+type Stem struct {
+	Instrument model.Instrument
+	URL        string
+}
+
+// stemAlanlari, split_stem yanitindaki camelCase alanlarin Instrument
+// karsiliklari. Sira sonuc sirasidir. vocalUrl ve backingVocalsUrl yok:
+// uretim instrumental ve mobil enum'u vokali tanimaz.
+var stemAlanlari = []struct {
+	alan       string
+	instrument model.Instrument
+}{
+	{"drumsUrl", model.InstrumentDrums},
+	{"bassUrl", model.InstrumentBass},
+	{"guitarUrl", model.InstrumentGuitar},
+	{"keyboardUrl", model.InstrumentPiano},
+	{"percussionUrl", model.InstrumentPercussion},
+	{"stringsUrl", model.InstrumentStrings},
+	{"synthUrl", model.InstrumentSynth},
+	{"fxUrl", model.InstrumentFX},
+	{"brassUrl", model.InstrumentBrass},
+	{"woodwindsUrl", model.InstrumentWoodwinds},
 }
 
 // sunoHataDurumlari, beklemeyi aninda bitiren basarisizlik durumlari.
@@ -119,6 +155,59 @@ func (c *SunoClient) WaitMusic(ctx context.Context, taskID string, interval, max
 		}
 		p := data.Response.SunoData[0]
 		sonuc = &Track{ID: p.ID, AudioURL: p.AudioURL, Duration: p.Duration}
+		return true, nil
+	})
+	return sonuc, err
+}
+
+// SplitStems, uretilen parcayi 12 kanala boler (split_stem, 50 kredi).
+func (c *SunoClient) SplitStems(ctx context.Context, taskID, audioID string) (string, error) {
+	body := map[string]any{
+		"taskId":      taskID,
+		"audioId":     audioID,
+		"type":        "split_stem",
+		"callBackUrl": c.callbackURL,
+	}
+	var data struct {
+		TaskID string `json:"taskId"`
+	}
+	if err := c.post(ctx, "/api/v1/vocal-removal/generate", body, &data); err != nil {
+		return "", err
+	}
+	if data.TaskID == "" {
+		return "", fmt.Errorf("suno: stem yanitinda taskId yok")
+	}
+	return data.TaskID, nil
+}
+
+// WaitStems, stem bolme SUCCESS olana kadar poll eder ve enstruman
+// kanallarini doner. Bos alanlar atlanir.
+func (c *SunoClient) WaitStems(ctx context.Context, stemTaskID string, interval, maxWait time.Duration) ([]Stem, error) {
+	var sonuc []Stem
+	err := c.bekle(ctx, interval, maxWait, "stem", func() (bool, error) {
+		var data struct {
+			SuccessFlag  string                     `json:"successFlag"`
+			ErrorMessage string                     `json:"errorMessage"`
+			Response     map[string]json.RawMessage `json:"response"`
+		}
+		if err := c.get(ctx, "/api/v1/vocal-removal/record-info?taskId="+url.QueryEscape(stemTaskID), &data); err != nil {
+			return false, geciciHata{err}
+		}
+		if sunoHataDurumlari[data.SuccessFlag] {
+			return false, fmt.Errorf("suno stem bolme basarisiz (%s): %s", data.SuccessFlag, data.ErrorMessage)
+		}
+		if data.SuccessFlag != "SUCCESS" {
+			return false, nil
+		}
+		for _, a := range stemAlanlari {
+			var adres string
+			if raw, ok := data.Response[a.alan]; ok {
+				_ = json.Unmarshal(raw, &adres) // null ve string disi degerler bos kalir
+			}
+			if adres != "" {
+				sonuc = append(sonuc, Stem{Instrument: a.instrument, URL: adres})
+			}
+		}
 		return true, nil
 	})
 	return sonuc, err
