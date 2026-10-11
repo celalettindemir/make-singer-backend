@@ -221,3 +221,109 @@ func TestWaitMusic_BosParcaKimligiHata(t *testing.T) {
 		t.Fatalf("hata bekleniyordu, geldi: %v", err)
 	}
 }
+
+func advancedClient(t *testing.T, h http.HandlerFunc) *SunoClient {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return NewSunoClient(&config.SunoConfig{APIKey: "k", BaseURL: srv.URL, Model: "V6", CallbackURL: "https://cb.test/suno"})
+}
+
+func TestIsolateStem_SaglayiciSozlesmesi(t *testing.T) {
+	var govde map[string]any
+	c := advancedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/vocal-removal/generate" {
+			t.Errorf("istek = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer k" {
+			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		_ = json.NewDecoder(r.Body).Decode(&govde)
+		_, _ = w.Write([]byte(`{"code":200,"msg":"success","data":{"taskId":"a1"}}`))
+	})
+
+	id, err := c.IsolateStem(context.Background(), "t1", "m1", "Drum Kit")
+	if err != nil || id != "a1" {
+		t.Fatalf("IsolateStem = %q, %v", id, err)
+	}
+	beklenen := map[string]any{"taskId": "t1", "audioId": "m1", "type": "split_stem_advanced", "stemName": "Drum Kit", "callBackUrl": "https://cb.test/suno"}
+	for k, v := range beklenen {
+		if govde[k] != v {
+			t.Errorf("govde[%s] = %v, beklenen %v", k, govde[k], v)
+		}
+	}
+}
+
+// advancedYanit, 2026-10-11 canli kesifteki gercek yanitin kisaltilmis hali.
+const advancedYanit = `{"code":200,"msg":"success","data":{
+ "taskId":"a1","successFlag":"SUCCESS","errorMessage":null,
+ "response":{"originUrl":null,"drumsUrl":null,"originData":[
+  {"extract":{"duration":141.48,"audio_url":"https://tempfile.test/r/x_Drum Kit.mp3","stem_type_group_name":"Drum Kit","id":"e1"},
+   "remove":{"duration":141.48,"audio_url":"https://tempfile.test/r/y_Drum Kit.mp3","stem_type_group_name":"Drum Kit","id":"r1"}},
+  {"extract":{"duration":141.48,"audio_url":"https://tempfile.test/r/ikinci-e.mp3","id":"e2"},
+   "remove":{"duration":141.48,"audio_url":"https://tempfile.test/r/ikinci-r.mp3","id":"r2"}}
+ ]}}}`
+
+func TestWaitIsolated_IlkVaryantinExtractVeRemoveAdresleri(t *testing.T) {
+	c := advancedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/vocal-removal/record-info" || r.URL.Query().Get("taskId") != "a1" {
+			t.Errorf("istek = %s?%s", r.URL.Path, r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(advancedYanit))
+	})
+
+	s, err := c.WaitIsolated(context.Background(), "a1", time.Millisecond, time.Second)
+	if err != nil {
+		t.Fatalf("WaitIsolated: %v", err)
+	}
+	if s.ExtractURL != "https://tempfile.test/r/x_Drum Kit.mp3" || s.RemoveURL != "https://tempfile.test/r/y_Drum Kit.mp3" || s.Duration != 141.48 {
+		t.Errorf("sonuc = %+v", s)
+	}
+}
+
+func TestWaitIsolated_BosOriginDataHata(t *testing.T) {
+	c := advancedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":200,"msg":"success","data":{"successFlag":"SUCCESS","response":{"originData":[]}}}`))
+	})
+	if _, err := c.WaitIsolated(context.Background(), "a1", time.Millisecond, time.Second); err == nil {
+		t.Fatal("bos originData icin hata bekleniyordu")
+	}
+}
+
+func TestWaitIsolated_EksikAdresHata(t *testing.T) {
+	c := advancedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":200,"msg":"success","data":{"successFlag":"SUCCESS","response":{"originData":[{"extract":{"audio_url":"https://x.test/e.mp3"},"remove":{"audio_url":""}}]}}}`))
+	})
+	if _, err := c.WaitIsolated(context.Background(), "a1", time.Millisecond, time.Second); err == nil {
+		t.Fatal("bos remove adresi icin hata bekleniyordu")
+	}
+}
+
+func TestWaitIsolated_HataBayragi(t *testing.T) {
+	c := advancedClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":200,"msg":"success","data":{"successFlag":"GENERATE_AUDIO_FAILED","errorMessage":"katalog eslesmesi"}}`))
+	})
+	_, err := c.WaitIsolated(context.Background(), "a1", time.Millisecond, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "katalog eslesmesi") {
+		t.Fatalf("hata mesaji tasinmali, geldi: %v", err)
+	}
+}
+
+func TestSunoStemAdi(t *testing.T) {
+	beklenen := map[model.Instrument]string{
+		model.InstrumentDrums: "Drum Kit", model.InstrumentBass: "Bass", model.InstrumentPiano: "Piano",
+		model.InstrumentGuitar: "Guitar", model.InstrumentSynth: "Synth", model.InstrumentStrings: "String Section",
+		model.InstrumentBrass: "Brass Section", model.InstrumentWoodwinds: "Woodwinds", model.InstrumentPercussion: "Percussion",
+		model.InstrumentPads: "Synth Pad", model.InstrumentLead: "Synth Lead", model.InstrumentFX: "Sound Effects",
+	}
+	for i, ad := range beklenen {
+		if got, ok := SunoStemAdi(i); !ok || got != ad {
+			t.Errorf("SunoStemAdi(%s) = %q, %v; beklenen %q", i, got, ok, ad)
+		}
+	}
+	for _, i := range []model.Instrument{model.InstrumentMix, model.InstrumentRest, "kazoo"} {
+		if _, ok := SunoStemAdi(i); ok {
+			t.Errorf("SunoStemAdi(%s) eslesmemeliydi", i)
+		}
+	}
+}

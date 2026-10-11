@@ -21,6 +21,8 @@ type MusicGenerator interface {
 	WaitMusic(ctx context.Context, taskID string, interval, maxWait time.Duration) (*Track, error)
 	SplitStems(ctx context.Context, taskID, audioID string) (string, error)
 	WaitStems(ctx context.Context, stemTaskID string, interval, maxWait time.Duration) ([]Stem, error)
+	IsolateStem(ctx context.Context, taskID, audioID, stemName string) (string, error)
+	WaitIsolated(ctx context.Context, stemTaskID string, interval, maxWait time.Duration) (*IsolatedStem, error)
 	IsConfigured() bool
 }
 
@@ -54,6 +56,38 @@ type Track struct {
 type Stem struct {
 	Instrument model.Instrument
 	URL        string
+}
+
+// IsolatedStem, split_stem_advanced sonucu: secilen enstruman (Extract) ve
+// o enstruman cikarilmis parca (Remove). Adresler sureli ve bosluk
+// icerebilir; net/http istekte kodlar.
+type IsolatedStem struct {
+	ExtractURL string
+	RemoveURL  string
+	Duration   float64
+}
+
+// sunoStemAdlari, bizim enstrumanlarimizin saglayicinin stemName enum'undaki
+// karsiliklari (harfi harfine; buyuk/kucuk harf ve bosluk onemli).
+var sunoStemAdlari = map[model.Instrument]string{
+	model.InstrumentDrums:      "Drum Kit",
+	model.InstrumentBass:       "Bass",
+	model.InstrumentPiano:      "Piano",
+	model.InstrumentGuitar:     "Guitar",
+	model.InstrumentSynth:      "Synth",
+	model.InstrumentStrings:    "String Section",
+	model.InstrumentBrass:      "Brass Section",
+	model.InstrumentWoodwinds:  "Woodwinds",
+	model.InstrumentPercussion: "Percussion",
+	model.InstrumentPads:       "Synth Pad",
+	model.InstrumentLead:       "Synth Lead",
+	model.InstrumentFX:         "Sound Effects",
+}
+
+// SunoStemAdi, enstrumanin split_stem_advanced stemName'ini doner.
+func SunoStemAdi(i model.Instrument) (string, bool) {
+	ad, ok := sunoStemAdlari[i]
+	return ad, ok
 }
 
 // stemAlanlari, split_stem yanitindaki camelCase alanlarin Instrument
@@ -221,6 +255,70 @@ func (c *SunoClient) WaitStems(ctx context.Context, stemTaskID string, interval,
 type geciciHata struct{ error }
 
 func (e geciciHata) Unwrap() error { return e.error }
+
+// IsolateStem, parcadan tek bir enstrumani ayirir (split_stem_advanced,
+// 20 kredi). Yanit hem enstrumani hem de onsuz parcayi doner.
+func (c *SunoClient) IsolateStem(ctx context.Context, taskID, audioID, stemName string) (string, error) {
+	body := map[string]any{
+		"taskId":      taskID,
+		"audioId":     audioID,
+		"type":        "split_stem_advanced",
+		"stemName":    stemName,
+		"callBackUrl": c.callbackURL,
+	}
+	var data struct {
+		TaskID string `json:"taskId"`
+	}
+	if err := c.post(ctx, "/api/v1/vocal-removal/generate", body, &data); err != nil {
+		return "", err
+	}
+	if data.TaskID == "" {
+		return "", fmt.Errorf("suno: ayirma yanitinda taskId yok")
+	}
+	return data.TaskID, nil
+}
+
+// WaitIsolated, split_stem_advanced SUCCESS olana kadar poll eder.
+// Saglayici uretimin her varyanti icin bir originData elemani doner;
+// biz ilk varyanti (WaitMusic'in dondurdugu sunoData[0]) kullaniriz.
+func (c *SunoClient) WaitIsolated(ctx context.Context, stemTaskID string, interval, maxWait time.Duration) (*IsolatedStem, error) {
+	type parca struct {
+		AudioURL string  `json:"audio_url"`
+		Duration float64 `json:"duration"`
+	}
+	var sonuc *IsolatedStem
+	err := c.bekle(ctx, interval, maxWait, "ayirma", func() (bool, error) {
+		var data struct {
+			SuccessFlag  string `json:"successFlag"`
+			ErrorMessage string `json:"errorMessage"`
+			Response     *struct {
+				OriginData []struct {
+					Extract parca `json:"extract"`
+					Remove  parca `json:"remove"`
+				} `json:"originData"`
+			} `json:"response"`
+		}
+		if err := c.get(ctx, "/api/v1/vocal-removal/record-info?taskId="+url.QueryEscape(stemTaskID), &data); err != nil {
+			return false, geciciHata{err}
+		}
+		if sunoHataDurumlari[data.SuccessFlag] {
+			return false, fmt.Errorf("suno ayirma basarisiz (%s): %s", data.SuccessFlag, data.ErrorMessage)
+		}
+		if data.SuccessFlag != "SUCCESS" {
+			return false, nil
+		}
+		if data.Response == nil || len(data.Response.OriginData) == 0 {
+			return false, fmt.Errorf("suno: SUCCESS ama originData yok")
+		}
+		ilk := data.Response.OriginData[0]
+		if ilk.Extract.AudioURL == "" || ilk.Remove.AudioURL == "" {
+			return false, fmt.Errorf("suno: SUCCESS ama ayirma adresi eksik")
+		}
+		sonuc = &IsolatedStem{ExtractURL: ilk.Extract.AudioURL, RemoveURL: ilk.Remove.AudioURL, Duration: ilk.Extract.Duration}
+		return true, nil
+	})
+	return sonuc, err
+}
 
 // bekle, kontrol true donene kadar interval araliklarla cagirir. kontrol'un
 // geciciHata'si arka arkaya pollHataToleransi kez yutulur; diger hatalar

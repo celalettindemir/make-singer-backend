@@ -41,6 +41,12 @@ func (s *sahteSuno) SplitStems(_ context.Context, taskID, audioID string) (strin
 func (s *sahteSuno) WaitStems(context.Context, string, time.Duration, time.Duration) ([]client.Stem, error) {
 	return s.stems, s.stemBekleHata
 }
+func (s *sahteSuno) IsolateStem(_ context.Context, taskID, audioID, stemName string) (string, error) {
+	return "i1", nil
+}
+func (s *sahteSuno) WaitIsolated(context.Context, string, time.Duration, time.Duration) (*client.IsolatedStem, error) {
+	return nil, nil
+}
 func (s *sahteSuno) IsConfigured() bool { return true }
 
 type yukleme struct {
