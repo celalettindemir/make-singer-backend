@@ -1,6 +1,6 @@
 # Make Singer Backend
 
-Monorepo with three services: Go API backend, Python audio processing, and Zitadel identity provider.
+Monorepo with two services: Go API backend (with its own OpenID Provider) and Python audio processing.
 
 ## Prerequisites
 
@@ -21,7 +21,7 @@ make-singer-backend/
 │   ├── internal/
 │   │   ├── config/        # Viper config management
 │   │   ├── handler/       # HTTP handlers (lyrics, render, master, export, upload)
-│   │   ├── middleware/     # JWT auth, rate limiting
+│   │   ├── middleware/     # OP access-token auth, rate limiting
 │   │   ├── model/         # Request/response structs
 │   │   ├── service/       # Business logic
 │   │   ├── worker/        # Asynq job processors (render, master)
@@ -29,7 +29,6 @@ make-singer-backend/
 │   │   └── websocket/     # WebSocket broadcast hub
 │   └── pkg/response/      # Standardized API responses
 ├── audio-service/         # Python FFmpeg-based audio mastering
-├── zitadel-service/       # Zitadel identity provider config
 ├── traefik/               # Reverse proxy configuration
 ├── docker-compose.yml     # Full stack orchestration
 └── docker-stack.yml       # Production stack

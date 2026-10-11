@@ -21,12 +21,12 @@ All `/api/*` routes are protected by Bearer token authentication.
 Authorization: Bearer <token>
 ```
 
-The server supports two verification strategies, tried in order:
+The only accepted credential is an RS256 access token issued by the service's own OpenID Provider:
 
-1. **Zitadel JWKS** -- RS256 tokens verified against a remote JWKS endpoint. Claims extracted: `userId`, `email`, `name`.
-2. **Legacy HMAC** -- HS256 tokens signed with a shared secret. Claims extracted: `userId`, `email`.
-
-If both are configured, JWKS is attempted first; on failure the server falls back to HMAC. If only one is configured, that method is used exclusively.
+- Issuer (`iss`) equals `AUTH_ISSUER`; audience (`aud`) contains `AUTH_CLIENT_ID`.
+- `exp` and `sub` are required.
+- ID tokens are rejected; only access tokens are accepted.
+- Claims extracted: `userId`, `email`, `name`.
 
 ### Error responses
 
@@ -65,8 +65,10 @@ Rate limits are enforced per authenticated user via Redis. When a rate limit is 
 | `/api/master/*` | `master` | per hour |
 | `/api/export/*` | `export` | per hour |
 | `/api/upload/*` | `upload` | per hour |
+| `POST /api/ws/ticket` | `ws_ticket` | 60 per minute (per user) |
+| `POST /api/files/sign` | `sign` | 60 per minute (per user) |
 
-Exact numeric limits are set via server configuration (`RateLimit.LyricsPerMin`, `RateLimit.RenderPerHour`, etc.).
+Exact numeric limits are set via server configuration (`RateLimit.LyricsPerMin`, `RateLimit.RenderPerHour`, `ratelimit.ws_ticket_per_min`, `ratelimit.sign_per_min`, etc.).
 
 ### 429 response
 

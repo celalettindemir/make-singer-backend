@@ -10,7 +10,7 @@ Monorepo with three services:
 - **audio-service/** — Python audio processing (FFmpeg-based mastering)
 - **traefik/** — Reverse proxy configuration
 
-Notes: Zitadel service was replaced in Phase 1 with a custom OpenID Provider implemented directly in core-service.
+Notes: Zitadel was removed in Phase 5; authentication is the custom OpenID Provider in core-service (internal/kimlik/).
 
 ## Build & Run Commands
 
@@ -56,9 +56,9 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 - **worker/** — Asynq job processors: `render_worker.go` (Suno `/api/v1/generate`, then by stemMode: none / `split_stem_advanced` / `split_stem`; stems downloaded and uploaded to R2 as `stems/{userId}/{projectId}/{stemId}.mp3` via `client.KullaniciAnahtari`; any failure after the paid generate call is wrapped in `asynq.SkipRetry` so a retry never re-bills Suno), `master_worker.go` (audio mastering pipeline), `hesap_worker.go` (delayed R2 cleanup `hesap:temizle` after account deletion). Render and master workers refuse paid calls and R2 writes for deleted owners (`hesapisaret.Denetci`).
 - **client/** — HTTP clients for external services: Groq (AI lyrics), Suno (music generation), R2 (Cloudflare S3-compatible storage), audio-service (local mastering).
 - **model/** — Request/response structs and enums. All enum values defined in `enums.go`.
-- **middleware/** — `auth.go` (RS256 tokens from `internal/kimlik`, or legacy HMAC in development), `ratelimit.go` (Redis fixed window per user), `silinmis.go` (`SilinmisKullaniciEngeli`: deleted-user gate on `/api`, 401 for deleted accounts, 503 + `Retry-After: 5` when Redis is unreachable).
+- **middleware/** — `auth.go` (RS256 access tokens from `internal/kimlik` — the only auth path), `ratelimit.go` (Redis fixed window per user; limits per user: lyrics/min, render/master/export/upload per hour, `ws/ticket` and `files/sign` per minute), `silinmis.go` (`SilinmisKullaniciEngeli`: deleted-user gate on `/api`, 401 for deleted accounts, 503 + `Retry-After: 5` when Redis is unreachable).
 - **hesapisaret/** — Deleted-account marker shared by middleware, `HesapService` and workers: `Anahtar(userID)` (`kimlik:silindi:<userId>`), `Omur` (24 h), `Denetci` interface and `RedisDenetci` (EXISTS).
-- **auth/** — `jwks_verifier.go`: token verifiers. `YukariAkisDogrulayici` validates **upstream** (Apple/Google) `id_token`s for the federation flow — RS256 pinned, `iss`/`aud`/`exp` enforced, `nonce` required and compared in constant time. `JWKSVerifier` is the legacy Zitadel-era path (to be removed in Phase 5).
+- **auth/** — `jwks_verifier.go`: token verifiers. `YukariAkisDogrulayici` validates **upstream** (Apple/Google) `id_token`s for the federation flow — RS256 pinned, `iss`/`aud`/`exp` enforced, `nonce` required and compared in constant time.
 - **websocket/** — Hub for broadcasting real-time job progress to clients via `GET /ws/jobs/:jobId?ticket=` (ticket from `POST /api/ws/ticket`).
 - **config/** — Viper-based config loading from `config.yaml` with env var overrides.
 
@@ -69,7 +69,7 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 | Groq | AI lyrics generation | Mock data |
 | Suno (`api.sunoapi.org`, model `SUNO_MODEL`, default `V6`) | Instrumental rendering. Per-render stem level chosen by the user via `stemMode`: `mix` (default, 12 credits: the generated track as one `mix` stem), `focus` (32: `split_stem_advanced` on `focusInstrument` → that instrument + `rest`), `stems` (62: `split_stem`, 10 instrument stems kept; vocals and woodwinds skipped) | Simulated render steps |
 | Cloudflare R2 | File storage | Operates without it |
-| Custom OpenID Provider (`internal/kimlik/`) | RS256 access token authentication, user sign-up/sign-in | Legacy HMAC JWT (development only) |
+| Custom OpenID Provider (`internal/kimlik/`) | RS256 access token authentication, user sign-up/sign-in | None — `AUTH_ISSUER` is required; the service refuses to start without it |
 | audio-service | Audio mastering | N/A (separate container) |
 
 ### Configuration
@@ -95,7 +95,7 @@ Standard error codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED` (401), `FORBIDDEN
 
 Bearer token required on all `/api/*` routes. 
 
-**When `AUTH_ISSUER` is configured:** The middleware validates RS256 access tokens issued by the custom OpenID Provider (`internal/kimlik/`). The public key is read from the provider process (no network call to a separate JWKS endpoint), avoiding circular startup dependencies. Token validation enforces:
+**`AUTH_ISSUER` is required.** The middleware validates RS256 access tokens issued by the custom OpenID Provider (`internal/kimlik/`). The public key is read from the provider process (no network call to a separate JWKS endpoint), avoiding circular startup dependencies. Token validation enforces:
 - Algorithm: RS256 only (no HMAC or "none")
 - Issuer (`iss`): exact match to `AUTH_ISSUER`
 - Audience (`aud`): must contain the `AUTH_CLIENT_ID` value
@@ -103,11 +103,9 @@ Bearer token required on all `/api/*` routes.
 - Subject (`sub`): non-empty
 - Token type: must be an access token (has `jti` claim, no `azp` or `at_hash`). ID tokens are rejected.
 
-If `AUTH_ISSUER` is set but the OpenID Provider fails to start, the service exits with a fatal error (fail-closed design).
+If `AUTH_ISSUER` is empty or the OpenID Provider fails to start, the service exits with a fatal error (fail-closed design).
 
 **Account deletion (`DELETE /api/account`):** `service.HesapService.Sil` validates the id, deletes the user via `kimlik.Sunucu.HesapSil` (a failure here aborts before R2 is touched), then, with errors only logged since the user can no longer retry, writes the `kimlik:silindi:<userId>` marker (`hesapisaret.Omur` = 24 h, the job record lifetime), deletes all R2 prefixes (`client.KullaniciOnekleri`) and enqueues a delayed `hesap:temizle` task (`bakim` queue, 1 h later, `MaxRetry(10)`) that repeats the R2 cleanup. `middleware.SilinmisKullaniciEngeli` on the `/api` group rejects tokens of marked users with 401 (503 + `Retry-After: 5` if Redis is unreachable), which also blocks starting new jobs. Jobs queued or running at deletion time check the owner through `hesapisaret.Denetci`: the render worker checks before the paid Suno `GenerateMusic` call (deleted → `SkipRetry`, Suno not called; check error → retryable, nothing paid yet) and before every stem upload (deleted or check error → `SkipRetry`, the paid path), and the master worker checks before the audio-service call that writes to R2. Known limit: `job:{id}` records (`ownerId`, result keys) stay in Redis until their 24 h TTL.
-
-**When `AUTH_ISSUER` is empty:** Falls back to legacy HMAC JWT verification (development only). The gateway mode can also bypass token verification using `X-User-*` headers when `GATEWAY_ENABLED=true`.
 
 Extracted claims (`userId`, `email`, `name`) are stored in Fiber context locals.
 
