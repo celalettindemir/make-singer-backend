@@ -1,11 +1,14 @@
 package e2e
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -13,7 +16,6 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/makeasinger/api/internal/auth"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/handler"
@@ -22,9 +24,19 @@ import (
 )
 
 const (
-	testJWTSecret = "test-secret-for-e2e"
-	testUserID    = "test-user-123"
+	testUserID   = "test-user-123"
+	testIssuer   = "https://kimlik.e2e.test"
+	testClientID = "e2e-istemci"
 )
+
+// testAnahtar: e2e jetonlarini imzalayan RSA anahtari, paket basina bir kez.
+var testAnahtar = func() *rsa.PrivateKey {
+	a, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic(err)
+	}
+	return a
+}()
 
 // e2eR2Cfg, KeyFromURL'in tanidigi konaklari uretecek sahte R2 yapilandirmasi.
 func e2eR2Cfg() *config.R2Config {
@@ -91,11 +103,8 @@ func setupApp(t *testing.T) *testApp {
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
 
-	// Auth handler (for /auth/verify)
-	authHandler := handler.NewAuthHandler(nil, testJWTSecret)
-
-	// Auth middleware — legacy HMAC only
-	authMiddleware := middleware.NewLegacyAuthMiddleware(testJWTSecret)
+	// Auth middleware — kendi OP'umuzun RS256 access token'i
+	authMiddleware := middleware.NewOPAuthMiddleware(testIssuer, testClientID, &testAnahtar.PublicKey)
 	rateLimiter := middleware.NewRateLimiter(redisClient)
 
 	// Fiber app
@@ -119,7 +128,6 @@ func setupApp(t *testing.T) *testApp {
 			},
 		})
 	})
-	app.Get("/auth/verify", authHandler.Verify)
 
 	// API routes (authenticated)
 	api := app.Group("/api", authMiddleware.Authenticate())
@@ -153,18 +161,24 @@ func setupApp(t *testing.T) *testApp {
 	return &testApp{app: app}
 }
 
-// generateToken creates a legacy HMAC JWT token for test requests.
+// generateToken, test istekleri icin OP bicimli bir RS256 access token uretir.
 func generateToken(t *testing.T) string {
 	t.Helper()
-	claims := auth.LegacyClaims{
-		UserID: "test-user-123",
-		Email:  "test@example.com",
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer: "makeasinger-api",
-		},
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(testJWTSecret))
+	return generateTokenFor(t, testUserID)
+}
+
+// generateTokenFor, verilen sub icin OP bicimli bir RS256 access token uretir.
+func generateTokenFor(t *testing.T, sub string) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		"iss":   testIssuer,
+		"sub":   sub,
+		"aud":   []string{testClientID},
+		"jti":   "e2e-jeton",
+		"email": "test@example.com",
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	})
+	signed, err := token.SignedString(testAnahtar)
 	if err != nil {
 		t.Fatalf("failed to generate test token: %v", err)
 	}

@@ -20,7 +20,6 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/makeasinger/api/docs"
-	"github.com/makeasinger/api/internal/auth"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/handler"
@@ -71,32 +70,28 @@ func main() {
 		log.Printf("Warning: Redis not available: %v", err)
 	}
 
-	// Kendi OpenID Provider'imiz. Issuer bos ise hic baslamaz; API o
-	// zaman eski auth yolunda kalir (yerel gelistirme).
+	// Kendi OpenID Provider'imiz: /api/* icin TEK kimlik dogrulama yolu.
+	// Issuer zorunludur; eski legacy HMAC / Zitadel / gateway yollari
+	// kaldirildi, cunku her biri OP'suz bir "yedek" mod olarak yapilandirma
+	// hatasinda /api'yi zayif ya da suresiz jetonlara aciyordu.
 	//
-	// Issuer DOLU ise baslatma hatasi FATALDIR. Eskiden yalnizca uyari
-	// loglaniyordu; o durumda /api/* legacy HMAC yoluna dusuyordu ve
-	// legacy dogrulama ne exp ne iss ne aud istedigi icin, varsayilan
-	// sirla (`change-me-in-production`) imzalanmis SURESIZ bir jeton
-	// kabul ediliyordu. Yani gecici bir Postgres kesintisi tum API'yi
-	// aciyordu. Her istege 401 donen ama /health'te saglikli gorunen
-	// bir pod sessiz bir kesintidir; CrashLoopBackOff dogru ve gorunur
-	// sinyal, yeniden baslatma da gecici kesinti icin dogru kurtarma.
-	var kimlikSunucu *kimlik.Sunucu
-	if cfg.Auth.Issuer != "" {
-		var err error
-		kimlikSunucu, err = kimlik.Start(ctx, &cfg.Auth, redisClient, cfg.Server.Env)
-		if err != nil {
-			log.Fatalf("Kimlik saglayicisi baslatilamadi, servis baslatilmiyor: %v", err)
-		} else {
-			log.Printf("Kimlik saglayicisi %s uzerinde, issuer %s", cfg.Auth.Port, cfg.Auth.Issuer)
-			defer func() {
-				kapatCtx, iptal := context.WithTimeout(context.Background(), 10*time.Second)
-				defer iptal()
-				_ = kimlikSunucu.Kapat(kapatCtx)
-			}()
-		}
+	// Baslatma hatasi FATALDIR. Her istege 401 donen ama /health'te
+	// saglikli gorunen bir pod sessiz bir kesintidir; CrashLoopBackOff
+	// dogru ve gorunur sinyal, yeniden baslatma da gecici kesinti (orn.
+	// Postgres) icin dogru kurtarma.
+	if cfg.Auth.Issuer == "" {
+		log.Fatalf("AUTH_ISSUER zorunlu: kimlik saglayicisi olmadan /api korunamaz")
 	}
+	kimlikSunucu, err := kimlik.Start(ctx, &cfg.Auth, redisClient, cfg.Server.Env)
+	if err != nil {
+		log.Fatalf("Kimlik saglayicisi baslatilamadi, servis baslatilmiyor: %v", err)
+	}
+	log.Printf("Kimlik saglayicisi %s uzerinde, issuer %s", cfg.Auth.Port, cfg.Auth.Issuer)
+	defer func() {
+		kapatCtx, iptal := context.WithTimeout(context.Background(), 10*time.Second)
+		defer iptal()
+		_ = kimlikSunucu.Kapat(kapatCtx)
+	}()
 
 	// Initialize Asynq client
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{
@@ -138,18 +133,6 @@ func main() {
 		storage = r2Client
 	}
 
-	// Initialize Zitadel JWKS verifier (optional - falls back to legacy JWT)
-	var jwksVerifier *auth.JWKSVerifier
-	if cfg.Zitadel.Issuer != "" {
-		var err error
-		jwksVerifier, err = auth.NewJWKSVerifier(&cfg.Zitadel)
-		if err != nil {
-			log.Printf("Warning: JWKS verifier not initialized: %v", err)
-		} else {
-			defer jwksVerifier.Close()
-		}
-	}
-
 	// Initialize services
 	lyricsService := service.NewLyricsService(groqClient)
 	renderService := service.NewRenderService(redisClient, asynqClient, storage, &cfg.R2)
@@ -166,13 +149,9 @@ func main() {
 		silici = r2Client
 	}
 
-	// Hesap silme yalnizca kendi OP'miz varken anlamli.
-	var hesapService *service.HesapService
-	var hesapHandler *handler.HesapHandler
-	if kimlikSunucu != nil {
-		hesapService = service.NewHesapService(kimlikSunucu, silici, redisClient, asynqClient)
-		hesapHandler = handler.NewHesapHandler(hesapService)
-	}
+	// Hesap silme: kullanici kaydi kendi OP'mizde tutulur.
+	hesapService := service.NewHesapService(kimlikSunucu, silici, redisClient, asynqClient)
+	hesapHandler := handler.NewHesapHandler(hesapService)
 
 	// Initialize handlers
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
@@ -183,58 +162,10 @@ func main() {
 	fileHandler := handler.NewFileHandler(fileService, validate)
 	wsTicketHandler := handler.NewWSTicketHandler(wsTicketService, validate)
 
-	// Mod secimi YAPILANDIRMADAN yapilir, calisma zamani basarisindan
-	// degil: bkz. middleware.APIAuthModuSec. Issuer doluyken legacy ve
-	// gateway dallari secilemez.
-	authModu := middleware.APIAuthModuSec(cfg.Auth.Issuer, cfg.Gateway.Enabled)
-
-	// Initialize auth handler for ForwardAuth verification
-	var tokenVerifier auth.TokenVerifier
-	if jwksVerifier != nil {
-		tokenVerifier = jwksVerifier
-	}
-	legacySir := cfg.JWT.Secret
-	if authModu == middleware.ModOP {
-		// OP modunda /auth/verify legacy HMAC zincirini KOSMAMALI.
-		// Aksi halde bu uc, varsayilan sirla imzalanmis suresiz bir
-		// jetona 200 + X-User-Id/X-User-Email doner; yani Traefik
-		// ForwardAuth icin bir kimlik oracle'i olur.
-		tokenVerifier = nil
-		legacySir = ""
-	}
-	authHandler := handler.NewAuthHandler(tokenVerifier, legacySir)
-
-	// Initialize middleware (with fallback support)
-	var apiAuthMiddleware fiber.Handler
-	switch authModu {
-	case middleware.ModOP:
-		// Kendi OP'umuz: access token'lari onun anahtariyla dogrula.
-		// Anahtar surec icinden okunur, kendi JWKS ucumuza ag uzerinden
-		// gidilmez. Bu modda gateway veya legacy yola dusulmez.
-		if kimlikSunucu == nil {
-			// Ulasilamaz: Issuer doluyken Start hatasi yukarida fatal.
-			// Yine de nil dereference yerine acik bir hata verelim.
-			log.Fatalf("Tutarsiz durum: OP modu secildi ama kimlik sunucusu yok")
-		}
-		log.Println("Info: kimlik saglayicisi modu — RS256 access token dogrulanacak")
-		apiAuthMiddleware = middleware.NewOPAuthMiddleware(
-			cfg.Auth.Issuer, cfg.Auth.ClientID, kimlikSunucu.APIAcikAnahtar()).Authenticate()
-	case middleware.ModGateway:
-		// Behind Traefik: auth is handled by ForwardAuth, read X-User-* headers
-		log.Println("Info: Gateway mode enabled — using header-based auth")
-		apiAuthMiddleware = middleware.GatewayAuthMiddleware()
-	default:
-		// Direct mode: auth is handled by the backend itself
-		var authMiddleware *middleware.AuthMiddleware
-		if jwksVerifier != nil && cfg.JWT.Secret != "" {
-			authMiddleware = middleware.NewAuthMiddlewareWithFallback(jwksVerifier, cfg.JWT.Secret)
-		} else if jwksVerifier != nil {
-			authMiddleware = middleware.NewAuthMiddleware(jwksVerifier)
-		} else {
-			authMiddleware = middleware.NewLegacyAuthMiddleware(cfg.JWT.Secret)
-		}
-		apiAuthMiddleware = authMiddleware.Authenticate()
-	}
+	// /api/* icin tek yol: kendi OP'umuzun RS256 access token'i. Acik
+	// anahtar surec icinden okunur, JWKS ucuna ag uzerinden gidilmez.
+	apiAuthMiddleware := middleware.NewOPAuthMiddleware(
+		cfg.Auth.Issuer, cfg.Auth.ClientID, kimlikSunucu.APIAcikAnahtar()).Authenticate()
 	rateLimiter := middleware.NewRateLimiter(redisClient)
 
 	// Initialize Fiber app
@@ -278,11 +209,11 @@ func main() {
 		// verdigini soyler ve nil alici icin de guvenlidir.
 		kimlikHazir := kimlikSunucu.Hazir()
 
-		// AUTH_ISSUER verildiyse OP olmadan servis islevsizdir: her
-		// /api/* istegi 401 doner. Boyle bir pod "ok" demeyi birakmali,
-		// yoksa yanlis saglik sinyali sessiz bir kesintiyi gizler.
+		// OP olmadan servis islevsizdir: her /api/* istegi 401 doner.
+		// Boyle bir pod "ok" demeyi birakmali, yoksa yanlis saglik
+		// sinyali sessiz bir kesintiyi gizler.
 		durum := "ok"
-		if cfg.Auth.Issuer != "" && !kimlikHazir {
+		if !kimlikHazir {
 			durum = "degraded"
 			c.Status(fiber.StatusServiceUnavailable)
 		}
@@ -294,7 +225,7 @@ func main() {
 				"suno":   sunoClient.IsConfigured(),
 				"r2":     r2Client != nil,
 				"audio":  audioClient.IsConfigured(),
-				"auth":   kimlikHazir || jwksVerifier != nil,
+				"auth":   kimlikHazir,
 				"kimlik": kimlikHazir,
 			},
 		})
@@ -302,9 +233,6 @@ func main() {
 
 	// Swagger UI
 	app.Get("/swagger/*", fiberSwagger.HandlerDefault)
-
-	// ForwardAuth verification endpoint (internal, called by Traefik)
-	app.Get("/auth/verify", authHandler.Verify)
 
 	// API routes
 	api := app.Group("/api", apiAuthMiddleware, middleware.SilinmisKullaniciEngeli(hesapisaret.NewRedisDenetci(redisClient)))
@@ -345,9 +273,7 @@ func main() {
 	// Kayitli dosya adreslerini tazeler (imza 1 saatte dolar).
 	api.Post("/files/sign", rateLimiter.SignLimit(cfg.RateLimit.SignPerMin), fileHandler.Sign)
 
-	if hesapHandler != nil {
-		api.Delete("/account", hesapHandler.Sil)
-	}
+	api.Delete("/account", hesapHandler.Sil)
 
 	// WebSocket routes
 	app.Use("/ws", func(c *fiber.Ctx) error {

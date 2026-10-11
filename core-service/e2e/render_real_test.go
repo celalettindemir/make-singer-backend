@@ -17,7 +17,6 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/makeasinger/api/internal/auth"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/handler"
@@ -26,8 +25,6 @@ import (
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/internal/websocket"
 	"github.com/makeasinger/api/internal/worker"
-
-	"github.com/golang-jwt/jwt/v5"
 )
 
 // loadEnvFile reads a .env file and sets environment variables.
@@ -120,10 +117,9 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 	masterHandler := handler.NewMasterHandler(masterService, validate)
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
-	authHandler := handler.NewAuthHandler(nil, testJWTSecret)
 
 	// Middleware
-	authMiddleware := middleware.NewLegacyAuthMiddleware(testJWTSecret)
+	authMiddleware := middleware.NewOPAuthMiddleware(testIssuer, testClientID, &testAnahtar.PublicKey)
 	rateLimiter := middleware.NewRateLimiter(redisClient)
 
 	// Fiber app
@@ -135,7 +131,6 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
-	app.Get("/auth/verify", authHandler.Verify)
 
 	api := app.Group("/api", authMiddleware.Authenticate())
 
@@ -195,23 +190,6 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 	return app, cleanup
 }
 
-func generateRealToken(t *testing.T) string {
-	t.Helper()
-	claims := auth.LegacyClaims{
-		UserID: "e2e-test-user",
-		Email:  "e2e@makeasinger.com",
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer: "makeasinger-api",
-		},
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(testJWTSecret))
-	if err != nil {
-		t.Fatalf("failed to generate token: %v", err)
-	}
-	return signed
-}
-
 // TestRenderFullPipeline_RealSuno tests the full render pipeline with real Suno API.
 // This test takes several minutes as it waits for actual music generation.
 func TestRenderFullPipeline_RealSuno(t *testing.T) {
@@ -229,7 +207,7 @@ func TestRenderFullPipeline_RealSuno(t *testing.T) {
 	app, cleanup := setupRealApp(t)
 	defer cleanup()
 
-	token := generateRealToken(t)
+	token := generateTokenFor(t, "e2e-test-user")
 	headers := map[string]string{"Authorization": "Bearer " + token}
 
 	// Step 1: Start a render job

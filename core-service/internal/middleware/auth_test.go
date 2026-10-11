@@ -10,7 +10,6 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/makeasinger/api/internal/auth"
 )
 
 const denemeIssuer = "https://kimlik.ornek.dev"
@@ -81,8 +80,8 @@ func TestGecerliJetonKabulEdilir(t *testing.T) {
 	}
 }
 
-// exp claim'i olmayan jeton sonsuza kadar gecerli olur. Legacy yolun
-// hatasi tam buydu; yeni yolda zorunlu.
+// exp claim'i olmayan jeton sonsuza kadar gecerli olur. Eski HMAC
+// yolunun hatasi tam buydu; burada zorunlu.
 func TestExpsizJetonReddedilir(t *testing.T) {
 	ozel := denemeAnahtar(t)
 	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
@@ -294,59 +293,6 @@ func TestDogruAudKabulEdilir(t *testing.T) {
 	}
 }
 
-// sayanVerifier, Zitadel JWKS yolunun CAGRILIP cagrilmadigini sayar.
-type sayanVerifier struct{ cagri int }
-
-func (v *sayanVerifier) Validate(string) (*auth.Claims, error) {
-	v.cagri++
-	return &auth.Claims{UserID: "jwks-kullanicisi"}, nil
-}
-
-func (v *sayanVerifier) Close() error { return nil }
-
-// OP modunda legacy HMAC ve JWKS yollarina DUSULMEZ.
-//
-// Onceki hali vacuous idi: legacy jetonu RASTGELE bir sirla
-// imzaladigi icin "fallback hic yok" ile "fallback var ama sir farkli"
-// arasini ayirt edemiyordu; "OP basarisizsa legacy'ye ak" mutasyonunda
-// PASS kaliyordu. Artik middleware paket icinden, op + jwtSecret +
-// verifier UCU BIRLIKTE dolu kurulur ve legacy jeton TAM O SIRLA
-// imzalanir. Ayrica verifier'in hic cagrilmadigi sayacla dogrulanir.
-func TestOPModundaLegacyYolaDusulmez(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	const bilinenSir = "bu-sir-middleware-a-verilenin-AYNISI"
-	sahte := &sayanVerifier{}
-	mw := &AuthMiddleware{
-		op:        NewOPAuthMiddleware(denemeIssuer, denemeIstemci, &ozel.PublicKey).op,
-		jwtSecret: bilinenSir,
-		verifier:  sahte,
-	}
-	app := uygulamaMW(t, mw)
-
-	// Legacy yol acik olsaydi bu jeton kabul edilirdi: dogru sir, gecerli
-	// exp, HS256. OP modunda reddedilmeli.
-	legacy := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"userId": "legacy-kullanicisi", "sub": "legacy-kullanicisi",
-		"exp": time.Now().Add(time.Hour).Unix(),
-	})
-	imzali, err := legacy.SignedString([]byte(bilinenSir))
-	if err != nil {
-		t.Fatalf("legacy jeton uretilemedi: %v", err)
-	}
-	if durum, govde := istek(t, app, "Bearer "+imzali); durum != 401 {
-		t.Errorf("legacy jeton: durum = %d (govde %q), beklenen 401", durum, govde)
-	}
-
-	// Zitadel JWKS yolu da denenmemeli: sahte verifier HER jetonu kabul
-	// ediyor, yani cagrilsaydi 200 donerdi.
-	if durum, _ := istek(t, app, "Bearer bozuk.jeton.metni"); durum != 401 {
-		t.Errorf("JWKS yolu: durum = %d, beklenen 401", durum)
-	}
-	if sahte.cagri != 0 {
-		t.Errorf("verifier %d kez cagrildi, beklenen 0", sahte.cagri)
-	}
-}
-
 // id_token bir access token DEGILDIR: API erisimi vermemeli. Ikisi de
 // ayni anahtarla, ayni iss/aud ile imzalandigi icin diger denetimlerin
 // hicbiri ayirt etmez; ayrim jti/azp/at_hash uzerinden yapilir.
@@ -432,20 +378,15 @@ func TestEksikYapilandirmadaHerIstekReddedilir(t *testing.T) {
 	}
 }
 
-// Legacy middleware bos sirla kurulmussa hicbir jetonu kabul etmemeli.
-// `jwtSecret != ""` kapisi bunu zaten sagliyor; test kapinin ILERIDE
-// kalkmasina karsi kilit. (auth.ValidateLegacyToken'in kendi kapisi
-// internal/auth/legacy_test.go'da olculuyor.)
-func TestLegacyMiddlewareBosSirlaHicbirJetonuKabulEtmez(t *testing.T) {
-	bosSirli, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"userId": "saldirgan",
-		"exp":    time.Now().Add(time.Hour).Unix(),
-	}).SignedString([]byte(""))
-	if err != nil {
-		t.Fatalf("jeton uretilemedi: %v", err)
-	}
-	app := uygulamaMW(t, NewLegacyAuthMiddleware(""))
-	if durum, govde := istek(t, app, "Bearer "+bosSirli); durum != 401 {
+// op alani bos (sifir degerli) bir middleware hicbir jetonu kabul etmemeli:
+// eski HMAC/JWKS yollari kaldirildi, geriye dusulecek baska bir yol yok.
+func TestOPsuzMiddlewareHerIstegiReddeder(t *testing.T) {
+	ozel := denemeAnahtar(t)
+	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
+		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci}, "jti": "jeton-1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	if durum, govde := istek(t, uygulamaMW(t, &AuthMiddleware{}), "Bearer "+jeton); durum != 401 {
 		t.Errorf("durum = %d (govde %q), beklenen 401", durum, govde)
 	}
 }

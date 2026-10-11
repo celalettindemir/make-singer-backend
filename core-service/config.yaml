@@ -8,10 +8,6 @@ redis:
   password: ""
   db: 0
 
-jwt:
-  secret: "your-super-secret-key-change-in-production"
-  expiration: 24 # hours
-
 ratelimit:
   lyrics_per_min: 30
   render_per_hour: 5
@@ -40,12 +36,6 @@ r2:
   public_url: "https://makesinger-cdn.celalettindemir.dev" # zorunlu; R2_PUBLIC_URL ile ezilebilir
   presign_ttl: "1h" # private nesneler icin presigned URL omru
 
-# Zitadel OIDC Configuration
-zitadel:
-  domain: "" # Set via ZITADEL_DOMAIN env var
-  client_id: "" # Set via ZITADEL_CLIENT_ID env var
-  issuer: "" # Set via ZITADEL_ISSUER env var (e.g., https://your-tenant.zitadel.cloud)
-
 # Suno API Configuration
 suno:
   api_key: "" # Set via SUNO_API_KEY env var
@@ -58,12 +48,8 @@ audio:
   service_url: "http://localhost:8084"
   timeout: 120 # seconds
 
-# API Gateway Configuration
-gateway:
-  enabled: false # Set to true when running behind Traefik
-
 # Custom OpenID Provider Configuration
-# When auth.issuer is empty, the service falls back to legacy HMAC JWT verification (development only).
+# auth.issuer zorunludur: bos ise servis baslamaz (legacy yol yok).
 # When auth.issuer is set but the provider fails to start, the service exits with a fatal error (fail-closed).
 auth:
   issuer: "" # Set via AUTH_ISSUER env var (e.g., https://makesinger-auth.celalettindemir.dev)

@@ -8,18 +8,13 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/makeasinger/api/internal/auth"
 	"github.com/makeasinger/api/pkg/response"
 )
 
-// UserClaims is an alias for auth.LegacyClaims for backwards compatibility
-type UserClaims = auth.LegacyClaims
-
-// AuthMiddleware handles JWT authentication
+// AuthMiddleware, /api/* isteklerini kendi OP'umuzun RS256 access
+// token'i ile dogrular. Baska bir dogrulama yolu yoktur.
 type AuthMiddleware struct {
-	op        *opDogrulayici // kendi OP'umuzun jetonlari (en oncelikli mod)
-	verifier  auth.TokenVerifier
-	jwtSecret string // fallback for legacy tokens
+	op *opDogrulayici
 }
 
 // opDogrulayici, kendi OP'umuzun urettigi RS256 access token'ini
@@ -134,28 +129,6 @@ func (d *opDogrulayici) dogrula(jetonMetni string) (string, string, string, erro
 	return sub, eposta, ad, nil
 }
 
-// NewAuthMiddleware creates a new auth middleware with Zitadel JWKS verification
-func NewAuthMiddleware(verifier auth.TokenVerifier) *AuthMiddleware {
-	return &AuthMiddleware{
-		verifier: verifier,
-	}
-}
-
-// NewAuthMiddlewareWithFallback creates auth middleware with both JWKS and legacy HMAC support
-func NewAuthMiddlewareWithFallback(verifier auth.TokenVerifier, jwtSecret string) *AuthMiddleware {
-	return &AuthMiddleware{
-		verifier:  verifier,
-		jwtSecret: jwtSecret,
-	}
-}
-
-// NewLegacyAuthMiddleware creates auth middleware using only HMAC signing (for testing/dev)
-func NewLegacyAuthMiddleware(jwtSecret string) *AuthMiddleware {
-	return &AuthMiddleware{
-		jwtSecret: jwtSecret,
-	}
-}
-
 // Authenticate validates JWT token from Authorization header
 func (m *AuthMiddleware) Authenticate() fiber.Handler {
 	return func(c *fiber.Ctx) error {
@@ -171,56 +144,22 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 
 		tokenString := parts[1]
 
-		// Kendi OP'umuz yapilandirilmissa yalnizca o gecerlidir: burada
-		// basarisizlik dogrudan 401'dir, legacy/gateway yoluna dusulmez.
-		if m.op != nil {
-			sub, eposta, ad, err := m.op.dogrula(tokenString)
-			if err != nil {
-				// Hata metni jeton icerigi tasiyabilir; loglanmaz.
-				return response.Unauthorized(c, "Invalid or expired token")
-			}
-			c.Locals("userId", sub)
-			c.Locals("email", eposta)
-			c.Locals("name", ad)
-			return c.Next()
+		// Tek yol kendi OP'umuzdur. op nil ise (yalnizca sifir degerli
+		// AuthMiddleware ile mumkun) istek reddedilir: geriye dusulecek
+		// baska bir dogrulama yolu yok.
+		if m.op == nil {
+			return response.Unauthorized(c, "Invalid or expired token")
 		}
-
-		// Try Zitadel JWKS verification first
-		if m.verifier != nil {
-			claims, err := m.verifier.Validate(tokenString)
-			if err == nil {
-				c.Locals("userId", claims.UserID)
-				c.Locals("email", claims.Email)
-				c.Locals("name", claims.Name)
-				c.Locals("claims", claims)
-				return c.Next()
-			}
-			// If JWKS verification fails and no fallback, return error
-			if m.jwtSecret == "" {
-				return response.Unauthorized(c, "Invalid or expired token")
-			}
+		sub, eposta, ad, err := m.op.dogrula(tokenString)
+		if err != nil {
+			// Hata metni jeton icerigi tasiyabilir; loglanmaz.
+			return response.Unauthorized(c, "Invalid or expired token")
 		}
-
-		// Fallback to legacy HMAC verification
-		if m.jwtSecret != "" {
-			claims, err := m.validateLegacyToken(tokenString)
-			if err != nil {
-				return response.Unauthorized(c, "Invalid or expired token")
-			}
-
-			c.Locals("userId", claims.UserID)
-			c.Locals("email", claims.Email)
-			c.Locals("claims", claims)
-			return c.Next()
-		}
-
-		return response.Unauthorized(c, "Authentication not configured")
+		c.Locals("userId", sub)
+		c.Locals("email", eposta)
+		c.Locals("name", ad)
+		return c.Next()
 	}
-}
-
-// validateLegacyToken validates a token using HMAC signing
-func (m *AuthMiddleware) validateLegacyToken(tokenString string) (*UserClaims, error) {
-	return auth.ValidateLegacyToken(tokenString, m.jwtSecret)
 }
 
 // GetUserID extracts user ID from context
@@ -245,22 +184,4 @@ func GetUserName(c *fiber.Ctx) string {
 		return name
 	}
 	return ""
-}
-
-// GenerateToken creates a new legacy JWT token (useful for testing)
-func (m *AuthMiddleware) GenerateToken(userID, email string) (string, error) {
-	if m.jwtSecret == "" {
-		return "", jwt.ErrTokenNotValidYet
-	}
-
-	claims := UserClaims{
-		UserID: userID,
-		Email:  email,
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer: "makeasinger-api",
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(m.jwtSecret))
 }

@@ -39,35 +39,3 @@ func TestHealth(t *testing.T) {
 		t.Error("expected 'services' field in response")
 	}
 }
-
-func TestAuthVerify_NoToken(t *testing.T) {
-	ta := setupApp(t)
-
-	resp, err := doRequest(ta.app, http.MethodGet, "/auth/verify", "", nil)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-
-	assertStatus(t, resp, http.StatusUnauthorized)
-}
-
-func TestAuthVerify_ValidToken(t *testing.T) {
-	ta := setupApp(t)
-
-	token := generateToken(t)
-	resp, err := doRequest(ta.app, http.MethodGet, "/auth/verify", "", map[string]string{
-		"Authorization": "Bearer " + token,
-	})
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-
-	assertStatus(t, resp, http.StatusOK)
-
-	if resp.Header.Get("X-User-Id") == "" {
-		t.Error("expected X-User-Id header to be set")
-	}
-	if resp.Header.Get("X-User-Email") == "" {
-		t.Error("expected X-User-Email header to be set")
-	}
-}

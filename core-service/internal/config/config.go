@@ -31,14 +31,11 @@ func readSecret(envKey string) {
 type Config struct {
 	Server    ServerConfig
 	Redis     RedisConfig
-	JWT       JWTConfig
 	RateLimit RateLimitConfig
 	Groq      GroqConfig
 	R2        R2Config
-	Zitadel   ZitadelConfig
 	Suno      SunoConfig
 	Audio     AudioConfig
-	Gateway   GatewayConfig
 	Auth      AuthConfig
 }
 
@@ -53,11 +50,6 @@ type RedisConfig struct {
 	Addr     string
 	Password string
 	DB       int
-}
-
-type JWTConfig struct {
-	Secret     string
-	Expiration int // hours
 }
 
 type RateLimitConfig struct {
@@ -104,12 +96,6 @@ func (c *R2Config) PresignTTLOrDefault() time.Duration {
 	return c.PresignTTL
 }
 
-type ZitadelConfig struct {
-	Domain   string
-	ClientID string
-	Issuer   string
-}
-
 type SunoConfig struct {
 	APIKey  string
 	BaseURL string
@@ -123,12 +109,8 @@ type AudioConfig struct {
 	Timeout    int // seconds
 }
 
-type GatewayConfig struct {
-	Enabled bool
-}
-
 // AuthConfig, kendi OpenID Provider'imizin yapilandirmasi.
-// Issuer bos ise OP hic baslamaz; API o zaman eski auth yolunda kalir.
+// Issuer zorunludur: bos ise servis baslamaz (/api icin baska auth yolu yok).
 type AuthConfig struct {
 	Issuer        string        // https://makesinger-auth.celalettindemir.dev
 	Port          string        // ikinci dinleyicinin portu
@@ -188,7 +170,6 @@ func Load() (*Config, error) {
 	readSecret("R2_ACCOUNT_ID")
 	readSecret("R2_ACCESS_KEY_ID")
 	readSecret("R2_SECRET_ACCESS_KEY")
-	readSecret("ZITADEL_CLIENT_ID")
 	readSecret("AUTH_DB_URL")
 	readSecret("AUTH_SIGNING_KEY")
 	readSecret("AUTH_CRYPTO_KEY")
@@ -208,8 +189,6 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("redis.addr", "REDIS_ADDR")
 	_ = viper.BindEnv("redis.password", "REDIS_PASSWORD")
 	_ = viper.BindEnv("redis.db", "REDIS_DB")
-	_ = viper.BindEnv("jwt.secret", "JWT_SECRET")
-	_ = viper.BindEnv("jwt.expiration", "JWT_EXPIRATION")
 	_ = viper.BindEnv("groq.api_key", "GROQ_API_KEY")
 	_ = viper.BindEnv("groq.base_url", "GROQ_BASE_URL")
 	_ = viper.BindEnv("groq.model", "GROQ_MODEL")
@@ -223,9 +202,6 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("r2.private_bucket", "R2_PRIVATE_BUCKET")
 	_ = viper.BindEnv("r2.public_url", "R2_PUBLIC_URL")
 	_ = viper.BindEnv("r2.presign_ttl", "R2_PRESIGN_TTL")
-	_ = viper.BindEnv("zitadel.domain", "ZITADEL_DOMAIN")
-	_ = viper.BindEnv("zitadel.client_id", "ZITADEL_CLIENT_ID")
-	_ = viper.BindEnv("zitadel.issuer", "ZITADEL_ISSUER")
 	_ = viper.BindEnv("suno.api_key", "SUNO_API_KEY")
 	_ = viper.BindEnv("suno.base_url", "SUNO_BASE_URL")
 	_ = viper.BindEnv("suno.model", "SUNO_MODEL")
@@ -233,7 +209,6 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("audio.service_url", "AUDIO_SERVICE_URL")
 	_ = viper.BindEnv("audio.timeout", "AUDIO_SERVICE_TIMEOUT")
 	_ = viper.BindEnv("server.api_domain", "API_DOMAIN")
-	_ = viper.BindEnv("gateway.enabled", "GATEWAY_ENABLED")
 	_ = viper.BindEnv("auth.issuer", "AUTH_ISSUER")
 	_ = viper.BindEnv("auth.port", "AUTH_PORT")
 	_ = viper.BindEnv("auth.db_url", "AUTH_DB_URL")
@@ -261,8 +236,6 @@ func Load() (*Config, error) {
 	viper.SetDefault("redis.addr", "localhost:6379")
 	viper.SetDefault("redis.password", "")
 	viper.SetDefault("redis.db", 0)
-	viper.SetDefault("jwt.secret", "change-me-in-production")
-	viper.SetDefault("jwt.expiration", 24)
 	viper.SetDefault("ratelimit.lyrics_per_min", 30)
 	viper.SetDefault("ratelimit.render_per_hour", 5)
 	viper.SetDefault("ratelimit.master_per_hour", 10)
@@ -286,9 +259,6 @@ func Load() (*Config, error) {
 	// Audio service defaults
 	viper.SetDefault("audio.service_url", "http://localhost:8084")
 	viper.SetDefault("audio.timeout", 120)
-
-	// Gateway defaults
-	viper.SetDefault("gateway.enabled", false)
 
 	// R2 presigned URL varsayilan omru
 	viper.SetDefault("r2.presign_ttl", "1h")
@@ -352,10 +322,6 @@ func Load() (*Config, error) {
 			Password: viper.GetString("redis.password"),
 			DB:       viper.GetInt("redis.db"),
 		},
-		JWT: JWTConfig{
-			Secret:     viper.GetString("jwt.secret"),
-			Expiration: viper.GetInt("jwt.expiration"),
-		},
 		RateLimit: RateLimitConfig{
 			LyricsPerMin:   viper.GetInt("ratelimit.lyrics_per_min"),
 			RenderPerHour:  viper.GetInt("ratelimit.render_per_hour"),
@@ -383,11 +349,6 @@ func Load() (*Config, error) {
 			PublicURL:       viper.GetString("r2.public_url"),
 			PresignTTL:      viper.GetDuration("r2.presign_ttl"),
 		},
-		Zitadel: ZitadelConfig{
-			Domain:   viper.GetString("zitadel.domain"),
-			ClientID: viper.GetString("zitadel.client_id"),
-			Issuer:   viper.GetString("zitadel.issuer"),
-		},
 		Suno: SunoConfig{
 			APIKey:      viper.GetString("suno.api_key"),
 			BaseURL:     viper.GetString("suno.base_url"),
@@ -397,9 +358,6 @@ func Load() (*Config, error) {
 		Audio: AudioConfig{
 			ServiceURL: viper.GetString("audio.service_url"),
 			Timeout:    viper.GetInt("audio.timeout"),
-		},
-		Gateway: GatewayConfig{
-			Enabled: viper.GetBool("gateway.enabled"),
 		},
 		Auth: AuthConfig{
 			Issuer:        viper.GetString("auth.issuer"),
