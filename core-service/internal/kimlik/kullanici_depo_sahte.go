@@ -88,6 +88,22 @@ func (s *SahteUserStore) ByID(ctx context.Context, id string) (*User, error) {
 	return nil, ErrKullaniciYok
 }
 
+func (s *SahteUserStore) Sil(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k, bulundu := s.idyeGore[id]
+	if !bulundu {
+		return ErrKullaniciYok
+	}
+	delete(s.idyeGore, id)
+	for anahtar, aday := range s.epostayaGor {
+		if aday.ID == k.ID {
+			delete(s.epostayaGor, anahtar)
+		}
+	}
+	return nil
+}
+
 // kullaniciKopya, cagirana DAHILI isaretci vermemek icin kaydin yuzeysel
 // bir kopyasini doner. User yalnizca deger alanlardan (string, bool,
 // time.Time) olustugu icin yuzeysel kopya yeterlidir; dilim/isaretci

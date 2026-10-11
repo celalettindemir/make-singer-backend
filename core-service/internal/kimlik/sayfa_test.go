@@ -44,6 +44,10 @@ func (s *sayimUserStore) ByID(ctx context.Context, id string) (*User, error) {
 	return s.ic.ByID(ctx, id)
 }
 
+func (s *sayimUserStore) Sil(ctx context.Context, id string) error {
+	return s.ic.Sil(ctx, id)
+}
+
 func (s *sayimUserStore) sayilar() (int, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -38,6 +38,10 @@ type Sunucu struct {
 	havuz   *pgxpool.Pool
 	anahtar *Anahtar
 
+	// kullanicilar, API tarafindaki hesap silme ucu icin tutulur
+	// (bkz. HesapSil).
+	kullanicilar UserStore
+
 	// hazir, dinleyicinin GERCEKTEN hizmet verip vermedigini tutar.
 	// /health eskiden yalnizca "kimlikSunucu != nil" bakiyordu, yani
 	// Start dondukten SONRA dinleyicinin cokmesini (orn. kabul
@@ -212,7 +216,7 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 	}
 
 	sunucu := &Sunucu{
-		srv: srv, havuz: havuz, anahtar: anahtar,
+		srv: srv, havuz: havuz, anahtar: anahtar, kullanicilar: kullaniciDepo,
 		fedIptal: fedIptal, dogrulayicilar: dogrulayicilar,
 	}
 	sunucu.hazir.Store(true)
@@ -641,4 +645,12 @@ func (s *Sunucu) Kapat(ctx context.Context) error {
 // dogrudan *rsa.PublicKey.
 func (s *Sunucu) APIAcikAnahtar() *rsa.PublicKey {
 	return &s.anahtar.ozel.PublicKey
+}
+
+// HesapSil, kullanicinin kimlik kaydini siler. Federe eslesmeler ve
+// refresh aileleri ON DELETE CASCADE ile gider; yeni access token
+// uretilemez. Elde kalan access token'lar icin API tarafindaki
+// silinmis kullanici engeli devreye girer.
+func (s *Sunucu) HesapSil(ctx context.Context, userID string) error {
+	return s.kullanicilar.Sil(ctx, userID)
 }

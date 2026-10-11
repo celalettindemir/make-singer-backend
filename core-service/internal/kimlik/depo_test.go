@@ -207,6 +207,10 @@ func (hataliByIDUserStore) ByID(context.Context, string) (*User, error) {
 	return nil, errKullaniciOkunamadi
 }
 
+func (hataliByIDUserStore) Sil(context.Context, string) error {
+	return errKullaniciOkunamadi
+}
+
 // sahteIDTokenIstek, op.IDTokenRequest'in en kucuk karsiligidir:
 // op.CreateIDToken'i GERCEKTEN cagirabilmek icin gerekir.
 type sahteIDTokenIstek struct {

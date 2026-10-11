@@ -151,6 +151,31 @@ func TestUserStoreSozlesmesi(t *testing.T) {
 			},
 			beklenen: sozlesmeSonuc{hata: "sifre-kisa"},
 		},
+		{
+			ad: "Sil var olan kullaniciyi siler",
+			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
+				k, err := d.ByEmail(ctx, temelEposta)
+				if err != nil {
+					return sonuc(nil, err)
+				}
+				return sozlesmeSonuc{hata: sozlesmeHata(d.Sil(ctx, k.ID))}
+			},
+			beklenen: sozlesmeSonuc{},
+		},
+		{
+			ad: "ByEmail silinen kullaniciyi bulamaz",
+			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
+				return sonuc(d.ByEmail(ctx, temelEposta))
+			},
+			beklenen: sozlesmeSonuc{hata: "kullanici-yok"},
+		},
+		{
+			ad: "Sil olmayan kullanici icin ErrKullaniciYok",
+			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
+				return sozlesmeSonuc{hata: sozlesmeHata(d.Sil(ctx, yokID))}
+			},
+			beklenen: sozlesmeSonuc{hata: "kullanici-yok"},
+		},
 	}
 
 	kos := func(t *testing.T, depo UserStore) {

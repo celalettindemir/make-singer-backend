@@ -37,6 +37,9 @@ type UserStore interface {
 	Create(ctx context.Context, email, name, password string) (*User, error)
 	ByEmail(ctx context.Context, email string) (*User, error)
 	ByID(ctx context.Context, id string) (*User, error)
+	// Sil, kullaniciyi kalici olarak siler. refresh_tokens ve
+	// federe_kimlikler FK uzerinden ON DELETE CASCADE ile birlikte gider.
+	Sil(ctx context.Context, id string) error
 }
 
 type PostgresUserStore struct {
@@ -85,6 +88,23 @@ func (s *PostgresUserStore) ByID(ctx context.Context, id string) (*User, error) 
 	return s.tekil(ctx,
 		`SELECT id, email, email_verified, name, coalesce(password_hash, ''), created_at
 		 FROM users WHERE id = $1`, id)
+}
+
+func (s *PostgresUserStore) Sil(ctx context.Context, id string) error {
+	// uuid olmayan id Postgres'te tip hatasi verir; sahte depoyla ayni
+	// sonuc icin "yok" doneriz (ByID bu durumda genel hata doner, ama
+	// silme icin "yok" daha guvenli ve sahte depoyla tutarlidir).
+	if _, err := uuid.Parse(id); err != nil {
+		return ErrKullaniciYok
+	}
+	etiket, err := s.havuz.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("kullanici silinemedi: %w", err)
+	}
+	if etiket.RowsAffected() == 0 {
+		return ErrKullaniciYok
+	}
+	return nil
 }
 
 func (s *PostgresUserStore) tekil(ctx context.Context, sorgu string, arg any) (*User, error) {
