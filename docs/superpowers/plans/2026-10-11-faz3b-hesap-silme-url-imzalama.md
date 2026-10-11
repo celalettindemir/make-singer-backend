@@ -1329,5 +1329,8 @@ Son inceleme düzeltmesi (I1) sonrası gerçek mekanizma: silinmiş işareti (`k
 
 - `job:{id}` kayıtları (`ownerId`, sonuçtaki dosya anahtarları) silinmez; 24 saatlik TTL ile Redis'te kalır.
 
-- Silme anında Redis'e ulaşılamazsa işaret yazılmaz; elde kalan token AccessTTL (15 dk) dolana kadar API'ye girebilir. Refresh imkânsız olduğu için süre sınırlıdır, yazılan dosyaları gecikmeli temizlik siler. Not: Redis yoksa `SilinmisKullaniciEngeli` zaten tüm `/api/*`'yi 503'e düşürür. Bu durumda işçiler de işareti göremez; o anda kuyrukta ya da koşmakta olan işlerin yazdıkları 1 saatlik gecikmeli temizlikte gider.
-- Asynq görevi kurulamazsa ikinci temizlik olmaz; ilk temizlikten sonra yazılan dosyalar kalır. Log satırı `Uyari: gecikmeli temizlik gorevi kurulamadi` ile izlenir.
+- Silme anında Redis'e ulaşılamazsa hem silinmiş işareti hem gecikmeli temizlik görevi kaybolur: Asynq aynı Redis'i kullandığı için `Enqueue` de başarısız olur (yalnızca uyarı loglanır). Elde kalan güvence yalnızca anlık R2 temizliğidir (`Temizle`, R2 erişilebilirse koşar). Kesinti sürerken `SilinmisKullaniciEngeli` tüm `/api/*`'yi 503'e düşürür; işçiler yeni iş alamaz, koşmakta olan işte ücret öncesi denetim hatası tekrar denenir, ücret sonrası denetim hatası `SkipRetry` olur ve dosya yazılmaz. Redis geri geldiğinde ise işaret olmadığından:
+  - kuyrukta bekleyen (veya ücret öncesi tekrar denenen) işler sahibi silinmiş saymaz; Suno ücretlenir ve dosyalar silinmiş kullanıcının önekine yazılır,
+  - elde kalan access token süresi (AccessTTL, 15 dk) dolana kadar API'ye girip yeni iş başlatabilir (refresh imkânsız, süre sınırlı),
+  - bu yollarla yazılan dosyaları temizleyecek bir görev yoktur; elle silinmeleri gerekir. Log satırları `Uyari: silinmis isareti yazilamadi` ve `Uyari: gecikmeli temizlik gorevi kurulamadi` birlikte görülürse bu durum oluşmuştur.
+- Asynq görevi Redis ayaktayken başka bir nedenle kurulamazsa ikinci temizlik olmaz; ilk temizlikten sonra yazılan dosyalar kalır. Log satırı `Uyari: gecikmeli temizlik gorevi kurulamadi` ile izlenir.
