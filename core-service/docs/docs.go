@@ -1447,7 +1447,29 @@ const docTemplate = `{
                 "percussion",
                 "pads",
                 "lead",
-                "fx"
+                "fx",
+                "mix",
+                "rest"
+            ],
+            "x-enum-comments": {
+                "InstrumentMix": "tam parca (mix modu)",
+                "InstrumentRest": "secilen enstruman cikarilmis parca (focus modu)"
+            },
+            "x-enum-descriptions": [
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "tam parca (mix modu)",
+                "secilen enstruman cikarilmis parca (focus modu)"
             ],
             "x-enum-varnames": [
                 "InstrumentDrums",
@@ -1461,7 +1483,9 @@ const docTemplate = `{
                 "InstrumentPercussion",
                 "InstrumentPads",
                 "InstrumentLead",
-                "InstrumentFX"
+                "InstrumentFX",
+                "InstrumentMix",
+                "InstrumentRest"
             ]
         },
         "model.JobStatus": {
@@ -1999,6 +2023,9 @@ const docTemplate = `{
                 "key": {
                     "$ref": "#/definitions/model.KeyResult"
                 },
+                "stemMode": {
+                    "$ref": "#/definitions/model.StemMode"
+                },
                 "stems": {
                     "type": "array",
                     "items": {
@@ -2021,8 +2048,41 @@ const docTemplate = `{
                 "brief": {
                     "$ref": "#/definitions/model.Brief"
                 },
+                "focusInstrument": {
+                    "enum": [
+                        "drums",
+                        "bass",
+                        "piano",
+                        "guitar",
+                        "synth",
+                        "strings",
+                        "brass",
+                        "woodwinds",
+                        "percussion",
+                        "pads",
+                        "lead",
+                        "fx"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Instrument"
+                        }
+                    ]
+                },
                 "projectId": {
                     "type": "string"
+                },
+                "stemMode": {
+                    "enum": [
+                        "mix",
+                        "focus",
+                        "stems"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.StemMode"
+                        }
+                    ]
                 }
             }
         },
@@ -2159,6 +2219,19 @@ const docTemplate = `{
                     ]
                 }
             }
+        },
+        "model.StemMode": {
+            "type": "string",
+            "enum": [
+                "mix",
+                "focus",
+                "stems"
+            ],
+            "x-enum-varnames": [
+                "StemModeMix",
+                "StemModeFocus",
+                "StemModeStems"
+            ]
         },
         "model.StemResult": {
             "type": "object",

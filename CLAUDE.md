@@ -33,7 +33,7 @@ cd core-service && swag init -g cmd/server/main.go
 
 Testler: `cd core-service && go test ./internal/...` (birim testler, ag gerekmez).
 `./e2e/...` canli Redis ve gecerli Groq/R2 anahtarlari ister; CI onu calistirmaz.
-Ucretli gercek Suno testi (`TestRenderFullPipeline_RealSuno`) yalnizca `SUNO_E2E_ONAY=1` ile kosar; tek kosu 12-62 kredi.
+Ucretli gercek Suno testi (`TestRenderFullPipeline_RealSuno`) yalnizca `SUNO_E2E_ONAY=1` ile kosar; istek `stemMode` gondermedigi icin varsayilan `mix` ile 12 kredi harcar.
 audio-service: `cd audio-service && python3 -m pytest tests/ -v`.
 Standard Go tooling (`go fmt`, `go vet`) is used for formatting and linting.
 
@@ -53,7 +53,7 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 
 - **handler/** — Fiber route handlers. One file per domain: `lyrics`, `render`, `master`, `export`, `upload`.
 - **service/** — Business logic. Mirrors handler structure. Services enqueue Asynq jobs for render/master operations.
-- **worker/** — Asynq job processors: `render_worker.go` (Suno `/api/v1/generate` + `split_stem`, stems downloaded and uploaded to R2 as `stems/{userId}/{projectId}/{stemId}.mp3` via `client.KullaniciAnahtari`; any failure after the paid generate call is wrapped in `asynq.SkipRetry` so a retry never re-bills Suno), `master_worker.go` (audio mastering pipeline).
+- **worker/** — Asynq job processors: `render_worker.go` (Suno `/api/v1/generate`, then by stemMode: none / `split_stem_advanced` / `split_stem`; stems downloaded and uploaded to R2 as `stems/{userId}/{projectId}/{stemId}.mp3` via `client.KullaniciAnahtari`; any failure after the paid generate call is wrapped in `asynq.SkipRetry` so a retry never re-bills Suno), `master_worker.go` (audio mastering pipeline).
 - **client/** — HTTP clients for external services: Groq (AI lyrics), Suno (music generation), R2 (Cloudflare S3-compatible storage), audio-service (local mastering).
 - **model/** — Request/response structs and enums. All enum values defined in `enums.go`.
 - **middleware/** — `auth.go` (RS256 tokens from `internal/kimlik`, or legacy HMAC in development), `ratelimit.go` (Redis fixed window per user).
@@ -66,7 +66,7 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 | Service | Purpose | Fallback when unconfigured |
 |---------|---------|---------------------------|
 | Groq | AI lyrics generation | Mock data |
-| Suno (`api.sunoapi.org`, model `SUNO_MODEL`, default `V6`) | Instrumental rendering + 12-stem split (10 instrument stems kept; vocals and woodwinds skipped) (12 + 50 credits per render) | Simulated render steps |
+| Suno (`api.sunoapi.org`, model `SUNO_MODEL`, default `V6`) | Instrumental rendering. Per-render stem level chosen by the user via `stemMode`: `mix` (default, 12 credits: the generated track as one `mix` stem), `focus` (32: `split_stem_advanced` on `focusInstrument` → that instrument + `rest`), `stems` (62: `split_stem`, 10 instrument stems kept; vocals and woodwinds skipped) | Simulated render steps |
 | Cloudflare R2 | File storage | Operates without it |
 | Custom OpenID Provider (`internal/kimlik/`) | RS256 access token authentication, user sign-up/sign-in | Legacy HMAC JWT (development only) |
 | audio-service | Audio mastering | N/A (separate container) |

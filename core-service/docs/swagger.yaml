@@ -293,7 +293,27 @@ definitions:
     - pads
     - lead
     - fx
+    - mix
+    - rest
     type: string
+    x-enum-comments:
+      InstrumentMix: tam parca (mix modu)
+      InstrumentRest: secilen enstruman cikarilmis parca (focus modu)
+    x-enum-descriptions:
+    - ""
+    - ""
+    - ""
+    - ""
+    - ""
+    - ""
+    - ""
+    - ""
+    - ""
+    - ""
+    - ""
+    - ""
+    - tam parca (mix modu)
+    - secilen enstruman cikarilmis parca (focus modu)
     x-enum-varnames:
     - InstrumentDrums
     - InstrumentBass
@@ -307,6 +327,8 @@ definitions:
     - InstrumentPads
     - InstrumentLead
     - InstrumentFX
+    - InstrumentMix
+    - InstrumentRest
   model.JobStatus:
     enum:
     - queued
@@ -675,6 +697,8 @@ definitions:
         type: string
       key:
         $ref: '#/definitions/model.KeyResult'
+      stemMode:
+        $ref: '#/definitions/model.StemMode'
       stems:
         items:
           $ref: '#/definitions/model.StemResult'
@@ -686,8 +710,31 @@ definitions:
         $ref: '#/definitions/model.Arrangement'
       brief:
         $ref: '#/definitions/model.Brief'
+      focusInstrument:
+        allOf:
+        - $ref: '#/definitions/model.Instrument'
+        enum:
+        - drums
+        - bass
+        - piano
+        - guitar
+        - synth
+        - strings
+        - brass
+        - woodwinds
+        - percussion
+        - pads
+        - lead
+        - fx
       projectId:
         type: string
+      stemMode:
+        allOf:
+        - $ref: '#/definitions/model.StemMode'
+        enum:
+        - mix
+        - focus
+        - stems
     required:
     - arrangement
     - brief
@@ -788,6 +835,16 @@ definitions:
     - id
     - type
     type: object
+  model.StemMode:
+    enum:
+    - mix
+    - focus
+    - stems
+    type: string
+    x-enum-varnames:
+    - StemModeMix
+    - StemModeFocus
+    - StemModeStems
   model.StemResult:
     properties:
       duration:

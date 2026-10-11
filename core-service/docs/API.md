@@ -246,6 +246,16 @@ Start a new render job. Rate limit group: `render` (per hour). Only the `/start`
 | `projectId` | string | yes | UUID of the project |
 | `brief` | [Brief](#brief) | yes | Song parameters |
 | `arrangement` | [Arrangement](#arrangement) | yes | Arrangement settings |
+| `stemMode` | string | no | `mix`, `focus`, or `stems`; default `mix` | Stem level of the render (see [Stem modes](#stem-modes)) |
+| `focusInstrument` | string | only with `focus` | One of [Instrument](#instrument) values, and must be in `arrangement.instruments` | Instrument to isolate. Required when `stemMode` is `focus`; rejected for `mix` and `stems` |
+
+#### Stem modes
+
+| `stemMode` | Credits | Output stems | Notes |
+|---|---|---|---|
+| `mix` (default) | 12 | `mix` (the whole generated track) | Also used when `stemMode` is omitted, so older clients do not pay the higher rates |
+| `focus` | 32 | `focusInstrument` and `rest` (the track minus the focus instrument) | `focusInstrument` is required |
+| `stems` | 62 | One stem per instrument (vocals and woodwinds are skipped) | `focusInstrument` must be omitted |
 
 #### Brief
 
@@ -309,6 +319,15 @@ Start a new render job. Rate limit group: `render` (per hour). Only the `/start`
 }
 ```
 
+**Errors**
+
+| Status | Code | Condition |
+|---|---|---|
+| `400` | `VALIDATION_ERROR` | `focusInstrument` missing when `stemMode` is `focus` |
+| `400` | `VALIDATION_ERROR` | `focusInstrument` is not in `arrangement.instruments` |
+| `400` | `VALIDATION_ERROR` | `focusInstrument` sent with `mix` or `stems` |
+| `400` | `VALIDATION_ERROR` | Other request validation failures (e.g. unknown `stemMode` value) |
+
 ### `GET /api/render/status/:jobId`
 
 Get the current status of a render job.
@@ -364,17 +383,26 @@ Get the result of a completed render job.
     "scale": "major"
   },
   "createdAt": "2025-01-30T12:00:00Z",
+  "stemMode": "mix",
   "stems": [
     {
       "id": "stem-uuid",
-      "instrument": "drums",
-      "fileUrl": "https://storage.example.com/stems/drums.wav",
+      "instrument": "mix",
+      "fileUrl": "https://storage.example.com/stems/mix.mp3",
       "duration": 180.5,
       "waveformData": [0.1, 0.5, 0.3]
     }
   ]
 }
 ```
+
+`stemMode` echoes the level the render was started with (`mix`, `focus`, or `stems`). Stem `instrument` values depend on it:
+
+- `mix`: a single stem with instrument `mix`.
+- `focus`: two stems, the `focusInstrument` value and `rest` (the track minus the focus instrument).
+- `stems`: one stem per instrument.
+
+`mix` and `rest` are output-only values; they are not valid in request `instruments` or `focusInstrument`.
 
 **Errors**
 
