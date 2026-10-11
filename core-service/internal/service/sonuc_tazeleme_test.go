@@ -235,3 +235,18 @@ func TestUploadService_GetSignedURLMock_KeyFromURLIleCozulur(t *testing.T) {
 		t.Errorf("cozulen anahtar = %q, beklenen %q", gotKey, anahtar)
 	}
 }
+
+func TestRenderService_BuildResultStemModunuTasir(t *testing.T) {
+	s := NewRenderService(nil, nil, &sahteDepo{}, testR2Cfg())
+	record := &model.RenderResultRecord{
+		StemMode: model.StemModeMix,
+		Stems:    []model.StemResultRecord{{ID: "s1", Instrument: model.InstrumentMix, FileKey: "stems/kullanici-a/p1/s1.mp3"}},
+	}
+	resp, err := s.BuildResult(context.Background(), record)
+	if err != nil {
+		t.Fatalf("BuildResult: %v", err)
+	}
+	if resp.StemMode != model.StemModeMix {
+		t.Errorf("yanit stemMode = %q", resp.StemMode)
+	}
+}

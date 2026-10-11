@@ -58,6 +58,10 @@ const (
 	InstrumentPads       Instrument = "pads"
 	InstrumentLead       Instrument = "lead"
 	InstrumentFX         Instrument = "fx"
+
+	// Yalnizca render CIKTISINDA gorunur; istekte kabul edilmez.
+	InstrumentMix  Instrument = "mix"  // tam parca (mix modu)
+	InstrumentRest Instrument = "rest" // secilen enstruman cikarilmis parca (focus modu)
 )
 
 // Job status
@@ -159,4 +163,15 @@ const (
 	LanguageEN Language = "en"
 	LanguageTR Language = "tr"
 	LanguageFR Language = "fr"
+)
+
+// StemMode, render'in stem seviyesi. Kullanici secer; maliyet Suno
+// kredisidir: mix 12, focus 32 (12 + split_stem_advanced 20), stems 62
+// (12 + split_stem 50).
+type StemMode string
+
+const (
+	StemModeMix   StemMode = "mix"
+	StemModeFocus StemMode = "focus"
+	StemModeStems StemMode = "stems"
 )

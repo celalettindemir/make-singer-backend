@@ -160,3 +160,52 @@ func TestMasterService_StartFinalSahibiYazar(t *testing.T) {
 		t.Errorf("gorev payload sahibi = %q", p.OwnerID)
 	}
 }
+
+func TestRenderService_StartRenderStemModunuYazar(t *testing.T) {
+	rdb := canliRedis(t)
+	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: canliRedisAdresi, DB: 13})
+	defer ac.Close()
+	s := NewRenderService(rdb, ac, nil, testR2Cfg())
+
+	davul := model.InstrumentDrums
+	req := &model.RenderStartRequest{
+		ProjectID:       uuid.New().String(),
+		Arrangement:     model.Arrangement{Instruments: []model.Instrument{model.InstrumentDrums}},
+		StemMode:        model.StemModeFocus,
+		FocusInstrument: &davul,
+	}
+	if _, err := s.StartRender(context.Background(), "kullanici-a", req); err != nil {
+		t.Fatalf("StartRender: %v", err)
+	}
+	var p model.RenderJobPayload
+	bekleyenGorevPayload(t, "render", &p)
+	if p.StemMode != model.StemModeFocus || p.FocusInstrument == nil || *p.FocusInstrument != model.InstrumentDrums {
+		t.Errorf("payload stem ayari = %q %v", p.StemMode, p.FocusInstrument)
+	}
+}
+
+func TestRenderService_StartRenderVarsayilanMix(t *testing.T) {
+	rdb := canliRedis(t)
+	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: canliRedisAdresi, DB: 13})
+	defer ac.Close()
+	s := NewRenderService(rdb, ac, nil, testR2Cfg())
+
+	req := &model.RenderStartRequest{ProjectID: uuid.New().String()}
+	if _, err := s.StartRender(context.Background(), "kullanici-a", req); err != nil {
+		t.Fatalf("StartRender: %v", err)
+	}
+	var p model.RenderJobPayload
+	bekleyenGorevPayload(t, "render", &p)
+	if p.StemMode != model.StemModeMix {
+		t.Errorf("varsayilan mod = %q, mix bekleniyordu", p.StemMode)
+	}
+}
+
+func TestRenderService_GecersizStemAyariIsYaratmaz(t *testing.T) {
+	// Redis nil: dogrulama is kaydindan ONCE olmali, dokunulursa panic.
+	s := NewRenderService(nil, nil, nil, testR2Cfg())
+	req := &model.RenderStartRequest{ProjectID: uuid.New().String(), StemMode: model.StemModeFocus}
+	if _, err := s.StartRender(context.Background(), "kullanici-a", req); !errors.Is(err, model.ErrGecersizStemAyari) {
+		t.Fatalf("ErrGecersizStemAyari bekleniyordu, geldi: %v", err)
+	}
+}

@@ -1,12 +1,48 @@
 package model
 
-import "time"
+import (
+	"errors"
+	"fmt"
+	"time"
+)
 
 // RenderStartRequest represents the request to start a render job
 type RenderStartRequest struct {
-	ProjectID   string      `json:"projectId" validate:"required,uuid"`
-	Brief       Brief       `json:"brief" validate:"required"`
-	Arrangement Arrangement `json:"arrangement" validate:"required"`
+	ProjectID       string      `json:"projectId" validate:"required,uuid"`
+	Brief           Brief       `json:"brief" validate:"required"`
+	Arrangement     Arrangement `json:"arrangement" validate:"required"`
+	StemMode        StemMode    `json:"stemMode" validate:"omitempty,oneof=mix focus stems"`
+	FocusInstrument *Instrument `json:"focusInstrument" validate:"omitempty,oneof=drums bass piano guitar synth strings brass woodwinds percussion pads lead fx"`
+}
+
+// ErrGecersizStemAyari: stemMode/focusInstrument birlikte tutarsiz.
+var ErrGecersizStemAyari = errors.New("gecersiz stem ayari")
+
+// StemAyarlari, istegin stem modunu normallestirir: bos mod mix'tir (ucuz
+// taraf; eski istemci kazara 62 kredi harcatamaz). focus icin enstruman
+// zorunludur ve aranjmanda olmalidir; diger modlarda enstruman verilemez.
+// Ileride plan bazli kisit (or. stems yalnizca belirli planda) buraya eklenir.
+func (r *RenderStartRequest) StemAyarlari() (StemMode, *Instrument, error) {
+	mod := r.StemMode
+	if mod == "" {
+		mod = StemModeMix
+	}
+	if mod != StemModeFocus {
+		if r.FocusInstrument != nil {
+			return "", nil, fmt.Errorf("%w: focusInstrument yalnizca focus modunda", ErrGecersizStemAyari)
+		}
+		return mod, nil, nil
+	}
+	if r.FocusInstrument == nil {
+		return "", nil, fmt.Errorf("%w: focus modu focusInstrument ister", ErrGecersizStemAyari)
+	}
+	for _, i := range r.Arrangement.Instruments {
+		if i == *r.FocusInstrument {
+			odak := *r.FocusInstrument
+			return mod, &odak, nil
+		}
+	}
+	return "", nil, fmt.Errorf("%w: focusInstrument aranjmanda yok", ErrGecersizStemAyari)
 }
 
 // Brief contains song parameters
@@ -82,6 +118,7 @@ type RenderResultResponse struct {
 	Duration  float64      `json:"duration"`
 	Key       KeyResult    `json:"key"`
 	CreatedAt time.Time    `json:"createdAt"`
+	StemMode  StemMode     `json:"stemMode"`
 	Stems     []StemResult `json:"stems"`
 }
 
@@ -110,6 +147,7 @@ type RenderResultRecord struct {
 	Duration  float64            `json:"duration"`
 	Key       KeyResult          `json:"key"`
 	CreatedAt time.Time          `json:"createdAt"`
+	StemMode  StemMode           `json:"stemMode"`
 	Stems     []StemResultRecord `json:"stems"`
 }
 

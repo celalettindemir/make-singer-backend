@@ -65,12 +65,19 @@ func (s *RenderService) BuildResult(ctx context.Context, record *model.RenderRes
 		Duration:  record.Duration,
 		Key:       record.Key,
 		CreatedAt: record.CreatedAt,
+		StemMode:  record.StemMode,
 		Stems:     stems,
 	}, nil
 }
 
 // StartRender queues a new render job
 func (s *RenderService) StartRender(ctx context.Context, userID string, req *model.RenderStartRequest) (*model.RenderStartResponse, error) {
+	// Stem ayari is kaydindan ONCE dogrulanir: tutarsiz istek is yaratmaz.
+	stemModu, odak, err := req.StemAyarlari()
+	if err != nil {
+		return nil, err
+	}
+
 	jobID := uuid.New().String()
 	now := time.Now()
 
@@ -86,10 +93,12 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 
 	// Create payload
 	payload := &model.RenderJobPayload{
-		OwnerID:     userID,
-		ProjectID:   req.ProjectID,
-		Brief:       req.Brief,
-		Arrangement: req.Arrangement,
+		OwnerID:         userID,
+		ProjectID:       req.ProjectID,
+		Brief:           req.Brief,
+		Arrangement:     req.Arrangement,
+		StemMode:        stemModu,
+		FocusInstrument: odak,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
