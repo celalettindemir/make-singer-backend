@@ -254,6 +254,24 @@ definitions:
       size:
         type: integer
     type: object
+  model.FileSignRequest:
+    properties:
+      urls:
+        items:
+          type: string
+        maxItems: 50
+        minItems: 1
+        type: array
+    required:
+    - urls
+    type: object
+  model.FileSignResponse:
+    properties:
+      files:
+        items:
+          $ref: '#/definitions/model.SignedFile'
+        type: array
+    type: object
   model.Genre:
     enum:
     - pop
@@ -824,6 +842,13 @@ definitions:
     - SectionBridge
     - SectionOutro
     - SectionInstrumental
+  model.SignedFile:
+    properties:
+      expiresAt:
+        type: string
+      url:
+        type: string
+    type: object
   model.SongSection:
     properties:
       bars:
@@ -972,6 +997,30 @@ info:
   title: Make-Singer API
   version: "1.0"
 paths:
+  /api/account:
+    delete:
+      description: Permanently delete the caller's account, linked sign-ins, refresh
+        tokens and every stored file. The same token is rejected afterwards.
+      responses:
+        "204":
+          description: No Content
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete account
+      tags:
+      - Account
   /api/export/mp3:
     post:
       consumes:
@@ -1105,6 +1154,47 @@ paths:
       summary: Export as WAV
       tags:
       - Export
+  /api/files/sign:
+    post:
+      consumes:
+      - application/json
+      description: Re-sign stored file URLs (1-50) owned by the caller. Response keeps
+        the request order. Public export URLs have no expiresAt.
+      parameters:
+      - description: URLs to refresh
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.FileSignRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.FileSignResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Refresh file URLs
+      tags:
+      - Files
   /api/lyrics/generate:
     post:
       consumes:
