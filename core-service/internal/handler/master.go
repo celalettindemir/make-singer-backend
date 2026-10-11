@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"errors"
+
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/makeasinger/api/internal/model"
@@ -67,6 +69,11 @@ func (h *MasterHandler) Preview(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/master/final [post]
 func (h *MasterHandler) Final(c *fiber.Ctx) error {
+	userID, ok := istekSahibi(c)
+	if !ok {
+		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+	}
+
 	var req model.MasterFinalRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.ValidationError(c, "Invalid request body", nil)
@@ -76,7 +83,7 @@ func (h *MasterHandler) Final(c *fiber.Ctx) error {
 		return response.ValidationError(c, "Validation failed", formatValidationErrors(err))
 	}
 
-	result, err := h.service.StartFinal(c.Context(), &req)
+	result, err := h.service.StartFinal(c.Context(), userID, &req)
 	if err != nil {
 		return response.ServiceError(c, err.Error())
 	}
@@ -98,14 +105,19 @@ func (h *MasterHandler) Final(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/master/status/{jobId} [get]
 func (h *MasterHandler) Status(c *fiber.Ctx) error {
+	userID, ok := istekSahibi(c)
+	if !ok {
+		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+	}
+
 	jobID := c.Params("jobId")
 	if jobID == "" {
 		return response.ValidationError(c, "Job ID is required", nil)
 	}
 
-	result, err := h.service.GetStatus(c.Context(), jobID)
+	result, err := h.service.GetStatus(c.Context(), userID, jobID)
 	if err != nil {
-		if err.Error() == "job not found" {
+		if errors.Is(err, service.ErrJobNotFound) {
 			return response.NotFound(c, "Job not found")
 		}
 		return response.ServiceError(c, err.Error())
@@ -128,14 +140,19 @@ func (h *MasterHandler) Status(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/master/result/{jobId} [get]
 func (h *MasterHandler) Result(c *fiber.Ctx) error {
+	userID, ok := istekSahibi(c)
+	if !ok {
+		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+	}
+
 	jobID := c.Params("jobId")
 	if jobID == "" {
 		return response.ValidationError(c, "Job ID is required", nil)
 	}
 
-	result, err := h.service.GetResult(c.Context(), jobID)
+	result, err := h.service.GetResult(c.Context(), userID, jobID)
 	if err != nil {
-		if err.Error() == "job not found" {
+		if errors.Is(err, service.ErrJobNotFound) {
 			return response.NotFound(c, "Job not found")
 		}
 		if err.Error() == "job not completed" {

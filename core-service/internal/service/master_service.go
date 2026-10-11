@@ -50,7 +50,7 @@ func (s *MasterService) Preview(ctx context.Context, req *model.MasterPreviewReq
 }
 
 // StartFinal queues a final mastering job
-func (s *MasterService) StartFinal(ctx context.Context, req *model.MasterFinalRequest) (*model.MasterFinalResponse, error) {
+func (s *MasterService) StartFinal(ctx context.Context, userID string, req *model.MasterFinalRequest) (*model.MasterFinalResponse, error) {
 	jobID := uuid.New().String()
 	now := time.Now()
 
@@ -58,6 +58,7 @@ func (s *MasterService) StartFinal(ctx context.Context, req *model.MasterFinalRe
 	job := &model.Job{
 		ID:        jobID,
 		Type:      model.JobTypeMaster,
+		OwnerID:   userID,
 		Status:    model.JobStatusQueued,
 		Progress:  0,
 		CreatedAt: now,
@@ -65,6 +66,7 @@ func (s *MasterService) StartFinal(ctx context.Context, req *model.MasterFinalRe
 
 	// Create payload
 	payload := &model.MasterJobPayload{
+		OwnerID:     userID,
 		ProjectID:   req.ProjectID,
 		Profile:     req.Profile,
 		StemURLs:    req.StemURLs,
@@ -108,8 +110,8 @@ func (s *MasterService) StartFinal(ctx context.Context, req *model.MasterFinalRe
 }
 
 // GetStatus returns the current status of a master job
-func (s *MasterService) GetStatus(ctx context.Context, jobID string) (*model.MasterStatusResponse, error) {
-	job, err := s.getJob(ctx, jobID)
+func (s *MasterService) GetStatus(ctx context.Context, userID, jobID string) (*model.MasterStatusResponse, error) {
+	job, err := sahipliJobOku(ctx, s.redis, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -123,8 +125,8 @@ func (s *MasterService) GetStatus(ctx context.Context, jobID string) (*model.Mas
 }
 
 // GetResult returns the result of a completed master job
-func (s *MasterService) GetResult(ctx context.Context, jobID string) (*model.MasterResultResponse, error) {
-	job, err := s.getJob(ctx, jobID)
+func (s *MasterService) GetResult(ctx context.Context, userID, jobID string) (*model.MasterResultResponse, error) {
+	job, err := sahipliJobOku(ctx, s.redis, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -160,28 +162,11 @@ func (s *MasterService) BuildResult(ctx context.Context, stored []byte) (*model.
 // Helper methods
 
 func (s *MasterService) saveJob(ctx context.Context, job *model.Job) error {
-	data, err := json.Marshal(job)
-	if err != nil {
-		return err
-	}
-	return s.redis.Set(ctx, fmt.Sprintf("job:%s", job.ID), data, 24*time.Hour).Err()
+	return jobYaz(ctx, s.redis, job)
 }
 
 func (s *MasterService) getJob(ctx context.Context, jobID string) (*model.Job, error) {
-	data, err := s.redis.Get(ctx, fmt.Sprintf("job:%s", jobID)).Bytes()
-	if err != nil {
-		if err == redis.Nil {
-			return nil, fmt.Errorf("job not found")
-		}
-		return nil, err
-	}
-
-	var job model.Job
-	if err := json.Unmarshal(data, &job); err != nil {
-		return nil, err
-	}
-
-	return &job, nil
+	return jobOku(ctx, s.redis, jobID)
 }
 
 func newMasterTask(jobID string, payload []byte) (*asynq.Task, error) {

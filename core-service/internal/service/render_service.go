@@ -70,7 +70,7 @@ func (s *RenderService) BuildResult(ctx context.Context, record *model.RenderRes
 }
 
 // StartRender queues a new render job
-func (s *RenderService) StartRender(ctx context.Context, req *model.RenderStartRequest) (*model.RenderStartResponse, error) {
+func (s *RenderService) StartRender(ctx context.Context, userID string, req *model.RenderStartRequest) (*model.RenderStartResponse, error) {
 	jobID := uuid.New().String()
 	now := time.Now()
 
@@ -78,6 +78,7 @@ func (s *RenderService) StartRender(ctx context.Context, req *model.RenderStartR
 	job := &model.Job{
 		ID:        jobID,
 		Type:      model.JobTypeRender,
+		OwnerID:   userID,
 		Status:    model.JobStatusQueued,
 		Progress:  0,
 		CreatedAt: now,
@@ -85,6 +86,7 @@ func (s *RenderService) StartRender(ctx context.Context, req *model.RenderStartR
 
 	// Create payload
 	payload := &model.RenderJobPayload{
+		OwnerID:     userID,
 		ProjectID:   req.ProjectID,
 		Brief:       req.Brief,
 		Arrangement: req.Arrangement,
@@ -127,8 +129,8 @@ func (s *RenderService) StartRender(ctx context.Context, req *model.RenderStartR
 }
 
 // GetStatus returns the current status of a render job
-func (s *RenderService) GetStatus(ctx context.Context, jobID string) (*model.RenderStatusResponse, error) {
-	job, err := s.getJob(ctx, jobID)
+func (s *RenderService) GetStatus(ctx context.Context, userID, jobID string) (*model.RenderStatusResponse, error) {
+	job, err := sahipliJobOku(ctx, s.redis, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -147,8 +149,8 @@ func (s *RenderService) GetStatus(ctx context.Context, jobID string) (*model.Ren
 }
 
 // GetResult returns the result of a completed render job
-func (s *RenderService) GetResult(ctx context.Context, jobID string) (*model.RenderResultResponse, error) {
-	job, err := s.getJob(ctx, jobID)
+func (s *RenderService) GetResult(ctx context.Context, userID, jobID string) (*model.RenderResultResponse, error) {
+	job, err := sahipliJobOku(ctx, s.redis, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -166,8 +168,8 @@ func (s *RenderService) GetResult(ctx context.Context, jobID string) (*model.Ren
 }
 
 // CancelRender cancels a render job
-func (s *RenderService) CancelRender(ctx context.Context, jobID string) (*model.RenderCancelResponse, error) {
-	job, err := s.getJob(ctx, jobID)
+func (s *RenderService) CancelRender(ctx context.Context, userID, jobID string) (*model.RenderCancelResponse, error) {
+	job, err := sahipliJobOku(ctx, s.redis, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -249,28 +251,11 @@ func (s *RenderService) FailJob(ctx context.Context, jobID string, errMsg string
 // Helper methods
 
 func (s *RenderService) saveJob(ctx context.Context, job *model.Job) error {
-	data, err := json.Marshal(job)
-	if err != nil {
-		return err
-	}
-	return s.redis.Set(ctx, fmt.Sprintf("job:%s", job.ID), data, 24*time.Hour).Err()
+	return jobYaz(ctx, s.redis, job)
 }
 
 func (s *RenderService) getJob(ctx context.Context, jobID string) (*model.Job, error) {
-	data, err := s.redis.Get(ctx, fmt.Sprintf("job:%s", jobID)).Bytes()
-	if err != nil {
-		if err == redis.Nil {
-			return nil, fmt.Errorf("job not found")
-		}
-		return nil, err
-	}
-
-	var job model.Job
-	if err := json.Unmarshal(data, &job); err != nil {
-		return nil, err
-	}
-
-	return &job, nil
+	return jobOku(ctx, s.redis, jobID)
 }
 
 func newRenderTask(jobID string, payload []byte) (*asynq.Task, error) {

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"errors"
+
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/makeasinger/api/internal/model"
@@ -35,6 +37,11 @@ func NewRenderHandler(svc *service.RenderService, v *validator.Validate) *Render
 // @Security     BearerAuth
 // @Router       /api/render/start [post]
 func (h *RenderHandler) Start(c *fiber.Ctx) error {
+	userID, ok := istekSahibi(c)
+	if !ok {
+		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+	}
+
 	var req model.RenderStartRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.ValidationError(c, "Invalid request body", nil)
@@ -44,7 +51,7 @@ func (h *RenderHandler) Start(c *fiber.Ctx) error {
 		return response.ValidationError(c, "Validation failed", formatValidationErrors(err))
 	}
 
-	result, err := h.service.StartRender(c.Context(), &req)
+	result, err := h.service.StartRender(c.Context(), userID, &req)
 	if err != nil {
 		return response.ServiceError(c, err.Error())
 	}
@@ -66,14 +73,19 @@ func (h *RenderHandler) Start(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/render/status/{jobId} [get]
 func (h *RenderHandler) Status(c *fiber.Ctx) error {
+	userID, ok := istekSahibi(c)
+	if !ok {
+		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+	}
+
 	jobID := c.Params("jobId")
 	if jobID == "" {
 		return response.ValidationError(c, "Job ID is required", nil)
 	}
 
-	result, err := h.service.GetStatus(c.Context(), jobID)
+	result, err := h.service.GetStatus(c.Context(), userID, jobID)
 	if err != nil {
-		if err.Error() == "job not found" {
+		if errors.Is(err, service.ErrJobNotFound) {
 			return response.NotFound(c, "Job not found")
 		}
 		return response.ServiceError(c, err.Error())
@@ -96,14 +108,19 @@ func (h *RenderHandler) Status(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/render/result/{jobId} [get]
 func (h *RenderHandler) Result(c *fiber.Ctx) error {
+	userID, ok := istekSahibi(c)
+	if !ok {
+		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+	}
+
 	jobID := c.Params("jobId")
 	if jobID == "" {
 		return response.ValidationError(c, "Job ID is required", nil)
 	}
 
-	result, err := h.service.GetResult(c.Context(), jobID)
+	result, err := h.service.GetResult(c.Context(), userID, jobID)
 	if err != nil {
-		if err.Error() == "job not found" {
+		if errors.Is(err, service.ErrJobNotFound) {
 			return response.NotFound(c, "Job not found")
 		}
 		if err.Error() == "job not completed" {
@@ -129,14 +146,19 @@ func (h *RenderHandler) Result(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/render/cancel/{jobId} [post]
 func (h *RenderHandler) Cancel(c *fiber.Ctx) error {
+	userID, ok := istekSahibi(c)
+	if !ok {
+		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+	}
+
 	jobID := c.Params("jobId")
 	if jobID == "" {
 		return response.ValidationError(c, "Job ID is required", nil)
 	}
 
-	result, err := h.service.CancelRender(c.Context(), jobID)
+	result, err := h.service.CancelRender(c.Context(), userID, jobID)
 	if err != nil {
-		if err.Error() == "job not found" {
+		if errors.Is(err, service.ErrJobNotFound) {
 			return response.NotFound(c, "Job not found")
 		}
 		if err.Error() == "job already completed" {
