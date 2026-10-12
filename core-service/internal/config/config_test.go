@@ -356,3 +356,62 @@ func TestLoad_SosyalYayinLimiti(t *testing.T) {
 		t.Errorf("SosyalYayinPerHour = %d, ortamdan 7 bekleniyordu", cfg.RateLimit.SosyalYayinPerHour)
 	}
 }
+
+func TestLoad_KesfetLimitleriVarsayilan(t *testing.T) {
+	for _, ad := range []string{
+		"RATELIMIT_SOSYAL_YORUM_PER_MIN", "RATELIMIT_SOSYAL_COVER_PER_HOUR",
+		"RATELIMIT_PUBLIC_PER_MIN", "RATELIMIT_PUBLIC_WEB_PER_MIN",
+		"SOSYAL_WEB_ANAHTARI", "SOSYAL_WEB_ANAHTARI_FILE",
+	} {
+		os.Unsetenv(ad)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load hata verdi: %v", err)
+	}
+	r := cfg.RateLimit
+	if r.SosyalYorumPerMin != 10 || r.SosyalCoverPerHour != 20 || r.PublicPerMin != 30 || r.PublicWebPerMin != 600 {
+		t.Errorf("varsayilanlar = yorum %d, cover %d, public %d, web %d; beklenen 10, 20, 30, 600",
+			r.SosyalYorumPerMin, r.SosyalCoverPerHour, r.PublicPerMin, r.PublicWebPerMin)
+	}
+	if cfg.Sosyal.WebAnahtari != "" {
+		t.Errorf("WebAnahtari varsayilani bos olmali: %q", cfg.Sosyal.WebAnahtari)
+	}
+}
+
+func TestLoad_KesfetLimitleriOrtamdan(t *testing.T) {
+	t.Setenv("RATELIMIT_SOSYAL_YORUM_PER_MIN", "3")
+	t.Setenv("RATELIMIT_SOSYAL_COVER_PER_HOUR", "4")
+	t.Setenv("RATELIMIT_PUBLIC_PER_MIN", "5")
+	t.Setenv("RATELIMIT_PUBLIC_WEB_PER_MIN", "6")
+	t.Setenv("SOSYAL_WEB_ANAHTARI", "dogrudan-deger")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load hata verdi: %v", err)
+	}
+	r := cfg.RateLimit
+	if r.SosyalYorumPerMin != 3 || r.SosyalCoverPerHour != 4 || r.PublicPerMin != 5 || r.PublicWebPerMin != 6 {
+		t.Errorf("ortam degerleri okunmadi: %+v", r)
+	}
+	if cfg.Sosyal.WebAnahtari != "dogrudan-deger" {
+		t.Errorf("WebAnahtari = %q", cfg.Sosyal.WebAnahtari)
+	}
+}
+
+// Docker secret yolu: SOSYAL_WEB_ANAHTARI bos, _FILE dolu.
+func TestLoad_WebAnahtariDosyadan(t *testing.T) {
+	dosya := t.TempDir() + "/web_anahtari"
+	if err := os.WriteFile(dosya, []byte("  dosyadaki-sir\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SOSYAL_WEB_ANAHTARI", "")
+	t.Setenv("SOSYAL_WEB_ANAHTARI_FILE", dosya)
+	// readSecret degeri ortama yazar; t.Setenv'in temizligi geri alir.
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load hata verdi: %v", err)
+	}
+	if cfg.Sosyal.WebAnahtari != "dosyadaki-sir" {
+		t.Errorf("WebAnahtari = %q, beklenen dosyadaki-sir (kirpilmis)", cfg.Sosyal.WebAnahtari)
+	}
+}
