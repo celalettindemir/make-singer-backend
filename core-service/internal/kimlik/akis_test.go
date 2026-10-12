@@ -145,7 +145,7 @@ func testSunucuKurAyarli(
 	// hicbir zaman Apple/Google'a cikmaz.
 	var (
 		akislar        map[string]*YukariAkis
-		dogrulayicilar map[string]*auth.YukariAkisDogrulayici
+		dogrulayicilar map[string]*auth.UpstreamVerifier
 		federeDepo     FedereDepo
 		sahteFedere    *SahteFedereDepo
 		oplar          map[string]*sahteOP

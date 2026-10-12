@@ -22,8 +22,8 @@ import (
 	"github.com/makeasinger/api/docs"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
+	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/handler"
-	"github.com/makeasinger/api/internal/hesapisaret"
 	"github.com/makeasinger/api/internal/kimlik"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/service"
@@ -175,7 +175,7 @@ func main() {
 	}
 	sosyalHandler := handler.NewSosyalHandler(
 		sosyal.NewServis(sosyalDepo, asynqClient, storage, &cfg.R2).KopyalayiciAyarla(kopyalayici))
-	sosyalWorker := worker.NewSosyalWorker(sosyalDepo, kopyalayici, audioClient, silici, hesapisaret.NewRedisDenetci(redisClient))
+	sosyalWorker := worker.NewSosyalWorker(sosyalDepo, kopyalayici, audioClient, silici, deletionmark.NewRedisChecker(redisClient))
 
 	// Initialize handlers
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
@@ -268,7 +268,7 @@ func main() {
 			cfg.Social.WebKey, cfg.RateLimit.PublicWebPerMin))
 
 	// API routes
-	api := app.Group("/api", apiAuthMiddleware, middleware.SilinmisKullaniciEngeli(hesapisaret.NewRedisDenetci(redisClient)))
+	api := app.Group("/api", apiAuthMiddleware, middleware.SilinmisKullaniciEngeli(deletionmark.NewRedisChecker(redisClient)))
 
 	// Lyrics routes
 	lyrics := api.Group("/lyrics", rateLimiter.LyricsLimit(cfg.RateLimit.LyricsPerMin))
@@ -396,7 +396,7 @@ func startWorkerServer(
 	// Create workers with external clients
 	// Isciler is sahibinin silinmis isaretini ucretli Suno cagrisindan ve
 	// her R2 yazimindan once denetler.
-	hesapDenetci := hesapisaret.NewRedisDenetci(redisClient)
+	hesapDenetci := deletionmark.NewRedisChecker(redisClient)
 	renderWorker := worker.NewRenderWorker(renderService, sunoClient, r2Client, hub, hesapDenetci)
 	masterWorker := worker.NewMasterWorker(redisClient, audioClient, r2Client, masterService, hub, &cfg.R2, hesapDenetci)
 

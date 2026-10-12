@@ -13,7 +13,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
-	"github.com/makeasinger/api/internal/hesapisaret"
+	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/internal/websocket"
@@ -28,11 +28,11 @@ type MasterWorker struct {
 	masterService *service.MasterService
 	hub           *websocket.Hub
 	r2Cfg         *config.R2Config
-	hesap         hesapisaret.Denetci // nil: denetim yok
+	hesap         deletionmark.Checker // nil: denetim yok
 }
 
 // NewMasterWorker creates a new master worker
-func NewMasterWorker(redisClient *redis.Client, audioClient client.AudioProcessor, r2Client client.StorageClient, masterService *service.MasterService, hub *websocket.Hub, r2Cfg *config.R2Config, hesap hesapisaret.Denetci) *MasterWorker {
+func NewMasterWorker(redisClient *redis.Client, audioClient client.AudioProcessor, r2Client client.StorageClient, masterService *service.MasterService, hub *websocket.Hub, r2Cfg *config.R2Config, hesap deletionmark.Checker) *MasterWorker {
 	return &MasterWorker{
 		redis:         redisClient,
 		audioClient:   audioClient,

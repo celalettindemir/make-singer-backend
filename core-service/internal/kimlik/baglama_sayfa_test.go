@@ -29,7 +29,7 @@ func iddiaKur(sub, eposta string, dogrulandi bool) *auth.Claims {
 	return &auth.Claims{
 		UserID:        sub,
 		Email:         eposta,
-		EmailVerified: auth.EsnekBool(dogrulandi),
+		EmailVerified: auth.FlexibleBool(dogrulandi),
 		Name:          "Test Kullanici",
 	}
 }

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
-	"github.com/makeasinger/api/internal/hesapisaret"
+	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/kimlik"
 	"github.com/redis/go-redis/v9"
 )
@@ -131,7 +131,7 @@ func TestHesapSil_Isaret24SaatYasar(t *testing.T) {
 	if err := svc.Sil(context.Background(), hesapID); err != nil {
 		t.Fatalf("beklenmeyen hata: %v", err)
 	}
-	ttl, err := rdb.TTL(context.Background(), hesapisaret.Anahtar(hesapID)).Result()
+	ttl, err := rdb.TTL(context.Background(), deletionmark.Key(hesapID)).Result()
 	if err != nil || ttl <= 23*time.Hour || ttl > 24*time.Hour {
 		t.Fatalf("isaret TTL = %v (err %v), ~24 saat bekleniyordu", ttl, err)
 	}

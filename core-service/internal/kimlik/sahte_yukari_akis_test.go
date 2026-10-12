@@ -879,7 +879,7 @@ func akisOrtamiKur(t *testing.T, ayar sahteOPAyar) *akisOrtami {
 // kurulur.
 func federasyonKablola(t *testing.T, ayar sahteOPAyar) (
 	map[string]*YukariAkis,
-	map[string]*auth.YukariAkisDogrulayici,
+	map[string]*auth.UpstreamVerifier,
 	map[string]*sahteOP,
 ) {
 	t.Helper()
@@ -909,9 +909,9 @@ func federasyonKablola(t *testing.T, ayar sahteOPAyar) (
 		},
 	}
 	oplar := map[string]*sahteOP{saglayiciGoogle: google, saglayiciApple: apple}
-	dogrulayicilar := map[string]*auth.YukariAkisDogrulayici{}
+	dogrulayicilar := map[string]*auth.UpstreamVerifier{}
 	for ad, s := range oplar {
-		d, err := auth.NewYukariAkisDogrulayici(
+		d, err := auth.NewUpstreamVerifier(
 			t.Context(), s.sunucu.URL+"/jwks", s.sunucu.URL, s.istemciID)
 		if err != nil {
 			t.Fatalf("%s dogrulayicisi kurulamadi: %v", ad, err)

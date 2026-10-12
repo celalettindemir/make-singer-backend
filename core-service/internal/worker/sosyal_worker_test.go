@@ -9,7 +9,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
-	"github.com/makeasinger/api/internal/hesapisaret"
+	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/sosyal"
 )
 
@@ -102,7 +102,7 @@ type sosyalKurulum struct {
 	w      *SosyalWorker
 }
 
-func sosyalTestWorker(kayit *sosyal.HazirlikKaydi, denetci hesapisaret.Denetci) *sosyalKurulum {
+func sosyalTestWorker(kayit *sosyal.HazirlikKaydi, denetci deletionmark.Checker) *sosyalKurulum {
 	k := &sosyalKurulum{
 		depo:   &sahteHazirlikDeposu{kayit: kayit},
 		kopya:  &sahteKopyalayici{},

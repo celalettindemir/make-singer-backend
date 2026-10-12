@@ -10,7 +10,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
-	"github.com/makeasinger/api/internal/hesapisaret"
+	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/kimlik"
 	"github.com/redis/go-redis/v9"
 )
@@ -81,7 +81,7 @@ func (s *HesapService) Sil(ctx context.Context, userID string) error {
 		return fmt.Errorf("hesap silinemedi: %w", err)
 	}
 
-	if err := s.redis.Set(ctx, hesapisaret.Anahtar(userID), "1", hesapisaret.Omur).Err(); err != nil {
+	if err := s.redis.Set(ctx, deletionmark.Key(userID), "1", deletionmark.TTL).Err(); err != nil {
 		log.Printf("Uyari: silinmis isareti yazilamadi (kullanici %s): %v", userID, err)
 	}
 	if err := s.Temizle(ctx, userID); err != nil {

@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
-	"github.com/makeasinger/api/internal/hesapisaret"
+	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/sosyal"
 )
 
@@ -27,14 +27,14 @@ type SosyalWorker struct {
 	kopyalayici client.Kopyalayici   // nil: R2 yok, kopya atlanir
 	analizci    client.AudioAnalizci // nil: dalga formu ve onizleme yok
 	silici      client.OnekSilici    // nil: R2 yok
-	hesap       hesapisaret.Denetci  // nil: denetim yok
+	hesap       deletionmark.Checker // nil: denetim yok
 	sonDeneme   func(context.Context) bool
 }
 
 // NewSosyalWorker kurar. Arayuz parametreleri nil olabilir; main tipli nil
 // tuzagina dusmemek icin yalnizca gercek istemcileri gecirir.
 func NewSosyalWorker(depo sosyal.HazirlikDeposu, kopyalayici client.Kopyalayici, analizci client.AudioAnalizci,
-	silici client.OnekSilici, hesap hesapisaret.Denetci) *SosyalWorker {
+	silici client.OnekSilici, hesap deletionmark.Checker) *SosyalWorker {
 	return &SosyalWorker{
 		depo: depo, kopyalayici: kopyalayici, analizci: analizci, silici: silici, hesap: hesap,
 		sonDeneme: asynqSonDeneme,

@@ -306,9 +306,9 @@ func testFedereSayfalar(t *testing.T) *fedOrtam {
 			AppleEkipID: "EKIP123", AppleAnahtarID: "ANAHTAR9", AppleAnahtarP8: appleP8,
 		},
 	}
-	dogrulayicilar := map[string]*auth.YukariAkisDogrulayici{}
+	dogrulayicilar := map[string]*auth.UpstreamVerifier{}
 	for ad, s := range map[string]*sahteSaglayici{saglayiciGoogle: google, saglayiciApple: apple} {
-		d, err := auth.NewYukariAkisDogrulayici(context.Background(), s.sunucu.URL+"/jwks", s.sunucu.URL, s.istemciID)
+		d, err := auth.NewUpstreamVerifier(context.Background(), s.sunucu.URL+"/jwks", s.sunucu.URL, s.istemciID)
 		if err != nil {
 			t.Fatalf("%s dogrulayicisi kurulamadi: %v", ad, err)
 		}

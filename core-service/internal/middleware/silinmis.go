@@ -2,7 +2,7 @@ package middleware
 
 import (
 	"github.com/gofiber/fiber/v2"
-	"github.com/makeasinger/api/internal/hesapisaret"
+	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/pkg/response"
 )
 
@@ -11,13 +11,13 @@ import (
 // imzayla dogruladigi icin bu engel olmadan silinen hesap 15 dakika
 // boyunca render baslatip R2'ye dosya yazabilirdi. Isarete
 // ulasilamazsa rate limiter gibi fail-closed davranir (503).
-func SilinmisKullaniciEngeli(denetci hesapisaret.Denetci) fiber.Handler {
+func SilinmisKullaniciEngeli(denetci deletionmark.Checker) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		userID := GetUserID(c)
 		if userID == "" {
 			return response.Unauthorized(c, "Kimlik dogrulanamadi")
 		}
-		silinmis, err := denetci.Silinmis(c.Context(), userID)
+		silinmis, err := denetci.IsDeleted(c.Context(), userID)
 		if err != nil {
 			c.Set("Retry-After", "5")
 			return response.Error(c, fiber.StatusServiceUnavailable,

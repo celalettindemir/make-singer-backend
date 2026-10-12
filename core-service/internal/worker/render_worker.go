@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
-	"github.com/makeasinger/api/internal/hesapisaret"
+	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/internal/websocket"
@@ -29,16 +29,16 @@ var errSahipSilindi = errors.New("is sahibinin hesabi silindi")
 
 // sahipSilinmis, is sahibinin silinmis isaretini denetler. Denetci nil
 // ise denetim yapilmaz.
-func sahipSilinmis(ctx context.Context, d hesapisaret.Denetci, ownerID string) (bool, error) {
+func sahipSilinmis(ctx context.Context, d deletionmark.Checker, ownerID string) (bool, error) {
 	if d == nil {
 		return false, nil
 	}
-	return d.Silinmis(ctx, ownerID)
+	return d.IsDeleted(ctx, ownerID)
 }
 
 // sahipYazabilir, is sahibinin hesabi hala varsa nil doner. Silinmisse
 // errSahipSilindi, denetim basarisizsa denetim hatasi doner.
-func sahipYazabilir(ctx context.Context, d hesapisaret.Denetci, ownerID string) error {
+func sahipYazabilir(ctx context.Context, d deletionmark.Checker, ownerID string) error {
 	silinmis, err := sahipSilinmis(ctx, d, ownerID)
 	if err != nil {
 		return fmt.Errorf("hesap durumu denetlenemedi: %w", err)
@@ -57,11 +57,11 @@ type RenderWorker struct {
 	hub           *websocket.Hub
 	indirici      *http.Client
 	pollAraligi   time.Duration
-	hesap         hesapisaret.Denetci // nil: denetim yok
+	hesap         deletionmark.Checker // nil: denetim yok
 }
 
 // NewRenderWorker creates a new render worker
-func NewRenderWorker(renderService *service.RenderService, music client.MusicGenerator, r2Client client.StorageClient, hub *websocket.Hub, hesap hesapisaret.Denetci) *RenderWorker {
+func NewRenderWorker(renderService *service.RenderService, music client.MusicGenerator, r2Client client.StorageClient, hub *websocket.Hub, hesap deletionmark.Checker) *RenderWorker {
 	return &RenderWorker{
 		renderService: renderService,
 		music:         music,

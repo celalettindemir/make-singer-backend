@@ -13,7 +13,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
-	"github.com/makeasinger/api/internal/hesapisaret"
+	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/model"
 )
 
@@ -102,7 +102,7 @@ func testWorker(s *sahteSuno, d client.StorageClient) *RenderWorker {
 	return denetciliWorker(s, d, nil)
 }
 
-func denetciliWorker(s *sahteSuno, d client.StorageClient, h hesapisaret.Denetci) *RenderWorker {
+func denetciliWorker(s *sahteSuno, d client.StorageClient, h deletionmark.Checker) *RenderWorker {
 	w := NewRenderWorker(nil, s, d, nil, h)
 	w.pollAraligi = time.Millisecond
 	return w
@@ -378,7 +378,7 @@ type sahteDenetci struct {
 	sorulan []string
 }
 
-func (d *sahteDenetci) Silinmis(_ context.Context, userID string) (bool, error) {
+func (d *sahteDenetci) IsDeleted(_ context.Context, userID string) (bool, error) {
 	n := len(d.sorulan)
 	d.sorulan = append(d.sorulan, userID)
 	return d.yanit(n)

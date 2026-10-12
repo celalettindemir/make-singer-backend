@@ -8,7 +8,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
-	"github.com/makeasinger/api/internal/hesapisaret"
+	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/redis/go-redis/v9"
 )
@@ -42,7 +42,7 @@ func (s *sahteSes) HealthCheck(context.Context) error { return nil }
 func masterTestWorker(ses *sahteSes, h *sahteDenetci) *MasterWorker {
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 50 * time.Millisecond})
 	// Tipli nil tuzagina dusmemek icin nil isaretci arayuze atanmaz.
-	var d hesapisaret.Denetci
+	var d deletionmark.Checker
 	if h != nil {
 		d = h
 	}

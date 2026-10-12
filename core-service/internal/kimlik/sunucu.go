@@ -56,7 +56,7 @@ type Sunucu struct {
 
 	// dogrulayicilar, kapanista Close edilmek uzere tutulur. Federasyon
 	// yapilandirilmamissa BOS olur.
-	dogrulayicilar map[string]*auth.YukariAkisDogrulayici
+	dogrulayicilar map[string]*auth.UpstreamVerifier
 }
 
 // Hazir, OP dinleyicisinin su an hizmet verdigini soyler. /health bunu
@@ -366,12 +366,12 @@ var yukariAkisSabitleri = map[string]YukariAkis{
 // CAGIRANIN sunucu omrune bagli ctx'i olmalidir (bkz. Start).
 func federasyonKur(
 	ctx context.Context, cfg *config.AuthConfig,
-) (map[string]*YukariAkis, map[string]*auth.YukariAkisDogrulayici, error) {
+) (map[string]*YukariAkis, map[string]*auth.UpstreamVerifier, error) {
 	if len(cfg.Federation) == 0 {
 		return nil, nil, nil
 	}
 	akislar := make(map[string]*YukariAkis, len(cfg.Federation))
-	dogrulayicilar := make(map[string]*auth.YukariAkisDogrulayici, len(cfg.Federation))
+	dogrulayicilar := make(map[string]*auth.UpstreamVerifier, len(cfg.Federation))
 	// Yarim kurulmus bir kume geride birakilmaz: ilk hatada o ana kadar
 	// acilan dogrulayicilar kapatilir.
 	temizle := func() {
@@ -394,7 +394,7 @@ func federasyonKur(
 
 		// audience = BIZIM istemci kimligimiz: saglayicinin baska bir
 		// uygulama icin verdigi id_token bize kabul edilmemeli.
-		dogrulayici, err := auth.NewYukariAkisDogrulayici(ctx, akis.JWKSURL, akis.Issuer, akis.IstemciID)
+		dogrulayici, err := auth.NewUpstreamVerifier(ctx, akis.JWKSURL, akis.Issuer, akis.IstemciID)
 		if err != nil {
 			temizle()
 			return nil, nil, fmt.Errorf("%s dogrulayicisi kurulamadi: %w", f.Name, err)
@@ -428,7 +428,7 @@ func muxKur(
 	istekDepo *IstekDepo,
 	federeDepo FedereDepo,
 	akislar map[string]*YukariAkis,
-	dogrulayicilar map[string]*auth.YukariAkisDogrulayici,
+	dogrulayicilar map[string]*auth.UpstreamVerifier,
 	issuer string,
 	cerezGuvenli bool,
 	hizLimit *HizLimit,

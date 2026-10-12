@@ -123,7 +123,7 @@ type FederasyonDepo interface {
 // Ucunden biri dusunce akis durur; hicbiri digerinin yerini tutmaz.
 type FedereSayfalar struct {
 	akislar        map[string]*YukariAkis
-	dogrulayicilar map[string]*auth.YukariAkisDogrulayici
+	dogrulayicilar map[string]*auth.UpstreamVerifier
 	durum          FederasyonDepo
 	federe         FedereDepo
 	kullanici      UserStore
@@ -158,7 +158,7 @@ type FedereSayfalar struct {
 // hic saklamaz ve yerel akis kirilir).
 func NewFedereSayfalar(
 	akislar map[string]*YukariAkis,
-	dogrulayicilar map[string]*auth.YukariAkisDogrulayici,
+	dogrulayicilar map[string]*auth.UpstreamVerifier,
 	durum FederasyonDepo,
 	federe FedereDepo,
 	kullanici UserStore,
@@ -467,7 +467,7 @@ func (f *FedereSayfalar) Geri(w http.ResponseWriter, r *http.Request) {
 	}
 	// Imza (RS256), iss, aud, expiry, sub ve NONCE burada dogrulanir;
 	// bu dosya hicbirini yeniden dogrulamaz.
-	iddia, err := dogrulayici.DogrulaNonce(idToken, d.Nonce)
+	iddia, err := dogrulayici.VerifyWithNonce(idToken, d.Nonce)
 	if err != nil {
 		// err icinde id_token GECMEZ (bkz. auth.DogrulaNonce).
 		log.Printf("federasyon: id_token dogrulanamadi: %v", err)
