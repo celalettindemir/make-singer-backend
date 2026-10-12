@@ -55,7 +55,7 @@ const hesapID = "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
 
 func TestHesapSil_HerSeyiSilerVeIkinciTemizligiKurar(t *testing.T) {
 	k, s, q := &sahteKimlik{}, &sahteSilici{}, &sahteKuyruk{}
-	svc := NewHesapService(k, s, ulasilamazRedis(), q)
+	svc := NewHesapService(k, s, ulasilamazRedis(), q, nil)
 	if err := svc.Sil(context.Background(), hesapID); err != nil {
 		t.Fatalf("beklenmeyen hata: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestHesapSil_HerSeyiSilerVeIkinciTemizligiKurar(t *testing.T) {
 
 func TestHesapSil_KimlikYoksaErrHesapYok(t *testing.T) {
 	k, s, q := &sahteKimlik{hata: kimlik.ErrKullaniciYok}, &sahteSilici{}, &sahteKuyruk{}
-	err := NewHesapService(k, s, ulasilamazRedis(), q).Sil(context.Background(), hesapID)
+	err := NewHesapService(k, s, ulasilamazRedis(), q, nil).Sil(context.Background(), hesapID)
 	if !errors.Is(err, ErrHesapYok) {
 		t.Fatalf("ErrHesapYok bekleniyordu, gelen %v", err)
 	}
@@ -89,7 +89,7 @@ func TestHesapSil_KimlikYoksaErrHesapYok(t *testing.T) {
 
 func TestHesapSil_KimlikHatasindaR2yeDokunulmaz(t *testing.T) {
 	k, s, q := &sahteKimlik{hata: errors.New("pg kapali")}, &sahteSilici{}, &sahteKuyruk{}
-	err := NewHesapService(k, s, ulasilamazRedis(), q).Sil(context.Background(), hesapID)
+	err := NewHesapService(k, s, ulasilamazRedis(), q, nil).Sil(context.Background(), hesapID)
 	if err == nil || errors.Is(err, ErrHesapYok) {
 		t.Fatalf("genel hata bekleniyordu, gelen %v", err)
 	}
@@ -100,7 +100,7 @@ func TestHesapSil_KimlikHatasindaR2yeDokunulmaz(t *testing.T) {
 
 func TestHesapSil_R2HatasiIstegiBozmaz(t *testing.T) {
 	k, s, q := &sahteKimlik{}, &sahteSilici{hata: errors.New("r2 kapali")}, &sahteKuyruk{}
-	if err := NewHesapService(k, s, ulasilamazRedis(), q).Sil(context.Background(), hesapID); err != nil {
+	if err := NewHesapService(k, s, ulasilamazRedis(), q, nil).Sil(context.Background(), hesapID); err != nil {
 		t.Fatalf("hesap silindikten sonra hata donmemeli: %v", err)
 	}
 	if len(q.gorevler) != 1 {
@@ -110,14 +110,14 @@ func TestHesapSil_R2HatasiIstegiBozmaz(t *testing.T) {
 
 func TestHesapSil_GecersizIDHicbirSeySilmez(t *testing.T) {
 	k, s, q := &sahteKimlik{}, &sahteSilici{}, &sahteKuyruk{}
-	err := NewHesapService(k, s, ulasilamazRedis(), q).Sil(context.Background(), "../x")
+	err := NewHesapService(k, s, ulasilamazRedis(), q, nil).Sil(context.Background(), "../x")
 	if !errors.Is(err, ErrHesapYok) || len(k.silinen) != 0 {
 		t.Fatalf("gecersiz id silinmemeli: err=%v silinen=%v", err, k.silinen)
 	}
 }
 
 func TestHesapTemizle_R2YoksaHataYok(t *testing.T) {
-	svc := NewHesapService(&sahteKimlik{}, nil, ulasilamazRedis(), &sahteKuyruk{})
+	svc := NewHesapService(&sahteKimlik{}, nil, ulasilamazRedis(), &sahteKuyruk{}, nil)
 	if err := svc.Temizle(context.Background(), hesapID); err != nil {
 		t.Fatalf("R2 yokken temizlik no-op olmali: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestHesapTemizle_R2YoksaHataYok(t *testing.T) {
 // kosan isler sahibin silindigini bu sure boyunca gorebilmeli.
 func TestHesapSil_Isaret24SaatYasar(t *testing.T) {
 	rdb := canliRedis(t)
-	svc := NewHesapService(&sahteKimlik{}, &sahteSilici{}, rdb, &sahteKuyruk{})
+	svc := NewHesapService(&sahteKimlik{}, &sahteSilici{}, rdb, &sahteKuyruk{}, nil)
 	if err := svc.Sil(context.Background(), hesapID); err != nil {
 		t.Fatalf("beklenmeyen hata: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestHesapSil_Isaret24SaatYasar(t *testing.T) {
 // (render varsayilan 30dk zaman asimi) fazlasiyla sonra.
 func TestHesapSil_GecikmeliTemizlikBirSaatSonra(t *testing.T) {
 	q := &sahteKuyruk{}
-	if err := NewHesapService(&sahteKimlik{}, &sahteSilici{}, ulasilamazRedis(), q).Sil(context.Background(), hesapID); err != nil {
+	if err := NewHesapService(&sahteKimlik{}, &sahteSilici{}, ulasilamazRedis(), q, nil).Sil(context.Background(), hesapID); err != nil {
 		t.Fatalf("beklenmeyen hata: %v", err)
 	}
 	if len(q.secenekler) != 1 {

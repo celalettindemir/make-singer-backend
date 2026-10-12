@@ -150,7 +150,7 @@ func main() {
 	}
 
 	// Hesap silme: kullanici kaydi kendi OP'mizde tutulur.
-	hesapService := service.NewHesapService(kimlikSunucu, silici, redisClient, asynqClient)
+	hesapService := service.NewHesapService(kimlikSunucu, silici, redisClient, asynqClient, nil)
 	hesapHandler := handler.NewHesapHandler(hesapService)
 
 	// Initialize handlers

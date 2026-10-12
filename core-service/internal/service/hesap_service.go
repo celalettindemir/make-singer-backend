@@ -40,15 +40,26 @@ type Kuyruk interface {
 	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
 }
 
+// SosyalTemizleyici, Kesfet verisinin hesap silmede temizlenen yuzu
+// (*sosyal.PostgresDepo uygular).
+type SosyalTemizleyici interface {
+	// YayinlariListele, yumusak silinmisler dahil tum yayin kimlikleri.
+	YayinlariListele(ctx context.Context, userID string) ([]string, error)
+	// KullaniciVerisiniSil, profil, yayin, begeni, yorum, takip ve
+	// sikayetleri tek islemde siler.
+	KullaniciVerisiniSil(ctx context.Context, userID string) error
+}
+
 type HesapService struct {
 	kimlik KimlikSilici
 	silici client.OnekSilici // nil: R2 yapilandirilmamis
 	redis  *redis.Client
 	kuyruk Kuyruk
+	sosyal SosyalTemizleyici // nil: sosyal modul yok
 }
 
-func NewHesapService(kimlikSilici KimlikSilici, silici client.OnekSilici, rdb *redis.Client, kuyruk Kuyruk) *HesapService {
-	return &HesapService{kimlik: kimlikSilici, silici: silici, redis: rdb, kuyruk: kuyruk}
+func NewHesapService(kimlikSilici KimlikSilici, silici client.OnekSilici, rdb *redis.Client, kuyruk Kuyruk, sosyal SosyalTemizleyici) *HesapService {
+	return &HesapService{kimlik: kimlikSilici, silici: silici, redis: rdb, kuyruk: kuyruk, sosyal: sosyal}
 }
 
 // Sil, hesabi ve tum dosyalarini siler. Kimlik kaydi silindikten sonra
@@ -88,21 +99,55 @@ func (s *HesapService) Sil(ctx context.Context, userID string) error {
 	return nil
 }
 
-// Temizle, kullanicinin tum R2 oneklerini siler. R2 yoksa bir sey
-// yapmaz. Bir onek basarisiz olsa da digerleri denenir.
+// Temizle, kullanicinin tum R2 oneklerini ve Kesfet verisini siler. R2
+// yoksa onekler atlanir. Bir onek basarisiz olsa da digerleri denenir.
 func (s *HesapService) Temizle(ctx context.Context, userID string) error {
-	if s.silici == nil {
-		return nil
-	}
 	onekler, err := client.KullaniciOnekleri(userID)
 	if err != nil {
 		return err
 	}
 	var hatalar []error
-	for _, onek := range onekler {
-		if _, err := s.silici.DeletePrefix(ctx, onek); err != nil {
-			hatalar = append(hatalar, fmt.Errorf("%s: %w", onek, err))
+	if s.silici != nil {
+		for _, onek := range onekler {
+			if _, err := s.silici.DeletePrefix(ctx, onek); err != nil {
+				hatalar = append(hatalar, fmt.Errorf("%s: %w", onek, err))
+			}
+		}
+	}
+	if s.sosyal != nil {
+		if err := s.sosyalTemizle(ctx, userID); err != nil {
+			hatalar = append(hatalar, err)
 		}
 	}
 	return errors.Join(hatalar...)
+}
+
+// sosyalTemizle, once her yayinin sosyal/{id}/ onekini, sonra satirlari
+// siler. Bir onek bile basarisizsa satirlar KALIR: gecikmeli gorev ayni
+// kimlikleri yeniden listeleyip temizligi tamamlar (idempotent).
+func (s *HesapService) sosyalTemizle(ctx context.Context, userID string) error {
+	idler, err := s.sosyal.YayinlariListele(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("sosyal yayinlar listelenemedi: %w", err)
+	}
+	if s.silici != nil {
+		var hatalar []error
+		for _, id := range idler {
+			onek, err := client.SosyalOneki(id)
+			if err != nil {
+				hatalar = append(hatalar, fmt.Errorf("sosyal onek %s: %w", id, err))
+				continue
+			}
+			if _, err := s.silici.DeletePrefix(ctx, onek); err != nil {
+				hatalar = append(hatalar, fmt.Errorf("%s: %w", onek, err))
+			}
+		}
+		if len(hatalar) > 0 {
+			return errors.Join(hatalar...)
+		}
+	}
+	if err := s.sosyal.KullaniciVerisiniSil(ctx, userID); err != nil {
+		return fmt.Errorf("sosyal veri silinemedi: %w", err)
+	}
+	return nil
 }
