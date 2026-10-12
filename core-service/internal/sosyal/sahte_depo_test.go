@@ -62,6 +62,10 @@ type sahteDepo struct {
 
 	akisOgeleri []YayinOzeti
 	sonAkis     akisCagrisi
+
+	takipler      map[[2]string]bool // {takipci, takip edilen}
+	oneriKayitlar []ProfilKaydi
+	sonOneri      [2]any // {izleyici, limit}
 }
 
 func yeniSahteDepo() *sahteDepo {
@@ -70,6 +74,7 @@ func yeniSahteDepo() *sahteDepo {
 		yayinlar:    map[string]*YayinKaydi{},
 		hazirliklar: map[string]*HazirlikKaydi{},
 		yayinlanan:  map[string]HazirlikSonucu{},
+		takipler:    map[[2]string]bool{},
 	}
 }
 
@@ -345,4 +350,41 @@ func (d *sahteDepo) BegeniyiKaldir(_ context.Context, kullaniciID, yayinID strin
 		k.BegeniSayisi--
 	}
 	return nil
+}
+
+func (d *sahteDepo) TakipEt(_ context.Context, takipci, edilen string) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	d.takipler[[2]string{takipci, edilen}] = true
+	return nil
+}
+
+func (d *sahteDepo) TakibiBirak(_ context.Context, takipci, edilen string) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	delete(d.takipler, [2]string{takipci, edilen})
+	return nil
+}
+
+func (d *sahteDepo) TakipDurumu(_ context.Context, takipci, edilen string) (*TakipDurumu, error) {
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	t := &TakipDurumu{TakipEdiyorMuyum: d.takipler[[2]string{takipci, edilen}]}
+	for k := range d.takipler {
+		if k[1] == edilen {
+			t.Takipci++
+		}
+	}
+	return t, nil
+}
+
+func (d *sahteDepo) Oneriler(_ context.Context, izleyiciID string, limit int) ([]ProfilKaydi, error) {
+	d.sonOneri = [2]any{izleyiciID, limit}
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	return d.oneriKayitlar, nil
 }

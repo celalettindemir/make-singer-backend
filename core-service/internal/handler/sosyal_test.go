@@ -28,6 +28,8 @@ type sahteSosyal struct {
 	dosyalar    *sosyal.YayinDosyalari
 	sayfa       *sosyal.Sayfa[sosyal.YayinOzeti]
 	begeni      *sosyal.BegeniDurumu
+	takip       *sosyal.TakipDurumu
+	oneriler    []sosyal.ProfilOzeti
 
 	sonKullanici string
 	sonAd        string
@@ -40,6 +42,7 @@ type sahteSosyal struct {
 	sonImlec     string
 	sonLimit     int
 	sonBegen     bool
+	sonTakip     bool
 }
 
 func (s *sahteSosyal) ProfilBen(_ context.Context, k string) (*sosyal.Profil, error) {
@@ -110,6 +113,16 @@ func (s *sahteSosyal) ProfilYayinlari(_ context.Context, k, ad, tur, imlec strin
 func (s *sahteSosyal) Begeni(_ context.Context, k, id string, begen bool) (*sosyal.BegeniDurumu, error) {
 	s.sonKullanici, s.sonYayin, s.sonBegen = k, id, begen
 	return s.begeni, s.hata
+}
+
+func (s *sahteSosyal) Takip(_ context.Context, k, ad string, takip bool) (*sosyal.TakipDurumu, error) {
+	s.sonKullanici, s.sonAd, s.sonTakip = k, ad, takip
+	return s.takip, s.hata
+}
+
+func (s *sahteSosyal) Oneriler(_ context.Context, k string) ([]sosyal.ProfilOzeti, error) {
+	s.sonKullanici = k
+	return s.oneriler, s.hata
 }
 
 // sosyalUygulamasi, /api/social grubunu sahte servisle kurar.

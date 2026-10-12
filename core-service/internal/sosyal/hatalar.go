@@ -21,6 +21,7 @@ var (
 	ErrStemYok              = errors.New("yayinin stem kopyasi yok")
 	ErrDurum                = errors.New("yayin bu islem icin uygun durumda degil")
 	ErrKimlik               = errors.New("kimlik gecersiz")
+	ErrKendiniTakip         = errors.New("kendini takip edemezsin")
 )
 
 // dogrulamaHatasi, ErrDogrulama'yi alan bazli bir aciklamayla sarar.

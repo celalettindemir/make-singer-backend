@@ -30,6 +30,9 @@ type SosyalServisi interface {
 	Akis(ctx context.Context, kullaniciID, sekme, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error)
 	ProfilYayinlari(ctx context.Context, izleyiciID, ad, tur, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error)
 	Begeni(ctx context.Context, kullaniciID, yayinID string, begen bool) (*sosyal.BegeniDurumu, error)
+
+	Takip(ctx context.Context, kullaniciID, ad string, takip bool) (*sosyal.TakipDurumu, error)
+	Oneriler(ctx context.Context, kullaniciID string) ([]sosyal.ProfilOzeti, error)
 }
 
 var _ SosyalServisi = (*sosyal.Servis)(nil)
@@ -62,6 +65,10 @@ func (h *SosyalHandler) Rotalar(r fiber.Router, yayinLimiti fiber.Handler) {
 	r.Get("/s/:slug", h.Slug)
 	r.Put("/yayinlar/:id/begeni", h.Begen)
 	r.Delete("/yayinlar/:id/begeni", h.BegeniyiKaldir)
+
+	r.Put("/profiller/:ad/takip", h.TakipEt)
+	r.Delete("/profiller/:ad/takip", h.TakibiBirak)
+	r.Get("/oneriler", h.Oneriler)
 }
 
 // sosyalHatalari, servis hatalarinin sozlesmedeki durum ve kodlaridir.
@@ -81,6 +88,7 @@ var sosyalHatalari = []struct {
 	{sosyal.ErrAltyapiKapali, fiber.StatusForbidden, "altyapi_kapali"},
 	{sosyal.ErrStemYok, fiber.StatusUnprocessableEntity, "stem_yok"},
 	{sosyal.ErrDurum, fiber.StatusConflict, "durum"},
+	{sosyal.ErrKendiniTakip, fiber.StatusUnprocessableEntity, "kendini_takip"},
 }
 
 // sosyalHata, servis hatasini sozlesme govdesine cevirir:

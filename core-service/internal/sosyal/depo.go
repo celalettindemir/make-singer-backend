@@ -33,6 +33,7 @@ type Depo interface {
 	HazirlikDeposu
 	AkisDeposu
 	BegeniDeposu
+	TakipDeposu
 }
 
 // PostgresDepo, Depo'nun Postgres uygulamasidir. Kimlikler cagri
@@ -57,6 +58,9 @@ func tekilIhlali(err error) (string, bool) {
 }
 
 const profilKolonlari = `kullanici_id::text, kullanici_adi, gorunen_ad, bio, olusturma`
+
+// profilKolonlariP, profilKolonlari'nin "p" takma adli bicimidir.
+const profilKolonlariP = `p.kullanici_id::text, p.kullanici_adi, p.gorunen_ad, p.bio, p.olusturma`
 
 func profilTara(satir pgx.Row) (*ProfilKaydi, error) {
 	var k ProfilKaydi
