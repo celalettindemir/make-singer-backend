@@ -316,24 +316,24 @@ func (f *FedereSayfalar) cakismaYonlendir(
 	http.Redirect(w, r, hedef, http.StatusFound)
 }
 
-// baglamaVeri, baglama.html sablonuna verilen veridir.
-type baglamaVeri struct {
-	Eposta      string
-	BeklemeID   string
-	CSRF        string
-	Hata        string
-	BaglamaYolu string
+// linkData, baglama.html sablonuna verilen veridir.
+type linkData struct {
+	Email     string
+	PendingID string
+	CSRF      string
+	Error     string
+	LinkPath  string
 }
 
-// cakismaVeri, cakisma.html'in bekledigi alanlardir. Cakisma yapisi
+// conflictData, cakisma.html'in bekledigi alanlardir. Cakisma yapisi
 // DOGRUDAN gecilmez: sablon, kullaniciya GOSTERILECEK metni ister,
 // saglayici listesini degil.
-type cakismaVeri struct {
-	Eposta         string
-	SaglayiciMetni string
-	// GirisURL, Go tarafinda url.Values ile kurulur; sablonda string
+type conflictData struct {
+	Email        string
+	ProviderText string
+	// LoginURL, Go tarafinda url.Values ile kurulur; sablonda string
 	// birlestirme YAPILMAZ.
-	GirisURL string
+	LoginURL string
 }
 
 // saglayiciEtiket, saglayici adini kullaniciya gosterilecek etikete
@@ -370,10 +370,10 @@ func saglayiciMetni(sag []string) string {
 // cakismaRender, K1'in 409 sayfasini yazar: baglama YOK, yeni hesap
 // YOK, yalnizca "hangi yontemle gir" bilgisi.
 func (f *FedereSayfalar) cakismaRender(w http.ResponseWriter, authRequestID, eposta string, sag []string) {
-	veri := cakismaVeri{
-		Eposta:         eposta,
-		SaglayiciMetni: saglayiciMetni(sag),
-		GirisURL:       yolGiris + "?" + url.Values{"authRequestID": {authRequestID}}.Encode(),
+	veri := conflictData{
+		Email:        eposta,
+		ProviderText: saglayiciMetni(sag),
+		LoginURL:     yolGiris + "?" + url.Values{"authRequestID": {authRequestID}}.Encode(),
 	}
 	w.WriteHeader(http.StatusConflict)
 	if err := sablonlar.ExecuteTemplate(w, "cakisma.html", veri); err != nil {
@@ -382,12 +382,12 @@ func (f *FedereSayfalar) cakismaRender(w http.ResponseWriter, authRequestID, epo
 }
 
 func (f *FedereSayfalar) baglamaRender(w http.ResponseWriter, kod int, b BaglamaBekleme, beklemeID, hata string) {
-	veri := baglamaVeri{
-		Eposta:      b.Eposta,
-		BeklemeID:   beklemeID,
-		CSRF:        b.CSRF,
-		Hata:        hata,
-		BaglamaYolu: yolBaglama,
+	veri := linkData{
+		Email:     b.Eposta,
+		PendingID: beklemeID,
+		CSRF:      b.CSRF,
+		Error:     hata,
+		LinkPath:  yolBaglama,
 	}
 	w.WriteHeader(kod)
 	if err := sablonlar.ExecuteTemplate(w, "baglama.html", veri); err != nil {

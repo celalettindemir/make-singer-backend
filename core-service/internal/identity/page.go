@@ -60,36 +60,36 @@ const hataOturum = "Oturum dogrulanamadi, lutfen giris sayfasini yeniden acin."
 // IstekDepo.TamamlandiIsaretle); kullanici akisi bastan baslatmali.
 const hataIstekBagli = "Bu giris istegi zaten kullanildi, lutfen uygulamadan tekrar deneyin."
 
-// girisVeri, giris.html sablonuna verilen veridir.
-type girisVeri struct {
+// loginData, giris.html sablonuna verilen veridir.
+type loginData struct {
 	AuthRequestID string
 	CSRF          string
-	Eposta        string
-	Hata          string
-	GirisYolu     string
-	KayitYolu     string
+	Email         string
+	Error         string
+	LoginPath     string
+	SignupPath    string
 
-	// Saglayicilar, giris sayfasinda buton gosterilecek YUKARI AKIS
+	// Providers, giris sayfasinda buton gosterilecek YUKARI AKIS
 	// saglayicilaridir. Bos ise hic buton cikmaz.
-	Saglayicilar []SaglayiciButon
+	Providers []ProviderButton
 }
 
-// SaglayiciButon, giris sayfasindaki tek bir yukari akis butonudur.
-type SaglayiciButon struct {
-	Ad     string // "google" | "apple"
-	Etiket string // "Google ile giris yap"
-	Yol    string // /federasyon/google/baslat?authRequestID=...
+// ProviderButton, giris sayfasindaki tek bir yukari akis butonudur.
+type ProviderButton struct {
+	Name  string // "google" | "apple"
+	Label string // "Google ile giris yap"
+	Path  string // /federasyon/google/baslat?authRequestID=...
 }
 
-// kayitVeri, kayit.html sablonuna verilen veridir.
-type kayitVeri struct {
+// signupData, kayit.html sablonuna verilen veridir.
+type signupData struct {
 	AuthRequestID string
 	CSRF          string
-	Eposta        string
-	Ad            string
-	Hata          string
-	GirisYolu     string
-	KayitYolu     string
+	Email         string
+	Name          string
+	Error         string
+	LoginPath     string
+	SignupPath    string
 }
 
 // Sayfalar, hosting edilen giris/kayit HTML formlarini ve bunlarin
@@ -168,20 +168,20 @@ func (s *Sayfalar) FederasyonSaglayicilari(adlar []string) { s.federasyonlar = a
 // Yolun GOVDESI ise federasyonBaslatYolu'ndan gelir, yani ucun mux'a
 // baglandigi sabitten turetilir: buton ile uc tek dogruluk kaynagini
 // paylasir (bkz. yolFederasyonBaslat).
-func (s *Sayfalar) federasyonButonlari(id string) []SaglayiciButon {
+func (s *Sayfalar) federasyonButonlari(id string) []ProviderButton {
 	if len(s.federasyonlar) == 0 {
 		return nil
 	}
-	butonlar := make([]SaglayiciButon, 0, len(s.federasyonlar))
+	butonlar := make([]ProviderButton, 0, len(s.federasyonlar))
 	for _, ad := range s.federasyonlar {
 		yol := url.URL{
 			Path:     federasyonBaslatYolu(ad),
 			RawQuery: url.Values{"authRequestID": {id}}.Encode(),
 		}
-		butonlar = append(butonlar, SaglayiciButon{
-			Ad:     ad,
-			Etiket: saglayiciEtiket(ad) + " ile giris yap",
-			Yol:    yol.String(),
+		butonlar = append(butonlar, ProviderButton{
+			Name:  ad,
+			Label: saglayiciEtiket(ad) + " ile giris yap",
+			Path:  yol.String(),
 		})
 	}
 	return butonlar
@@ -560,14 +560,14 @@ func (s *Sayfalar) girisPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Sayfalar) girisRender(w http.ResponseWriter, kod int, id, csrf, eposta, hata string) {
-	veri := girisVeri{
+	veri := loginData{
 		AuthRequestID: id,
 		CSRF:          csrf,
-		Eposta:        eposta,
-		Hata:          hata,
-		GirisYolu:     yolGiris,
-		KayitYolu:     yolKayit,
-		Saglayicilar:  s.federasyonButonlari(id),
+		Email:         eposta,
+		Error:         hata,
+		LoginPath:     yolGiris,
+		SignupPath:    yolKayit,
+		Providers:     s.federasyonButonlari(id),
 	}
 	w.WriteHeader(kod)
 	if err := sablonlar.ExecuteTemplate(w, "giris.html", veri); err != nil {
@@ -653,14 +653,14 @@ func (s *Sayfalar) kayitPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Sayfalar) kayitRender(w http.ResponseWriter, kod int, id, csrf, eposta, ad, hata string) {
-	veri := kayitVeri{
+	veri := signupData{
 		AuthRequestID: id,
 		CSRF:          csrf,
-		Eposta:        eposta,
-		Ad:            ad,
-		Hata:          hata,
-		GirisYolu:     yolGiris,
-		KayitYolu:     yolKayit,
+		Email:         eposta,
+		Name:          ad,
+		Error:         hata,
+		LoginPath:     yolGiris,
+		SignupPath:    yolKayit,
 	}
 	w.WriteHeader(kod)
 	if err := sablonlar.ExecuteTemplate(w, "kayit.html", veri); err != nil {

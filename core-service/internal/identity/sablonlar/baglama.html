@@ -15,10 +15,10 @@
 </head>
 <body>
   <h1>Hesabini bagla</h1>
-  <p>{{.Eposta}} adresiyle zaten bir hesabin var. Baglamak icin mevcut sifreni gir.</p>
-  {{if .Hata}}<p class="hata">{{.Hata}}</p>{{end}}
-  <form method="post" action="{{.BaglamaYolu}}">
-    <input type="hidden" name="beklemeID" value="{{.BeklemeID}}">
+  <p>{{.Email}} adresiyle zaten bir hesabin var. Baglamak icin mevcut sifreni gir.</p>
+  {{if .Error}}<p class="hata">{{.Error}}</p>{{end}}
+  <form method="post" action="{{.LinkPath}}">
+    <input type="hidden" name="beklemeID" value="{{.PendingID}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label for="sifre">Mevcut sifren</label>
     <input type="password" id="sifre" name="sifre" required autofocus>

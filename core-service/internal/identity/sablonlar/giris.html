@@ -20,24 +20,24 @@
 </head>
 <body>
   <h1>Giris yap</h1>
-  {{if .Hata}}<p class="hata">{{.Hata}}</p>{{end}}
-  <form method="post" action="{{.GirisYolu}}">
+  {{if .Error}}<p class="hata">{{.Error}}</p>{{end}}
+  <form method="post" action="{{.LoginPath}}">
     <input type="hidden" name="authRequestID" value="{{.AuthRequestID}}">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label for="eposta">E-posta</label>
-    <input type="email" id="eposta" name="eposta" value="{{.Eposta}}" required autofocus>
+    <input type="email" id="eposta" name="eposta" value="{{.Email}}" required autofocus>
     <label for="sifre">Sifre</label>
     <input type="password" id="sifre" name="sifre" required>
     <button type="submit">Giris yap</button>
   </form>
-  {{if .Saglayicilar}}
+  {{if .Providers}}
   <div class="federasyon">
     <p class="ayirici">veya</p>
-    {{range .Saglayicilar}}
-    <a class="fed-buton" href="{{.Yol}}">{{.Etiket}}</a>
+    {{range .Providers}}
+    <a class="fed-buton" href="{{.Path}}">{{.Label}}</a>
     {{end}}
   </div>
   {{end}}
-  <p class="alt">Hesabin yok mu? <a href="{{.KayitYolu}}?authRequestID={{.AuthRequestID}}">Kayit ol</a></p>
+  <p class="alt">Hesabin yok mu? <a href="{{.SignupPath}}?authRequestID={{.AuthRequestID}}">Kayit ol</a></p>
 </body>
 </html>
