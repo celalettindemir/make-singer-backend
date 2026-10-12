@@ -23,10 +23,16 @@ type sahteSosyal struct {
 
 	profil      *sosyal.Profil
 	adUygunlugu *sosyal.AdUygunlugu
+	yayinYaniti *sosyal.YayinYaniti
+	detay       *sosyal.YayinDetayi
+	dosyalar    *sosyal.YayinDosyalari
 
 	sonKullanici string
 	sonAd        string
 	sonProfil    sosyal.ProfilGirdisi
+	sonYayin     string
+	sonIstek     sosyal.YayinIstegi
+	sonYama      sosyal.YayinYamasi
 }
 
 func (s *sahteSosyal) ProfilBen(_ context.Context, k string) (*sosyal.Profil, error) {
@@ -47,6 +53,41 @@ func (s *sahteSosyal) AdUygunMu(_ context.Context, k, ad string) (*sosyal.AdUygu
 func (s *sahteSosyal) ProfilGoster(_ context.Context, k, ad string) (*sosyal.Profil, error) {
 	s.sonKullanici, s.sonAd = k, ad
 	return s.profil, s.hata
+}
+
+func (s *sahteSosyal) YayinOlustur(_ context.Context, k string, ist sosyal.YayinIstegi) (*sosyal.YayinYaniti, error) {
+	s.sonKullanici, s.sonIstek = k, ist
+	return s.yayinYaniti, s.hata
+}
+
+func (s *sahteSosyal) YayinGoster(_ context.Context, k, id string) (*sosyal.YayinDetayi, error) {
+	s.sonKullanici, s.sonYayin = k, id
+	return s.detay, s.hata
+}
+
+func (s *sahteSosyal) SlugGoster(_ context.Context, k, slug string) (*sosyal.YayinDetayi, error) {
+	s.sonKullanici, s.sonYayin = k, slug
+	return s.detay, s.hata
+}
+
+func (s *sahteSosyal) YayinGuncelle(_ context.Context, k, id string, y sosyal.YayinYamasi) (*sosyal.YayinDetayi, error) {
+	s.sonKullanici, s.sonYayin, s.sonYama = k, id, y
+	return s.detay, s.hata
+}
+
+func (s *sahteSosyal) YayinSil(_ context.Context, k, id string) error {
+	s.sonKullanici, s.sonYayin = k, id
+	return s.hata
+}
+
+func (s *sahteSosyal) TekrarDene(_ context.Context, k, id string) (*sosyal.YayinYaniti, error) {
+	s.sonKullanici, s.sonYayin = k, id
+	return s.yayinYaniti, s.hata
+}
+
+func (s *sahteSosyal) Dosyalar(_ context.Context, k, id string) (*sosyal.YayinDosyalari, error) {
+	s.sonKullanici, s.sonYayin = k, id
+	return s.dosyalar, s.hata
 }
 
 // sosyalUygulamasi, /api/social grubunu sahte servisle kurar.

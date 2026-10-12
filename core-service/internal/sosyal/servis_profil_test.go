@@ -12,14 +12,14 @@ const (
 )
 
 func TestServis_ProfilBenYoksaProfilYok(t *testing.T) {
-	s := NewServis(yeniSahteDepo())
+	s, _ := testServisi(yeniSahteDepo())
 	if _, err := s.ProfilBen(context.Background(), kullaniciA); !errors.Is(err, ErrProfilYok) {
 		t.Fatalf("ErrProfilYok bekleniyordu: %v", err)
 	}
 }
 
 func TestServis_GecersizKimlik(t *testing.T) {
-	s := NewServis(yeniSahteDepo())
+	s, _ := testServisi(yeniSahteDepo())
 	if _, err := s.ProfilBen(context.Background(), "kullanici-a"); !errors.Is(err, ErrKimlik) {
 		t.Fatalf("ErrKimlik bekleniyordu: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestServis_GecersizKimlik(t *testing.T) {
 func TestServis_ProfilKaydetVeBen(t *testing.T) {
 	d := yeniSahteDepo()
 	d.sayilar = ProfilSayilari{Istatistik: Istatistik{Sarki: 2, Takipci: 5}}
-	s := NewServis(d)
+	s, _ := testServisi(d)
 	p, err := s.ProfilKaydet(context.Background(), kullaniciA, ProfilGirdisi{KullaniciAdi: "ali", GorunenAd: " Ali ", Bio: "selam"})
 	if err != nil {
 		t.Fatalf("kaydet: %v", err)
@@ -47,7 +47,7 @@ func TestServis_ProfilKaydetVeBen(t *testing.T) {
 
 func TestServis_ProfilKaydetHatalari(t *testing.T) {
 	d := yeniSahteDepo()
-	s := NewServis(d)
+	s, _ := testServisi(d)
 	ctx := context.Background()
 	if _, err := s.ProfilKaydet(ctx, kullaniciA, ProfilGirdisi{KullaniciAdi: ".ali", GorunenAd: "A"}); !errors.Is(err, ErrGecersizKullaniciAdi) {
 		t.Fatalf("gecersiz ad: %v", err)
@@ -67,7 +67,7 @@ func TestServis_AdUygunMu(t *testing.T) {
 	d := yeniSahteDepo()
 	d.profiller[kullaniciA] = &ProfilKaydi{KullaniciID: kullaniciA, KullaniciAdi: "ali"}
 	d.profiller[kullaniciB] = &ProfilKaydi{KullaniciID: kullaniciB, KullaniciAdi: "ali2"}
-	s := NewServis(d)
+	s, _ := testServisi(d)
 	ctx := context.Background()
 
 	bos, err := s.AdUygunMu(ctx, kullaniciB, "veli")
@@ -97,7 +97,7 @@ func TestServis_ProfilGoster(t *testing.T) {
 	d := yeniSahteDepo()
 	d.profiller[kullaniciA] = &ProfilKaydi{KullaniciID: kullaniciA, KullaniciAdi: "ali", GorunenAd: "Ali"}
 	d.sayilar = ProfilSayilari{TakipEdiyorMuyum: true}
-	s := NewServis(d)
+	s, _ := testServisi(d)
 	ctx := context.Background()
 	p, err := s.ProfilGoster(ctx, kullaniciB, "ali")
 	if err != nil || p.BenMiyim || !p.TakipEdiyorMuyum {

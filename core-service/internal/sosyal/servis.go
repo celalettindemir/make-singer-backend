@@ -3,16 +3,30 @@ package sosyal
 import (
 	"context"
 	"errors"
+
+	"github.com/hibiken/asynq"
+	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/config"
 )
+
+// Kuyruk, *asynq.Client'in burada kullanilan yuzu.
+type Kuyruk interface {
+	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
+}
 
 // Servis, Kesfet uclarinin is kurallarini uygular. Gorunurluk detayda
 // burada (DetayGorebilir), listelerde depoda (gorunurlukKosulu) uygulanir.
 type Servis struct {
-	depo Depo
+	depo     Depo
+	kuyruk   Kuyruk
+	depolama client.StorageClient // nil: R2 yok, imzasiz adres uretilir
+	r2       *config.R2Config
 }
 
-func NewServis(depo Depo) *Servis {
-	return &Servis{depo: depo}
+// NewServis kurar. depolama nil olabilir (R2 yapilandirilmamis); main
+// tipli nil tuzagina dusmemek icin yalnizca gercek istemciyi gecirir.
+func NewServis(depo Depo, kuyruk Kuyruk, depolama client.StorageClient, r2 *config.R2Config) *Servis {
+	return &Servis{depo: depo, kuyruk: kuyruk, depolama: depolama, r2: r2}
 }
 
 // kullaniciCoz, istegi yapanin kimligini dogrular. Auth middleware her

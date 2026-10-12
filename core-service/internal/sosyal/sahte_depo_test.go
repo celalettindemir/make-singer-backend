@@ -3,7 +3,40 @@ package sosyal
 import (
 	"context"
 	"time"
+
+	"github.com/hibiken/asynq"
+	"github.com/makeasinger/api/internal/config"
 )
+
+// sahteKuyruk, kuyruga konan gorevleri ve seceneklerini kaydeder.
+type sahteKuyruk struct {
+	gorevler   []*asynq.Task
+	secenekler [][]asynq.Option
+	hata       error
+}
+
+func (q *sahteKuyruk) Enqueue(t *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
+	if q.hata != nil {
+		return nil, q.hata
+	}
+	q.gorevler = append(q.gorevler, t)
+	q.secenekler = append(q.secenekler, opts)
+	return &asynq.TaskInfo{}, nil
+}
+
+// testR2, client testlerindeki yapilandirmanin aynisidir.
+func testR2() *config.R2Config {
+	return &config.R2Config{
+		AccountID: "hesap123", PublicBucket: "makeasinger-public", PrivateBucket: "makeasinger-private",
+		PublicURL: "https://makesinger-cdn.celalettindemir.dev", PresignTTL: time.Hour,
+	}
+}
+
+// testServisi, sahte depo ve kuyrukla, R2 istemcisi olmadan servis kurar.
+func testServisi(d *sahteDepo) (*Servis, *sahteKuyruk) {
+	q := &sahteKuyruk{}
+	return NewServis(d, q, nil, testR2()), q
+}
 
 // sahteDepo, servis testleri icin bellek ici Depo'dur. Yalnizca servisin
 // kararlarini sinamaya yetecek kadar davranir; SQL davranisi canli

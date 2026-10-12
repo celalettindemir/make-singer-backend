@@ -18,6 +18,14 @@ type SosyalServisi interface {
 	ProfilKaydet(ctx context.Context, kullaniciID string, g sosyal.ProfilGirdisi) (*sosyal.Profil, error)
 	AdUygunMu(ctx context.Context, kullaniciID, ad string) (*sosyal.AdUygunlugu, error)
 	ProfilGoster(ctx context.Context, izleyiciID, ad string) (*sosyal.Profil, error)
+
+	YayinOlustur(ctx context.Context, kullaniciID string, ist sosyal.YayinIstegi) (*sosyal.YayinYaniti, error)
+	YayinGoster(ctx context.Context, kullaniciID, yayinID string) (*sosyal.YayinDetayi, error)
+	SlugGoster(ctx context.Context, kullaniciID, slug string) (*sosyal.YayinDetayi, error)
+	YayinGuncelle(ctx context.Context, kullaniciID, yayinID string, yama sosyal.YayinYamasi) (*sosyal.YayinDetayi, error)
+	YayinSil(ctx context.Context, kullaniciID, yayinID string) error
+	TekrarDene(ctx context.Context, kullaniciID, yayinID string) (*sosyal.YayinYaniti, error)
+	Dosyalar(ctx context.Context, kullaniciID, yayinID string) (*sosyal.YayinDosyalari, error)
 }
 
 var _ SosyalServisi = (*sosyal.Servis)(nil)
@@ -38,6 +46,14 @@ func (h *SosyalHandler) Rotalar(r fiber.Router, yayinLimiti fiber.Handler) {
 	r.Put("/profil/ben", h.ProfilKaydet)
 	r.Get("/profil/kullanici-adi/uygun", h.AdUygun)
 	r.Get("/profiller/:ad", h.Profil)
+
+	r.Post("/yayinlar", yayinLimiti, h.YayinOlustur)
+	r.Get("/yayinlar/:id", h.Yayin)
+	r.Patch("/yayinlar/:id", h.YayinGuncelle)
+	r.Delete("/yayinlar/:id", h.YayinSil)
+	r.Post("/yayinlar/:id/tekrar-dene", h.TekrarDene)
+	r.Post("/yayinlar/:id/dosyalar", h.Dosyalar)
+	r.Get("/s/:slug", h.Slug)
 }
 
 // sosyalHatalari, servis hatalarinin sozlesmedeki durum ve kodlaridir.
