@@ -12,8 +12,9 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from services.analiz import AnalizService
 from services.archiver import ArchiverService
 from services.encoder import EncoderService
 from services.master import MasterService
@@ -103,17 +104,35 @@ class ZipResponse(BaseModel):
     file_count: int
 
 
+class AnalizRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Anahtarlar R2 nesne anahtaridir; imzali adres tasinmaz.
+    input_key: str
+    preview_key: str
+    peak_count: int = Field(default=64, ge=1, le=1024)
+    preview_seconds: int = Field(default=30, ge=1, le=120)
+
+
+class AnalizResponse(BaseModel):
+    peaks: list[float]
+    duration: float
+    preview_url: str
+
+
 # Services
 storage_service: StorageService | None = None
 master_service: MasterService | None = None
 encoder_service: EncoderService | None = None
 archiver_service: ArchiverService | None = None
+analiz_service: AnalizService | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     global storage_service, master_service, encoder_service, archiver_service
+    global analiz_service
 
     # Initialize storage service
     if R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY:
@@ -130,6 +149,7 @@ async def lifespan(app: FastAPI):
     master_service = MasterService(storage_service)
     encoder_service = EncoderService(storage_service)
     archiver_service = ArchiverService(storage_service)
+    analiz_service = AnalizService(storage_service)
 
     yield
 
@@ -216,6 +236,29 @@ async def create_zip(request: ZipRequest):
             output_key=request.output_key,
         )
         return ZipResponse(**result)
+    # Genis yakalama BILINCLI: FastAPI ucunda son siginak, her hata 500
+    # olarak donsun. BLE001 bu yuzden susturuldu.
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/analiz", response_model=AnalizResponse)
+async def analiz_audio(request: AnalizRequest):
+    """
+    Kesfet yayini icin dalga formu (peak_count tepe) ve en yuksek RMS'li
+    preview_seconds'lik mp3 onizleme uretir. Onizleme preview_key'e yazilir.
+    """
+    if analiz_service is None:
+        raise HTTPException(status_code=503, detail="Analiz service not initialized")
+
+    try:
+        result = await analiz_service.analiz(
+            input_key=request.input_key,
+            preview_key=request.preview_key,
+            peak_count=request.peak_count,
+            preview_seconds=request.preview_seconds,
+        )
+        return AnalizResponse(**result)
     # Genis yakalama BILINCLI: FastAPI ucunda son siginak, her hata 500
     # olarak donsun. BLE001 bu yuzden susturuldu.
     except Exception as e:  # noqa: BLE001
