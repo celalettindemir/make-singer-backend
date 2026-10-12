@@ -105,7 +105,7 @@ func TestIstemciIPGuvenilenProxySayisinaGoreCozulur(t *testing.T) {
 	}
 	for _, d := range durumlar {
 		t.Run(d.ad, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, yolGiris, nil)
+			r := httptest.NewRequest(http.MethodPost, pathLogin, nil)
 			r.RemoteAddr = d.remoteAddr
 			if d.xff != "" {
 				r.Header.Set("X-Forwarded-For", d.xff)
@@ -113,7 +113,7 @@ func TestIstemciIPGuvenilenProxySayisinaGoreCozulur(t *testing.T) {
 			for _, satir := range d.xffSatirlari {
 				r.Header.Add("X-Forwarded-For", satir)
 			}
-			if got := istemciIP(r, d.guvenilenProxy); got != d.beklenen {
+			if got := clientIP(r, d.guvenilenProxy); got != d.beklenen {
 				t.Errorf("istemciIP = %q, beklenen %q", got, d.beklenen)
 			}
 		})
@@ -123,11 +123,11 @@ func TestIstemciIPGuvenilenProxySayisinaGoreCozulur(t *testing.T) {
 // ---- Kurulum: sessizce "limitsiz" moda dusmek yasak ----
 
 func TestHizLimitGecersizAyardaKurulmaz(t *testing.T) {
-	gecerli := HizLimitAyar{GirisIPPerMin: 1, GirisEpostaPerSaat: 1, KayitIPPerSaat: 1}
+	gecerli := RateLimitConfig{LoginIPPerMin: 1, LoginEmailPerHour: 1, SignupIPPerHour: 1}
 	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
 	t.Cleanup(func() { _ = rdb.Close() })
 
-	bozuk := func(degistir func(*HizLimitAyar)) HizLimitAyar {
+	bozuk := func(degistir func(*RateLimitConfig)) RateLimitConfig {
 		a := gecerli
 		degistir(&a)
 		return a
@@ -135,19 +135,19 @@ func TestHizLimitGecersizAyardaKurulmaz(t *testing.T) {
 	durumlar := []struct {
 		ad   string
 		rdb  *redis.Client
-		ayar HizLimitAyar
+		ayar RateLimitConfig
 		key  []byte
 	}{
 		{"redis yok", nil, gecerli, []byte("anahtar")},
-		{"giris ip siniri 0", rdb, bozuk(func(a *HizLimitAyar) { a.GirisIPPerMin = 0 }), []byte("anahtar")},
-		{"giris eposta siniri 0", rdb, bozuk(func(a *HizLimitAyar) { a.GirisEpostaPerSaat = 0 }), []byte("anahtar")},
-		{"kayit ip siniri 0", rdb, bozuk(func(a *HizLimitAyar) { a.KayitIPPerSaat = 0 }), []byte("anahtar")},
-		{"guvenilen proxy negatif", rdb, bozuk(func(a *HizLimitAyar) { a.GuvenilenProxy = -1 }), []byte("anahtar")},
+		{"giris ip siniri 0", rdb, bozuk(func(a *RateLimitConfig) { a.LoginIPPerMin = 0 }), []byte("anahtar")},
+		{"giris eposta siniri 0", rdb, bozuk(func(a *RateLimitConfig) { a.LoginEmailPerHour = 0 }), []byte("anahtar")},
+		{"kayit ip siniri 0", rdb, bozuk(func(a *RateLimitConfig) { a.SignupIPPerHour = 0 }), []byte("anahtar")},
+		{"guvenilen proxy negatif", rdb, bozuk(func(a *RateLimitConfig) { a.TrustedProxies = -1 }), []byte("anahtar")},
 		{"eposta ozet anahtari bos", rdb, gecerli, nil},
 	}
 	for _, d := range durumlar {
 		t.Run(d.ad, func(t *testing.T) {
-			if _, err := NewHizLimit(d.rdb, d.ayar, d.key); err == nil {
+			if _, err := NewRateLimiter(d.rdb, d.ayar, d.key); err == nil {
 				t.Error("gecersiz ayarla hiz limiti kuruldu")
 			}
 		})
@@ -167,15 +167,15 @@ func TestHizLimitRedisYokkenFailClosed(t *testing.T) {
 		MaxRetries:  -1,
 	})
 	t.Cleanup(func() { _ = rdb.Close() })
-	hiz, err := NewHizLimit(rdb, HizLimitAyar{
-		GirisIPPerMin: 100, GirisEpostaPerSaat: 100, KayitIPPerSaat: 100,
+	hiz, err := NewRateLimiter(rdb, RateLimitConfig{
+		LoginIPPerMin: 100, LoginEmailPerHour: 100, SignupIPPerHour: 100,
 	}, []byte(testCryptoAnahtari))
 	if err != nil {
 		t.Fatalf("NewHizLimit: %v", err)
 	}
 
 	cagrildi := false
-	h := hiz.GirisSar(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { cagrildi = true }))
+	h := hiz.WrapLogin(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { cagrildi = true }))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, girisPostIstegi("kurban@ornek.com", "198.51.100.7"))
 
@@ -189,10 +189,10 @@ func TestHizLimitRedisYokkenFailClosed(t *testing.T) {
 
 // ---- Canli Redis ile sayac davranisi ----
 
-func testHizLimit(t *testing.T, ayar HizLimitAyar) (*HizLimit, *redis.Client) {
+func testHizLimit(t *testing.T, ayar RateLimitConfig) (*RateLimiter, *redis.Client) {
 	t.Helper()
 	rdb := testRedis(t) // Redis yoksa burada atlanir
-	hiz, err := NewHizLimit(rdb, ayar, []byte(testCryptoAnahtari))
+	hiz, err := NewRateLimiter(rdb, ayar, []byte(testCryptoAnahtari))
 	if err != nil {
 		t.Fatalf("NewHizLimit: %v", err)
 	}
@@ -202,7 +202,7 @@ func testHizLimit(t *testing.T, ayar HizLimitAyar) (*HizLimit, *redis.Client) {
 // girisPostIstegi, POST /giris'e benzeyen bir form istegi uretir.
 func girisPostIstegi(eposta, ip string) *http.Request {
 	form := url.Values{"eposta": {eposta}, "sifre": {"herhangiBirSifre"}, "authRequestID": {"istek-1"}}
-	r := httptest.NewRequest(http.MethodPost, yolGiris, strings.NewReader(form.Encode()))
+	r := httptest.NewRequest(http.MethodPost, pathLogin, strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.RemoteAddr = ip + ":40000"
 	return r
@@ -232,10 +232,10 @@ func izinVerenHandler() http.Handler {
 // POST /giris: IP basina dakikalik sinir. Sinirin UZERINDEKI istek 429
 // almali; eskiden 25 yanlis sifre denemesinin HICBIRI 429 almiyordu.
 func TestGirisHizLimitiIPBasinaUygulanir(t *testing.T) {
-	hiz, _ := testHizLimit(t, HizLimitAyar{
-		GirisIPPerMin: 3, GirisEpostaPerSaat: 1000, KayitIPPerSaat: 1000,
+	hiz, _ := testHizLimit(t, RateLimitConfig{
+		LoginIPPerMin: 3, LoginEmailPerHour: 1000, SignupIPPerHour: 1000,
 	})
-	h := hiz.GirisSar(izinVerenHandler())
+	h := hiz.WrapLogin(izinVerenHandler())
 
 	// Her istekte FARKLI e-posta: olculen sey yalnizca IP sayaci olsun.
 	gecen, sonDurum := gecenSayisi(t, h, 5, func(i int) *http.Request {
@@ -252,10 +252,10 @@ func TestGirisHizLimitiIPBasinaUygulanir(t *testing.T) {
 // Dagitik brute-force (her istek ayri IP) IP sayacini atlar; e-posta
 // basina sayac tek bir hesaba yonelen denemeleri sinirlar.
 func TestGirisHizLimitiEpostaBasinaUygulanir(t *testing.T) {
-	hiz, _ := testHizLimit(t, HizLimitAyar{
-		GirisIPPerMin: 1000, GirisEpostaPerSaat: 3, KayitIPPerSaat: 1000,
+	hiz, _ := testHizLimit(t, RateLimitConfig{
+		LoginIPPerMin: 1000, LoginEmailPerHour: 3, SignupIPPerHour: 1000,
 	})
-	h := hiz.GirisSar(izinVerenHandler())
+	h := hiz.WrapLogin(izinVerenHandler())
 
 	// Her istekte FARKLI IP: olculen sey yalnizca e-posta sayaci olsun.
 	gecen, sonDurum := gecenSayisi(t, h, 5, func(i int) *http.Request {
@@ -272,10 +272,10 @@ func TestGirisHizLimitiEpostaBasinaUygulanir(t *testing.T) {
 // Farkli e-postalar AYNI sayaci paylasmamali (aksi halde bir kullanici
 // digerini kilitler).
 func TestGirisEpostaSayaclariAyrisir(t *testing.T) {
-	hiz, _ := testHizLimit(t, HizLimitAyar{
-		GirisIPPerMin: 1000, GirisEpostaPerSaat: 2, KayitIPPerSaat: 1000,
+	hiz, _ := testHizLimit(t, RateLimitConfig{
+		LoginIPPerMin: 1000, LoginEmailPerHour: 2, SignupIPPerHour: 1000,
 	})
-	h := hiz.GirisSar(izinVerenHandler())
+	h := hiz.WrapLogin(izinVerenHandler())
 
 	for i := 0; i < 2; i++ {
 		w := httptest.NewRecorder()
@@ -295,14 +295,14 @@ func TestGirisEpostaSayaclariAyrisir(t *testing.T) {
 // POST /kayit: IP basina saatlik sinir. Inceleme sirasinda 15 hesap
 // kimlik dogrulamasiz olusturulabiliyordu.
 func TestKayitHizLimitiIPBasinaUygulanir(t *testing.T) {
-	hiz, _ := testHizLimit(t, HizLimitAyar{
-		GirisIPPerMin: 1000, GirisEpostaPerSaat: 1000, KayitIPPerSaat: 2,
+	hiz, _ := testHizLimit(t, RateLimitConfig{
+		LoginIPPerMin: 1000, LoginEmailPerHour: 1000, SignupIPPerHour: 2,
 	})
-	h := hiz.KayitSar(izinVerenHandler())
+	h := hiz.WrapSignup(izinVerenHandler())
 
 	gecen, sonDurum := gecenSayisi(t, h, 4, func(i int) *http.Request {
 		r := girisPostIstegi(string(rune('a'+i))+"@ornek.com", "198.51.100.7")
-		r.URL.Path = yolKayit
+		r.URL.Path = pathSignup
 		return r
 	})
 	if gecen != 2 {
@@ -316,10 +316,10 @@ func TestKayitHizLimitiIPBasinaUygulanir(t *testing.T) {
 // 429 yaniti Retry-After tasimali: istemci ne zaman tekrar deneyecegini
 // bilmeli ve deger asla <= 0 olmamali.
 func TestHizLimit429RetryAfterTasir(t *testing.T) {
-	hiz, _ := testHizLimit(t, HizLimitAyar{
-		GirisIPPerMin: 1, GirisEpostaPerSaat: 1000, KayitIPPerSaat: 1000,
+	hiz, _ := testHizLimit(t, RateLimitConfig{
+		LoginIPPerMin: 1, LoginEmailPerHour: 1000, SignupIPPerHour: 1000,
 	})
-	h := hiz.GirisSar(izinVerenHandler())
+	h := hiz.WrapLogin(izinVerenHandler())
 	for i := 0; i < 2; i++ {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, girisPostIstegi("kurban@ornek.com", "198.51.100.7"))
@@ -337,18 +337,18 @@ func TestHizLimit429RetryAfterTasir(t *testing.T) {
 // E-posta PII'dir: Redis anahtarinda DUZ METIN tutulmaz. Bu dalda tam
 // bu kusur daha once cikti.
 func TestHizLimitEpostayiRedisAnahtarindaDuzMetinTutmaz(t *testing.T) {
-	hiz, rdb := testHizLimit(t, HizLimitAyar{
-		GirisIPPerMin: 1000, GirisEpostaPerSaat: 1000, KayitIPPerSaat: 1000,
+	hiz, rdb := testHizLimit(t, RateLimitConfig{
+		LoginIPPerMin: 1000, LoginEmailPerHour: 1000, SignupIPPerHour: 1000,
 	})
 	const eposta = "gizli.kullanici@ornek.com"
-	h := hiz.GirisSar(izinVerenHandler())
+	h := hiz.WrapLogin(izinVerenHandler())
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, girisPostIstegi(eposta, "198.51.100.7"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("durum = %d, beklenen 200", w.Code)
 	}
 
-	anahtarlar, err := rdb.Keys(context.Background(), hizLimitOnEki+"*").Result()
+	anahtarlar, err := rdb.Keys(context.Background(), rateLimitPrefix+"*").Result()
 	if err != nil {
 		t.Fatalf("Keys: %v", err)
 	}
@@ -368,8 +368,8 @@ func TestHizLimitEpostayiRedisAnahtarindaDuzMetinTutmaz(t *testing.T) {
 // mux uzerinden (muxKur) gecer. Bu testin yakaladigi sey, limitin
 // yalnizca birim duzeyinde degil OP dinleyicisinde de bagli oldugudur.
 func TestGirisHizLimitiUretimMuxundaDevrede(t *testing.T) {
-	o := testSunucuAyarli(t, HizLimitAyar{
-		GirisIPPerMin: 2, GirisEpostaPerSaat: 1000, KayitIPPerSaat: 1000,
+	o := testSunucuAyarli(t, RateLimitConfig{
+		LoginIPPerMin: 2, LoginEmailPerHour: 1000, SignupIPPerHour: 1000,
 	})
 	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
 
@@ -403,10 +403,10 @@ func TestGirisHizLimitiUretimMuxundaDevrede(t *testing.T) {
 // olcum (sinir 2/saat): ayni yazim 401 401 429, uc harf varyanti hepsi
 // 401.
 func TestGirisEpostaSayaciHarfDuyarsiz(t *testing.T) {
-	hiz, _ := testHizLimit(t, HizLimitAyar{
-		GirisIPPerMin: 1000, GirisEpostaPerSaat: 2, KayitIPPerSaat: 1000,
+	hiz, _ := testHizLimit(t, RateLimitConfig{
+		LoginIPPerMin: 1000, LoginEmailPerHour: 2, SignupIPPerHour: 1000,
 	})
-	h := hiz.GirisSar(izinVerenHandler())
+	h := hiz.WrapLogin(izinVerenHandler())
 
 	// Her istekte FARKLI IP: olculen sey yalnizca e-posta sayaci olsun.
 	// Her istekte FARKLI HARF YAZIMI: hepsi AYNI sayaca dusmeli.
@@ -429,11 +429,11 @@ func TestGirisEpostaSayaciHarfDuyarsiz(t *testing.T) {
 // istemciIP tablosu birim duzeyinde olcer; bu test sayacin GERCEKTEN
 // ayni anahtara dustugunu olcer.
 func TestGirisHizLimitiCokluXFFSatiriIleAtlatilamaz(t *testing.T) {
-	hiz, _ := testHizLimit(t, HizLimitAyar{
-		GirisIPPerMin: 2, GirisEpostaPerSaat: 1000, KayitIPPerSaat: 1000,
-		GuvenilenProxy: 1,
+	hiz, _ := testHizLimit(t, RateLimitConfig{
+		LoginIPPerMin: 2, LoginEmailPerHour: 1000, SignupIPPerHour: 1000,
+		TrustedProxies: 1,
 	})
-	h := hiz.GirisSar(izinVerenHandler())
+	h := hiz.WrapLogin(izinVerenHandler())
 
 	// Saldirgan HER istekte farkli bir ILK satir yazar; guvenilen
 	// proxy'nin ekledigi deger hep ayni ve EN SAGDA.
@@ -455,14 +455,14 @@ func TestGirisHizLimitiCokluXFFSatiriIleAtlatilamaz(t *testing.T) {
 // dogrulamasiz ve /authorize'dan (gecerli client_id + redirect_uri +
 // S256 ister) daha ucuz bir yuzey.
 func TestSayfaGetHizLimitiUygulanir(t *testing.T) {
-	hiz, _ := testHizLimit(t, HizLimitAyar{
-		GirisIPPerMin: 2, GirisEpostaPerSaat: 1000, KayitIPPerSaat: 1000,
+	hiz, _ := testHizLimit(t, RateLimitConfig{
+		LoginIPPerMin: 2, LoginEmailPerHour: 1000, SignupIPPerHour: 1000,
 	})
 	for _, ad := range []string{"giris", "kayit"} {
 		t.Run(ad, func(t *testing.T) {
-			h := hiz.SayfaGetSar(ad, izinVerenHandler())
+			h := hiz.WrapPageGet(ad, izinVerenHandler())
 			gecen, sonDurum := gecenSayisi(t, h, 4, func(int) *http.Request {
-				r := httptest.NewRequest(http.MethodGet, yolGiris+"?authRequestID=istek-1", nil)
+				r := httptest.NewRequest(http.MethodGet, pathLogin+"?authRequestID=istek-1", nil)
 				r.RemoteAddr = "198.51.100.7:40000"
 				return r
 			})
@@ -480,16 +480,16 @@ func TestSayfaGetHizLimitiUygulanir(t *testing.T) {
 // acmak sifre deneme butcesini tuketir ve mesru kullanici kendi akisini
 // kilitler.
 func TestSayfaGetSayaciPostSayacindanAyri(t *testing.T) {
-	hiz, _ := testHizLimit(t, HizLimitAyar{
-		GirisIPPerMin: 1, GirisEpostaPerSaat: 1000, KayitIPPerSaat: 1000,
+	hiz, _ := testHizLimit(t, RateLimitConfig{
+		LoginIPPerMin: 1, LoginEmailPerHour: 1000, SignupIPPerHour: 1000,
 	})
 	const ip = "198.51.100.7"
 
 	// GET butcesini TUKET.
-	getH := hiz.SayfaGetSar("giris", izinVerenHandler())
+	getH := hiz.WrapPageGet("giris", izinVerenHandler())
 	for i := 0; i < 2; i++ {
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodGet, yolGiris+"?authRequestID=istek-1", nil)
+		r := httptest.NewRequest(http.MethodGet, pathLogin+"?authRequestID=istek-1", nil)
 		r.RemoteAddr = ip + ":40000"
 		getH.ServeHTTP(w, r)
 		if i == 1 && w.Code != http.StatusTooManyRequests {
@@ -499,7 +499,7 @@ func TestSayfaGetSayaciPostSayacindanAyri(t *testing.T) {
 
 	// POST hala GECMELI.
 	w := httptest.NewRecorder()
-	hiz.GirisSar(izinVerenHandler()).ServeHTTP(w, girisPostIstegi("kurban@ornek.com", ip))
+	hiz.WrapLogin(izinVerenHandler()).ServeHTTP(w, girisPostIstegi("kurban@ornek.com", ip))
 	if w.Code != http.StatusOK {
 		t.Errorf("POST durumu = %d, beklenen 200 (GET sayaci POST butcesini tuketmemeli)", w.Code)
 	}
@@ -507,8 +507,8 @@ func TestSayfaGetSayaciPostSayacindanAyri(t *testing.T) {
 
 // Hiz limiti URETIM KABLOLAMASINDA GET uclarinda da devrede mi.
 func TestGetHizLimitiUretimMuxundaDevrede(t *testing.T) {
-	o := testSunucuAyarli(t, HizLimitAyar{
-		GirisIPPerMin: 2, GirisEpostaPerSaat: 1000, KayitIPPerSaat: 1000,
+	o := testSunucuAyarli(t, RateLimitConfig{
+		LoginIPPerMin: 2, LoginEmailPerHour: 1000, SignupIPPerHour: 1000,
 	})
 	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
 	_, challenge := pkceS256(t)
@@ -516,7 +516,7 @@ func TestGetHizLimitiUretimMuxundaDevrede(t *testing.T) {
 	id := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge, "S256")))
 
 	// Ilk iki GET gecer (biri 200), ucuncusu 429.
-	adres := o.issuer + yolGiris + "?authRequestID=" + url.QueryEscape(id)
+	adres := o.issuer + pathLogin + "?authRequestID=" + url.QueryEscape(id)
 	for i := 1; i <= 3; i++ {
 		yanit := al(t, c, adres)
 		switch {

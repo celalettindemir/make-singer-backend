@@ -12,55 +12,55 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/op"
 )
 
-// Giris ve kayit sayfalarinin yollari. Hem istemcinin LoginURL'i hem
-// sayfa handler'lari buradan okur.
+// Paths of the login and signup pages. Both the client's LoginURL and the
+// page handlers read from here.
 const (
-	yolGiris = "/giris"
-	yolKayit = "/kayit"
+	pathLogin  = "/giris"
+	pathSignup = "/kayit"
 )
 
-// csrfAlan, formdaki CSRF jetonunun alan adi.
-const csrfAlan = "csrf"
+// fieldCSRF is the field name of the CSRF token in the form.
+const fieldCSRF = "csrf"
 
-// IstekTamamlayici, giris/kayit basarili olunca bekleyen auth istegini
-// kullaniciya baglar. Arayuz olmasinin nedeni testlerin mutlu yolu AG
-// OLMADAN olcebilmesi; uretimde *IstekDepo karsilar.
-type IstekTamamlayici interface {
-	TamamlandiIsaretle(ctx context.Context, id string, userID string, amr []string) error
+// RequestCompleter binds the pending auth request to the user once login or
+// signup succeeds. It is an interface so tests can measure the happy path
+// OFFLINE; in production *RequestStore implements it.
+type RequestCompleter interface {
+	MarkDone(ctx context.Context, id string, userID string, amr []string) error
 }
 
 //go:embed sablonlar/*.html
-var sablonFS embed.FS
+var templateFS embed.FS
 
-var sablonlar = template.Must(template.ParseFS(sablonFS, "sablonlar/*.html"))
+var templates = template.Must(template.ParseFS(templateFS, "sablonlar/*.html"))
 
-// hataGirisBasarisiz, hem "boyle bir hesap yok" hem "sifre yanlis"
-// durumunda gosterilir. Ikisini ayirmak formu e-posta sayim aracina
-// cevirir (kullanici numaralandirma).
-const hataGirisBasarisiz = "E-posta veya sifre hatali."
+// msgLoginFailed is shown for both "no such account" and "wrong password".
+// Separating the two would turn the form into an email-counting tool (user
+// enumeration).
+const msgLoginFailed = "E-posta veya sifre hatali."
 
-// hataSunucu, beklenmeyen (5xx) durumlarda gosterilir; ic detay
-// icermez.
-const hataSunucu = "Bir hata olustu, lutfen tekrar deneyin."
+// msgServerError is shown for unexpected (5xx) situations; it carries no
+// internal detail.
+const msgServerError = "Bir hata olustu, lutfen tekrar deneyin."
 
-// hataEpostaKullanimda, kayitta e-posta zaten varsa gosterilir. Bu
-// bilgiyi kayit akisinda vermek kullanici numaralandirma sayilmaz:
-// giris akisindan farkli olarak burada kullanici zaten kendi verdigi
-// e-postayla yeni hesap acmaya calisiyor.
-const hataEpostaKullanimda = "Bu e-posta zaten kullaniliyor."
+// msgEmailInUse is shown when the email already exists at signup. Giving
+// this information in the signup flow does not count as user enumeration:
+// unlike the login flow, the user here is already trying to open a new
+// account with the email they themselves supplied.
+const msgEmailInUse = "Bu e-posta zaten kullaniliyor."
 
-// hataOturum, cerez baglamasi veya CSRF dogrulamasi tutmadiginda
-// donulur. TEK bir genel mesaj: hangi kosulun tutmadigini (cerez yok /
-// baglama yok / id eslesmedi / csrf yanlis) ayirmak saldirgana yol
-// gosterir.
-const hataOturum = "Oturum dogrulanamadi, lutfen giris sayfasini yeniden acin."
+// msgSessionInvalid is returned when the cookie binding or the CSRF
+// verification does not hold. A single generic message: separating which
+// condition failed (no cookie / no binding / id mismatch / wrong csrf)
+// would guide an attacker.
+const msgSessionInvalid = "Oturum dogrulanamadi, lutfen giris sayfasini yeniden acin."
 
-// hataIstekBagli, bekleyen auth istegi ZATEN baska bir kimlige
-// baglandiginda donulur. Subject ezilmez (bkz.
-// IstekDepo.TamamlandiIsaretle); kullanici akisi bastan baslatmali.
-const hataIstekBagli = "Bu giris istegi zaten kullanildi, lutfen uygulamadan tekrar deneyin."
+// msgRequestAlreadyUsed is returned when the pending auth request is
+// ALREADY bound to another identity. Subject is not overwritten (see
+// RequestStore.MarkDone); the user must restart the flow.
+const msgRequestAlreadyUsed = "Bu giris istegi zaten kullanildi, lutfen uygulamadan tekrar deneyin."
 
-// loginData, giris.html sablonuna verilen veridir.
+// loginData is the data given to the giris.html template.
 type loginData struct {
 	AuthRequestID string
 	CSRF          string
@@ -69,19 +69,19 @@ type loginData struct {
 	LoginPath     string
 	SignupPath    string
 
-	// Providers, giris sayfasinda buton gosterilecek YUKARI AKIS
-	// saglayicilaridir. Bos ise hic buton cikmaz.
+	// Providers are the UPSTREAM providers for which a button is shown on the
+	// login page. If empty, no button appears.
 	Providers []ProviderButton
 }
 
-// ProviderButton, giris sayfasindaki tek bir yukari akis butonudur.
+// ProviderButton is a single upstream button on the login page.
 type ProviderButton struct {
 	Name  string // "google" | "apple"
-	Label string // "Google ile giris yap"
+	Label string // "Google ile giris yap" (UI text)
 	Path  string // /federasyon/google/baslat?authRequestID=...
 }
 
-// signupData, kayit.html sablonuna verilen veridir.
+// signupData is the data given to the kayit.html template.
 type signupData struct {
 	AuthRequestID string
 	CSRF          string
@@ -92,415 +92,413 @@ type signupData struct {
 	SignupPath    string
 }
 
-// Sayfalar, hosting edilen giris/kayit HTML formlarini ve bunlarin
-// OIDC akisina geri donusunu tasir.
+// Pages carries the hosted login/signup HTML forms and their return into
+// the OIDC flow.
 //
-// GUVENLIK: authRequestID tek basina yetki girdisi DEGILDIR. Cerez ->
-// {authRequestID, CSRF} baglamasi YALNIZCA /authorize'da, istegi
-// BASLATAN tarayici icin kurulur (bkz. AuthorizeSar). GET /giris,
-// GET /kayit, POST'lar ve /authorize/callback bu baglamayi ZORUNLU
-// kilar ve HICBIRI yeni baglama mintlemez. Boylece auth istegini
-// baslatan, formu goren, girisi tamamlayan ve kodu toplayan tarayici
-// AYNI olmak zorundadir. Ayrica /authorize CAPRAZ-SITEDEN cagrildiginda
-// hic baglama kurulmaz (login-CSRF; bkz. AuthorizeSar ve
-// caprazSiteIstek).
-type Sayfalar struct {
-	kullanici    UserStore
-	istekler     IstekTamamlayici
-	oturumlar    OturumDepo
-	geriCagirma  func(context.Context, string) string
-	cerezGuvenli bool
+// SECURITY: authRequestID alone is NOT an authorization input. The cookie ->
+// {authRequestID, CSRF} binding is set up ONLY at /authorize, for the
+// browser that STARTED the request (see WrapAuthorize). GET /giris,
+// GET /kayit, the POSTs and /authorize/callback REQUIRE this binding and
+// NONE of them mints a new one. So the browser that starts the auth
+// request, sees the form, completes the login and collects the code MUST be
+// the SAME. Also, when /authorize is called FROM A CROSS-SITE ORIGIN, no
+// binding is set at all (login-CSRF; see WrapAuthorize and isCrossSite).
+type Pages struct {
+	users        UserStore
+	requests     RequestCompleter
+	sessions     SessionStore
+	authCallback func(context.Context, string) string
+	secureCookie bool
 
-	// callbackDelege, cerez baglamasi dogrulandiktan sonra cagrilan
-	// KUTUPHANE handler'idir (op.AuthorizeCallbackHandler / saglayici).
-	// Kutuphane kodu degistirilmez veya kopyalanmaz; yalnizca onune
-	// gecilir.
-	callbackDelege http.Handler
+	// callbackDelegate is the LIBRARY handler called once the cookie binding
+	// is verified (op.AuthorizeCallbackHandler / provider). The library code is
+	// not modified or copied; it is only put in front of.
+	callbackDelegate http.Handler
 
-	// federasyonlar, giris sayfasinda buton cikacak saglayici
-	// adlaridir. BOS birakilabilir ve o zaman hic buton cikmaz; bu,
-	// federasyon yapilandirilmamis kurulumun dogru davranisidir.
-	federasyonlar []string
+	// federationProviders are the provider names that get a button on the login
+	// page. It MAY BE LEFT EMPTY, in which case no button appears; this is the
+	// correct behavior for a setup where federation is not configured.
+	federationProviders []string
 }
 
-// NewSayfalar, gecerli bir UserStore, IstekDepo, OturumDepo ve
-// op.AuthCallbackURL tarafindan uretilen geri cagirma ile Sayfalar
-// kurar. cerezGuvenli, cereze Secure bayragi konup konmayacagidir:
-// issuer https ise true, http:// yerel gelistirmede false (aksi halde
-// tarayici cerezi hic saklamaz ve yerel akis kirilir).
-func NewSayfalar(
-	kullanici UserStore,
-	istekler IstekTamamlayici,
-	oturumlar OturumDepo,
-	geriCagirma func(context.Context, string) string,
-	cerezGuvenli bool,
-) *Sayfalar {
-	return &Sayfalar{
-		kullanici:    kullanici,
-		istekler:     istekler,
-		oturumlar:    oturumlar,
-		geriCagirma:  geriCagirma,
-		cerezGuvenli: cerezGuvenli,
+// NewPages builds Pages with a valid UserStore, RequestStore, SessionStore
+// and the callback produced by op.AuthCallbackURL. cookieSecure is whether
+// the Secure flag is put on the cookie: true if the issuer is https, false
+// for http:// local development (otherwise the browser would not store the
+// cookie at all and the local flow would break).
+func NewPages(
+	user UserStore,
+	requests RequestCompleter,
+	sessions SessionStore,
+	authCallback func(context.Context, string) string,
+	cookieSecure bool,
+) *Pages {
+	return &Pages{
+		users:        user,
+		requests:     requests,
+		sessions:     sessions,
+		authCallback: authCallback,
+		secureCookie: cookieSecure,
 	}
 }
 
-// CallbackDelege, cerez baglamasi dogrulandiktan sonra cagrilacak
-// kutuphane handler'ini baglar. Ayri bir setter: handler kutuphane
-// saglayicisindan gelir ve saglayici NewSayfalar'dan sonra kurulur.
-func (s *Sayfalar) CallbackDelege(h http.Handler) { s.callbackDelege = h }
+// SetCallbackDelegate wires the library handler to be called once the cookie
+// binding is verified. A separate setter: the handler comes from the library
+// provider and the provider is set up after NewPages.
+func (s *Pages) SetCallbackDelegate(h http.Handler) { s.callbackDelegate = h }
 
-// FederasyonSaglayicilari, giris sayfasinda buton gosterilecek yukari
-// akis saglayicilarini belirler. Ayri bir setter: liste yapilandirmadan
-// gelir ve sirasi cagiranin verdigi siradir (bkz. muxKur; map yinelemesi
-// rasgele oldugu icin orada siralanir).
+// SetFederationProviders sets the upstream providers for which a button is
+// shown on the login page. A separate setter: the list comes from
+// configuration and its order is the order the caller gave (see
+// buildMux; map iteration is random, so it is sorted there).
 //
-// Liste YALNIZCA GERCEKTEN yapilandirilmis saglayicilari icermeli:
-// baglanmamis bir uca giden buton, kullaniciya 404 gosterir.
-func (s *Sayfalar) FederasyonSaglayicilari(adlar []string) { s.federasyonlar = adlar }
+// The list MUST contain ONLY providers that are ACTUALLY configured: a
+// button to an unwired endpoint shows the user a 404.
+func (s *Pages) SetFederationProviders(names []string) { s.federationProviders = names }
 
-// federasyonButonlari, verilen auth istegi icin buton listesini kurar.
+// federationButtons builds the button list for the given auth request.
 //
-// Yol BURADA, url paketiyle kurulur; sablonda elle string birlestirme
-// YAPILMAZ. authRequestID kacissiz girerse en iyi durumda baglanti
-// bozulur, en kotusunde icindeki "&" sorgu dizisine yabanci bir
-// parametre enjekte eder.
+// The path is built HERE, with the url package; NO manual string
+// concatenation is done in the template. If authRequestID entered unescaped,
+// at best the link would break, at worst the "&" in it would inject a
+// foreign parameter into the query string.
 //
-// Yolun GOVDESI ise federasyonBaslatYolu'ndan gelir, yani ucun mux'a
-// baglandigi sabitten turetilir: buton ile uc tek dogruluk kaynagini
-// paylasir (bkz. yolFederasyonBaslat).
-func (s *Sayfalar) federasyonButonlari(id string) []ProviderButton {
-	if len(s.federasyonlar) == 0 {
+// The BODY of the path comes from federationStartPath, i.e. it is derived
+// from the constant the endpoint is mounted on in the mux: the button and
+// the endpoint share a single source of truth (see pathFederationStart).
+func (s *Pages) federationButtons(id string) []ProviderButton {
+	if len(s.federationProviders) == 0 {
 		return nil
 	}
-	butonlar := make([]ProviderButton, 0, len(s.federasyonlar))
-	for _, ad := range s.federasyonlar {
-		yol := url.URL{
-			Path:     federasyonBaslatYolu(ad),
+	buttons := make([]ProviderButton, 0, len(s.federationProviders))
+	for _, name := range s.federationProviders {
+		redirect := url.URL{
+			Path:     federationStartPath(name),
 			RawQuery: url.Values{"authRequestID": {id}}.Encode(),
 		}
-		butonlar = append(butonlar, ProviderButton{
-			Name:  ad,
-			Label: saglayiciEtiket(ad) + " ile giris yap",
-			Path:  yol.String(),
+		buttons = append(buttons, ProviderButton{
+			Name:  name,
+			Label: providerLabel(name) + " ile giris yap",
+			Path:  redirect.String(),
 		})
 	}
-	return butonlar
+	return buttons
 }
 
-// Bagla, sayfalari mux'a baglar. POST handler'lari issuer aracisiyla
-// SARILIR: araci issuer'i istek baglamina koyar ve geriCagirma onu
-// oradan okur. Sarmadan baglamak akisi yonlendirme asamasinda kirar.
+// Mount mounts the pages on the mux. The POST handlers are WRAPPED with the
+// issuer interceptor: the interceptor puts the issuer into the request
+// context and authCallback reads it from there. Mounting without the
+// wrapper breaks the flow at the redirect stage.
 //
-// hiz, uclara uygulanan hiz limitidir (bkz. hizlimit.go). GET'ler de
-// SARILIR: baglama /authorize'a tasindiktan sonra GET artik Redis'e
-// yazmiyor ama uc hala kimlik dogrulamasiz ve /authorize'dan (gecerli
-// client_id + redirect_uri + S256 ister) daha ucuz bir yuzey; sablon
-// uretimi de bedava degil. GET'ler POST'lardan AYRI anahtarlarda
-// sayilir: aksi halde formu acmak sifre deneme butcesini tuketir ve
-// mesru kullanici kendi akisini kilitler.
+// limiter is the rate limit applied to the endpoints (see ratelimit.go). The
+// GETs are WRAPPED too: now that the binding has moved to /authorize, the
+// GET no longer writes to Redis, but the endpoint is still unauthenticated
+// and a cheaper surface than /authorize (which requires a valid client_id +
+// redirect_uri + S256); template rendering is not free either. GETs are
+// counted under SEPARATE keys from POSTs: otherwise opening the form would
+// consume the password-guessing budget and a legitimate user would lock out
+// their own flow.
 //
-// nil GECILEBILIR ve o zaman hiz limiti UYGULANMAZ; bu yalnizca birim
-// testler icindir, uretimde Start her zaman bir limit kurar ve limit
-// kurulamazsa HIC BASLAMAZ.
-func (s *Sayfalar) Bagla(mux *http.ServeMux, araci *op.IssuerInterceptor, hiz *HizLimit) {
-	girisPost := araci.Handler(http.HandlerFunc(s.Giris))
-	kayitPost := araci.Handler(http.HandlerFunc(s.Kayit))
-	// GET'ler issuer aracisiyla SARILMAZ: form uretimi geriCagirma
-	// cagirmaz, yani istek baglaminda issuer'a ihtiyac duymaz.
-	var girisGet http.Handler = http.HandlerFunc(s.Giris)
-	var kayitGet http.Handler = http.HandlerFunc(s.Kayit)
-	if hiz != nil {
-		// Hiz limiti aracinin ICINDE degil DISINDA: reddedilen bir istek
-		// issuer cozumlemesi dahil hicbir ek is yapmadan donsun.
-		girisPost = hiz.GirisSar(girisPost)
-		kayitPost = hiz.KayitSar(kayitPost)
-		girisGet = hiz.SayfaGetSar("giris", girisGet)
-		kayitGet = hiz.SayfaGetSar("kayit", kayitGet)
+// nil MAY BE PASSED, in which case NO rate limit is APPLIED; this is only
+// for unit tests, in production Start always sets up a limiter and does NOT
+// START AT ALL if it cannot.
+func (s *Pages) Mount(mux *http.ServeMux, interceptor *op.IssuerInterceptor, limiter *RateLimiter) {
+	loginPost := interceptor.Handler(http.HandlerFunc(s.Login))
+	signupPost := interceptor.Handler(http.HandlerFunc(s.Signup))
+	// GETs are NOT wrapped with the issuer interceptor: form rendering does not
+	// call authCallback, i.e. it does not need the issuer in the request context.
+	var loginGet http.Handler = http.HandlerFunc(s.Login)
+	var signupGet http.Handler = http.HandlerFunc(s.Signup)
+	if limiter != nil {
+		// The rate limit goes OUTSIDE the interceptor, not inside: a rejected
+		// request returns without doing any extra work, including issuer resolution.
+		loginPost = limiter.WrapLogin(loginPost)
+		signupPost = limiter.WrapSignup(signupPost)
+		loginGet = limiter.WrapPageGet("giris", loginGet)
+		signupGet = limiter.WrapPageGet("kayit", signupGet)
 	}
-	mux.Handle("GET "+yolGiris, girisGet)
-	mux.Handle("POST "+yolGiris, girisPost)
-	mux.Handle("GET "+yolKayit, kayitGet)
-	mux.Handle("POST "+yolKayit, kayitPost)
+	mux.Handle("GET "+pathLogin, loginGet)
+	mux.Handle("POST "+pathLogin, loginPost)
+	mux.Handle("GET "+pathSignup, signupGet)
+	mux.Handle("POST "+pathSignup, signupPost)
 }
 
-// BaglamaKur, verilen authRequestID'yi CAGIRAN tarayiciya baglar: varsa
-// mevcut oturum cerezini yeniden kullanir (paralel akis icin, bkz.
-// oturumBaglamaUstSinir), yoksa yeni bir oturum degeri uretir; istege
-// ozel bir CSRF jetonu uretip baglamayi depoya yazar ve cerezi yanita
-// koyar.
+// BindSession binds the given authRequestID to the CALLING browser: if
+// present it reuses the existing session cookie (for parallel flows, see
+// maxSessionBindings), otherwise it generates a new session value; it
+// generates a request-specific CSRF token, writes the binding to the store
+// and puts the cookie on the response.
 //
-// YALNIZCA /authorize bacagindan cagrilir (AuthorizeSar). GET /giris ve
-// GET /kayit bunu CAGIRMAZ: cagirsalardi baglama herkese, herhangi bir
-// id icin mintlenebilir olurdu (bkz. oturum.go cerezAdOturum notu).
+// Called ONLY from the /authorize leg (WrapAuthorize). GET /giris and
+// GET /kayit do NOT CALL it: if they did, a binding could be minted for
+// anyone, for any id (see the cookieNameSession note in session.go).
 //
-// Oturum degeri, CSRF jetonu ve authRequestID LOGLANMAZ.
-func (s *Sayfalar) BaglamaKur(w http.ResponseWriter, r *http.Request, id string) error {
+// The session value, CSRF token and authRequestID are NOT LOGGED.
+func (s *Pages) BindSession(w http.ResponseWriter, r *http.Request, id string) error {
 	if id == "" {
-		return ErrOturumEslesmedi
+		return ErrSessionMismatch
 	}
 	var (
-		oturum  string
-		baglama OturumBaglama
+		session string
+		binding SessionBinding
 	)
-	// Mevcut cerez YALNIZCA depoda gecerli bir baglamasi varsa yeniden
-	// kullanilir; uydurma veya suresi dolmus bir cerez degerinin uzerine
-	// yazmak, saldirganin secebildigi bir oturum degerini canlandirmak
-	// olurdu.
-	if cerez, err := r.Cookie(cerezAdOturum); err == nil && cerez.Value != "" {
-		if mevcut, err := s.oturumlar.OturumOku(r.Context(), cerez.Value); err == nil {
-			oturum = cerez.Value
-			baglama = mevcut
+	// An existing cookie is reused ONLY if it has a valid binding in the store;
+	// overwriting a made-up or expired cookie value would revive a session value
+	// the attacker can choose.
+	if cookie, err := r.Cookie(cookieNameSession); err == nil && cookie.Value != "" {
+		if existing, err := s.sessions.ReadSession(r.Context(), cookie.Value); err == nil {
+			session = cookie.Value
+			binding = existing
 		}
 	}
-	if oturum == "" {
-		yeni, err := rasgeleJeton()
+	if session == "" {
+		newToken, err := randomToken()
 		if err != nil {
 			return err
 		}
-		oturum = yeni
+		session = newToken
 	}
-	csrf, err := rasgeleJeton()
+	csrf, err := randomToken()
 	if err != nil {
 		return err
 	}
-	baglama.Ekle(id, csrf)
-	if err := s.oturumlar.OturumYaz(r.Context(), oturum, baglama, istekTTL); err != nil {
+	binding.Add(id, csrf)
+	if err := s.sessions.WriteSession(r.Context(), session, binding, requestTTL); err != nil {
 		return err
 	}
-	// Cerez her yolda yeniden yazilir: yeni oturumda zorunlu, mevcut
-	// oturumda MaxAge'i istek TTL'i boyunca tazeler.
-	http.SetCookie(w, oturumCerezi(oturum, s.cerezGuvenli))
+	// The cookie is rewritten on every path: required for a new session, and
+	// for an existing session it refreshes MaxAge for the request TTL.
+	http.SetCookie(w, sessionCookie(session, s.secureCookie))
 	return nil
 }
 
-// AuthorizeSar, /authorize handler'ini sarar ve istek dogrulamalari
-// GECTIKTEN sonra (yani kutuphane kullaniciyi giris sayfasina
-// yonlendirdiginde) cerez baglamasini ISTEGI BASLATAN tarayici icin
-// kurar.
+// WrapAuthorize wraps the /authorize handler and, AFTER the request
+// verifications have PASSED (i.e. when the library redirects the user to the
+// login page), sets the cookie binding for the browser that STARTED THE
+// REQUEST.
 //
-// NEDEN BURADA: /authorize, akisin tarayici tarafindan BASLATILDIGI tek
-// noktadir ve gecerli bir client_id + redirect_uri + S256 PKCE
-// gerektirir (bkz. pkceZorlayici). Baglamayi burada kurmak, "istegi
-// baslatan tarayici" ile "cerezi tasiyan tarayici" esitligini
-// kurulabilir tek yer yapar. Kutuphane kodu DEGISTIRILMEZ: yanit
-// yazilmadan HEMEN once araya giriyoruz.
+// WHY HERE: /authorize is the only point at which the flow is STARTED BY
+// THE BROWSER and it requires a valid client_id + redirect_uri + S256 PKCE
+// (see pkceEnforcer). Setting the binding here makes it the only place where
+// the equality "the browser that started the request" == "the browser that
+// carries the cookie" can be established. The library code is NOT MODIFIED:
+// we step in IMMEDIATELY BEFORE the response is written.
 //
-// Yonlendirme giris sayfasina DEGILSE (hata 302'si, dogrudan yanit)
-// baglama KURULMAZ.
+// If the redirect is NOT to the login page (an error 302, a direct
+// response) NO binding is SET.
 //
-// FAIL-CLOSED: baglama kurulamazsa (orn. Redis yok) kutuphanenin
-// yonlendirmesi YAZILMAZ, 500 donulur. Aksi halde kullanici, POST'u
-// kesin 403 olacak bir forma gonderilirdi.
+// FAIL-CLOSED: if the binding cannot be set (e.g. Redis is down) the
+// library's redirect is NOT WRITTEN and 500 is returned. Otherwise the user
+// would be sent to a form whose POST is certain to be 403.
 //
-// CAPRAZ-SITE NAVIGASYON (login-CSRF): oturum cerezi SameSite=Lax
-// oldugu icin ust-duzey navigasyonda TASINIR. Saldirgan kurbani kendi
-// hazirladigi /authorize?...&code_challenge=<SALDIRGANIN> adresine
-// yonlendirirse, kurbanin MEVCUT cerezi yeniden kullanilir ve
-// saldirganin parametreleriyle dogan authRequestID kurbanin baglama
-// kumesine girer: kurban formu acabilir, girisi tamamlar, uretilen
-// kodun code_verifier'i ise SALDIRGANDA olur. Kod kurbanin cihazindan
-// sizarsa (ayni custom scheme'i claim eden kotu amacli bir uygulama,
-// RFC 8252 bolum 8.1) PKCE'nin korudugu TEK senaryo cokar. Bu yuzden
-// capraz-siteden gelen istekte baglama KURULMAZ; bkz.
-// caprazSiteIstek.
-func (s *Sayfalar) AuthorizeSar(next http.Handler) http.Handler {
+// CROSS-SITE NAVIGATION (login-CSRF): since the session cookie is
+// SameSite=Lax, it is CARRIED on top-level navigation. If an attacker
+// redirects the victim to their own crafted
+// /authorize?...&code_challenge=<ATTACKER'S>, the victim's EXISTING cookie
+// is reused and the authRequestID born with the attacker's parameters enters
+// the victim's binding set: the victim can open the form and completes the
+// login, while the code_verifier of the produced code is held by the
+// ATTACKER. If the code leaks from the victim's device (a malicious app
+// claiming the same custom scheme, RFC 8252 section 8.1), the ONLY scenario
+// PKCE protects against collapses. So NO binding is SET on a request coming
+// from cross-site; see isCrossSite.
+func (s *Pages) WrapAuthorize(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		yakalayici := &baglamaYakalayici{ResponseWriter: w}
-		yakalayici.kur = func(kod int) error {
-			if kod != http.StatusFound && kod != http.StatusSeeOther {
+		interceptor := &bindingInterceptor{ResponseWriter: w}
+		interceptor.bind = func(status int) error {
+			if status != http.StatusFound && status != http.StatusSeeOther {
 				return nil
 			}
-			id := girisYonlendirmeID(w.Header().Get("Location"))
+			id := loginRedirectID(w.Header().Get("Location"))
 			if id == "" {
 				return nil
 			}
-			if caprazSiteIstek(r) {
-				// Yalnizca YENI BAGLAMA EKLENMEZ. Kurbanin cerezi, mevcut
-				// baglamalari ve paralel akislari DOKUNULMADAN kalir
-				// (cerez yenilenmez, kume temizlenmez): aksi halde bu
-				// kontrol kurbanin acik sekmelerini dusuren bir DoS'a
-				// donerdi. Kutuphanenin yonlendirmesi YAZILIR; auth
-				// istegi olusur ama hicbir tarayici ona bagli olmadigi
-				// icin GET /giris 403 doner ve istek TAMAMLANAMAZ.
+			if isCrossSite(r) {
+				// ONLY THE NEW BINDING IS NOT ADDED. The victim's cookie, existing
+				// bindings and parallel flows are left UNTOUCHED (the cookie is not
+				// refreshed, the set is not cleared): otherwise this check would turn into
+				// a DoS that drops the victim's open tabs. The library's redirect IS
+				// WRITTEN; the auth request is created but no browser is bound to it, so
+				// GET /giris returns 403 and the request CANNOT BE COMPLETED.
 				//
-				// authRequestID, cerez degeri ve CSRF jetonu LOGLANMAZ.
+				// authRequestID, the cookie value and the CSRF token are NOT LOGGED.
 				log.Print("authorize: capraz-site navigasyon, oturum baglamasi kurulmadi")
 				return nil
 			}
-			return s.BaglamaKur(w, r, id)
+			return s.BindSession(w, r, id)
 		}
-		next.ServeHTTP(yakalayici, r)
+		next.ServeHTTP(interceptor, r)
 	})
 }
 
-// Fetch-metadata baslik adlari (tarayici tarafindan uretilir, istemci
-// JavaScript'i tarafindan DEGISTIRILEMEZ; "Sec-" on eki yasak baslik
-// adi oldugu icin fetch/XHR ile ezilemez).
+// Fetch-metadata header names (produced by the browser, CANNOT BE MODIFIED
+// by the client's JavaScript; since the "Sec-" prefix is a forbidden header
+// name, they cannot be overridden via fetch/XHR).
 const (
-	baslikFetchSite = "Sec-Fetch-Site"
-	baslikFetchMode = "Sec-Fetch-Mode"
+	headerFetchSite = "Sec-Fetch-Site"
+	headerFetchMode = "Sec-Fetch-Mode"
 )
 
-// Sec-Fetch-Site degerleri. DORDUNU de ayirmak sart:
+// Sec-Fetch-Site values. It is essential to separate ALL FOUR:
 //
-//   - "none"        -> kullanicinin DOGRUDAN baslattigi navigasyon:
-//     adres cubugu, yer imi VE native uygulamanin sistem tarayicisini
-//     acmasi. BIZIM MESRU AKISIMIZ budur (bugun tek istemcimiz
-//     MobilIstemci / ApplicationTypeNative), asla reddedilmez.
-//   - "same-origin" -> kendi sayfalarimizdan donen navigasyon
-//     (giris <-> kayit capraz linkleri, form sonrasi geri donusler).
-//   - "same-site"   -> ayni kayitli alan adi, farkli origin.
-//   - "cross-site"  -> BASKA bir sitenin baslattigi istek: tek
-//     hedefimiz bu.
+//   - "none"        -> a navigation the user started DIRECTLY: the address
+//     bar, a bookmark AND a native app opening the system browser. THIS IS
+//     OUR LEGITIMATE FLOW (today our only client is MobileClient /
+//     ApplicationTypeNative); it is never rejected.
+//   - "same-origin" -> navigation returning from our own pages
+//     (login <-> signup cross links, returns after a form submit).
+//   - "same-site"   -> same registered domain, different origin.
+//   - "cross-site"  -> a request started by ANOTHER site: our only
+//     target.
 const (
-	fetchSiteYok        = "none"
-	fetchSiteAyniOrigin = "same-origin"
-	fetchSiteAyniSite   = "same-site"
-	fetchSiteCapraz     = "cross-site"
+	fetchSiteNone       = "none"
+	fetchSiteSameOrigin = "same-origin"
+	fetchSiteSameSite   = "same-site"
+	fetchSiteCrossSite  = "cross-site"
 )
 
-// caprazSiteIstek, istegin BASKA bir sitenin baslattigi bir istek
-// oldugunu soyler.
+// isCrossSite says whether the request was started by ANOTHER site.
 //
-// BASLIK YOKSA FAIL-OPEN (false doner, yani baglama KURULUR). Gerekce:
-// bu kontrol yalnizca "cerezi tasiyan tarayici" senaryosunda is gorur
-// ve SameSite=Lax cerezi tasiyan her tarayici fetch-metadata'yi da
-// gonderir (Chrome 76+, Firefox 90+, Safari 16.4+; SameSite'i
-// uygulamayan daha eski bir tarayicida zaten Lax korumasi da yoktur,
-// yani fail-closed yapmak somuruyu kapatmaz). Buna karsilik
-// fail-closed, basligi hic gondermeyen TARAYICI OLMAYAN istemcilerde
-// (curl, yerel gelistirme araclari, saglik kontrolleri) girisi tumden
-// kirardi — ve o istemcilerde saldirgan bir "kurban cerezi" de yoktur.
-// Yani eksik baslik, kazandirdigindan cok sey kiriyor.
+// IF THE HEADER IS MISSING, FAIL-OPEN (returns false, i.e. the binding IS
+// SET). Rationale: this check matters only in the "browser carrying the
+// cookie" scenario, and every browser that carries a SameSite=Lax cookie
+// also sends fetch-metadata (Chrome 76+, Firefox 90+, Safari 16.4+; an
+// older browser that does not enforce SameSite has no Lax protection
+// either, so failing closed would not close the exploit). On the other
+// hand, failing closed would break login entirely for NON-BROWSER clients
+// that never send the header (curl, local development tools, health
+// checks) -- and no attacker "victim cookie" exists on those clients
+// either. So the missing header breaks more than it gains.
 //
-// Mod (Sec-Fetch-Mode) kontrolu KASITLI olarak YOK: capraz-site bir
-// alt-kaynak istegi (mod "no-cors"/"cors") Lax cerezi ZATEN tasimaz,
-// dolayisiyla modu ayirmadan TUM capraz-site isteklerde baglama
-// kurmamak hem daha basit hem daha dar. Baslik yine de okunabilir
-// olsun diye adi baslikFetchMode'da tutuluyor.
+// There is DELIBERATELY NO mode (Sec-Fetch-Mode) check: a cross-site
+// subresource request (mode "no-cors"/"cors") ALREADY does not carry a Lax
+// cookie, so not setting the binding on ALL cross-site requests without
+// separating the mode is both simpler and narrower. The name is still kept
+// in headerFetchMode so that the header remains readable.
 //
-// GELECEGE NOT — WEB RP'si: ileride tarayici tabanli bir istemci (web
-// RP) eklenirse, o istemcinin kullaniciyi OP'ye yonlendirmesi MESRU
-// olarak Sec-Fetch-Site: cross-site gelir ve bu kontrol onu reddeder.
-// O gun bu fonksiyon gozden gecirilmeli: ornegin baglamayi kurup
-// login-CSRF'i ayri bir mekanizmayla (OP tarafinda tutulan, istemciye
-// ozel bir baslatma jetonu) kapatmak gerekir. SameSite=Strict'e gecmek
-// COZUM DEGILDIR: tek basina bu somuruyu kapatmaz ve kurbanin mesru
-// akislarini dusurur.
-func caprazSiteIstek(r *http.Request) bool {
-	return r.Header.Get(baslikFetchSite) == fetchSiteCapraz
+// NOTE FOR THE FUTURE -- WEB RP: if a browser-based client (a web RP) is
+// ever added, that client's redirect of the user to the OP LEGITIMATELY
+// arrives as Sec-Fetch-Site: cross-site and this check would reject it.
+// This function should be reviewed that day: for example the binding would
+// have to be set and login-CSRF closed with a separate mechanism (a
+// client-specific start token held on the OP side). Moving to
+// SameSite=Strict IS NOT A SOLUTION: by itself it does not close the
+// exploit and it drops the victim's legitimate flows.
+func isCrossSite(r *http.Request) bool {
+	return r.Header.Get(headerFetchSite) == fetchSiteCrossSite
 }
 
-// girisYonlendirmeID, kutuphanenin urettigi yonlendirme adresi BIZIM
-// giris sayfamiza gidiyorsa authRequestID'yi doner, aksi halde bos
-// string. Yol kontrolu zorunlu: istemcinin redirect_uri'sine donen hata
-// yonlendirmelerinde baglama kurulmamali.
-func girisYonlendirmeID(konum string) string {
-	if konum == "" {
+// loginRedirectID returns the authRequestID if the redirect address produced
+// by the library goes to OUR login page, otherwise an empty string. The path
+// check is mandatory: the binding must not be set on error redirects
+// returning to the client's redirect_uri.
+func loginRedirectID(location string) string {
+	if location == "" {
 		return ""
 	}
-	u, err := url.Parse(konum)
-	if err != nil || u.Path != yolGiris {
+	u, err := url.Parse(location)
+	if err != nil || u.Path != pathLogin {
 		return ""
 	}
 	return u.Query().Get("authRequestID")
 }
 
-// baglamaYakalayici, sarilan handler'in yanitini YAZMADAN once kur'u
-// cagirir. Cerez ve durum kodu sirasi onemli: Set-Cookie basliklari
-// WriteHeader'dan ONCE yazilmak zorunda.
-type baglamaYakalayici struct {
+// bindingInterceptor calls bind BEFORE the wrapped handler's response is
+// WRITTEN. The order of cookie and status code matters: Set-Cookie headers
+// MUST be written BEFORE WriteHeader.
+type bindingInterceptor struct {
 	http.ResponseWriter
 
-	// kur, yanitin durum kodunu alir ve baglamayi kurar. Hata donerse
-	// sarilan handler'in yaniti BASTIRILIR ve 500 yazilir.
-	kur func(kod int) error
+	// bind takes the response's status code and sets the binding. If it returns
+	// an error, the wrapped handler's response is SUPPRESSED and 500 is written.
+	bind func(status int) error
 
-	yazildi    bool
-	bastirildi bool
+	wroteHeader bool
+	suppressed  bool
 }
 
-func (y *baglamaYakalayici) WriteHeader(kod int) {
-	if y.yazildi {
+func (ic *bindingInterceptor) WriteHeader(status int) {
+	if ic.wroteHeader {
 		return
 	}
-	y.yazildi = true
-	if err := y.kur(kod); err != nil {
-		// authRequestID, cerez degeri ve CSRF jetonu LOGLANMAZ.
+	ic.wroteHeader = true
+	if err := ic.bind(status); err != nil {
+		// authRequestID, the cookie value and the CSRF token are NOT LOGGED.
 		log.Printf("authorize: oturum baglamasi kurulamadi: %v", err)
-		y.bastirildi = true
-		y.ResponseWriter.Header().Del("Location")
-		http.Error(y.ResponseWriter, hataSunucu, http.StatusInternalServerError)
+		ic.suppressed = true
+		ic.ResponseWriter.Header().Del("Location")
+		http.Error(ic.ResponseWriter, msgServerError, http.StatusInternalServerError)
 		return
 	}
-	y.ResponseWriter.WriteHeader(kod)
+	ic.ResponseWriter.WriteHeader(status)
 }
 
-func (y *baglamaYakalayici) Write(b []byte) (int, error) {
-	if !y.yazildi {
-		y.WriteHeader(http.StatusOK)
+func (ic *bindingInterceptor) Write(b []byte) (int, error) {
+	if !ic.wroteHeader {
+		ic.WriteHeader(http.StatusOK)
 	}
-	if y.bastirildi {
-		// Govde yutulur ama yazar hata gormez: 500 ZATEN yazildi.
+	if ic.suppressed {
+		// The body is swallowed but the writer sees no error: the 500 was ALREADY written.
 		return len(b), nil
 	}
-	return y.ResponseWriter.Write(b)
+	return ic.ResponseWriter.Write(b)
 }
 
-// oturumZorla, bir POST'un GERCEKTEN bu tarayicida gosterilen forma ait
-// oldugunu dogrular: (1) oturum cerezi var, (2) cereze bagli bir kayit
-// var, (3) bagli authRequestID form degeriyle birebir ayni, (4) form
-// CSRF jetonu cereze bagli jetonla ayni. Dordu de SIFRE DOGRULAMASINDAN
-// ONCE kosar; biri tutmazsa giris denemesi hic yapilmaz.
-func (s *Sayfalar) oturumZorla(r *http.Request, id string) error {
-	csrf, err := oturumBaglamaDogrula(r.Context(), s.oturumlar, r, id)
+// enforceSession verifies that a POST REALLY belongs to the form shown in
+// this browser: (1) a session cookie exists, (2) a record bound to the
+// cookie exists, (3) the bound authRequestID is exactly the same as the form
+// value, (4) the form CSRF token is the same as the token bound to the
+// cookie. All four run BEFORE THE PASSWORD VERIFICATION; if one fails, no
+// login attempt is made at all.
+func (s *Pages) enforceSession(r *http.Request, id string) error {
+	csrf, err := verifySessionBinding(r.Context(), s.sessions, r, id)
 	if err != nil {
 		return err
 	}
-	if !csrfEsit(csrf, r.FormValue(csrfAlan)) {
+	if !csrfEqual(csrf, r.FormValue(fieldCSRF)) {
 		return ErrCSRF
 	}
 	return nil
 }
 
-// oturumRed, baglama/CSRF dogrulamasi tutmadiginda tek bicimli yaniti
-// yazar. Reddin SEBEBI istemciye sizdirilmaz; sunucu tarafinda da cerez
-// degeri, CSRF jetonu ve authRequestID loglanmaz, yalnizca hata turu
-// yazilir.
-func oturumRed(w http.ResponseWriter, nerede string, err error) {
-	log.Printf("%s: oturum baglamasi dogrulanamadi: %v", nerede, err)
-	http.Error(w, hataOturum, http.StatusForbidden)
+// rejectSession writes a uniform response when the binding/CSRF verification
+// does not hold. The REASON for the rejection is not leaked to the client;
+// on the server side too the cookie value, CSRF token and authRequestID are
+// not logged, only the error kind is.
+func rejectSession(w http.ResponseWriter, where string, err error) {
+	log.Printf("%s: oturum baglamasi dogrulanamadi: %v", where, err)
+	http.Error(w, msgSessionInvalid, http.StatusForbidden)
 }
 
-// Giris, GET'te formu gosterir, POST'ta kimlik dogrular ve basarili
-// olursa OIDC akisina geri doner.
-func (s *Sayfalar) Giris(w http.ResponseWriter, r *http.Request) {
+// Login shows the form on GET, verifies credentials on POST and, if
+// successful, returns to the OIDC flow.
+func (s *Pages) Login(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
-		s.girisPost(w, r)
+		s.loginPost(w, r)
 		return
 	}
-	s.girisGet(w, r)
+	s.loginGet(w, r)
 }
 
-// girisGet, formu YALNIZCA bu tarayici o auth istegini baslatmissa
-// gosterir. Yeni baglama MINTLEMEZ: var olan baglamayi TALEP eder.
-// Baglama yoksa form BILE gosterilmez — aksi halde saldirgan kendi
-// tarayicisinda baglama alip linki kurbana yollayabilirdi.
-func (s *Sayfalar) girisGet(w http.ResponseWriter, r *http.Request) {
+// loginGet shows the form ONLY if this browser started that auth request.
+// It does NOT MINT a new binding: it REQUIRES an existing one. If there is
+// no binding not even the form is shown -- otherwise an attacker could
+// obtain a binding in their own browser and send the link to the victim.
+func (s *Pages) loginGet(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("authRequestID")
 	if id == "" {
 		http.Error(w, "authRequestID eksik", http.StatusBadRequest)
 		return
 	}
-	csrf, err := oturumBaglamaDogrula(r.Context(), s.oturumlar, r, id)
+	csrf, err := verifySessionBinding(r.Context(), s.sessions, r, id)
 	if err != nil {
-		oturumRed(w, "giris-get", err)
+		rejectSession(w, "giris-get", err)
 		return
 	}
-	s.girisRender(w, http.StatusOK, id, csrf, "", "")
+	s.renderLogin(w, http.StatusOK, id, csrf, "", "")
 }
 
-func (s *Sayfalar) girisPost(w http.ResponseWriter, r *http.Request) {
+func (s *Pages) loginPost(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "form okunamadi", http.StatusBadRequest)
 		return
@@ -510,98 +508,98 @@ func (s *Sayfalar) girisPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authRequestID eksik", http.StatusBadRequest)
 		return
 	}
-	// Cerez baglamasi + CSRF: sifre dogrulamasindan ONCE. Burada
-	// reddedilen bir istek kullanici deposuna HIC dokunmaz.
-	if err := s.oturumZorla(r, id); err != nil {
-		oturumRed(w, "giris", err)
+	// Cookie binding + CSRF: BEFORE the password verification. A request
+	// rejected here NEVER touches the user store.
+	if err := s.enforceSession(r, id); err != nil {
+		rejectSession(w, "giris", err)
 		return
 	}
-	csrf := r.FormValue(csrfAlan)
-	// epostaNormalize: kayit ile giris AYNI yoldan gecmek zorunda.
-	// Eskiden kayit tarafi trim ediyor, giris tarafi ham form degerini
-	// geciyordu; bosluklu e-postayla kayit olan kullanici AYNI girdiyle
-	// giris yapamiyordu (bkz. kullanici_depo.go epostaNormalize notu).
-	eposta := normalizeEmail(r.FormValue("eposta"))
-	sifre := r.FormValue("sifre")
+	csrf := r.FormValue(fieldCSRF)
+	// normalizeEmail: signup and login MUST go through the SAME path. Previously
+	// the signup side trimmed while the login side passed the raw form value; a
+	// user who signed up with an email containing spaces could not log in with
+	// the SAME input (see the normalizeEmail note in user_store.go).
+	email := normalizeEmail(r.FormValue("eposta"))
+	password := r.FormValue("sifre")
 
-	kullanici, err := s.kullanici.ByEmail(r.Context(), eposta)
+	user, err := s.users.ByEmail(r.Context(), email)
 	if err != nil && !errors.Is(err, ErrUserNotFound) {
-		// E-posta PII'dir ve burada loglanmaz; hatanin kendisi zaten
-		// teshis icin yeterli.
+		// The email is PII and is not logged here; the error itself is already
+		// enough for diagnosis.
 		log.Printf("giris: kullanici okunamadi: %v", err)
 	}
-	if !kullanici.PasswordMatches(sifre) {
-		// Kasitli olarak hesabin var olup olmadigini AYIRT ETMIYORUZ:
-		// AYNI e-posta icin "hesap yok" ve "sifre yanlis" durumlari
-		// birebir ayni govdeyi/durum kodunu doner (bkz.
-		// TestYanlisGirisKullaniciVarligiSizdirmaz). Girilen e-postayi
-		// forma geri yazmak numaralandirma sayilmaz: saldirgan zaten
-		// kendi yazdigi degeri goruyor, farkli bir bilgi sizmiyor.
-		// html/template kacislama yapar, bkz. TestGirisEpostaEchoKacar. Sifre
-		// burada loglanmaz.
-		s.girisRender(w, http.StatusUnauthorized, id, csrf, eposta, hataGirisBasarisiz)
+	if !user.PasswordMatches(password) {
+		// We DELIBERATELY DO NOT DISTINGUISH whether the account exists: for the
+		// SAME email the "no account" and "wrong password" cases return EXACTLY the
+		// same body/status code (see
+		// TestLogin_FailureDoesNotRevealUserExistence). Writing the entered email
+		// back to the form does not count as enumeration: the attacker already sees
+		// the value they typed, no different information leaks. html/template
+		// escapes, see TestLogin_EchoedEmailEscaped. The password is not logged
+		// here.
+		s.renderLogin(w, http.StatusUnauthorized, id, csrf, email, msgLoginFailed)
 		return
 	}
 
-	if err := s.istekler.TamamlandiIsaretle(r.Context(), id, kullanici.ID, []string{amrSifre}); err != nil {
-		// authRequestID loglanmaz: TamamlandiIsaretle ile birlesince
-		// bekleyen bir istegi belirli bir kullaniciya baglayan, 10
-		// dakika gecerli bir yetki jetonu gibi davranir.
+	if err := s.requests.MarkDone(r.Context(), id, user.ID, []string{amrPassword}); err != nil {
+		// authRequestID is not logged: combined with MarkDone it acts like an
+		// authorization token, valid for 10 minutes, that binds a pending request
+		// to a specific user.
 		log.Printf("giris: istek tamamlanamadi: %v", err)
-		if errors.Is(err, ErrIstekZatenTamamlandi) {
-			// Bu istek baska bir kimlige bagli; ezmek yerine reddet.
-			http.Error(w, hataIstekBagli, http.StatusConflict)
+		if errors.Is(err, ErrRequestAlreadyCompleted) {
+			// This request is bound to another identity; reject instead of overwriting.
+			http.Error(w, msgRequestAlreadyUsed, http.StatusConflict)
 			return
 		}
-		s.girisRender(w, http.StatusInternalServerError, id, csrf, eposta, hataSunucu)
+		s.renderLogin(w, http.StatusInternalServerError, id, csrf, email, msgServerError)
 		return
 	}
-	http.Redirect(w, r, s.geriCagirma(r.Context(), id), http.StatusFound)
+	http.Redirect(w, r, s.authCallback(r.Context(), id), http.StatusFound)
 }
 
-func (s *Sayfalar) girisRender(w http.ResponseWriter, kod int, id, csrf, eposta, hata string) {
-	veri := loginData{
+func (s *Pages) renderLogin(w http.ResponseWriter, status int, id, csrf, email, errMsg string) {
+	data := loginData{
 		AuthRequestID: id,
 		CSRF:          csrf,
-		Email:         eposta,
-		Error:         hata,
-		LoginPath:     yolGiris,
-		SignupPath:    yolKayit,
-		Providers:     s.federasyonButonlari(id),
+		Email:         email,
+		Error:         errMsg,
+		LoginPath:     pathLogin,
+		SignupPath:    pathSignup,
+		Providers:     s.federationButtons(id),
 	}
-	w.WriteHeader(kod)
-	if err := sablonlar.ExecuteTemplate(w, "giris.html", veri); err != nil {
+	w.WriteHeader(status)
+	if err := templates.ExecuteTemplate(w, "giris.html", data); err != nil {
 		log.Printf("giris sablonu yazilamadi: %v", err)
 	}
 }
 
-// Kayit, GET'te formu gosterir, POST'ta yeni kullanici olusturur ve
-// basarili olursa OIDC akisina geri doner.
-func (s *Sayfalar) Kayit(w http.ResponseWriter, r *http.Request) {
+// Signup shows the form on GET, creates a new user on POST and, if
+// successful, returns to the OIDC flow.
+func (s *Pages) Signup(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
-		s.kayitPost(w, r)
+		s.signupPost(w, r)
 		return
 	}
-	s.kayitGet(w, r)
+	s.signupGet(w, r)
 }
 
-// kayitGet, girisGet ile AYNI kurala tabidir: baglama TALEP eder,
-// mintlemez (bkz. girisGet).
-func (s *Sayfalar) kayitGet(w http.ResponseWriter, r *http.Request) {
+// signupGet is subject to the SAME rule as loginGet: it REQUIRES a binding,
+// it does not mint one (see loginGet).
+func (s *Pages) signupGet(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("authRequestID")
 	if id == "" {
 		http.Error(w, "authRequestID eksik", http.StatusBadRequest)
 		return
 	}
-	csrf, err := oturumBaglamaDogrula(r.Context(), s.oturumlar, r, id)
+	csrf, err := verifySessionBinding(r.Context(), s.sessions, r, id)
 	if err != nil {
-		oturumRed(w, "kayit-get", err)
+		rejectSession(w, "kayit-get", err)
 		return
 	}
-	s.kayitRender(w, http.StatusOK, id, csrf, "", "", "")
+	s.renderSignup(w, http.StatusOK, id, csrf, "", "", "")
 }
 
-func (s *Sayfalar) kayitPost(w http.ResponseWriter, r *http.Request) {
+func (s *Pages) signupPost(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "form okunamadi", http.StatusBadRequest)
 		return
@@ -611,84 +609,83 @@ func (s *Sayfalar) kayitPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authRequestID eksik", http.StatusBadRequest)
 		return
 	}
-	// Cerez baglamasi + CSRF: kullanici OLUSTURMADAN once.
-	if err := s.oturumZorla(r, id); err != nil {
-		oturumRed(w, "kayit", err)
+	// Cookie binding + CSRF: BEFORE the user is CREATED.
+	if err := s.enforceSession(r, id); err != nil {
+		rejectSession(w, "kayit", err)
 		return
 	}
-	csrf := r.FormValue(csrfAlan)
-	// Giris ile AYNI normalizasyon (bkz. girisPost'taki not).
-	eposta := normalizeEmail(r.FormValue("eposta"))
-	ad := r.FormValue("ad")
-	sifre := r.FormValue("sifre")
+	csrf := r.FormValue(fieldCSRF)
+	// The SAME normalization as login (see the note in loginPost).
+	email := normalizeEmail(r.FormValue("eposta"))
+	name := r.FormValue("ad")
+	password := r.FormValue("sifre")
 
-	kullanici, err := s.kullanici.Create(r.Context(), eposta, ad, sifre)
+	user, err := s.users.Create(r.Context(), email, name, password)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrEmailInUse):
-			s.kayitRender(w, http.StatusConflict, id, csrf, eposta, ad, hataEpostaKullanimda)
+			s.renderSignup(w, http.StatusConflict, id, csrf, email, name, msgEmailInUse)
 		case errors.Is(err, ErrPasswordTooShort):
-			s.kayitRender(w, http.StatusBadRequest, id, csrf, eposta, ad, ErrPasswordTooShort.Error())
+			s.renderSignup(w, http.StatusBadRequest, id, csrf, email, name, ErrPasswordTooShort.Error())
 		default:
-			// E-posta PII'dir ve burada loglanmaz; hatanin kendisi zaten
-			// teshis icin yeterli.
+			// The email is PII and is not logged here; the error itself is already
+			// enough for diagnosis.
 			log.Printf("kayit: kullanici olusturulamadi: %v", err)
-			s.kayitRender(w, http.StatusInternalServerError, id, csrf, eposta, ad, hataSunucu)
+			s.renderSignup(w, http.StatusInternalServerError, id, csrf, email, name, msgServerError)
 		}
 		return
 	}
 
-	if err := s.istekler.TamamlandiIsaretle(r.Context(), id, kullanici.ID, []string{amrSifre}); err != nil {
-		// authRequestID loglanmaz (bkz. girisPost'taki ayni not).
+	if err := s.requests.MarkDone(r.Context(), id, user.ID, []string{amrPassword}); err != nil {
+		// authRequestID is not logged (see the same note in loginPost).
 		log.Printf("kayit: istek tamamlanamadi: %v", err)
-		if errors.Is(err, ErrIstekZatenTamamlandi) {
-			// Bu istek zaten baska bir kimlige bagli; Subject EZILMEZ.
-			http.Error(w, hataIstekBagli, http.StatusConflict)
+		if errors.Is(err, ErrRequestAlreadyCompleted) {
+			// This request is already bound to another identity; Subject is NOT OVERWRITTEN.
+			http.Error(w, msgRequestAlreadyUsed, http.StatusConflict)
 			return
 		}
-		s.kayitRender(w, http.StatusInternalServerError, id, csrf, eposta, ad, hataSunucu)
+		s.renderSignup(w, http.StatusInternalServerError, id, csrf, email, name, msgServerError)
 		return
 	}
-	http.Redirect(w, r, s.geriCagirma(r.Context(), id), http.StatusFound)
+	http.Redirect(w, r, s.authCallback(r.Context(), id), http.StatusFound)
 }
 
-func (s *Sayfalar) kayitRender(w http.ResponseWriter, kod int, id, csrf, eposta, ad, hata string) {
-	veri := signupData{
+func (s *Pages) renderSignup(w http.ResponseWriter, status int, id, csrf, email, name, errMsg string) {
+	data := signupData{
 		AuthRequestID: id,
 		CSRF:          csrf,
-		Email:         eposta,
-		Name:          ad,
-		Error:         hata,
-		LoginPath:     yolGiris,
-		SignupPath:    yolKayit,
+		Email:         email,
+		Name:          name,
+		Error:         errMsg,
+		LoginPath:     pathLogin,
+		SignupPath:    pathSignup,
 	}
-	w.WriteHeader(kod)
-	if err := sablonlar.ExecuteTemplate(w, "kayit.html", veri); err != nil {
+	w.WriteHeader(status)
+	if err := templates.ExecuteTemplate(w, "kayit.html", data); err != nil {
 		log.Printf("kayit sablonu yazilamadi: %v", err)
 	}
 }
 
-// Callback, /authorize/callback bacagini cerez baglamasiyla korur.
+// Callback protects the /authorize/callback leg with the cookie binding.
 //
-// Bu bacak acik kalirsa yalnizca forma CSRF koymak YETMEZ: kutuphane
-// callback'te sadece AuthRequestByID + Done() bakar
-// (pkg/op/auth_request.go, AuthorizeCallback), yani kodu TOPLAYAN
-// tarayici girisi YAPAN tarayicidan bagimsiz olabilir. Burada ayni
-// cerez baglamasini dogrulariz ve ancak "id" parametresi cereze bagli
-// authRequestID ile birebir eslesirse kutuphanenin kendi handler'ina
-// delege ederiz.
+// If this leg is left open, putting a CSRF token on the form is NOT ENOUGH:
+// at the callback the library only looks at AuthRequestByID + Done()
+// (pkg/op/auth_request.go, AuthorizeCallback), so the browser COLLECTING the
+// code may be independent of the browser that DID the login. Here we verify
+// the same cookie binding and delegate to the library's own handler only if
+// the "id" parameter matches EXACTLY the authRequestID bound to the cookie.
 //
-// CSRF jetonu burada ARANMAZ: bu bacak bir form POST'u degil,
-// /giris POST'unun 302 ile yonlendirdigi bir GET'tir; jeton URL'e
-// konsa Referer/tarayici gecmisi uzerinden sizardi. Koruyan sey cerez
-// baglamasidir ve bu bacakta cerez baglamasi tek basina yeterlidir:
-// CSRF, "kurbanin tarayicisinda istemedigi bir POST'u tetiklemek"
-// tehdidine karsidir, burada ise kodu saldirganin tarayicisinda
-// toplama tehdidi var ve onu cerez kapatiyor.
-func (s *Sayfalar) Callback(w http.ResponseWriter, r *http.Request) {
-	if s.callbackDelege == nil {
+// The CSRF token is NOT LOOKED FOR here: this leg is not a form POST but a
+// GET that the /giris POST redirects to with a 302; if the token were put in
+// the URL it would leak via Referer/browser history. What protects is the
+// cookie binding, and on this leg the cookie binding alone is sufficient:
+// CSRF is against the threat of "triggering an unwanted POST in the
+// victim's browser", whereas here the threat is collecting the code in the
+// attacker's browser, and the cookie closes that.
+func (s *Pages) Callback(w http.ResponseWriter, r *http.Request) {
+	if s.callbackDelegate == nil {
 		log.Print("callback: delege baglanmamis")
-		http.Error(w, hataSunucu, http.StatusInternalServerError)
+		http.Error(w, msgServerError, http.StatusInternalServerError)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
@@ -700,9 +697,9 @@ func (s *Sayfalar) Callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id eksik", http.StatusBadRequest)
 		return
 	}
-	if _, err := oturumBaglamaDogrula(r.Context(), s.oturumlar, r, id); err != nil {
-		oturumRed(w, "callback", err)
+	if _, err := verifySessionBinding(r.Context(), s.sessions, r, id); err != nil {
+		rejectSession(w, "callback", err)
 		return
 	}
-	s.callbackDelege.ServeHTTP(w, r)
+	s.callbackDelegate.ServeHTTP(w, r)
 }

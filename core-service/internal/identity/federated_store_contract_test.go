@@ -11,7 +11,7 @@ import (
 // federeKurulum, ayni sozlesmeyi iki uygulamaya da kosturur.
 type federeKurulum struct {
 	ad        string
-	depo      FedereDepo
+	depo      FederatedStore
 	kullanici UserStore
 }
 
@@ -42,7 +42,7 @@ func federeDepoKurulumlari() []federeKurulumKurucu {
 				sahteKullanici := NewFakeUserStore()
 				return federeKurulum{
 					ad:        "sahte",
-					depo:      NewSahteFedereDepo(sahteKullanici),
+					depo:      NewFakeFederatedStore(sahteKullanici),
 					kullanici: sahteKullanici,
 				}
 			},
@@ -71,7 +71,7 @@ func federeDepoKurulumlari() []federeKurulumKurucu {
 				}
 				return federeKurulum{
 					ad:        "postgres",
-					depo:      NewPostgresFedereDepo(havuz),
+					depo:      NewPostgresFederatedStore(havuz),
 					kullanici: NewPostgresUserStore(havuz),
 				}
 			},
@@ -86,13 +86,13 @@ func TestFedereDepoSozlesmesi(t *testing.T) {
 			ctx := context.Background()
 
 			// Bilinmeyen kimlik ErrKimlikYok doner, nil kullanici degil.
-			if _, err := k.depo.KimlikleKullanici(ctx, "google", "yok-123"); !errors.Is(err, ErrKimlikYok) {
+			if _, err := k.depo.UserByIdentity(ctx, "google", "yok-123"); !errors.Is(err, ErrIdentityNotFound) {
 				t.Fatalf("bilinmeyen kimlik icin err = %v, beklenen ErrKimlikYok", err)
 			}
 
 			// Federe kullanici olusturma: sifre hash'i BOS olmali, yani
 			// SifreDogru her sifre icin false donmeli.
-			ku, err := k.depo.FedereKullaniciOlustur(ctx, "google", "sub-1", "a@ornek.com", "Ali", true)
+			ku, err := k.depo.CreateFederatedUser(ctx, "google", "sub-1", "a@ornek.com", "Ali", true)
 			if err != nil {
 				t.Fatalf("federe kullanici olusturulamadi: %v", err)
 			}
@@ -107,7 +107,7 @@ func TestFedereDepoSozlesmesi(t *testing.T) {
 			}
 
 			// Olusturulan kimlik artik bulunabilir ve AYNI kullaniciyi doner.
-			bulunan, err := k.depo.KimlikleKullanici(ctx, "google", "sub-1")
+			bulunan, err := k.depo.UserByIdentity(ctx, "google", "sub-1")
 			if err != nil {
 				t.Fatalf("kimlik okunamadi: %v", err)
 			}
@@ -117,7 +117,7 @@ func TestFedereDepoSozlesmesi(t *testing.T) {
 
 			// Saglayici ayrimi: ayni sub degeri baska saglayicida AYNI kisi
 			// degildir.
-			if _, err := k.depo.KimlikleKullanici(ctx, "apple", "sub-1"); !errors.Is(err, ErrKimlikYok) {
+			if _, err := k.depo.UserByIdentity(ctx, "apple", "sub-1"); !errors.Is(err, ErrIdentityNotFound) {
 				t.Errorf("apple/sub-1 icin err = %v, beklenen ErrKimlikYok", err)
 			}
 
@@ -126,10 +126,10 @@ func TestFedereDepoSozlesmesi(t *testing.T) {
 			if err != nil {
 				t.Fatalf("sifreli hesap olusturulamadi: %v", err)
 			}
-			if err := k.depo.Bagla(ctx, "apple", "apple-sub-9", sifreli.ID); err != nil {
+			if err := k.depo.Link(ctx, "apple", "apple-sub-9", sifreli.ID); err != nil {
 				t.Fatalf("bagla: %v", err)
 			}
-			bagli, err := k.depo.KimlikleKullanici(ctx, "apple", "apple-sub-9")
+			bagli, err := k.depo.UserByIdentity(ctx, "apple", "apple-sub-9")
 			if err != nil {
 				t.Fatalf("baglanan kimlik okunamadi: %v", err)
 			}
@@ -140,17 +140,17 @@ func TestFedereDepoSozlesmesi(t *testing.T) {
 			// AYNI (saglayici, sub) BASKA bir hesaba baglanamaz: aksi halde
 			// bir Google hesabi iki bizim hesabimiza birden baglanir ve
 			// giriste hangisine dusecegi belirsizlesir.
-			if err := k.depo.Bagla(ctx, "apple", "apple-sub-9", ku.ID); !errors.Is(err, ErrKimlikKullanimda) {
+			if err := k.depo.Link(ctx, "apple", "apple-sub-9", ku.ID); !errors.Is(err, ErrIdentityInUse) {
 				t.Errorf("ikinci bagla err = %v, beklenen ErrKimlikKullanimda", err)
 			}
 
 			// Bir kullanici ayni saglayiciya iki kez baglanamaz.
-			if err := k.depo.Bagla(ctx, "apple", "apple-sub-FARKLI", sifreli.ID); !errors.Is(err, ErrKimlikKullanimda) {
+			if err := k.depo.Link(ctx, "apple", "apple-sub-FARKLI", sifreli.ID); !errors.Is(err, ErrIdentityInUse) {
 				t.Errorf("ayni saglayiciya ikinci bagla err = %v, beklenen ErrKimlikKullanimda", err)
 			}
 
 			// SaglayicilarByUserID, K1'in 409 sayfasinin metnini besler.
-			sag, err := k.depo.SaglayicilarByUserID(ctx, sifreli.ID)
+			sag, err := k.depo.ProvidersByUserID(ctx, sifreli.ID)
 			if err != nil {
 				t.Fatalf("saglayicilar okunamadi: %v", err)
 			}

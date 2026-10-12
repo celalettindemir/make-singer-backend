@@ -36,12 +36,12 @@ const testRedirectURI = "com.makesinger.app:/oauth2redirect"
 type akisOrtami struct {
 	issuer    string
 	kullanici UserStore
-	istekler  *IstekDepo
+	istekler  *RequestStore
 
 	// federe ve yukari YALNIZCA federasyonlu kurulumda doludur (bkz.
 	// testSunucuKurAyarli): uctan uca testler yukari akisin yanitlarini
 	// bozmak ve yazilan eslesmeleri saymak zorunda.
-	federe *SahteFedereDepo
+	federe *FakeFederatedStore
 	yukari map[string]*sahteOP
 }
 
@@ -54,15 +54,15 @@ func testSunucu(t *testing.T) *akisOrtami {
 	// *HizLimit alir), ama sinirlar bu testleri etkilemeyecek kadar
 	// yuksek: hiz limitinin KENDISI hizlimit_test.go'da dar sinirlarla
 	// olculur.
-	return testSunucuAyarli(t, HizLimitAyar{
-		GirisIPPerMin:      1000,
-		GirisEpostaPerSaat: 1000,
-		KayitIPPerSaat:     1000,
-		GuvenilenProxy:     0,
+	return testSunucuAyarli(t, RateLimitConfig{
+		LoginIPPerMin:     1000,
+		LoginEmailPerHour: 1000,
+		SignupIPPerHour:   1000,
+		TrustedProxies:    0,
 	})
 }
 
-func testSunucuAyarli(t *testing.T, ayar HizLimitAyar) *akisOrtami {
+func testSunucuAyarli(t *testing.T, ayar RateLimitConfig) *akisOrtami {
 	t.Helper()
 	return testSunucuKur(t, ayar, false)
 }
@@ -75,12 +75,12 @@ func testSunucuAyarli(t *testing.T, ayar HizLimitAyar) *akisOrtami {
 // kurulumu olcer ve her birine iki RSA anahtari + iki sahte saglayici
 // maliyeti yuklemek gereksiz. Federasyon kablolamasini olcen testler bu
 // varyanti cagirir.
-func testSunucuFedere(t *testing.T, ayar HizLimitAyar) *akisOrtami {
+func testSunucuFedere(t *testing.T, ayar RateLimitConfig) *akisOrtami {
 	t.Helper()
 	return testSunucuKur(t, ayar, true)
 }
 
-func testSunucuKur(t *testing.T, ayar HizLimitAyar, federe bool) *akisOrtami {
+func testSunucuKur(t *testing.T, ayar RateLimitConfig, federe bool) *akisOrtami {
 	t.Helper()
 	// Varsayilan sahte yukari akis ayari: hicbir alan bozulmamis.
 	return testSunucuKurAyarli(t, ayar, federe, sahteOPAyar{})
@@ -91,7 +91,7 @@ func testSunucuKur(t *testing.T, ayar HizLimitAyar, federe bool) *akisOrtami {
 // testSunucuFedere imzalari ve cagiranlari BOZULMADAN kaliyor, uctan
 // uca testler ise yukari akisin her yanitini bozabiliyor.
 func testSunucuKurAyarli(
-	t *testing.T, ayar HizLimitAyar, federe bool, opAyar sahteOPAyar,
+	t *testing.T, ayar RateLimitConfig, federe bool, opAyar sahteOPAyar,
 ) *akisOrtami {
 	t.Helper()
 	rdb := testRedis(t) // Redis yoksa burada atlanir
@@ -116,7 +116,7 @@ func testSunucuKurAyarli(
 	cfg.RedirectURIs = []string{testRedirectURI}
 
 	kullanici := NewFakeUserStore()
-	istekler := NewIstekDepo(rdb)
+	istekler := NewRequestStore(rdb)
 	depo := NewStorage(cfg, kullanici, NewFakeTokenStore(), istekler, anahtar)
 
 	opCfg := &op.Config{
@@ -134,7 +134,7 @@ func testSunucuKurAyarli(
 		t.Fatalf("OpenIDProvider: %v", err)
 	}
 
-	hizLimit, err := NewHizLimit(rdb, ayar, []byte(testCryptoAnahtari))
+	hizLimit, err := NewRateLimiter(rdb, ayar, []byte(testCryptoAnahtari))
 	if err != nil {
 		t.Fatalf("NewHizLimit: %v", err)
 	}
@@ -144,17 +144,17 @@ func testSunucuKurAyarli(
 	// ile dolu. Sahte saglayici yerel bir httptest sunucusudur; test
 	// hicbir zaman Apple/Google'a cikmaz.
 	var (
-		akislar        map[string]*YukariAkis
+		akislar        map[string]*Upstream
 		dogrulayicilar map[string]*auth.UpstreamVerifier
-		federeDepo     FedereDepo
-		sahteFedere    *SahteFedereDepo
+		federeDepo     FederatedStore
+		sahteFedere    *FakeFederatedStore
 		oplar          map[string]*sahteOP
 	)
 	if federe {
 		// Google (302 donus) ve Apple (form_post donus) birlikte
 		// kurulur; ikisi de yerel httptest sunucularidir.
 		akislar, dogrulayicilar, oplar = federasyonKablola(t, opAyar)
-		sahteFedere = NewSahteFedereDepo(kullanici)
+		sahteFedere = NewFakeFederatedStore(kullanici)
 		federeDepo = sahteFedere
 	}
 
@@ -203,7 +203,7 @@ func tarayici(t *testing.T) *http.Client {
 // pkceS256, (verifier, challenge) ciftini uretir.
 func pkceS256(t *testing.T) (string, string) {
 	t.Helper()
-	verifier, err := rasgeleJeton()
+	verifier, err := randomToken()
 	if err != nil {
 		t.Fatalf("verifier uretilemedi: %v", err)
 	}
@@ -268,8 +268,8 @@ func authRequestIDCikar(t *testing.T, yanit *http.Response) string {
 	if err != nil {
 		t.Fatalf("Location cozulemedi: %v", err)
 	}
-	if konum.Path != yolGiris {
-		t.Fatalf("Location yolu = %q, beklenen %q", konum.Path, yolGiris)
+	if konum.Path != pathLogin {
+		t.Fatalf("Location yolu = %q, beklenen %q", konum.Path, pathLogin)
 	}
 	id := konum.Query().Get("authRequestID")
 	if id == "" {
@@ -291,7 +291,7 @@ var akisCSRFDeseni = regexp.MustCompile(`name="csrf" value="([^"]*)"`)
 // gosterilir ve akis tamamlanir.
 func (o *akisOrtami) girisDene(t *testing.T, c *http.Client, id, eposta, sifre string) (*http.Response, int) {
 	t.Helper()
-	formYanit := al(t, c, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
+	formYanit := al(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
 	if formYanit.StatusCode != http.StatusOK {
 		return formYanit, formYanit.StatusCode
 	}
@@ -301,9 +301,9 @@ func (o *akisOrtami) girisDene(t *testing.T, c *http.Client, id, eposta, sifre s
 	}
 	form := url.Values{
 		"eposta": {eposta}, "sifre": {sifre},
-		"authRequestID": {id}, csrfAlan: {esler[1]},
+		"authRequestID": {id}, fieldCSRF: {esler[1]},
 	}
-	yanit, err := c.PostForm(o.issuer+yolGiris, form)
+	yanit, err := c.PostForm(o.issuer+pathLogin, form)
 	if err != nil {
 		t.Fatalf("POST /giris: %v", err)
 	}
@@ -315,7 +315,7 @@ func (o *akisOrtami) girisDene(t *testing.T, c *http.Client, id, eposta, sifre s
 // Form reddedilirse test durur.
 func (o *akisOrtami) girisFormuAc(t *testing.T, c *http.Client, id string) string {
 	t.Helper()
-	formYanit := al(t, c, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
+	formYanit := al(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
 	if formYanit.StatusCode != http.StatusOK {
 		t.Fatalf("giris formu durumu = %d", formYanit.StatusCode)
 	}
@@ -331,9 +331,9 @@ func (o *akisOrtami) girisFormuAc(t *testing.T, c *http.Client, id string) strin
 // yuklemez, govdeyle birlikte donen sayfayi gosterir.
 func (o *akisOrtami) girisGonder(t *testing.T, c *http.Client, id, csrf, eposta, sifre string) *http.Response {
 	t.Helper()
-	yanit, err := c.PostForm(o.issuer+yolGiris, url.Values{
+	yanit, err := c.PostForm(o.issuer+pathLogin, url.Values{
 		"eposta": {eposta}, "sifre": {sifre},
-		"authRequestID": {id}, csrfAlan: {csrf},
+		"authRequestID": {id}, fieldCSRF: {csrf},
 	})
 	if err != nil {
 		t.Fatalf("POST /giris: %v", err)
@@ -471,7 +471,7 @@ func devralmaDogrula(t *testing.T, o *akisOrtami, id string, cbYanit *http.Respo
 	if kod := kodCikar(t, cbYanit); kod != "" {
 		t.Fatalf("HESAP DEVRALMA: saldirgan kod aldi (durum %d)", cbYanit.StatusCode)
 	}
-	istek, err := o.istekler.IDileOku(context.Background(), id)
+	istek, err := o.istekler.GetByID(context.Background(), id)
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
@@ -501,7 +501,7 @@ func TestSomuru1OnBaglamaIleDevralinamaz(t *testing.T) {
 
 	// 2) ON-BAGLAMA: saldirgan formu KENDI tarayicisinda acar. Bu 200
 	//    doner (akisi o baslatti, baglamasi var) ama giris YAPMAZ.
-	saldirganForm := al(t, saldirgan, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
+	saldirganForm := al(t, saldirgan, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
 	if saldirganForm.StatusCode != http.StatusOK {
 		t.Fatalf("saldirganin kendi formu durumu = %d; senaryo kurulamadi", saldirganForm.StatusCode)
 	}
@@ -546,7 +546,7 @@ func TestSomuru2GirisSonrasiBaglamaIleDevralinamaz(t *testing.T) {
 
 	// 3) Saldirgan SONRA formu acar (baglama almaya calisir) ve kodu
 	//    toplar.
-	al(t, saldirgan, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
+	al(t, saldirgan, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
 	devralmaDogrula(t, o, id, al(t, saldirgan, o.issuer+"/authorize/callback?id="+url.QueryEscape(id)))
 }
 
@@ -561,7 +561,7 @@ func TestGetGirisBaglamasizUretimMuxundaReddedilir(t *testing.T) {
 
 	id := authRequestIDCikar(t, al(t, baslatan, o.authorizeURL(challenge, "S256")))
 
-	yanit := al(t, yabanci, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
+	yanit := al(t, yabanci, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
 	if yanit.StatusCode != http.StatusForbidden {
 		t.Fatalf("yabanci tarayici GET /giris durumu = %d, beklenen 403", yanit.StatusCode)
 	}
@@ -571,7 +571,7 @@ func TestGetGirisBaglamasizUretimMuxundaReddedilir(t *testing.T) {
 
 	// NEGATIF KONTROL: akisi baslatan tarayicida AYNI link 200 doner,
 	// yani 403 baglama yuzunden (uc tumuyle kapanmis degil).
-	if kendi := al(t, baslatan, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id)); kendi.StatusCode != http.StatusOK {
+	if kendi := al(t, baslatan, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id)); kendi.StatusCode != http.StatusOK {
 		t.Errorf("baslatan tarayicida GET /giris durumu = %d, beklenen 200", kendi.StatusCode)
 	}
 }
@@ -661,7 +661,7 @@ func pkceRed(t *testing.T, yanit *http.Response) {
 	switch yanit.StatusCode {
 	case http.StatusFound:
 		konum := yanit.Header.Get("Location")
-		if strings.Contains(konum, yolGiris) {
+		if strings.Contains(konum, pathLogin) {
 			t.Fatalf("istek giris sayfasina yonlendirildi: %q", konum)
 		}
 		if !strings.Contains(konum, "error=invalid_request") {
@@ -755,7 +755,7 @@ func TestPlainChallengeTokenUcundaReddedilir(t *testing.T) {
 
 	// /authorize'i BYPASS ederek plain challenge'li bir istek yaz.
 	verifier, _ := pkceS256(t)
-	istek, err := o.istekler.Olustur(ctx, &oidc.AuthRequest{
+	istek, err := o.istekler.Create(ctx, &oidc.AuthRequest{
 		ClientID:            "makesinger-mobil",
 		RedirectURI:         testRedirectURI,
 		Scopes:              oidc.SpaceDelimitedArray{oidc.ScopeOpenID},
@@ -767,11 +767,11 @@ func TestPlainChallengeTokenUcundaReddedilir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := o.istekler.TamamlandiIsaretle(ctx, istek.GetID(), kullanici.ID, []string{amrSifre}); err != nil {
+	if err := o.istekler.MarkDone(ctx, istek.GetID(), kullanici.ID, []string{amrPassword}); err != nil {
 		t.Fatalf("TamamlandiIsaretle: %v", err)
 	}
 	const kod = "test-kod-plain"
-	if err := o.istekler.KodKaydet(ctx, istek.GetID(), kod); err != nil {
+	if err := o.istekler.SaveCode(ctx, istek.GetID(), kod); err != nil {
 		t.Fatalf("KodKaydet: %v", err)
 	}
 
@@ -862,8 +862,8 @@ func alBaslikli(t *testing.T, c *http.Client, adres, fetchSite string) *http.Res
 		t.Fatalf("istek kurulamadi: %v", err)
 	}
 	if fetchSite != "" {
-		istek.Header.Set(baslikFetchSite, fetchSite)
-		istek.Header.Set(baslikFetchMode, "navigate")
+		istek.Header.Set(headerFetchSite, fetchSite)
+		istek.Header.Set(headerFetchMode, "navigate")
 	}
 	yanit, err := c.Do(istek)
 	if err != nil {
@@ -893,7 +893,7 @@ func TestLoginCSRFCaprazSiteEnjeksiyonuTamamlanamaz(t *testing.T) {
 	// 1) Kurbanin MESRU akisi: native uygulama sistem tarayicisini acar
 	// (Sec-Fetch-Site: none). Cerez ve baglama burada dogar.
 	kurbanVerifier, kurbanChallenge := pkceS256(t)
-	mesruID := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(kurbanChallenge, "S256"), fetchSiteYok))
+	mesruID := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(kurbanChallenge, "S256"), fetchSiteNone))
 
 	// 2) Saldirganin hazirladigi adres, KURBANIN tarayicisinda
 	// capraz-site ust-duzey navigasyonla acilir. code_challenge
@@ -902,7 +902,7 @@ func TestLoginCSRFCaprazSiteEnjeksiyonuTamamlanamaz(t *testing.T) {
 	// bilmesinin ise yaramamasi — asagida HIC kod uretilmedigi icin
 	// degistirecek bir sey YOK (adim 4).
 	_, saldirganChallenge := pkceS256(t)
-	enjekteID := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(saldirganChallenge, "S256"), fetchSiteCapraz))
+	enjekteID := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(saldirganChallenge, "S256"), fetchSiteCrossSite))
 	if enjekteID == mesruID {
 		t.Fatal("iki /authorize ayni authRequestID uretti")
 	}
@@ -949,13 +949,13 @@ func TestCaprazSiteIstekMevcutBaglamalariBozmaz(t *testing.T) {
 
 	_, challenge1 := pkceS256(t)
 	_, challenge2 := pkceS256(t)
-	id1 := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(challenge1, "S256"), fetchSiteYok))
-	id2 := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(challenge2, "S256"), fetchSiteYok))
+	id1 := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(challenge1, "S256"), fetchSiteNone))
+	id2 := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(challenge2, "S256"), fetchSiteNone))
 
 	// Araya capraz-site bir istek girer.
 	_, saldirganChallenge := pkceS256(t)
-	enjekteID := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(saldirganChallenge, "S256"), fetchSiteCapraz))
-	if g := al(t, kurban, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(enjekteID)); g.StatusCode != http.StatusForbidden {
+	enjekteID := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(saldirganChallenge, "S256"), fetchSiteCrossSite))
+	if g := al(t, kurban, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(enjekteID)); g.StatusCode != http.StatusForbidden {
 		t.Fatalf("enjekte id icin GET /giris durumu = %d, beklenen 403", g.StatusCode)
 	}
 
@@ -998,7 +998,7 @@ func TestFederasyonsuzKurulumUclariBaglamaz(t *testing.T) {
 	// Giris sayfasi hala calisir ve HICBIR federasyon butonu tasimaz.
 	_, challenge := pkceS256(t)
 	id := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge, "S256")))
-	formYanit := al(t, c, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
+	formYanit := al(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
 	if formYanit.StatusCode != http.StatusOK {
 		t.Fatalf("giris formu durumu = %d, beklenen 200", formYanit.StatusCode)
 	}
@@ -1035,10 +1035,10 @@ func TestMuxKurFederasyonKablolamasi(t *testing.T) {
 	// Sinirlari YUKSEK tutan ayar: baglilik alt testleri hiz limitine
 	// takilmamali; hiz limitini olcen alt testler kendi dar ayarini
 	// kurar.
-	gevsek := HizLimitAyar{
-		GirisIPPerMin:      50,
-		GirisEpostaPerSaat: 50,
-		KayitIPPerSaat:     50,
+	gevsek := RateLimitConfig{
+		LoginIPPerMin:     50,
+		LoginEmailPerHour: 50,
+		SignupIPPerHour:   50,
 	}
 
 	t.Run("baslat ve baglama uclari mux'a bagli", func(t *testing.T) {
@@ -1050,9 +1050,9 @@ func TestMuxKurFederasyonKablolamasi(t *testing.T) {
 		// IDileOku 400) bu, saglayici COZULDUKTEN sonraki ilk
 		// kontroldur. Yani 400 ancak handler CALISTIYSA donebilir;
 		// uc baglanmamis olsa istek mux.Handle("/", saglayici)'ya duser.
-		baslat := al(t, c, o.issuer+federasyonBaslatYolu(saglayiciGoogle))
+		baslat := al(t, c, o.issuer+federationStartPath(providerGoogle))
 		if baslat.StatusCode == http.StatusNotFound {
-			t.Errorf("%s mux'a BAGLI DEGIL: 404 dondu", federasyonBaslatYolu(saglayiciGoogle))
+			t.Errorf("%s mux'a BAGLI DEGIL: 404 dondu", federationStartPath(providerGoogle))
 		} else if baslat.StatusCode != http.StatusBadRequest {
 			t.Errorf("baslat durumu = %d, beklenen 400 (bos authRequestID)", baslat.StatusCode)
 		}
@@ -1060,9 +1060,9 @@ func TestMuxKurFederasyonKablolamasi(t *testing.T) {
 		// beklemeID YOK: baglamaGet gecerli bir bekleme baglamasi
 		// bulamayinca 403 doner (oturumRed). 404 ise ucun hic
 		// baglanmadigi anlamina gelir.
-		baglama := al(t, c, o.issuer+yolBaglama)
+		baglama := al(t, c, o.issuer+pathLink)
 		if baglama.StatusCode == http.StatusNotFound {
-			t.Errorf("%s mux'a BAGLI DEGIL: 404 dondu", yolBaglama)
+			t.Errorf("%s mux'a BAGLI DEGIL: 404 dondu", pathLink)
 		} else if baglama.StatusCode != http.StatusForbidden {
 			t.Errorf("baglama durumu = %d, beklenen 403 (bekleme yok)", baglama.StatusCode)
 		}
@@ -1074,7 +1074,7 @@ func TestMuxKurFederasyonKablolamasi(t *testing.T) {
 		_, challenge := pkceS256(t)
 		id := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge, "S256")))
 
-		sayfa := al(t, c, o.issuer+yolGiris+"?authRequestID="+url.QueryEscape(id))
+		sayfa := al(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
 		if sayfa.StatusCode != http.StatusOK {
 			t.Fatalf("giris sayfasi durumu = %d", sayfa.StatusCode)
 		}
@@ -1097,17 +1097,17 @@ func TestMuxKurFederasyonKablolamasi(t *testing.T) {
 				t.Errorf("buton href'i 404 dondu: %q", esler[1])
 			}
 		}
-		if !gorulen[federasyonBaslatYolu(saglayiciGoogle)] {
+		if !gorulen[federationStartPath(providerGoogle)] {
 			t.Fatalf("Google butonu bagli ucun yoluna gitmiyor; gorulen yollar: %v", gorulen)
 		}
 	})
 
 	t.Run("baslat ucu hiz limitli", func(t *testing.T) {
-		o := testSunucuFedere(t, HizLimitAyar{
-			GirisIPPerMin: 1, GirisEpostaPerSaat: 50, KayitIPPerSaat: 50,
+		o := testSunucuFedere(t, RateLimitConfig{
+			LoginIPPerMin: 1, LoginEmailPerHour: 50, SignupIPPerHour: 50,
 		})
 		c := tarayici(t)
-		yol := o.issuer + federasyonBaslatYolu(saglayiciGoogle)
+		yol := o.issuer + federationStartPath(providerGoogle)
 
 		if ilk := al(t, c, yol); ilk.StatusCode == http.StatusTooManyRequests {
 			t.Fatal("ilk baslatma 429 aldi; sinir yanlis kurulmus")
@@ -1118,11 +1118,11 @@ func TestMuxKurFederasyonKablolamasi(t *testing.T) {
 	})
 
 	t.Run("baglama ucu hiz limitli", func(t *testing.T) {
-		o := testSunucuFedere(t, HizLimitAyar{
-			GirisIPPerMin: 1, GirisEpostaPerSaat: 50, KayitIPPerSaat: 50,
+		o := testSunucuFedere(t, RateLimitConfig{
+			LoginIPPerMin: 1, LoginEmailPerHour: 50, SignupIPPerHour: 50,
 		})
 		c := tarayici(t)
-		yol := o.issuer + yolBaglama
+		yol := o.issuer + pathLink
 
 		if ilk := al(t, c, yol); ilk.StatusCode == http.StatusTooManyRequests {
 			t.Fatal("ilk baglama 429 aldi; sinir yanlis kurulmus")

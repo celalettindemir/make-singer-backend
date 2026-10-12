@@ -10,41 +10,40 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// saglayiciApple, saglayiciGoogle: YukariAkis.Ad alaninda kullanilan
-// sabitler. Bare string yerine bunlar kullanilir ki saglayici adi
-// yazim hatasina karsi derleme zamaninda (en azindan tek bir tanim
-// yerinde) yakalanabilsin.
+// providerApple, providerGoogle: constants used in the Upstream.Name field.
+// They are used instead of bare strings so that a typo in the provider name
+// can be caught at compile time (at least in a single place of definition).
 const (
-	saglayiciApple  = "apple"
-	saglayiciGoogle = "google"
+	providerApple  = "apple"
+	providerGoogle = "google"
 )
 
-// appleIstemciSirOmru: K5. Her degisimde yeniden uretildigi icin kisa
-// tutulur; Apple ustten 6 ay siniri koyar.
-const appleIstemciSirOmru = 5 * time.Minute
+// appleClientSecretTTL: K5. Kept short because it is regenerated on every
+// exchange; Apple puts a 6-month upper limit.
+const appleClientSecretTTL = 5 * time.Minute
 
-// appleIstemciSir, Apple'in client_secret olarak bekledigi ES256 JWT'yi
-// uretir. simdi parametre: test zamani sabitleyebilsin.
-func appleIstemciSir(ekipID, anahtarID, istemciID, p8PEM string, simdi time.Time) (string, error) {
-	blok, _ := pem.Decode([]byte(p8PEM))
-	if blok == nil {
+// appleClientSecret produces the ES256 JWT that Apple expects as the
+// client_secret. now is a parameter so that tests can pin the time.
+func appleClientSecret(teamID, keyID, clientID, p8PEM string, now time.Time) (string, error) {
+	block, _ := pem.Decode([]byte(p8PEM))
+	if block == nil {
 		return "", fmt.Errorf("apple .p8 anahtari PEM olarak cozumlenemedi")
 	}
-	ham, err := x509.ParsePKCS8PrivateKey(blok.Bytes)
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
 		return "", fmt.Errorf("apple .p8 anahtari okunamadi: %w", err)
 	}
-	anahtar, ok := ham.(*ecdsa.PrivateKey)
+	key, ok := parsed.(*ecdsa.PrivateKey)
 	if !ok {
-		return "", fmt.Errorf("apple anahtari ECDSA degil (%T); ES256 imzalanamaz", ham)
+		return "", fmt.Errorf("apple anahtari ECDSA degil (%T); ES256 imzalanamaz", parsed)
 	}
-	jeton := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
-		"iss": ekipID,
-		"iat": simdi.Unix(),
-		"exp": simdi.Add(appleIstemciSirOmru).Unix(),
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
+		"iss": teamID,
+		"iat": now.Unix(),
+		"exp": now.Add(appleClientSecretTTL).Unix(),
 		"aud": "https://appleid.apple.com",
-		"sub": istemciID,
+		"sub": clientID,
 	})
-	jeton.Header["kid"] = anahtarID
-	return jeton.SignedString(anahtar)
+	token.Header["kid"] = keyID
+	return token.SignedString(key)
 }

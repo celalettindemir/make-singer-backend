@@ -27,13 +27,13 @@ func testRedis(t *testing.T) *redis.Client {
 }
 
 func TestAuthIstekArayuzuKarsilar(t *testing.T) {
-	var _ op.AuthRequest = &AuthIstek{}
+	var _ op.AuthRequest = &AuthRequest{}
 }
 
 func TestIstekOlusturVeOku(t *testing.T) {
-	depo := NewIstekDepo(testRedis(t))
+	depo := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Olustur(ctx, &oidc.AuthRequest{
+	istek, err := depo.Create(ctx, &oidc.AuthRequest{
 		ClientID:            "makesinger-mobil",
 		RedirectURI:         "com.makesinger.app:/oauth2redirect",
 		Scopes:              oidc.SpaceDelimitedArray{oidc.ScopeOpenID},
@@ -46,7 +46,7 @@ func TestIstekOlusturVeOku(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	okunan, err := depo.IDileOku(ctx, istek.GetID())
+	okunan, err := depo.GetByID(ctx, istek.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
@@ -61,29 +61,29 @@ func TestIstekOlusturVeOku(t *testing.T) {
 // Kod TEK kullanimlik olmali. Ikinci kez kullanilabilirse, adres
 // cubugundan veya loglardan kod kapan biri jeton alir.
 func TestKodTekKullanimlik(t *testing.T) {
-	depo := NewIstekDepo(testRedis(t))
+	depo := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Olustur(ctx, &oidc.AuthRequest{
+	istek, err := depo.Create(ctx, &oidc.AuthRequest{
 		ClientID:     "makesinger-mobil",
 		ResponseType: oidc.ResponseTypeCode,
 	}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.KodKaydet(ctx, istek.GetID(), "kod123"); err != nil {
+	if err := depo.SaveCode(ctx, istek.GetID(), "kod123"); err != nil {
 		t.Fatalf("KodKaydet: %v", err)
 	}
-	if _, err := depo.KodlaOku(ctx, "kod123"); err != nil {
+	if _, err := depo.GetByCode(ctx, "kod123"); err != nil {
 		t.Fatalf("ilk okuma basarisiz: %v", err)
 	}
-	if _, err := depo.KodlaOku(ctx, "kod123"); !errors.Is(err, ErrIstekYok) {
+	if _, err := depo.GetByCode(ctx, "kod123"); !errors.Is(err, ErrRequestNotFound) {
 		t.Errorf("ikinci okuma hatasi = %v, beklenen ErrIstekYok", err)
 	}
 }
 
 func TestOlmayanIstek(t *testing.T) {
-	depo := NewIstekDepo(testRedis(t))
-	if _, err := depo.IDileOku(context.Background(), "yok"); !errors.Is(err, ErrIstekYok) {
+	depo := NewRequestStore(testRedis(t))
+	if _, err := depo.GetByID(context.Background(), "yok"); !errors.Is(err, ErrRequestNotFound) {
 		t.Errorf("hata = %v, beklenen ErrIstekYok", err)
 	}
 }
@@ -91,9 +91,9 @@ func TestOlmayanIstek(t *testing.T) {
 // Giris tamamlanmadan istek "done" olmamali: aksi halde kod, kullanici
 // hic dogrulanmadan verilir.
 func TestIstekBaslangictaTamamlanmamis(t *testing.T) {
-	depo := NewIstekDepo(testRedis(t))
+	depo := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Olustur(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	istek, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
@@ -103,10 +103,10 @@ func TestIstekBaslangictaTamamlanmamis(t *testing.T) {
 	if istek.GetSubject() != "" {
 		t.Errorf("subject = %q, bos olmali", istek.GetSubject())
 	}
-	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrSifre}); err != nil {
+	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
 		t.Fatalf("TamamlandiIsaretle: %v", err)
 	}
-	okunan, err := depo.IDileOku(ctx, istek.GetID())
+	okunan, err := depo.GetByID(ctx, istek.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
@@ -118,22 +118,22 @@ func TestIstekBaslangictaTamamlanmamis(t *testing.T) {
 // C1 ek bulgu: zaten tamamlanmis bir istek BASKA bir kullaniciya
 // yeniden baglanamaz; Subject EZILMEZ.
 func TestTamamlandiIsaretleSubjectEzmez(t *testing.T) {
-	depo := NewIstekDepo(testRedis(t))
+	depo := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Olustur(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	istek, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrSifre}); err != nil {
+	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
 		t.Fatalf("ilk TamamlandiIsaretle: %v", err)
 	}
 	// 15 kez ust uste baska kimliklerle dene: hepsi reddedilmeli.
 	for i := 0; i < 15; i++ {
-		if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "saldirgan", []string{amrSifre}); !errors.Is(err, ErrIstekZatenTamamlandi) {
+		if err := depo.MarkDone(ctx, istek.GetID(), "saldirgan", []string{amrPassword}); !errors.Is(err, ErrRequestAlreadyCompleted) {
 			t.Fatalf("%d. deneme hatasi = %v, beklenen ErrIstekZatenTamamlandi", i+1, err)
 		}
 	}
-	okunan, err := depo.IDileOku(ctx, istek.GetID())
+	okunan, err := depo.GetByID(ctx, istek.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
@@ -146,23 +146,23 @@ func TestTamamlandiIsaretleSubjectEzmez(t *testing.T) {
 // gonderim (formu iki kez yollamak, geri tusu) hata gostermemeli ve
 // AuthTime gercek giris anini korumali.
 func TestTamamlandiIsaretleAyniKullaniciNoOp(t *testing.T) {
-	depo := NewIstekDepo(testRedis(t))
+	depo := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Olustur(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	istek, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrSifre}); err != nil {
+	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
 		t.Fatalf("ilk TamamlandiIsaretle: %v", err)
 	}
-	ilk, err := depo.IDileOku(ctx, istek.GetID())
+	ilk, err := depo.GetByID(ctx, istek.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
-	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrSifre}); err != nil {
+	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
 		t.Fatalf("ikinci TamamlandiIsaretle (ayni kullanici) hata dondu: %v", err)
 	}
-	ikinci, err := depo.IDileOku(ctx, istek.GetID())
+	ikinci, err := depo.GetByID(ctx, istek.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
@@ -175,25 +175,25 @@ func TestTamamlandiIsaretleAyniKullaniciNoOp(t *testing.T) {
 // istek ID'si DEGILDIR. Istek ID'si HER ZAMAN yeni bir UUID olmali;
 // aksi halde es zamanli iki akis ayni Redis anahtarini ezer.
 func TestIstekIDIpucuSubjectOlmaz(t *testing.T) {
-	depo := NewIstekDepo(testRedis(t))
+	depo := NewRequestStore(testRedis(t))
 	ctx := context.Background()
 	const ipucu = "kullanici-42"
-	birinci, err := depo.Olustur(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, ipucu)
+	birinci, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, ipucu)
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
 	if birinci.GetID() == ipucu {
 		t.Fatal("istek ID'si id_token_hint sub'una esitlendi")
 	}
-	if birinci.IpucuSubject != ipucu {
-		t.Errorf("IpucuSubject = %q, beklenen %q", birinci.IpucuSubject, ipucu)
+	if birinci.HintSubject != ipucu {
+		t.Errorf("IpucuSubject = %q, beklenen %q", birinci.HintSubject, ipucu)
 	}
 	// Ipucu Done()'u etkilememeli: kullanici henuz giris yapmadi.
 	if birinci.Done() || birinci.GetSubject() != "" {
 		t.Error("ipucu ile istek tamamlanmis gorunuyor")
 	}
 	// Es zamanli ikinci akis ayni anahtari EZMEMELI.
-	ikinci, err := depo.Olustur(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, ipucu)
+	ikinci, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, ipucu)
 	if err != nil {
 		t.Fatalf("ikinci Olustur: %v", err)
 	}
@@ -204,16 +204,16 @@ func TestIstekIDIpucuSubjectOlmaz(t *testing.T) {
 
 // K6: sifreyle giris sonrasi GetAMR() ["pwd"] donmeli.
 func TestAMRSifreyleGiristePwd(t *testing.T) {
-	depo := NewIstekDepo(testRedis(t))
+	depo := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Olustur(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	istek, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrSifre}); err != nil {
+	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
 		t.Fatalf("TamamlandiIsaretle: %v", err)
 	}
-	okunan, err := depo.IDileOku(ctx, istek.GetID())
+	okunan, err := depo.GetByID(ctx, istek.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
@@ -224,22 +224,22 @@ func TestAMRSifreyleGiristePwd(t *testing.T) {
 
 // K6: Google ile giren kullanicinin tokeninda "pwd" YAZMAMALI.
 func TestAMRFederasyondaPwdDegil(t *testing.T) {
-	depo := NewIstekDepo(testRedis(t))
+	depo := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Olustur(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	istek, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrFederasyon}); err != nil {
+	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrFederation}); err != nil {
 		t.Fatalf("TamamlandiIsaretle: %v", err)
 	}
-	okunan, err := depo.IDileOku(ctx, istek.GetID())
+	okunan, err := depo.GetByID(ctx, istek.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
 	got := okunan.GetAMR()
-	if len(got) != 1 || got[0] != amrFederasyon {
-		t.Errorf("GetAMR() = %v, beklenen [%s]", got, amrFederasyon)
+	if len(got) != 1 || got[0] != amrFederation {
+		t.Errorf("GetAMR() = %v, beklenen [%s]", got, amrFederation)
 	}
 	for _, v := range got {
 		if v == "pwd" {
@@ -251,7 +251,7 @@ func TestAMRFederasyondaPwdDegil(t *testing.T) {
 // Varsayilan sessizce "pwd" OLMAMALI: amr vermeyi unutan bir cagiran
 // yanlis bir beyan uretmemeli, bos uretmeli.
 func TestAMRVarsayilanPwdDegil(t *testing.T) {
-	istek := &AuthIstek{}
+	istek := &AuthRequest{}
 	if len(istek.GetAMR()) != 0 {
 		t.Errorf("GetAMR() = %v, beklenen bos", istek.GetAMR())
 	}
@@ -260,26 +260,26 @@ func TestAMRVarsayilanPwdDegil(t *testing.T) {
 // amr ikinci (no-op) cagrida EZILMEMELI: ilk gercek giris yonteminin
 // dogru olani kaydeder.
 func TestAMRNoOpdaEzilmez(t *testing.T) {
-	depo := NewIstekDepo(testRedis(t))
+	depo := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Olustur(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	istek, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrSifre}); err != nil {
+	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
 		t.Fatalf("ilk TamamlandiIsaretle: %v", err)
 	}
 	// Ayni kullanici icin ikinci cagri, FARKLI bir amr ile gelse bile
 	// NO-OP olmali ve ilk amr'i EZMEMELI.
-	if err := depo.TamamlandiIsaretle(ctx, istek.GetID(), "kullanici-1", []string{amrFederasyon}); err != nil {
+	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrFederation}); err != nil {
 		t.Fatalf("ikinci TamamlandiIsaretle (no-op): %v", err)
 	}
-	okunan, err := depo.IDileOku(ctx, istek.GetID())
+	okunan, err := depo.GetByID(ctx, istek.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
-	if got := okunan.GetAMR(); len(got) != 1 || got[0] != amrSifre {
-		t.Errorf("GetAMR() = %v, beklenen [%s] (ezilmemis olmali)", got, amrSifre)
+	if got := okunan.GetAMR(); len(got) != 1 || got[0] != amrPassword {
+		t.Errorf("GetAMR() = %v, beklenen [%s] (ezilmemis olmali)", got, amrPassword)
 	}
 }
 
@@ -291,13 +291,13 @@ func TestAMRNoOpdaEzilmez(t *testing.T) {
 func TestAMRRefreshYenilemesindeKorunur(t *testing.T) {
 	d := testDepo(t)
 	ctx := context.Background()
-	istek := &AuthIstek{
+	istek := &AuthRequest{
 		ID:       "istek-amr-1",
 		ClientID: "makesinger-mobil",
 		Subject:  "kullanici-1",
 		Scopes:   []string{"openid", "offline_access"},
 		AuthTime: time.Now().UTC(),
-		AMR:      []string{amrFederasyon},
+		AMR:      []string{amrFederation},
 	}
 	_, refreshToken, _, err := d.CreateAccessAndRefreshTokens(ctx, istek, "")
 	if err != nil {
@@ -307,8 +307,8 @@ func TestAMRRefreshYenilemesindeKorunur(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RefreshOku: %v", err)
 	}
-	if len(kayit.AMR) != 1 || kayit.AMR[0] != amrFederasyon {
-		t.Fatalf("ilk kayitta amr = %v, beklenen [%s]", kayit.AMR, amrFederasyon)
+	if len(kayit.AMR) != 1 || kayit.AMR[0] != amrFederation {
+		t.Fatalf("ilk kayitta amr = %v, beklenen [%s]", kayit.AMR, amrFederation)
 	}
 	// Kutuphanenin gercek cagri sirasini taklit et: refresh akisinda
 	// TokenRequestByRefreshToken amr'i tasiyan RefreshTokenRequest'i
@@ -325,27 +325,27 @@ func TestAMRRefreshYenilemesindeKorunur(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RefreshOku (yeni): %v", err)
 	}
-	if len(yeniKayit.AMR) != 1 || yeniKayit.AMR[0] != amrFederasyon {
-		t.Errorf("rotasyon sonrasi amr = %v, beklenen [%s]", yeniKayit.AMR, amrFederasyon)
+	if len(yeniKayit.AMR) != 1 || yeniKayit.AMR[0] != amrFederation {
+		t.Errorf("rotasyon sonrasi amr = %v, beklenen [%s]", yeniKayit.AMR, amrFederation)
 	}
 }
 
 // Cerez baglamasi, auth istegiyle ayni depoda tutulur ve okunabilir
 // olmali; eslesmeyen bir cerez degeri ErrOturumYok dondurmeli.
 func TestOturumBaglamaYazVeOku(t *testing.T) {
-	depo := NewIstekDepo(testRedis(t))
+	depo := NewRequestStore(testRedis(t))
 	ctx := context.Background()
 	// Kume: bir cerez birden fazla istege bagli olabilir (paralel
 	// sekmeler, bkz. oturumBaglamaUstSinir). Redis'e giden JSON tur
 	// yolculugunu da dogruluyoruz: alanlar disa acik olmazsa
 	// encoding/json onlari sessizce atlar ve baglama kaybolur.
-	var baglama OturumBaglama
-	baglama.Ekle("istek-1", "csrf-1")
-	baglama.Ekle("istek-2", "csrf-2")
-	if err := depo.OturumYaz(ctx, "oturum-1", baglama, istekTTL); err != nil {
+	var baglama SessionBinding
+	baglama.Add("istek-1", "csrf-1")
+	baglama.Add("istek-2", "csrf-2")
+	if err := depo.WriteSession(ctx, "oturum-1", baglama, requestTTL); err != nil {
 		t.Fatalf("OturumYaz: %v", err)
 	}
-	okunan, err := depo.OturumOku(ctx, "oturum-1")
+	okunan, err := depo.ReadSession(ctx, "oturum-1")
 	if err != nil {
 		t.Fatalf("OturumOku: %v", err)
 	}
@@ -353,15 +353,15 @@ func TestOturumBaglamaYazVeOku(t *testing.T) {
 		t.Errorf("baglama = %+v, beklenen %+v", okunan, baglama)
 	}
 	for _, d := range []struct{ id, csrf string }{{"istek-1", "csrf-1"}, {"istek-2", "csrf-2"}} {
-		csrf, bagliMi := okunan.CSRFBul(d.id)
+		csrf, bagliMi := okunan.CSRFFor(d.id)
 		if !bagliMi || csrf != d.csrf {
 			t.Errorf("CSRFBul(%q) = (%q, %v), beklenen (%q, true)", d.id, csrf, bagliMi, d.csrf)
 		}
 	}
-	if _, bagliMi := okunan.CSRFBul("istek-3"); bagliMi {
+	if _, bagliMi := okunan.CSRFFor("istek-3"); bagliMi {
 		t.Error("baglanmamis id icin CSRFBul true dondu")
 	}
-	if _, err := depo.OturumOku(ctx, "yok"); !errors.Is(err, ErrOturumYok) {
+	if _, err := depo.ReadSession(ctx, "yok"); !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("hata = %v, beklenen ErrOturumYok", err)
 	}
 }

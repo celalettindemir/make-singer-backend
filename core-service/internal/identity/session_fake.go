@@ -6,38 +6,38 @@ import (
 	"time"
 )
 
-// SahteOturumDepo, OturumDepo'nun bellek ici karsiligidir. Amaci
-// testlerin AG OLMADAN (Redis'siz) cerez baglamasini olcebilmesi;
-// kullanici/jeton depolarindaki sahte karsiliklarla ayni kalip.
-type SahteOturumDepo struct {
-	mu       sync.Mutex
-	kayitlar map[string]sahteOturumKaydi
+// FakeSessionStore is the in-memory counterpart of SessionStore. Its purpose
+// is for tests to measure the cookie binding OFFLINE (without Redis); the
+// same pattern as the fakes of the user/token stores.
+type FakeSessionStore struct {
+	mu      sync.Mutex
+	entries map[string]fakeSessionEntry
 }
 
-type sahteOturumKaydi struct {
-	baglama OturumBaglama
-	biter   time.Time
+type fakeSessionEntry struct {
+	binding   SessionBinding
+	expiresAt time.Time
 }
 
-func NewSahteOturumDepo() *SahteOturumDepo {
-	return &SahteOturumDepo{kayitlar: map[string]sahteOturumKaydi{}}
+func NewFakeSessionStore() *FakeSessionStore {
+	return &FakeSessionStore{entries: map[string]fakeSessionEntry{}}
 }
 
-var _ OturumDepo = (*SahteOturumDepo)(nil)
+var _ SessionStore = (*FakeSessionStore)(nil)
 
-func (d *SahteOturumDepo) OturumYaz(_ context.Context, oturum string, baglama OturumBaglama, ttl time.Duration) error {
+func (d *FakeSessionStore) WriteSession(_ context.Context, session string, binding SessionBinding, ttl time.Duration) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.kayitlar[oturum] = sahteOturumKaydi{baglama: baglama, biter: time.Now().Add(ttl)}
+	d.entries[session] = fakeSessionEntry{binding: binding, expiresAt: time.Now().Add(ttl)}
 	return nil
 }
 
-func (d *SahteOturumDepo) OturumOku(_ context.Context, oturum string) (OturumBaglama, error) {
+func (d *FakeSessionStore) ReadSession(_ context.Context, session string) (SessionBinding, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	kayit, varMi := d.kayitlar[oturum]
-	if !varMi || time.Now().After(kayit.biter) {
-		return OturumBaglama{}, ErrOturumYok
+	entry, found := d.entries[session]
+	if !found || time.Now().After(entry.expiresAt) {
+		return SessionBinding{}, ErrSessionNotFound
 	}
-	return kayit.baglama, nil
+	return entry.binding, nil
 }

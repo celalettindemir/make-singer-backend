@@ -15,161 +15,162 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// YukariAkis, tek bir yukari akis saglayicisinin (Apple veya Google)
-// /authorize adresini kurmak icin gereken her seyi tasir. JWKSURL ve
-// Issuer, Gorev 2'nin auth.NewYukariAkisDogrulayici'sine verilir; bu
-// struct kendisi dogrulama yapmaz, sadece yapilandirmayi tasir.
-type YukariAkis struct {
-	Ad, IstemciID, IstemciSir string
+// Upstream carries everything needed to build the /authorize address of a
+// single upstream provider (Apple or Google). JWKSURL and Issuer are given
+// to Task 2's auth.NewUpstreamVerifier; this struct does not verify
+// anything itself, it only carries the configuration.
+type Upstream struct {
+	Name, ClientID, ClientSecret string
 
 	AuthURL, TokenURL, JWKSURL, Issuer string
 
-	Kapsamlar []string
+	Scopes []string
 
-	// PKCEDestekli: Google PKCE'yi destekler ve biz onu HER ZAMAN
-	// kullaniriz (public client, secret yok). Apple'in PKCE destegi
-	// DOKUMANTE DEGIL; bilinmeyen bir parametre gondermek akisi kirma
-	// riski tasir, bu yuzden Apple icin bu alan BILEREK false birakilir
-	// (bkz. TestAuthorizeURLApplePKCEGondermez). Bu bir unutma degil,
-	// kayitli bir karardir: ileride biri "tutarlilik" adina PKCE'yi
-	// Apple'a da eklemeye kalkisirsa, bu yorum onu durdurmali.
-	PKCEDestekli bool
+	// SupportsPKCE: Google supports PKCE and we ALWAYS use it (public client,
+	// no secret). Apple's PKCE support is NOT DOCUMENTED; sending an unknown
+	// parameter carries the risk of breaking the flow, so for Apple this field
+	// is DELIBERATELY left false (see TestUpstream_AuthorizeURLAppleOmitsPKCE).
+	// This is not an oversight, it is a recorded decision: if someone later
+	// tries to add PKCE to Apple too in the name of "consistency", this
+	// comment should stop them.
+	SupportsPKCE bool
 
-	// FormPost: Apple, name/email scope'u istenince yanitini GET
-	// yerine POST (response_mode=form_post) ile doner. Geri donus
-	// handler'i bu yuzden POST'u da kabul etmek zorunda (bkz. K2).
+	// FormPost: when the name/email scope is requested, Apple returns its
+	// response with POST (response_mode=form_post) instead of GET. The return
+	// handler therefore MUST accept POST too (see K2).
 	FormPost bool
 
-	// Apple'a ozgu (K5). Google icin bos kalir. JetonDegis (Gorev 4),
-	// client_secret'i HER token degisiminde bu uc alandan ES256 ile
-	// uretir; Apple'in secret'i sabit degil, kisa omurlu bir JWT'dir.
-	AppleEkipID, AppleAnahtarID, AppleAnahtarP8 string
+	// Apple-specific (K5). Left empty for Google. ExchangeCode (Task 4)
+	// produces the client_secret from these three fields with ES256 on EVERY
+	// token exchange; Apple's secret is not constant, it is a short-lived JWT.
+	AppleTeamID, AppleKeyID, AppleKeyP8 string
 }
 
-// AuthorizeURL, yukari akis saglayicisinin authorize adresini kurar.
-// redirect_uri BIZIM geri donus adresimizdir ve saglayici tarafinda
-// ayniyla kayitli olmak zorundadir.
+// AuthorizeURL builds the authorize address of the upstream provider.
+// redirect_uri is OUR return address and must be registered IDENTICALLY on
+// the provider side.
 //
-// kodDogrulayici asla URL'e duz metin olarak girmez: PKCE destekliyse
-// yalnizca onun SHA-256 ozetinin base64url'i (code_challenge) gonderilir.
-// Dogrulayicinin kendisi yalnizca bizim tarafimizda (DurumYaz ile) saklanir
-// ve token degisiminde saglayiciya dogrudan gonderilir.
-func (y *YukariAkis) AuthorizeURL(state, nonce, kodDogrulayici, geriURL string) string {
+// codeVerifier never enters the URL as plain text: if PKCE is supported,
+// only the base64url of its SHA-256 digest (code_challenge) is sent. The
+// verifier itself is stored only on our side (via WriteState) and is sent
+// directly to the provider at the token exchange.
+func (ic *Upstream) AuthorizeURL(state, nonce, codeVerifier, callbackURL string) string {
 	q := url.Values{}
-	q.Set("client_id", y.IstemciID)
+	q.Set("client_id", ic.ClientID)
 	q.Set("response_type", "code")
-	q.Set("scope", strings.Join(y.Kapsamlar, " "))
+	q.Set("scope", strings.Join(ic.Scopes, " "))
 	q.Set("state", state)
 	q.Set("nonce", nonce)
-	q.Set("redirect_uri", geriURL)
-	if y.FormPost {
+	q.Set("redirect_uri", callbackURL)
+	if ic.FormPost {
 		q.Set("response_mode", "form_post")
 	}
-	if y.PKCEDestekli {
-		ozet := sha256.Sum256([]byte(kodDogrulayici))
-		q.Set("code_challenge", base64.RawURLEncoding.EncodeToString(ozet[:]))
+	if ic.SupportsPKCE {
+		sum := sha256.Sum256([]byte(codeVerifier))
+		q.Set("code_challenge", base64.RawURLEncoding.EncodeToString(sum[:]))
 		q.Set("code_challenge_method", "S256")
 	}
-	return y.AuthURL + "?" + q.Encode()
+	return ic.AuthURL + "?" + q.Encode()
 }
 
-// kodDogrulayiciUretBaytSayisi: 32 ham bayt, base64url ile kodlandiginda
-// 43 karaktere cikar (PKCE RFC 7636'nin alt siniri). Daha az bayt
-// standardi ihlal eder, daha fazlasi fayda getirmez.
-const kodDogrulayiciUretBaytSayisi = 32
+// codeVerifierBytes: 32 raw bytes become 43 characters when encoded with
+// base64url (the lower bound of PKCE RFC 7636). Fewer bytes violate the
+// standard, more brings no benefit.
+const codeVerifierBytes = 32
 
-// kodDogrulayiciUret, PKCE icin rasgele bir "code_verifier" ve onun S256
-// "code_challenge"ini uretir. Hata YUTULMAZ: rasgele uretim basarisiz
-// olursa (crypto/rand.Read hata donerse) bos/zayif bir dogrulayici ile
-// devam etmek PKCE korumasini fiilen kaldirir (bkz. oturum.go,
-// rasgeleJeton ile ayni disiplin).
-func kodDogrulayiciUret() (dogrulayici, meydanOkuma string, err error) {
-	b := make([]byte, kodDogrulayiciUretBaytSayisi)
+// generateCodeVerifier produces a random PKCE "code_verifier" and its S256
+// "code_challenge". The error is NOT SWALLOWED: if random generation fails
+// (if crypto/rand.Read returns an error), continuing with an empty/weak
+// verifier effectively removes the PKCE protection (see session.go,
+// the same discipline as randomToken).
+func generateCodeVerifier() (verifier, challenge string, err error) {
+	b := make([]byte, codeVerifierBytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", "", fmt.Errorf("kod dogrulayicisi uretilemedi: %w", err)
 	}
-	dogrulayici = base64.RawURLEncoding.EncodeToString(b)
-	ozet := sha256.Sum256([]byte(dogrulayici))
-	meydanOkuma = base64.RawURLEncoding.EncodeToString(ozet[:])
-	return dogrulayici, meydanOkuma, nil
+	verifier = base64.RawURLEncoding.EncodeToString(b)
+	sum := sha256.Sum256([]byte(verifier))
+	challenge = base64.RawURLEncoding.EncodeToString(sum[:])
+	return verifier, challenge, nil
 }
 
-// FedereDurum, /federasyon/{saglayici}/baslat ile /federasyon/{saglayici}/geri
-// arasinda "state" parametresi uzerinden tasinan tum baglami tutar.
+// FederationState carries the whole context moved through the "state"
+// parameter between /federasyon/{saglayici}/baslat and
+// /federasyon/{saglayici}/geri.
 //
-// Karsilastirilabilir (==) olmasi KASITLI: dilim/harita alani YOK. Bu,
-// testin okunan != istenen ile dogrudan karsilastirma yapabilmesini
-// saglar ve ayni zamanda Redis'teki kaydin minimal ve duz oldugunu
-// garanti eder.
-type FedereDurum struct {
-	// AuthRequestID: bizim OP'imizdeki asil auth istegi (mobil istemcinin
-	// baslattigi). Federasyon akisi bittiginde bu istege Subject yazilir.
+// It is DELIBERATELY comparable (==): there is NO slice/map field. This lets
+// the test compare directly with read != wanted and at the same time
+// guarantees that the record in Redis is minimal and flat.
+type FederationState struct {
+	// AuthRequestID: the real auth request in our OP (started by the mobile
+	// client). When the federation flow finishes, Subject is written to this request.
 	AuthRequestID string
-	// Nonce: id_token'in nonce iddiasiyla karsilastirilir (replay'e
-	// karsi, bkz. auth.DogrulaNonce).
+	// Nonce: compared with the id_token's nonce claim (against replay, see
+	// auth.VerifyWithNonce).
 	Nonce string
-	// Saglayici: "google" | "apple". Geri donus handler'i callback'in
-	// beklenen saglayiciya ait oldugunu dogrulamak icin kullanir.
-	Saglayici string `json:"Saglayici"`
-	// Cerez: bu akisi baslatan tarayicinin cerez degeri (oturum.go'daki
-	// desenle ayni gerekce: authRequestID tek basina yetki girdisi
-	// degildir, baslatan tarayici ile tamamlayan tarayici ayni olmali).
-	Cerez string `json:"Cerez"`
-	// KodDogrulayici: PKCE code_verifier. Token degisiminde saglayiciya
-	// gonderilir; LOGLANMAMALI (sir niteliginde).
-	KodDogrulayici string `json:"KodDogrulayici"`
+	// Provider: "google" | "apple". The return handler uses it to verify that
+	// the callback belongs to the expected provider.
+	Provider string `json:"Saglayici"`
+	// Cookie: the cookie value of the browser that started this flow (same
+	// rationale as the pattern in session.go: authRequestID alone is not an
+	// authorization input, the starting browser and the completing browser must
+	// be the same).
+	Cookie string `json:"Cerez"`
+	// CodeVerifier: the PKCE code_verifier. It is sent to the provider at the
+	// token exchange; it MUST NOT BE LOGGED (it is secret in nature).
+	CodeVerifier string `json:"KodDogrulayici"`
 }
 
-// ErrDurumYok, state icin kayitli bir FedereDurum yok (hic olusmamis,
-// suresi dolmus veya zaten tuketilmis).
-var ErrDurumYok = errors.New("federasyon durumu bulunamadi")
+// ErrStateNotFound: there is no FederationState recorded for the state
+// (never created, expired, or already consumed).
+var ErrStateNotFound = errors.New("federasyon durumu bulunamadi")
 
-// DurumDepo, federasyon "state" kaydinin yazilip tek seferlik okunmasini
-// tanimlar. OturumDepo gibi, IstekDepo tarafindan karsilanir.
-type DurumDepo interface {
-	DurumYaz(ctx context.Context, state string, d FedereDurum) error
-	DurumAl(ctx context.Context, state string) (FedereDurum, error)
+// StateStore defines writing and single-use reading of the federation
+// "state" record. Like SessionStore, it is implemented by RequestStore.
+type StateStore interface {
+	WriteState(ctx context.Context, state string, d FederationState) error
+	TakeState(ctx context.Context, state string) (FederationState, error)
 }
 
-var _ DurumDepo = (*IstekDepo)(nil)
+var _ StateStore = (*RequestStore)(nil)
 
-// federasyonDurumTTL, kullanicinin yukari akis saglayicisinda gecirdigi
-// sureye yetecek kadar uzun, calinmis bir state'in ise degerini hizla
-// yitirmesine yetecek kadar kisa olmali. 10 dakika: Apple'in iki
-// adimli onayi dahil bol bol yeterli.
-const federasyonDurumTTL = 10 * time.Minute
+// federationStateTTL must be long enough for the time the user spends at the
+// upstream provider and short enough for a stolen state to lose its value
+// quickly. 10 minutes: more than enough, including Apple's two-step
+// approval.
+const federationStateTTL = 10 * time.Minute
 
-func durumAnahtar(state string) string { return "kimlik:fed:" + state }
+func stateKey(state string) string { return "kimlik:fed:" + state }
 
-// DurumYaz, federasyon akisinin baslangicindaki baglami state anahtari
-// altinda Redis'e yazar.
-func (d *IstekDepo) DurumYaz(ctx context.Context, state string, durum FedereDurum) error {
-	veri, err := json.Marshal(durum)
+// WriteState writes the context at the start of the federation flow to
+// Redis under the state key.
+func (d *RequestStore) WriteState(ctx context.Context, state string, record FederationState) error {
+	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("federasyon durumu serilenemedi: %w", err)
 	}
-	if err := d.rdb.Set(ctx, durumAnahtar(state), veri, federasyonDurumTTL).Err(); err != nil {
+	if err := d.rdb.Set(ctx, stateKey(state), data, federationStateTTL).Err(); err != nil {
 		return fmt.Errorf("federasyon durumu yazilamadi: %w", err)
 	}
 	return nil
 }
 
-// DurumAl, state kaydini okur ve ATOMIK olarak siler (GETDEL): kayit TEK
-// KULLANIMLIKTIR, aksi halde saldirgan yakaladigi bir callback URL'ini
-// (adres cubugu, log, proxy) tekrar oynatip ayni federasyon akisini
-// ikinci kez tamamlayabilir. Kod degisimiyle ayni desen (bkz.
-// IstekDepo.KodlaOku).
-func (d *IstekDepo) DurumAl(ctx context.Context, state string) (FedereDurum, error) {
-	veri, err := d.rdb.GetDel(ctx, durumAnahtar(state)).Bytes()
+// TakeState reads the state record and deletes it ATOMICALLY (GETDEL): the
+// record is SINGLE-USE, otherwise an attacker could replay a callback URL
+// they captured (address bar, log, proxy) and complete the same federation
+// flow a second time. Same pattern as the code exchange (see
+// RequestStore.GetByCode).
+func (d *RequestStore) TakeState(ctx context.Context, state string) (FederationState, error) {
+	data, err := d.rdb.GetDel(ctx, stateKey(state)).Bytes()
 	if errors.Is(err, redis.Nil) {
-		return FedereDurum{}, ErrDurumYok
+		return FederationState{}, ErrStateNotFound
 	}
 	if err != nil {
-		return FedereDurum{}, fmt.Errorf("federasyon durumu okunamadi: %w", err)
+		return FederationState{}, fmt.Errorf("federasyon durumu okunamadi: %w", err)
 	}
-	var durum FedereDurum
-	if err := json.Unmarshal(veri, &durum); err != nil {
-		return FedereDurum{}, fmt.Errorf("federasyon durumu cozumlenemedi: %w", err)
+	var record FederationState
+	if err := json.Unmarshal(data, &record); err != nil {
+		return FederationState{}, fmt.Errorf("federasyon durumu cozumlenemedi: %w", err)
 	}
-	return durum, nil
+	return record, nil
 }

@@ -37,7 +37,7 @@ func TestAppleIstemciSirAlanlari(t *testing.T) {
 	p8, acikAnahtar := testP8Uret(t)
 	simdi := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
 
-	sir, err := appleIstemciSir("EKIP123", "ANAHTAR9", "tr.makesinger.giris", p8, simdi)
+	sir, err := appleClientSecret("EKIP123", "ANAHTAR9", "tr.makesinger.giris", p8, simdi)
 	if err != nil {
 		t.Fatalf("client_secret uretilemedi: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestAppleIstemciSirOmru(t *testing.T) {
 	p8, acikAnahtar := testP8Uret(t)
 	simdi := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
 
-	sir, err := appleIstemciSir("EKIP123", "ANAHTAR9", "tr.makesinger.giris", p8, simdi)
+	sir, err := appleClientSecret("EKIP123", "ANAHTAR9", "tr.makesinger.giris", p8, simdi)
 	if err != nil {
 		t.Fatalf("client_secret uretilemedi: %v", err)
 	}
@@ -115,14 +115,14 @@ func TestAppleIstemciSirYanlisAnahtarTipiReddeder(t *testing.T) {
 	}
 	p8 := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 
-	_, err = appleIstemciSir("EKIP123", "ANAHTAR9", "tr.makesinger.giris", p8, time.Now())
+	_, err = appleClientSecret("EKIP123", "ANAHTAR9", "tr.makesinger.giris", p8, time.Now())
 	if err == nil {
 		t.Fatal("rsa anahtariyla ES256 imzalama basarili oldu, hata bekleniyordu")
 	}
 }
 
 func TestAppleIstemciSirBozukPEMReddeder(t *testing.T) {
-	_, err := appleIstemciSir("EKIP123", "ANAHTAR9", "tr.makesinger.giris", "bu-pem-degil", time.Now())
+	_, err := appleClientSecret("EKIP123", "ANAHTAR9", "tr.makesinger.giris", "bu-pem-degil", time.Now())
 	if err == nil {
 		t.Fatal("bozuk PEM ile hata bekleniyordu, nil geldi")
 	}

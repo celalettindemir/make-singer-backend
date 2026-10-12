@@ -14,7 +14,7 @@ func TestHesapSilCascade(t *testing.T) {
 	kullanicilar := testPostgresUserStore(t)
 	havuz := kullanicilar.pool
 	jetonlar := NewPostgresTokenStore(havuz, nil)
-	federe := NewPostgresFedereDepo(havuz)
+	federe := NewPostgresFederatedStore(havuz)
 	ctx := context.Background()
 
 	k, err := kullanicilar.Create(ctx, "sil-"+uuid.NewString()+"@ornek.com", "Ad", "uzun-sifre-123")
@@ -24,7 +24,7 @@ func TestHesapSilCascade(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = havuz.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, k.ID)
 	})
-	if err := federe.Bagla(ctx, "google", "sub-"+uuid.NewString(), k.ID); err != nil {
+	if err := federe.Link(ctx, "google", "sub-"+uuid.NewString(), k.ID); err != nil {
 		t.Fatalf("Bagla: %v", err)
 	}
 	if _, err := jetonlar.CreateRefresh(ctx, yeniRefresh(k.ID)); err != nil {

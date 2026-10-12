@@ -16,307 +16,304 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/op"
 )
 
-// yolBaglama, hesap baglama sayfasinin yolu. Federasyon akisinin
-// ORTASINDAKI bir adimdir: kullanici yukari akista dogrulandi ama
-// e-postasi mevcut bir SIFRELI hesapla cakisiyor.
-const yolBaglama = "/baglama"
+// pathLink is the path of the account-link page. It is a step in the
+// MIDDLE of the federation flow: the user was verified upstream but their
+// email collides with an existing account that HAS A PASSWORD.
+const pathLink = "/baglama"
 
-// alanBeklemeID, bekleyen baglama kaydinin form/query alan adi.
-const alanBeklemeID = "beklemeID"
+// fieldPendingID is the form/query field name of the pending link record.
+const fieldPendingID = "beklemeID"
 
-// gizliAktarmaSoneki, Apple'in "Hide My Email" adreslerinin sonekidir.
+// privateRelaySuffix is the suffix of Apple's "Hide My Email" addresses.
 //
-// Bu adresler BAGLAMA icin HICBIR KOSULDA guvenilir degildir (spec
-// yasagi): adres kullaniciya degil (uygulama, Apple hesabi) ciftine
-// aittir, kullanici hesabini silip tekrar kaydolursa AYNI adres geri
-// gelir ve adresin bir baska satirda bulunmasi ayni kisi oldugunu
-// KANITLAMAZ.
-const gizliAktarmaSoneki = "@privaterelay.appleid.com"
+// These addresses are NOT trustworthy for LINKING under ANY CONDITION (spec
+// prohibition): the address belongs not to the user but to the (app, Apple
+// account) pair; if the user deletes their account and signs up again the
+// SAME address comes back, and finding the address on another row does NOT
+// PROVE it is the same person.
+const privateRelaySuffix = "@privaterelay.appleid.com"
 
-// baglamaBeklemeTTL, bekleyen baglama kaydinin omru. Kullanicinin
-// sifresini hatirlayip girmesine yetecek kadar uzun, calinmis bir
-// kaydin degerini yitirmesine yetecek kadar kisa.
-const baglamaBeklemeTTL = 10 * time.Minute
+// pendingLinkTTL is the lifetime of the pending link record. Long enough for
+// the user to remember and enter their password, short enough for a stolen
+// record to lose its value.
+const pendingLinkTTL = 10 * time.Minute
 
-// BaglamaBekleme, /baglama sayfasinin bir POST'u guvenle tamamlamak
-// icin ihtiyac duydugu her seyi tutar. Redis'te kisa omurlu ve TEK
-// KULLANIMLIK tutulur.
+// PendingLink holds everything the /baglama page needs to complete a POST
+// safely. It is kept in Redis, short-lived and SINGLE-USE.
 //
-// Alanlar disa acik (buyuk harfli) olmak ZORUNDA: kayit JSON olarak
-// yazilir ve encoding/json kucuk harfli alanlari sessizce atlar.
-type BaglamaBekleme struct {
-	// AuthRequestID, akisin tamamlanacagi bekleyen auth istegi.
+// The fields MUST be exported (capitalized): the record is written as JSON
+// and encoding/json silently skips lowercase fields.
+type PendingLink struct {
+	// AuthRequestID is the pending auth request that the flow will complete.
 	AuthRequestID string
-	// UserID, sifresi sorulacak MEVCUT hesap. Formdan GELMEZ: aksi
-	// halde kullanici baska bir hesabin sifresini denemeye
-	// yonlendirilebilirdi.
+	// UserID is the EXISTING account whose password will be asked for. It does
+	// NOT come from the form: otherwise the user could be steered into trying
+	// another account's password.
 	UserID string
-	// Saglayici ve Sub, dogru sifre girilince baglanacak federe kimlik.
-	Saglayici string `json:"Saglayici"`
-	Sub       string
-	// Eposta, sayfada GOSTERILEN (salt okunur) adres.
-	Eposta string `json:"Eposta"`
-	// CSRF, bu kayda ve bu tarayiciya ozel jeton.
+	// Provider and Sub are the federated identity to link once the correct password is entered.
+	Provider string `json:"Saglayici"`
+	Sub      string
+	// Email is the address SHOWN on the page (read-only).
+	Email string `json:"Eposta"`
+	// CSRF is the token specific to this record and this browser.
 	CSRF string
 }
 
-// ErrBeklemeYok, beklenen baglama kaydi yok (hic olusmamis, suresi
-// dolmus veya ZATEN TUKETILMIS).
-var ErrBeklemeYok = errors.New("baglama beklemesi bulunamadi")
+// ErrPendingLinkNotFound means the expected link record does not exist (never
+// created, expired, or ALREADY CONSUMED).
+var ErrPendingLinkNotFound = errors.New("baglama beklemesi bulunamadi")
 
-// ErrYukariAkisEpostaYok, yukari akis dogrulanmis id_token'da e-posta
-// GONDERMEDIGI icin yeni bir federe hesap acilamadiginda donulur
-// (bkz. kullaniciCoz'daki gerekce: bos e-posta ile en fazla BIR hesap
-// olusabilir ve ikincisi kullaniciyi KALICI olarak kilitler).
-var ErrYukariAkisEpostaYok = errors.New("yukari akis e-posta gondermedi")
+// ErrUpstreamNoEmail is returned when a new federated account cannot be
+// opened because the upstream verified id_token carried no email (see the
+// rationale in resolveUser: at most ONE account can exist with an empty
+// email, and the second would lock the user out PERMANENTLY).
+var ErrUpstreamNoEmail = errors.New("yukari akis e-posta gondermedi")
 
-// BeklemeDepo, bekleyen baglama kaydinin yazilmasini ve okunmasini
-// tanimlar. Uretimde *IstekDepo karsilar.
+// PendingLinkStore defines writing and reading the pending link record. In
+// production *RequestStore implements it.
 //
-// IKI okuma yolu KASITLIDIR:
-//   - BeklemeOku (GET): formu RENDER etmek icin. Render kaydi
-//     TUKETMEMELI, aksi halde sayfayi gormek akisi bitirirdi.
-//   - BeklemeAl (GETDEL): POST icin. Kayit ATOMIK olarak tuketilir,
-//     yani bir kayitla yalnizca TEK bir baglama tamamlanabilir.
-type BeklemeDepo interface {
-	BeklemeYaz(ctx context.Context, id string, b BaglamaBekleme, ttl time.Duration) error
-	BeklemeOku(ctx context.Context, id string) (BaglamaBekleme, error)
-	BeklemeAl(ctx context.Context, id string) (BaglamaBekleme, error)
+// The TWO read paths are INTENTIONAL:
+//   - ReadPendingLink (GET): to RENDER the form. Rendering must NOT consume
+//     the record, otherwise viewing the page would end the flow.
+//   - TakePendingLink (GETDEL): for the POST. The record is consumed
+//     ATOMICALLY, so only ONE link can be completed per record.
+type PendingLinkStore interface {
+	WritePendingLink(ctx context.Context, id string, b PendingLink, ttl time.Duration) error
+	ReadPendingLink(ctx context.Context, id string) (PendingLink, error)
+	TakePendingLink(ctx context.Context, id string) (PendingLink, error)
 }
 
-var _ BeklemeDepo = (*IstekDepo)(nil)
+var _ PendingLinkStore = (*RequestStore)(nil)
 
-func beklemeAnahtar(id string) string { return "kimlik:baglama:" + id }
+func pendingLinkKey(id string) string { return "kimlik:baglama:" + id }
 
-func (d *IstekDepo) BeklemeYaz(ctx context.Context, id string, b BaglamaBekleme, ttl time.Duration) error {
-	// Sifir/negatif TTL, Redis'te SURESIZ bir anahtar demektir: tek
-	// kullanimlik olmasi gereken bir kayit sonsuza kadar yasardi.
+func (d *RequestStore) WritePendingLink(ctx context.Context, id string, b PendingLink, ttl time.Duration) error {
+	// A zero/negative TTL means a PERSISTENT key in Redis: a record that must
+	// be single-use would live forever.
 	if ttl <= 0 {
 		return fmt.Errorf("baglama beklemesi ttl pozitif olmali")
 	}
-	veri, err := json.Marshal(b)
+	data, err := json.Marshal(b)
 	if err != nil {
 		return fmt.Errorf("baglama beklemesi serilenemedi: %w", err)
 	}
-	if err := d.rdb.Set(ctx, beklemeAnahtar(id), veri, ttl).Err(); err != nil {
+	if err := d.rdb.Set(ctx, pendingLinkKey(id), data, ttl).Err(); err != nil {
 		return fmt.Errorf("baglama beklemesi yazilamadi: %w", err)
 	}
 	return nil
 }
 
-// BeklemeOku, kaydi TUKETMEDEN okur (form render'i icin).
-func (d *IstekDepo) BeklemeOku(ctx context.Context, id string) (BaglamaBekleme, error) {
-	return d.beklemeCoz(d.rdb.Get(ctx, beklemeAnahtar(id)).Bytes())
+// ReadPendingLink reads the record WITHOUT consuming it (for rendering the form).
+func (d *RequestStore) ReadPendingLink(ctx context.Context, id string) (PendingLink, error) {
+	return d.decodePendingLink(d.rdb.Get(ctx, pendingLinkKey(id)).Bytes())
 }
 
-// BeklemeAl, kaydi okur ve ATOMIK olarak siler (GETDEL): TEK
-// KULLANIMLIK. Aksi halde dogru sifre bir kez girildikten sonra ayni
-// kayitla ikinci bir baglama (baska bir auth istegini tamamlamak
-// dahil) yapilabilirdi. Kod degisimiyle ayni desen (bkz. KodlaOku).
-func (d *IstekDepo) BeklemeAl(ctx context.Context, id string) (BaglamaBekleme, error) {
-	return d.beklemeCoz(d.rdb.GetDel(ctx, beklemeAnahtar(id)).Bytes())
+// TakePendingLink reads the record and deletes it ATOMICALLY (GETDEL):
+// SINGLE-USE. Otherwise, after the correct password was entered once, the
+// same record could drive a second link (including completing another auth
+// request). Same pattern as the code exchange (see RequestStore.GetByCode).
+func (d *RequestStore) TakePendingLink(ctx context.Context, id string) (PendingLink, error) {
+	return d.decodePendingLink(d.rdb.GetDel(ctx, pendingLinkKey(id)).Bytes())
 }
 
-func (d *IstekDepo) beklemeCoz(veri []byte, err error) (BaglamaBekleme, error) {
+func (d *RequestStore) decodePendingLink(data []byte, err error) (PendingLink, error) {
 	if errors.Is(err, redis.Nil) {
-		return BaglamaBekleme{}, ErrBeklemeYok
+		return PendingLink{}, ErrPendingLinkNotFound
 	}
 	if err != nil {
-		return BaglamaBekleme{}, fmt.Errorf("baglama beklemesi okunamadi: %w", err)
+		return PendingLink{}, fmt.Errorf("baglama beklemesi okunamadi: %w", err)
 	}
-	var b BaglamaBekleme
-	if err := json.Unmarshal(veri, &b); err != nil {
-		return BaglamaBekleme{}, fmt.Errorf("baglama beklemesi cozumlenemedi: %w", err)
+	var b PendingLink
+	if err := json.Unmarshal(data, &b); err != nil {
+		return PendingLink{}, fmt.Errorf("baglama beklemesi cozumlenemedi: %w", err)
 	}
 	return b, nil
 }
 
-// Cakisma, federasyon akisinin GIRIS YAPMADAN durdugu durumu anlatir.
-// Iki bicimi var:
+// Conflict describes the situation where the federation flow stops WITHOUT
+// logging in. It has two forms:
 //
-//	SifreliHesap = true  -> /baglama sayfasi: mevcut hesabin sifresi BIR
-//	                        KEZ sorulur ve dogruysa kimlik baglanir.
-//	SifreliHesap = false -> 409 cakisma sayfasi (K1): sorulacak sifre
-//	                        yok, baglama YOK, yeni hesap YOK.
-type Cakisma struct {
-	// BeklemeID, /baglama akisinin kayit anahtari. Yalnizca
-	// SifreliHesap true oldugunda doludur.
-	BeklemeID string
-	// Eposta, cakisan adres (kullaniciya gosterilir).
-	Eposta string
-	// MevcutSaglayicilar, 409 metninin "hangi yontemle gir" kismini
-	// besler. BOS olabilir; o zaman saglayici adi UYDURULMAZ.
-	MevcutSaglayicilar []string
-	SifreliHesap       bool
+//	HasPassword = true  -> /baglama page: the existing account's password is
+//	                       asked ONCE and, if correct, the identity is linked.
+//	HasPassword = false -> 409 conflict page (K1): no password to ask, NO
+//	                       link, NO new account.
+type Conflict struct {
+	// PendingID is the record key of the /baglama flow. It is set only when
+	// HasPassword is true.
+	PendingID string
+	// Email is the conflicting address (shown to the user).
+	Email string
+	// ExistingProviders feeds the "which method to sign in with" part of the
+	// 409 text. It MAY BE EMPTY; in that case no provider name is MADE UP.
+	ExistingProviders []string
+	HasPassword       bool
 
-	// Asagidakiler DISA ACIK DEGIL: yalnizca cakismaYonlendir'in
-	// bekleme kaydini yazmasi icin tasinirlar. Formdan GELMEZLER.
-	userID    string
-	saglayici string
-	sub       string
-	csrf      string
+	// The following are NOT exported: they are carried only so that
+	// handleConflict can write the pending record. They do NOT come from the form.
+	userID   string
+	provider string
+	sub      string
+	csrf     string
 }
 
-// kullaniciCoz, dogrulanmis bir yukari akis id_token'indan bizim
-// kullanicimizi bulur.
+// resolveUser finds our user from a verified upstream id_token.
+// THE ORDER IS THE SECURITY ITSELF:
 //
-// SIRA GUVENLIGIN KENDISIDIR:
+//  1. (provider, sub) -- a linked account always comes first. The user's
+//     email at the provider may change; looking up by email could take them
+//     to ANOTHER account (or to no account at all).
+//  2. Private relay address -> NO conflict check (spec prohibition).
+//  3. No account with this email -> new account.
+//  4. Account exists and HAS A PASSWORD -> link page (password once).
+//  5. Account exists and has NO PASSWORD -> 409 (K1).
 //
-//  1. (saglayici, sub) -- bagli hesap her zaman once. Kullanicinin
-//     saglayicidaki e-postasi degisebilir; e-postaya gore aramak onu
-//     BASKA bir hesaba (ya da hic hesaba) goturebilirdi.
-//  2. Gizli aktarma adresi -> cakisma kontrolu YOK (spec yasagi).
-//  3. E-posta ile hesap yok -> yeni hesap.
-//  4. Hesap var ve SIFRELI -> baglama sayfasi (sifre bir kez).
-//  5. Hesap var ve SIFRESIZ -> 409 (K1).
-//
-// 4 ve 5'te OTOMATIK BAGLAMA YAPILMAZ, email_verified true olsa bile.
-// Spec'teki saldiri: e-posta dogrulamasini BIZ yapmadigimiz icin
-// saldirgan kurbanin adresiyle sifreli bir hesap acabilir; kurban
-// Google ile girip otomatik baglanirsa SIFRESI SALDIRGANDA olan bir
-// hesaba duser.
-func (f *FedereSayfalar) kullaniciCoz(
-	ctx context.Context, saglayici string, iddia *auth.Claims,
-) (*User, *Cakisma, error) {
-	// 1) Bagli kimlik her zaman ONCE.
-	ku, err := f.federe.KimlikleKullanici(ctx, saglayici, iddia.UserID)
+// In 4 and 5 NO AUTOMATIC LINKING happens, even if email_verified is true.
+// The attack in the spec: since WE do not verify the email, an attacker can
+// open a password account with the victim's address; if the victim signs in
+// with Google and is linked automatically, they land in an account whose
+// PASSWORD THE ATTACKER HAS.
+func (f *FederationPages) resolveUser(
+	ctx context.Context, provider string, claims *auth.Claims,
+) (*User, *Conflict, error) {
+	// 1) A linked identity always comes FIRST.
+	user, err := f.federated.UserByIdentity(ctx, provider, claims.UserID)
 	if err == nil {
-		return ku, nil, nil
+		return user, nil, nil
 	}
-	if !errors.Is(err, ErrKimlikYok) {
+	if !errors.Is(err, ErrIdentityNotFound) {
 		return nil, nil, fmt.Errorf("federe kimlik okunamadi: %w", err)
 	}
 
-	eposta := normalizeEmail(iddia.Email)
-	// 2) Gizli aktarma adresinde cakisma kontrolu HIC yapilmaz.
-	gizliAktarma := strings.HasSuffix(strings.ToLower(eposta), gizliAktarmaSoneki)
+	email := normalizeEmail(claims.Email)
+	// 2) The conflict check is NEVER done for a private relay address.
+	privateRelay := strings.HasSuffix(strings.ToLower(email), privateRelaySuffix)
 
-	// E-posta BOS ise de arama yapilmaz: bos adresle bir hesap aramak
-	// anlamsizdir ve tekillik kisiti olusturmayi zaten engeller.
-	if !gizliAktarma && eposta != "" {
-		mevcut, err := f.kullanici.ByEmail(ctx, eposta)
+	// No lookup is done for an EMPTY email either: searching for an account
+	// with an empty address is meaningless and the uniqueness constraint
+	// already prevents creating one.
+	if !privateRelay && email != "" {
+		existing, err := f.users.ByEmail(ctx, email)
 		switch {
-		// 4) Hesap var ve SIFRELI -> baglama sayfasi.
-		case err == nil && mevcut.PasswordHash != "":
-			c, err := f.cakismaKur(mevcut, eposta, saglayici, iddia)
+		// 4) Account exists and HAS A PASSWORD -> link page.
+		case err == nil && existing.PasswordHash != "":
+			c, err := f.buildConflict(existing, email, provider, claims)
 			if err != nil {
 				return nil, nil, err
 			}
 			return nil, c, nil
-		// 5) Hesap var ve SIFRESIZ -> 409 (K1). Baglama YOK, yeni hesap
-		//    YOK: sorulacak bir sifre yoktur ve hesabin ayni kisiye ait
-		//    oldugunu kanitlayamayiz.
+		// 5) Account exists and has NO PASSWORD -> 409 (K1). NO link, NO new
+		//    account: there is no password to ask, and we cannot prove the
+		//    account belongs to the same person.
 		case err == nil:
-			return nil, &Cakisma{
-				Eposta:             eposta,
-				MevcutSaglayicilar: f.saglayicilar(ctx, mevcut.ID),
-				SifreliHesap:       false,
+			return nil, &Conflict{
+				Email:             email,
+				ExistingProviders: f.linkedProviders(ctx, existing.ID),
+				HasPassword:       false,
 			}, nil
 		case !errors.Is(err, ErrUserNotFound):
 			return nil, nil, fmt.Errorf("kullanici okunamadi: %w", err)
 		}
 	}
 
-	// 3) Hesap yok (veya gizli aktarma adresi) -> yeni federe hesap.
+	// 3) No account (or a private relay address) -> new federated account.
 	//
-	// AMA e-posta BOS ise hesap ACILMAZ. users tablosunda "email NOT
-	// NULL" ve "UNIQUE (lower(email))" var (migrations/001_kullanici.sql),
-	// yani e-postasiz EN FAZLA BIR federe hesap olusabilir. Yukari akis
-	// bir kez e-posta gondermezse ikinci boyle kullanici 23505 ->
-	// ErrEpostaKullanimda ile duser ve BOS e-posta gosteren bir 409
-	// cakisma sayfasina cakilir; o kullanici bir daha HIC kaydolamaz,
-	// yani KALICI olarak kilitlenir. Olasilik dusuk, acilan kapi agir.
+	// BUT if the email is EMPTY, NO account is opened. The users table has
+	// "email NOT NULL" and "UNIQUE (lower(email))" (migrations/001_kullanici.sql),
+	// so AT MOST ONE federated account without an email can exist. If upstream
+	// omits the email once, the second such user fails with 23505 ->
+	// ErrEmailInUse and lands on a 409 conflict page showing an EMPTY email;
+	// that user can never sign up again, i.e. is locked out PERMANENTLY. The
+	// probability is low, the door it opens is heavy.
 	//
-	// Cozum semayi degistirmek DEGIL (email NULL'lanabilir yapmak
-	// calisir bir uretim tablosunu etkiler ve bu turun kapsami disi),
-	// sessizce bos e-postayla hesap acmak yerine ACIKCA reddetmek ve
-	// kullaniciya ne yapacagini soylemek.
-	if eposta == "" {
-		return nil, nil, ErrYukariAkisEpostaYok
+	// The fix is NOT to change the schema (making email nullable would affect a
+	// running production table and is out of scope for this round) but to
+	// reject EXPLICITLY instead of silently opening an account with an empty
+	// email, and to tell the user what to do.
+	if email == "" {
+		return nil, nil, ErrUpstreamNoEmail
 	}
-	yeni, err := f.federe.FedereKullaniciOlustur(
-		ctx, saglayici, iddia.UserID, eposta, iddia.Name, bool(iddia.EmailVerified))
+	created, err := f.federated.CreateFederatedUser(
+		ctx, provider, claims.UserID, email, claims.Name, bool(claims.EmailVerified))
 	if errors.Is(err, ErrEmailInUse) {
-		// Gizli aktarma adresi zaten kayitli ya da arada bir yaris
-		// olustu. Her iki halde de BAGLAMA YOK: o satirin ayni kisiye
-		// ait oldugunu kanitlayamayiz.
-		return nil, &Cakisma{Eposta: eposta, SifreliHesap: false}, nil
+		// The private relay address is already registered or a race happened in
+		// between. In both cases there is NO LINK: we cannot prove that row
+		// belongs to the same person.
+		return nil, &Conflict{Email: email, HasPassword: false}, nil
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("federe kullanici olusturulamadi: %w", err)
 	}
-	return yeni, nil, nil
+	return created, nil, nil
 }
 
-// saglayicilar, 409 metnini beslemek icin kullanicinin bagli oldugu
-// saglayici adlarini doner. Hata YUTULMAZ ama AKISI DURDURMAZ: liste
-// yalnizca gosterim icindir ve bos liste "baska bir yontem" metnine
-// duser (bkz. saglayiciMetni).
-func (f *FedereSayfalar) saglayicilar(ctx context.Context, userID string) []string {
-	sag, err := f.federe.SaglayicilarByUserID(ctx, userID)
+// linkedProviders returns the provider names the user is linked to, to feed
+// the 409 text. The error is NOT SWALLOWED but does NOT STOP THE FLOW: the
+// list is for display only and an empty list falls back to the "another
+// method" text (see providerText).
+func (f *FederationPages) linkedProviders(ctx context.Context, userID string) []string {
+	providers, err := f.federated.ProvidersByUserID(ctx, userID)
 	if err != nil {
 		log.Printf("federasyon: saglayici listesi okunamadi: %v", err)
 		return nil
 	}
-	return sag
+	return providers
 }
 
-// cakismaKur, SIFRELI bir hesapla cakismada /baglama akisinin
-// kimliklerini uretir. Kaydi Redis'e YAZMAZ: authRequestID'yi
-// cakismaYonlendir tasir, boylece tek bir yazma noktasi olur.
-func (f *FedereSayfalar) cakismaKur(
-	mevcut *User, eposta, saglayici string, iddia *auth.Claims,
-) (*Cakisma, error) {
-	beklemeID, err := rasgeleJeton()
+// buildConflict produces the identifiers of the /baglama flow for a conflict
+// with an account that HAS A PASSWORD. It does NOT WRITE the record to
+// Redis: handleConflict carries authRequestID, so there is a single write point.
+func (f *FederationPages) buildConflict(
+	existing *User, email, provider string, claims *auth.Claims,
+) (*Conflict, error) {
+	pendingID, err := randomToken()
 	if err != nil {
 		return nil, fmt.Errorf("bekleme id uretilemedi: %w", err)
 	}
-	csrf, err := rasgeleJeton()
+	csrf, err := randomToken()
 	if err != nil {
 		return nil, fmt.Errorf("csrf uretilemedi: %w", err)
 	}
-	return &Cakisma{
-		BeklemeID:    beklemeID,
-		Eposta:       eposta,
-		SifreliHesap: true,
-		userID:       mevcut.ID,
-		saglayici:    saglayici,
-		sub:          iddia.UserID,
-		csrf:         csrf,
+	return &Conflict{
+		PendingID:   pendingID,
+		Email:       email,
+		HasPassword: true,
+		userID:      existing.ID,
+		provider:    provider,
+		sub:         claims.UserID,
+		csrf:        csrf,
 	}, nil
 }
 
-// cakismaYonlendir, cakismanin iki bicimini yanita cevirir: sifreli
-// hesapta /baglama sayfasina yonlendirir, sifresiz hesapta 409 cakisma
-// sayfasini yazar. HICBIR dalda giris YAPILMAZ.
-func (f *FedereSayfalar) cakismaYonlendir(
-	w http.ResponseWriter, r *http.Request, authRequestID string, c *Cakisma,
+// handleConflict turns the two forms of conflict into a response: for an
+// account with a password it redirects to the /baglama page, for one
+// without it writes the 409 conflict page. NO login happens in ANY branch.
+func (f *FederationPages) handleConflict(
+	w http.ResponseWriter, r *http.Request, authRequestID string, c *Conflict,
 ) {
-	if !c.SifreliHesap {
-		f.cakismaRender(w, authRequestID, c.Eposta, c.MevcutSaglayicilar)
+	if !c.HasPassword {
+		f.renderConflict(w, authRequestID, c.Email, c.ExistingProviders)
 		return
 	}
-	bekleme := BaglamaBekleme{
+	pending := PendingLink{
 		AuthRequestID: authRequestID,
 		UserID:        c.userID,
-		Saglayici:     c.saglayici,
+		Provider:      c.provider,
 		Sub:           c.sub,
-		Eposta:        c.Eposta,
+		Email:         c.Email,
 		CSRF:          c.csrf,
 	}
-	if err := f.durum.BeklemeYaz(r.Context(), c.BeklemeID, bekleme, baglamaBeklemeTTL); err != nil {
-		// beklemeID, csrf ve e-posta LOGLANMAZ.
+	if err := f.flows.WritePendingLink(r.Context(), c.PendingID, pending, pendingLinkTTL); err != nil {
+		// pendingID, csrf and email are NOT LOGGED.
 		log.Printf("federasyon: baglama beklemesi yazilamadi: %v", err)
-		f.hataSayfasi(w, http.StatusInternalServerError, hataSunucu)
+		f.errorPage(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
-	// URL Go tarafinda url.Values ile kurulur, sablonda string
-	// birlestirmeyle DEGIL.
-	hedef := yolBaglama + "?" + url.Values{alanBeklemeID: {c.BeklemeID}}.Encode()
-	http.Redirect(w, r, hedef, http.StatusFound)
+	// The URL is built in Go with url.Values, NOT by string concatenation in the template.
+	target := pathLink + "?" + url.Values{fieldPendingID: {c.PendingID}}.Encode()
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
-// linkData, baglama.html sablonuna verilen veridir.
+// linkData is the data given to the baglama.html template.
 type linkData struct {
 	Email     string
 	PendingID string
@@ -325,234 +322,233 @@ type linkData struct {
 	LinkPath  string
 }
 
-// conflictData, cakisma.html'in bekledigi alanlardir. Cakisma yapisi
-// DOGRUDAN gecilmez: sablon, kullaniciya GOSTERILECEK metni ister,
-// saglayici listesini degil.
+// conflictData holds the fields cakisma.html expects. The Conflict struct is
+// NOT passed directly: the template wants the text to SHOW the user, not the
+// provider list.
 type conflictData struct {
 	Email        string
 	ProviderText string
-	// LoginURL, Go tarafinda url.Values ile kurulur; sablonda string
-	// birlestirme YAPILMAZ.
+	// LoginURL is built in Go with url.Values; NO string concatenation in the template.
 	LoginURL string
 }
 
-// saglayiciEtiket, saglayici adini kullaniciya gosterilecek etikete
-// cevirir. Bilinmeyen bir ad UYDURULMAZ, oldugu gibi gosterilir.
-func saglayiciEtiket(ad string) string {
-	switch ad {
-	case saglayiciGoogle:
+// providerLabel turns a provider name into the label shown to the user. An
+// unknown name is NOT MADE UP, it is shown as is.
+func providerLabel(name string) string {
+	switch name {
+	case providerGoogle:
 		return "Google"
-	case saglayiciApple:
+	case providerApple:
 		return "Apple"
 	default:
-		return ad
+		return name
 	}
 }
 
-// saglayiciMetni, listeyi kullaniciya gosterilecek tek bir ifadeye
-// cevirir. Liste BOS olabilir (ornegin gizli aktarma adresi zaten
-// kayitliysa); o zaman saglayici adi UYDURULMAZ.
-func saglayiciMetni(sag []string) string {
-	switch len(sag) {
+// providerText turns the list into a single phrase to show the user. The
+// list MAY BE EMPTY (for example if the private relay address is already
+// registered); in that case no provider name is MADE UP.
+func providerText(providers []string) string {
+	switch len(providers) {
 	case 0:
 		return "baska bir yontem"
 	case 1:
-		return saglayiciEtiket(sag[0])
+		return providerLabel(providers[0])
 	default:
-		etiketler := make([]string, 0, len(sag))
-		for _, s := range sag {
-			etiketler = append(etiketler, saglayiciEtiket(s))
+		labels := make([]string, 0, len(providers))
+		for _, s := range providers {
+			labels = append(labels, providerLabel(s))
 		}
-		return strings.Join(etiketler, " veya ")
+		return strings.Join(labels, " veya ")
 	}
 }
 
-// cakismaRender, K1'in 409 sayfasini yazar: baglama YOK, yeni hesap
-// YOK, yalnizca "hangi yontemle gir" bilgisi.
-func (f *FedereSayfalar) cakismaRender(w http.ResponseWriter, authRequestID, eposta string, sag []string) {
-	veri := conflictData{
-		Email:        eposta,
-		ProviderText: saglayiciMetni(sag),
-		LoginURL:     yolGiris + "?" + url.Values{"authRequestID": {authRequestID}}.Encode(),
+// renderConflict writes K1's 409 page: NO link, NO new account, only the
+// "which method to sign in with" information.
+func (f *FederationPages) renderConflict(w http.ResponseWriter, authRequestID, email string, providers []string) {
+	data := conflictData{
+		Email:        email,
+		ProviderText: providerText(providers),
+		LoginURL:     pathLogin + "?" + url.Values{"authRequestID": {authRequestID}}.Encode(),
 	}
 	w.WriteHeader(http.StatusConflict)
-	if err := sablonlar.ExecuteTemplate(w, "cakisma.html", veri); err != nil {
+	if err := templates.ExecuteTemplate(w, "cakisma.html", data); err != nil {
 		log.Printf("cakisma sablonu yazilamadi: %v", err)
 	}
 }
 
-func (f *FedereSayfalar) baglamaRender(w http.ResponseWriter, kod int, b BaglamaBekleme, beklemeID, hata string) {
-	veri := linkData{
-		Email:     b.Eposta,
-		PendingID: beklemeID,
+func (f *FederationPages) renderLink(w http.ResponseWriter, status int, b PendingLink, pendingID, errMsg string) {
+	data := linkData{
+		Email:     b.Email,
+		PendingID: pendingID,
 		CSRF:      b.CSRF,
-		Error:     hata,
-		LinkPath:  yolBaglama,
+		Error:     errMsg,
+		LinkPath:  pathLink,
 	}
-	w.WriteHeader(kod)
-	if err := sablonlar.ExecuteTemplate(w, "baglama.html", veri); err != nil {
+	w.WriteHeader(status)
+	if err := templates.ExecuteTemplate(w, "baglama.html", data); err != nil {
 		log.Printf("baglama sablonu yazilamadi: %v", err)
 	}
 }
 
-// BaglamaBagla, /baglama sayfasini mux'a baglar.
+// MountLink mounts the /baglama page on the mux.
 //
-// POST issuer aracisiyla SARILIR (geriCagirma issuer'i baglamdan
-// okur). Hiz limiti GIRIS ucundan AYRI bir sayac kullanir: /baglama,
-// bu sistemdeki IKINCI sifre deneme yuzeyidir ve formu acmak ile sifre
-// denemek ayni butceyi tuketmemelidir.
+// The POST is WRAPPED with the issuer interceptor (authCallback reads the
+// issuer from the context). Rate limiting uses a SEPARATE counter from the
+// LOGIN endpoint: /baglama is the SECOND password-guessing surface in this
+// system, and opening the form and guessing a password must not consume the
+// same budget.
 //
-// hiz nil GECILEBILIR (yalnizca birim testler icin).
-func (f *FedereSayfalar) BaglamaBagla(mux *http.ServeMux, araci *op.IssuerInterceptor, hiz *HizLimit) {
-	// hiz, HESAP BASINA sayac icin handler'da da gerekir: o sayacin
-	// anahtari ancak bekleme kaydi okunduktan sonra bilinir (bkz.
-	// HizLimit.HesapSayaci).
-	f.hiz = hiz
-	var get http.Handler = http.HandlerFunc(f.baglamaGet)
-	post := araci.Handler(http.HandlerFunc(f.baglamaPost))
-	if hiz != nil {
-		get = hiz.SayfaGetSar("baglama", get)
-		post = hiz.BaglamaSar(post)
+// limiter MAY BE nil (only for unit tests).
+func (f *FederationPages) MountLink(mux *http.ServeMux, interceptor *op.IssuerInterceptor, limiter *RateLimiter) {
+	// limiter is also needed in the handler for the PER-ACCOUNT counter: that
+	// counter's key is known only after the pending record is read (see
+	// RateLimiter.AllowAccount).
+	f.limiter = limiter
+	var get http.Handler = http.HandlerFunc(f.linkGet)
+	post := interceptor.Handler(http.HandlerFunc(f.linkPost))
+	if limiter != nil {
+		get = limiter.WrapPageGet("baglama", get)
+		post = limiter.WrapLink(post)
 	}
-	mux.Handle("GET "+yolBaglama, get)
-	mux.Handle("POST "+yolBaglama, post)
+	mux.Handle("GET "+pathLink, get)
+	mux.Handle("POST "+pathLink, post)
 }
 
-// baglamaBaglamaDogrula, /baglama istegi icin IKI kosulu birlikte
-// dogrular: (1) gecerli bir bekleme kaydi var, (2) kaydin bagli oldugu
-// auth istegi BU tarayiciya bagli (Faz 1'in oturum cerezi; federasyon
-// cerezi Path=/federasyon oldugu icin /baglama'ya HIC gonderilmez).
+// verifyLinkBinding verifies TWO conditions together for a /baglama
+// request: (1) a valid pending record exists, (2) the auth request the
+// record is bound to is bound to THIS browser (Phase 1's session cookie; the
+// federation cookie has Path=/federasyon so it is NEVER sent to /baglama).
 //
-// KAYIT BURADA TUKETILMEZ. GETDEL'i dogrulamalardan ONCE yapmak, bir
-// beklemeID'yi ogrenen ucuncu bir tarafin CEREZSIZ tek bir POST ile
-// kurbanin bekleyen baglamasini YOK ETMESINE izin verirdi (kurban tum
-// federasyon turunu bastan yapmak zorunda kalirdi). Tuketme, sifre
-// dogrulandiktan SONRA baglamaPost'ta ACIKCA yapilir.
-func (f *FedereSayfalar) baglamaBaglamaDogrula(
-	r *http.Request, beklemeID string,
-) (BaglamaBekleme, error) {
-	if beklemeID == "" {
-		return BaglamaBekleme{}, ErrBeklemeYok
+// THE RECORD IS NOT CONSUMED HERE. Doing GETDEL BEFORE the checks would let
+// a third party who learns a pendingID destroy the victim's pending link
+// with a single COOKIELESS POST (the victim would have to redo the whole
+// federation round). Consumption is done EXPLICITLY in linkPost, AFTER the
+// password is verified.
+func (f *FederationPages) verifyLinkBinding(
+	r *http.Request, pendingID string,
+) (PendingLink, error) {
+	if pendingID == "" {
+		return PendingLink{}, ErrPendingLinkNotFound
 	}
-	b, err := f.durum.BeklemeOku(r.Context(), beklemeID)
+	b, err := f.flows.ReadPendingLink(r.Context(), pendingID)
 	if err != nil {
-		return BaglamaBekleme{}, err
+		return PendingLink{}, err
 	}
-	// Oturum baglamasi: akisi BASLATAN tarayici ile baglamayi
-	// TAMAMLAYAN tarayici ayni olmak zorunda.
-	if _, err := oturumBaglamaDogrula(r.Context(), f.oturumlar, r, b.AuthRequestID); err != nil {
-		return BaglamaBekleme{}, err
+	// Session binding: the browser that STARTED the flow and the browser that
+	// COMPLETES the link must be the same.
+	if _, err := verifySessionBinding(r.Context(), f.sessions, r, b.AuthRequestID); err != nil {
+		return PendingLink{}, err
 	}
 	return b, nil
 }
 
-// baglamaGet, sifre formunu YALNIZCA gecerli bir bekleme baglamasi
-// varsa gosterir.
-//
-// Faz 1'in C1 dersi: baglamasiz bir istege form RENDER ETMEK, zafiyetin
-// KENDISIDIR. Bu yuzden form burada MINTLENMEZ, var olan bir bekleme
-// TALEP edilir.
-func (f *FedereSayfalar) baglamaGet(w http.ResponseWriter, r *http.Request) {
-	beklemeID := r.URL.Query().Get(alanBeklemeID)
-	b, err := f.baglamaBaglamaDogrula(r, beklemeID)
+// linkGet shows the password form ONLY if a valid pending link exists.
+// Phase 1's C1 lesson: RENDERING a form for a request without a binding IS
+// the vulnerability. So the form is NOT MINTED here; an existing pending
+// record is REQUIRED.
+func (f *FederationPages) linkGet(w http.ResponseWriter, r *http.Request) {
+	pendingID := r.URL.Query().Get(fieldPendingID)
+	b, err := f.verifyLinkBinding(r, pendingID)
 	if err != nil {
-		oturumRed(w, "baglama-get", err)
+		rejectSession(w, "baglama-get", err)
 		return
 	}
-	f.baglamaRender(w, http.StatusOK, b, beklemeID, "")
+	f.renderLink(w, http.StatusOK, b, pendingID, "")
 }
 
-// baglamaPost, mevcut hesabin sifresini BIR KEZ dogrular ve dogruysa
-// federe kimligi o hesaba baglar.
-func (f *FedereSayfalar) baglamaPost(w http.ResponseWriter, r *http.Request) {
+// linkPost verifies the existing account's password ONCE and, if correct,
+// links the federated identity to that account.
+func (f *FederationPages) linkPost(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "form okunamadi", http.StatusBadRequest)
 		return
 	}
-	beklemeID := r.FormValue(alanBeklemeID)
-	// Kayit TUKETILMEDEN okunur; tuketme asagida, sifre dogrulandiktan
-	// SONRA yapilir (bkz. baglamaBaglamaDogrula).
-	b, err := f.baglamaBaglamaDogrula(r, beklemeID)
+	pendingID := r.FormValue(fieldPendingID)
+	// The record is read WITHOUT being consumed; consumption happens below,
+	// AFTER the password is verified (see verifyLinkBinding).
+	b, err := f.verifyLinkBinding(r, pendingID)
 	if err != nil {
-		oturumRed(w, "baglama", err)
+		rejectSession(w, "baglama", err)
 		return
 	}
-	// CSRF jetonu kayitta SUNUCUDA saklanir: dogrulama fiilen "bu
-	// jetonu bu bekleme icin biz verdik mi" sorusudur.
-	if !csrfEsit(b.CSRF, r.FormValue(csrfAlan)) {
-		oturumRed(w, "baglama", ErrCSRF)
+	// The CSRF token is stored on the SERVER in the record: the verification is
+	// effectively "did we issue this token for this pending record".
+	if !csrfEqual(b.CSRF, r.FormValue(fieldCSRF)) {
+		rejectSession(w, "baglama", ErrCSRF)
 		return
 	}
 
-	mevcut, err := f.kullanici.ByID(r.Context(), b.UserID)
+	existing, err := f.users.ByID(r.Context(), b.UserID)
 	if err != nil {
-		// E-posta ve kullanici id'si LOGLANMAZ.
+		// Email and user id are NOT LOGGED.
 		log.Printf("federasyon: baglanacak hesap okunamadi: %v", err)
-		f.hataSayfasi(w, http.StatusInternalServerError, hataSunucu)
+		f.errorPage(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
-	// Sifresiz hesap bu sayfaya HIC gelmemeli (kullaniciCoz K1 dalinda
-	// 409 doner); gelirse derinlemesine savunma olarak burada da 409.
-	// SifreDogru bos hash'te zaten false doner, ama o yol kullaniciya
-	// "sifreni yanlis girdin" derdi ve kullanici ASLA giremeyecegi bir
-	// formda sonsuza kadar denerdi.
-	if mevcut.PasswordHash == "" {
+	// An account without a password must NEVER reach this page (resolveUser
+	// returns 409 in the K1 branch); if it does, 409 here as defense in depth.
+	// PasswordMatches already returns false on an empty hash, but that path
+	// would tell the user "you entered the wrong password" and the user would
+	// try forever on a form they can NEVER get through.
+	if existing.PasswordHash == "" {
 		log.Print("federasyon: sifresiz hesap icin baglama denendi")
-		f.cakismaRender(w, b.AuthRequestID, b.Eposta, f.saglayicilar(r.Context(), mevcut.ID))
+		f.renderConflict(w, b.AuthRequestID, b.Email, f.linkedProviders(r.Context(), existing.ID))
 		return
 	}
-	// HESAP BASINA hiz limiti: sifre dogrulamasindan ONCE. IP sayaci
-	// dagitik bir denemeyi (her istek farkli IP) durdurmaz; bu sayac
-	// TEK bir hesaba yonelen denemeleri, kaynaktan ve kullanilan
-	// bekleme kaydindan BAGIMSIZ olarak sinirlar. Yeni bir bekleme
-	// kaydi federasyon turunu tekrarlayarak istenildigi kadar
-	// alinabildigi icin tek basina IP sayaci yeterli DEGILDIR.
-	// hiz nil GECILEBILIR (yalnizca birim testler); uretimde Start her
-	// zaman bir limit kurar ve kurulamazsa HIC BASLAMAZ.
-	if f.hiz != nil && !f.hiz.HesapSayaci(w, r, b.UserID) {
+	// PER-ACCOUNT rate limit: BEFORE the password verification. The IP counter
+	// does not stop a distributed attempt (a different IP per request); this
+	// counter limits attempts aimed at a SINGLE account, INDEPENDENT of the
+	// source and of the pending record used. Since new pending records can be
+	// obtained as often as desired by repeating the federation round, the IP
+	// counter alone is NOT sufficient.
+	// limiter MAY BE nil (unit tests only); in production Start always sets up
+	// a limiter and does NOT START AT ALL if it cannot.
+	if f.limiter != nil && !f.limiter.AllowAccount(w, r, b.UserID) {
 		return
 	}
-	if !mevcut.PasswordMatches(r.FormValue("sifre")) {
-		// Kayit TUKETILMEZ: bir yazim hatasi tum federasyon turunu
-		// bastan yapmayi gerektirmesin. Denemeleri sinirlayan sey hiz
-		// limitleridir (IP basina + yukaridaki hesap basina sayac).
+	if !existing.PasswordMatches(r.FormValue("sifre")) {
+		// The record is NOT CONSUMED: a typo should not force the whole federation
+		// round to be redone. What limits the attempts is the rate limits (per IP
+		// + the per-account counter above).
 		//
-		// Sifre LOGLANMAZ ve hata metni hesabin varligini sizdirmaz:
-		// hataGirisBasarisiz, giris sayfasiyla AYNI tek mesajdir.
-		f.baglamaRender(w, http.StatusUnauthorized, b, beklemeID, hataGirisBasarisiz)
+		// The password is NOT LOGGED and the error text does not leak the
+		// account's existence: msgLoginFailed is the SAME single message as the
+		// login page.
+		f.renderLink(w, http.StatusUnauthorized, b, pendingID, msgLoginFailed)
 		return
 	}
 
-	// Sifre DOGRU: kayit ancak simdi ATOMIK olarak tuketilir (GETDEL).
-	// TEK KULLANIMLIK olmasi, dogru sifre bir kez girildikten sonra ayni
-	// kayitla ikinci bir baglamanin (baska bir auth istegini tamamlamak
-	// dahil) yapilmasini engeller.
-	if _, err := f.durum.BeklemeAl(r.Context(), beklemeID); err != nil {
-		// Yaris: kayit arada tuketilmis. Baglamayi YAPMADAN durulur.
-		oturumRed(w, "baglama", err)
+	// Password CORRECT: only now is the record consumed ATOMICALLY (GETDEL).
+	// Being SINGLE-USE prevents the same record from driving a second link
+	// (including completing another auth request) after the correct password
+	// was entered once.
+	if _, err := f.flows.TakePendingLink(r.Context(), pendingID); err != nil {
+		// Race: the record was consumed in the meantime. We stop WITHOUT linking.
+		rejectSession(w, "baglama", err)
 		return
 	}
 
-	if err := f.federe.Bagla(r.Context(), b.Saglayici, b.Sub, b.UserID); err != nil {
+	if err := f.federated.Link(r.Context(), b.Provider, b.Sub, b.UserID); err != nil {
 		log.Printf("federasyon: kimlik baglanamadi: %v", err)
-		if errors.Is(err, ErrKimlikKullanimda) {
-			// Kimlik arada baska bir hesaba baglanmis ya da bu hesap bu
-			// saglayiciya zaten bagli: sessizce ezmek yerine acikca
-			// durulur.
-			f.cakismaRender(w, b.AuthRequestID, b.Eposta, f.saglayicilar(r.Context(), b.UserID))
+		if errors.Is(err, ErrIdentityInUse) {
+			// The identity was linked to another account in the meantime, or this
+			// account is already linked to this provider: we stop explicitly instead of
+			// silently overwriting.
+			f.renderConflict(w, b.AuthRequestID, b.Email, f.linkedProviders(r.Context(), b.UserID))
 			return
 		}
-		f.hataSayfasi(w, http.StatusInternalServerError, hataSunucu)
+		f.errorPage(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
-	if err := f.istekler.TamamlandiIsaretle(r.Context(), b.AuthRequestID, b.UserID, []string{amrFederasyon}); err != nil {
-		// authRequestID LOGLANMAZ.
+	if err := f.requests.MarkDone(r.Context(), b.AuthRequestID, b.UserID, []string{amrFederation}); err != nil {
+		// authRequestID is NOT LOGGED.
 		log.Printf("federasyon: istek tamamlanamadi: %v", err)
-		// Geri bacagiyla AYNI siniflandirma: 409 / 400 (TTL ile dustu) /
-		// 500. baglamaBeklemeTTL ile istekTTL ust uste bindigi icin bu
-		// bacak da auth istegini GECEBILIR.
-		f.istekTamamlamaHatasi(w, err)
+		// SAME classification as the callback leg: 409 / 400 (dropped by TTL) /
+		// 500. Since pendingLinkTTL and requestTTL overlap, this leg too can
+		// OUTLIVE the auth request.
+		f.writeCompletionError(w, err)
 		return
 	}
-	http.Redirect(w, r, f.geriCagirma(r.Context(), b.AuthRequestID), http.StatusFound)
+	http.Redirect(w, r, f.authCallback(r.Context(), b.AuthRequestID), http.StatusFound)
 }

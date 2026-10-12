@@ -25,7 +25,7 @@ type Storage struct {
 	cfg        *config.AuthConfig
 	users      UserStore
 	tokens     TokenStore
-	requests   *IstekDepo
+	requests   *RequestStore
 	signingKey *SigningKey
 	client     *MobileClient
 
@@ -37,7 +37,7 @@ type Storage struct {
 // Health needs the Postgres/Redis connections they are added later with
 // SetHealthDeps; this way tests can build a Storage without live
 // connections.
-func NewStorage(cfg *config.AuthConfig, users UserStore, tokens TokenStore, requests *IstekDepo, signingKey *SigningKey) *Storage {
+func NewStorage(cfg *config.AuthConfig, users UserStore, tokens TokenStore, requests *RequestStore, signingKey *SigningKey) *Storage {
 	return &Storage{
 		cfg:        cfg,
 		users:      users,
@@ -75,7 +75,7 @@ var _ op.CanSetUserinfoFromRequest = (*Storage)(nil)
 // has not signed in yet at this stage; MarkDone fills it in when the
 // login completes.
 func (s *Storage) CreateAuthRequest(ctx context.Context, authReq *oidc.AuthRequest, userID string) (op.AuthRequest, error) {
-	req, err := s.requests.Olustur(ctx, authReq, userID)
+	req, err := s.requests.Create(ctx, authReq, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -83,19 +83,19 @@ func (s *Storage) CreateAuthRequest(ctx context.Context, authReq *oidc.AuthReque
 }
 
 func (s *Storage) AuthRequestByID(ctx context.Context, id string) (op.AuthRequest, error) {
-	return s.requests.IDileOku(ctx, id)
+	return s.requests.GetByID(ctx, id)
 }
 
 func (s *Storage) AuthRequestByCode(ctx context.Context, code string) (op.AuthRequest, error) {
-	return s.requests.KodlaOku(ctx, code)
+	return s.requests.GetByCode(ctx, code)
 }
 
 func (s *Storage) SaveAuthCode(ctx context.Context, id string, code string) error {
-	return s.requests.KodKaydet(ctx, id, code)
+	return s.requests.SaveCode(ctx, id, code)
 }
 
 func (s *Storage) DeleteAuthRequest(ctx context.Context, id string) error {
-	return s.requests.Sil(ctx, id)
+	return s.requests.Delete(ctx, id)
 }
 
 // clientIDGetter is the common denominator of AuthRequest and

@@ -14,385 +14,383 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/op"
 )
 
-// Federasyon uclarinin yollari. {saglayici} yol degeri YALNIZCA akisi
-// BASLATIRKEN kullanilir; geri donuste saglayici state KAYDINDAN
-// okunur (bkz. Geri).
+// Paths of the federation endpoints. The {saglayici} path value is used ONLY
+// WHEN STARTING the flow; on return the provider is read from the state
+// RECORD (see Callback).
 const (
-	yolFederasyonBaslat = "/federasyon/{saglayici}/baslat"
-	yolFederasyonGeri   = "/federasyon/{saglayici}/geri"
+	pathFederationStart    = "/federasyon/{saglayici}/baslat"
+	pathFederationCallback = "/federasyon/{saglayici}/geri"
 )
 
-// saglayiciYerTutucu, yukaridaki desenlerde saglayici adinin yerini
-// tutan ServeMux yol degeridir.
-const saglayiciYerTutucu = "{saglayici}"
+// providerPlaceholder is the ServeMux path value that stands in for the
+// provider name in the patterns above.
+const providerPlaceholder = "{saglayici}"
 
-// federasyonBaslatYolu, bir saglayicinin baslatma ucunun GERCEK yolunu
-// uretir.
+// federationStartPath builds the REAL path of a provider's start endpoint.
 //
-// NEDEN BU YARDIMCI VAR: giris sayfasindaki buton yolu (bkz.
-// Sayfalar.federasyonButonlari) ile mux'a baglanan uc yolu AYNI olmak
-// zorunda. Ikisi ayri ayri elle kurulurken uc yolunun yeniden
-// adlandirilmasi butonlari sessizce eski yola, yani 404'e birakiyordu.
-// Buton yolu artik ucun KENDI sabitinden turetiliyor: tek dogruluk
-// kaynagi yolFederasyonBaslat'tir. Yardimci tercih edildi (sabiti
-// cagiran yerde elle Replace etmek yerine) cunku yer tutucunun bicimi
-// de boylece tek yerde kaliyor.
-func federasyonBaslatYolu(saglayici string) string {
-	return strings.Replace(yolFederasyonBaslat, saglayiciYerTutucu, saglayici, 1)
+// WHY THIS HELPER EXISTS: the button path on the login page (see
+// Pages.federationButtons) and the endpoint path mounted on the mux MUST be
+// the SAME. When the two were built separately by hand, renaming the
+// endpoint path silently left the buttons on the old path, i.e. a 404. The
+// button path is now derived from the endpoint's OWN constant: the single
+// source of truth is pathFederationStart. A helper was preferred (over
+// calling Replace by hand at the call site) because the placeholder's form
+// also stays in one place that way.
+func federationStartPath(provider string) string {
+	return strings.Replace(pathFederationStart, providerPlaceholder, provider, 1)
 }
 
-// cerezAdFederasyon, federasyon akisini BASLATAN tarayiciya verilen
-// cerezin adidir (K2).
+// cookieNameFederation is the name of the cookie given to the browser that
+// STARTS the federation flow (K2).
 //
-// NEDEN AYRI BIR CEREZ: Apple name/email kapsami istenince yanitini
-// response_mode=form_post ile, yani Apple'in origin'inden BIZE
-// CAPRAZ-SITE bir POST olarak doner. Faz 1'in oturum cerezi
-// (cerezAdOturum) SameSite=Lax'tir ve tarayici onu o POST'ta
-// GONDERMEZ: Faz 1'in baglama kontrolu federasyon donusunde fiilen HIC
-// KOSMAZ. Bu yuzden federasyon akisi SameSite=None olan kendi cerezini
-// kullanir. Oturum cerezi DEGISTIRILMEZ: onu None yapmak Faz 1'in
-// login-CSRF korumasini zayiflatirdi.
-const cerezAdFederasyon = "kimlik_fed"
+// WHY A SEPARATE COOKIE: when Apple is asked for the name/email scope it
+// returns its response with response_mode=form_post, i.e. as a CROSS-SITE
+// POST to US from Apple's origin. Phase 1's session cookie
+// (cookieNameSession) is SameSite=Lax and the browser does NOT SEND it on
+// that POST: Phase 1's binding check effectively NEVER RUNS on the
+// federation return. So the federation flow uses its own cookie with
+// SameSite=None. The session cookie is NOT CHANGED: making it None would
+// weaken Phase 1's login-CSRF protection.
+const cookieNameFederation = "kimlik_fed"
 
-// hataIstekGecersiz, federasyon akisi var olmayan (veya suresi dolmus)
-// bir auth istegi icin baslatilmak istendiginde gosterilir.
-const hataIstekGecersiz = "Giris istegi gecersiz, lutfen uygulamadan tekrar deneyin."
+// msgRequestInvalid is shown when the federation flow is started for an auth
+// request that does not exist (or has expired).
+const msgRequestInvalid = "Giris istegi gecersiz, lutfen uygulamadan tekrar deneyin."
 
-// hataIstekSuresiDoldu, bekleyen auth isteginin TTL ile Redis'ten
-// dusmesi durumunda gosterilir.
+// msgRequestExpired is shown when the pending auth request has dropped out
+// of Redis by TTL.
 //
-// NEDEN AYRI BIR SINIF: istekTTL (10dk) sayaci EN BASTA, /authorize'da
-// baslar ve hicbir yolda uzatilmaz; federasyonDurumTTL ve
-// baglamaBeklemeTTL de 10dk'dir ama SIRALI tuketilir. Yani federasyon
-// zinciri, isaret ettigi auth istegini GECEBILIR: T=9dk50sn'de Baslat
-// gecer (istek VAR), kullanici yukari akista 30 saniye gecirir, T=10dk20sn'de
-// Geri'de TamamlandiIsaretle ErrIstekYok doner. Bu SIRADAN bir
-// suresi-dolmadir; eskiden hataSunucu'ya dusup 500 ureterek gercek
-// sunucu hatalariyla AYNI alarmi caliyordu ve kullaniciya ne oldugunu
-// soylemiyordu. TTL degerleri BILEREK degistirilmedi: istekTTL'i
-// buyutmek bir UX sorunu icin bir guvenlik penceresini genisletmek
-// olurdu.
-const hataIstekSuresiDoldu = "Giris isteginin suresi doldu. Lutfen uygulamaya donup girisi yeniden baslatin."
+// WHY A SEPARATE CLASS: the requestTTL (10 min) counter starts FIRST, at
+// /authorize, and is never extended on any path; federationStateTTL and
+// pendingLinkTTL are also 10 min but are consumed SEQUENTIALLY. So the
+// federation chain can OUTLIVE the auth request it points to: Start passes
+// at T=9m50s (the request EXISTS), the user spends 30 seconds upstream, and
+// at T=10m20s MarkDone returns ErrRequestNotFound in Callback. This is an
+// ORDINARY expiry; it used to fall into msgServerError and produce a 500,
+// raising the SAME alarm as real server errors while not telling the user
+// what happened. The TTL values were DELIBERATELY not changed: extending
+// requestTTL would widen a security window to fix a UX problem.
+const msgRequestExpired = "Giris isteginin suresi doldu. Lutfen uygulamaya donup girisi yeniden baslatin."
 
-// hataEpostaYok, yukari akis e-posta gondermedigi icin yeni hesap
-// acilamadiginda gosterilir (bkz. ErrYukariAkisEpostaYok). Mesaj
-// kullaniciya NE YAPACAGINI soyler; "bir hata olustu" demek kullaniciyi
-// sonsuza kadar ayni butona basmaya birakirdi.
-const hataEpostaYok = "Saglayici e-posta adresinizi bize vermedigi icin yeni bir hesap olusturulamadi. Lutfen e-posta ve sifre ile giris yapin ya da diger giris yontemini kullanin."
+// msgUpstreamNoEmail is shown when a new account cannot be opened because
+// upstream did not send an email (see ErrUpstreamNoEmail). The message tells
+// the user WHAT TO DO; saying "an error occurred" would leave the user
+// pressing the same button forever.
+const msgUpstreamNoEmail = "Saglayici e-posta adresinizi bize vermedigi icin yeni bir hesap olusturulamadi. Lutfen e-posta ve sifre ile giris yapin ya da diger giris yontemini kullanin."
 
-// federasyonZamanAsimi, yukari akisa yapilan HTTP cagrilarinin ust
-// siniri. JetonDegis kendi ic zaman asimini da uygular; bu, istemci
-// seviyesindeki ikinci kemerdir.
-const federasyonZamanAsimi = 15 * time.Second
+// federationHTTPTimeout is the upper bound for HTTP calls made to upstream.
+// ExchangeCode also applies its own internal timeout; this is the second
+// belt at the client level.
+const federationHTTPTimeout = 15 * time.Second
 
-// FedereIstekDepo, federasyon akisinin bekleyen auth istegine ihtiyac
-// duydugu IKI islemi tanimlar: Baslat istegin GERCEKTEN var oldugunu
-// dogrulamak icin okur, Geri ise akis bitince onu kullaniciya baglar.
-// Uretimde *IstekDepo karsilar; testler bellek ici bir karsilikla
-// agsiz koshar.
-type FedereIstekDepo interface {
-	IstekTamamlayici
+// FederationRequestStore defines the TWO operations the federation flow
+// needs on the pending auth request: Start reads to verify the request
+// REALLY exists, Callback binds it to the user when the flow finishes. In
+// production *RequestStore implements it; tests run with an in-memory
+// counterpart, offline.
+type FederationRequestStore interface {
+	RequestCompleter
 
-	// IDileOku, bekleyen auth istegini doner; yoksa ErrIstekYok.
-	IDileOku(ctx context.Context, id string) (*AuthIstek, error)
+	// GetByID returns the pending auth request; ErrRequestNotFound if missing.
+	GetByID(ctx context.Context, id string) (*AuthRequest, error)
 }
 
-// FederasyonDepo, federasyon akisinin Redis yuzeyinin TAMAMIDIR:
-// Gorev 3'un tek kullanimlik state kaydi (DurumDepo) ve bekleyen
-// baglama kaydi (BeklemeDepo, bkz. baglama_sayfa.go). Ikisi de ayni
-// akisin kisa omurlu durumudur ve uretimde ayni *IstekDepo tarafindan
-// karsilanir; ayri ayri kablolamak iki yerde ayri bozulabilen bir
-// kurulum demek olurdu.
-type FederasyonDepo interface {
-	DurumDepo
-	BeklemeDepo
+// FlowStore is the WHOLE Redis surface of the federation flow: Task 3's
+// single-use state record (StateStore) and the pending link record
+// (PendingLinkStore, see link_page.go). Both are short-lived state of the
+// same flow and in production are implemented by the same *RequestStore;
+// wiring them separately would mean a setup that can break in two places
+// independently.
+type FlowStore interface {
+	StateStore
+	PendingLinkStore
 }
 
-// FedereSayfalar, bizim OP'umuzun bir RP olarak Apple/Google'a gidip
-// donen bacaklarini tasir.
+// FederationPages carries the legs where our OP goes to Apple/Google as an
+// RP and comes back.
+// THE SECURITY TRIANGLE (so as not to reopen Phase 1's C1 in federation):
 //
-// GUVENLIK UCGENI (Faz 1'in C1'ini federasyonda yeniden acmamak icin):
+//	state  -> SINGLE-USE (Redis GETDEL, see TakeState); a captured callback
+//	          cannot be replayed a second time.
+//	cookie -> forces the browser that STARTED the flow and the browser that
+//	          COMPLETES it to be the same (K2).
+//	nonce  -> proves the id_token the provider returns was issued for THIS
+//	          flow (see auth.VerifyWithNonce).
 //
-//	state  -> TEK KULLANIMLIK (Redis GETDEL, bkz. DurumAl); yakalanan
-//	          bir callback ikinci kez oynatilamaz.
-//	cerez  -> akisi BASLATAN tarayici ile TAMAMLAYAN tarayicinin ayni
-//	          olmasini zorunlu kilar (K2).
-//	nonce  -> saglayicinin donen id_token'inin BU akis icin verildigini
-//	          kanitlar (bkz. auth.DogrulaNonce).
-//
-// Ucunden biri dusunce akis durur; hicbiri digerinin yerini tutmaz.
-type FedereSayfalar struct {
-	akislar        map[string]*YukariAkis
-	dogrulayicilar map[string]*auth.UpstreamVerifier
-	durum          FederasyonDepo
-	federe         FedereDepo
-	kullanici      UserStore
-	istekler       FedereIstekDepo
-	oturumlar      OturumDepo
-	geriCagirma    func(context.Context, string) string
-	issuer         string
-	cerezGuvenli   bool
+// If any one of the three fails the flow stops; none substitutes for another.
+type FederationPages struct {
+	upstreams    map[string]*Upstream
+	verifiers    map[string]*auth.UpstreamVerifier
+	flows        FlowStore
+	federated    FederatedStore
+	users        UserStore
+	requests     FederationRequestStore
+	sessions     SessionStore
+	authCallback func(context.Context, string) string
+	issuer       string
+	secureCookie bool
 
-	// istemci, yukari akis token ucuna yapilan cagrilarda kullanilir.
-	// Alan olarak tutulur ki testler httptest istemcisini gecirebilsin.
-	istemci *http.Client
+	// httpClient is used for calls to the upstream token endpoint. It is kept
+	// as a field so tests can inject an httptest client.
+	httpClient *http.Client
 
-	// hiz, HESAP BASINA sifre deneme sayaci icin /baglama handler'inda
-	// kullanilir; BaglamaBagla tarafindan kurulur ve nil OLABILIR
-	// (yalnizca birim testler).
-	hiz *HizLimit
+	// limiter is used in the /baglama handler for the PER-ACCOUNT password
+	// attempt counter; it is set by MountLink and MAY BE nil (unit tests only).
+	limiter *RateLimiter
 }
 
-// NewFedereSayfalar, federasyon uclarini kurar.
+// NewFederationPages sets up the federation endpoints.
 //
-// dogrulayicilar, saglayici adindan Gorev 2'nin yukari akis
-// dogrulayicisina esler: id_token'in imzasi, iss'i, aud'u ve nonce'u
-// ORADA dogrulanir, burada yeniden dogrulanmaz.
+// verifiers maps a provider name to Task 2's upstream verifier: the
+// id_token's signature, iss, aud and nonce are verified THERE and not
+// re-verified here.
 //
-// oturumlar, YALNIZCA /baglama sayfasinin Faz 1 ile ayni oturum
-// baglamasini zorunlu kilmasi icindir (bkz. baglama_sayfa.go);
-// federasyon donusu kendi cerezini kullanir.
+// sessions is ONLY so that the /baglama page enforces the same session
+// binding as Phase 1 (see link_page.go); the federation return uses its own
+// cookie.
 //
-// cerezGuvenli, Faz 1 ile ayni kuraldir: issuer https ise true,
-// http:// yerel gelistirmede false (aksi halde tarayici Secure cerezi
-// hic saklamaz ve yerel akis kirilir).
-func NewFedereSayfalar(
-	akislar map[string]*YukariAkis,
-	dogrulayicilar map[string]*auth.UpstreamVerifier,
-	durum FederasyonDepo,
-	federe FedereDepo,
-	kullanici UserStore,
-	istekler FedereIstekDepo,
-	oturumlar OturumDepo,
-	geriCagirma func(context.Context, string) string,
+// cookieSecure follows the same rule as Phase 1: true if the issuer is
+// https, false for http:// local development (otherwise the browser would
+// not store a Secure cookie at all and the local flow would break).
+func NewFederationPages(
+	flows map[string]*Upstream,
+	verifiers map[string]*auth.UpstreamVerifier,
+	flowStore FlowStore,
+	federatedStore FederatedStore,
+	user UserStore,
+	requests FederationRequestStore,
+	sessions SessionStore,
+	authCallback func(context.Context, string) string,
 	issuer string,
-	cerezGuvenli bool,
-) *FedereSayfalar {
-	return &FedereSayfalar{
-		akislar:        akislar,
-		dogrulayicilar: dogrulayicilar,
-		durum:          durum,
-		federe:         federe,
-		kullanici:      kullanici,
-		istekler:       istekler,
-		oturumlar:      oturumlar,
-		geriCagirma:    geriCagirma,
-		issuer:         issuer,
-		cerezGuvenli:   cerezGuvenli,
-		istemci:        &http.Client{Timeout: federasyonZamanAsimi},
+	cookieSecure bool,
+) *FederationPages {
+	return &FederationPages{
+		upstreams:    flows,
+		verifiers:    verifiers,
+		flows:        flowStore,
+		federated:    federatedStore,
+		users:        user,
+		requests:     requests,
+		sessions:     sessions,
+		authCallback: authCallback,
+		issuer:       issuer,
+		secureCookie: cookieSecure,
+		httpClient:   &http.Client{Timeout: federationHTTPTimeout},
 	}
 }
 
-// Bagla, federasyon uclarini mux'a baglar.
+// Mount mounts the federation endpoints on the mux.
 //
-// Geri, issuer aracisiyla SARILIR: geriCagirma (op.AuthCallbackURL)
-// issuer'i istek baglamindan okur, sarmadan baglamak akisi yonlendirme
-// asamasinda kirar. Baslat SARILMAZ: geriCagirma cagirmaz.
+// Callback is WRAPPED with the issuer interceptor: authCallback
+// (op.AuthCallbackURL) reads the issuer from the request context, and
+// mounting it without the wrapper breaks the flow at the redirect stage.
+// Start is NOT wrapped: it does not call authCallback.
 //
-// POST /federasyon/{saglayici}/geri ZORUNLU: Apple name/email kapsami
-// istenince yanitini form_post ile doner (K2).
+// POST /federasyon/{saglayici}/geri is REQUIRED: when Apple is asked for the
+// name/email scope it returns its response with form_post (K2).
 //
-// hiz nil GECILEBILIR ve o zaman hiz limiti UYGULANMAZ; bu yalnizca
-// birim testler icindir (Faz 1'deki Sayfalar.Bagla ile ayni kural).
-func (f *FedereSayfalar) Bagla(mux *http.ServeMux, araci *op.IssuerInterceptor, hiz *HizLimit) {
-	var baslat http.Handler = http.HandlerFunc(f.Baslat)
-	geri := araci.Handler(http.HandlerFunc(f.Geri))
-	if hiz != nil {
-		// Baslat, kimlik dogrulamasiz bir uctur ve her kabul edilen
-		// istek Redis'e bir state kaydi yazar; kendi sayacini hak
-		// ediyor (bkz. HizLimit.FederasyonBaslatSar).
-		baslat = hiz.FederasyonBaslatSar(baslat)
-		geri = hiz.FederasyonGeriSar(geri)
+// limiter MAY BE nil, in which case NO rate limit is APPLIED; this is only
+// for unit tests (same rule as Pages.Mount in Phase 1).
+func (f *FederationPages) Mount(mux *http.ServeMux, interceptor *op.IssuerInterceptor, limiter *RateLimiter) {
+	var start http.Handler = http.HandlerFunc(f.Start)
+	callback := interceptor.Handler(http.HandlerFunc(f.Callback))
+	if limiter != nil {
+		// Start is an unauthenticated endpoint and every accepted request writes a
+		// state record to Redis; it deserves its own counter (see
+		// RateLimiter.WrapFederationStart).
+		start = limiter.WrapFederationStart(start)
+		callback = limiter.WrapFederationCallback(callback)
 	}
-	mux.Handle("GET "+yolFederasyonBaslat, baslat)
-	mux.Handle("GET "+yolFederasyonGeri, geri)
-	mux.Handle("POST "+yolFederasyonGeri, geri)
+	mux.Handle("GET "+pathFederationStart, start)
+	mux.Handle("GET "+pathFederationCallback, callback)
+	mux.Handle("POST "+pathFederationCallback, callback)
 }
 
-// geriURL, saglayiciya verilecek redirect_uri'yi uretir. Saglayici
-// tarafinda ayniyla kayitli olmak zorundadir, bu yuzden issuer'dan
-// deterministik olarak kurulur ve elle string birlestirme yerine
-// url.JoinPath kullanilir.
-func (f *FedereSayfalar) geriURL(saglayici string) string {
-	taban := strings.TrimSuffix(f.issuer, "/")
-	return taban + "/federasyon/" + url.PathEscape(saglayici) + "/geri"
+// upstreamRedirectURI builds the redirect_uri given to the provider. It must
+// be registered IDENTICALLY on the provider side, so it is built
+// deterministically from the issuer and url.JoinPath is used instead of
+// manual string concatenation.
+func (f *FederationPages) upstreamRedirectURI(provider string) string {
+	base := strings.TrimSuffix(f.issuer, "/")
+	return base + "/federasyon/" + url.PathEscape(provider) + "/geri"
 }
 
-// federasyonCerezi: K2. SameSite=None ZORUNLU cunku Apple form_post
-// ile CAPRAZ-SITE POST yapar ve Lax cerez o POST'ta gonderilmez.
-// HttpOnly ve Secure'dan vazgecilmez; Path federasyon altina SINIRLANIR
-// ki oturum cerezinin yuzeyini genisletmesin.
+// federationCookie: K2. SameSite=None is REQUIRED because Apple's form_post
+// makes a CROSS-SITE POST and a Lax cookie is not sent on that POST.
+// HttpOnly and Secure are not given up; Path is RESTRICTED to the federation
+// prefix so it does not widen the session cookie's surface.
 //
-// YEREL GELISTIRME TUZAGI: cerezGuvenli, http:// issuer'da false'tur
-// (bkz. NewFedereSayfalar) ve SameSite=None + Secure OLMAYAN bir cerezi
-// MODERN TARAYICILAR REDDEDER. Yani yerelde bu cerez hic saklanmaz ve
-// geri donus "cerez baglamasi tutmadi" ile 403 verir. Pratikte
-// uretimi etkilemez: Apple ve Google redirect_uri'nin https olmasini
-// zorunlu kilar, yani federasyon akisi yerelde ZATEN elle denenemez.
-// Kod BILEREK degistirilmedi -- Secure'u http'de true yapmak cerezi
-// baska bir sekilde (bu kez her ortamda) kirar; yerelde denemek isteyen
-// kisinin bilmesi gereken sey, bu akisin https bir issuer gerektirdigidir.
-func (f *FedereSayfalar) federasyonCerezi(deger string) *http.Cookie {
+// LOCAL DEVELOPMENT TRAP: cookieSecure is false for an http:// issuer
+// (see NewFederationPages) and MODERN BROWSERS REJECT a cookie that has
+// SameSite=None without Secure. So locally this cookie is never stored and
+// the return gives 403 with "cookie binding did not hold". In practice it
+// does not affect production: Apple and Google require the redirect_uri to
+// be https, so the federation flow cannot be tried by hand locally ANYWAY.
+// The code was DELIBERATELY not changed -- making Secure true on http would
+// break the cookie in another way (this time in every environment); what
+// someone who wants to try it locally needs to know is that this flow
+// requires an https issuer.
+func (f *FederationPages) federationCookie(value string) *http.Cookie {
 	return &http.Cookie{
-		Name:     cerezAdFederasyon,
-		Value:    deger,
+		Name:     cookieNameFederation,
+		Value:    value,
 		Path:     "/federasyon",
 		HttpOnly: true,
-		Secure:   f.cerezGuvenli,
+		Secure:   f.secureCookie,
 		SameSite: http.SameSiteNoneMode,
-		MaxAge:   int(federasyonDurumTTL.Seconds()),
+		MaxAge:   int(federationStateTTL.Seconds()),
 	}
 }
 
-// federasyonCereziSil, kimlik_fed cerezini SILEN cerezi uretir.
+// clearFederationCookie produces the cookie that DELETES the kimlik_fed
+// cookie.
 //
-// Ozniteliklerin yazma anindakiyle birebir ayni olmasi ZORUNLU
-// (ozellikle Path ve SameSite/Secure): tarayici cerezi ad+Path+Domain
-// ucluyle esler ve uyusmayan bir silme cerezi ESKISINI SILMEZ, yanina
-// IKINCI bir cerez yazar. Bu yuzden deger federasyonCerezi'nden
-// turetilir, elle yeniden kurulmaz.
-func (f *FedereSayfalar) federasyonCereziSil() *http.Cookie {
-	c := f.federasyonCerezi("")
-	// MaxAge < 0 "simdi sil" demektir (net/http bunu Max-Age=0 olarak
-	// yazar); MaxAge = 0 ise "oznitelik yok" anlamina gelir ve cerez
-	// oturum cerezi olarak YASAMAYA DEVAM EDER.
+// The attributes MUST match the ones used when writing EXACTLY (especially
+// Path and SameSite/Secure): the browser matches a cookie by the name+Path+
+// Domain triple, and a mismatched deletion cookie does NOT DELETE the OLD
+// one but writes a SECOND cookie next to it. So the value is derived from
+// federationCookie and never rebuilt by hand.
+func (f *FederationPages) clearFederationCookie() *http.Cookie {
+	c := f.federationCookie("")
+	// MaxAge < 0 means "delete now" (net/http writes it as Max-Age=0); MaxAge = 0
+	// means "no attribute" and the cookie CONTINUES TO LIVE as a session cookie.
 	c.MaxAge = -1
 	return c
 }
 
-// hataSayfasi, federasyon akisindaki hatalari tek bicimli yazar. Metin
-// SINIF bilgisi tasir, deger tasimaz: hangi kontrolun (state / cerez /
-// nonce / imza) tutmadigini ayirmak saldirgana yol gosterir.
-func (f *FedereSayfalar) hataSayfasi(w http.ResponseWriter, kod int, metin string) {
-	http.Error(w, metin, kod)
+// errorPage writes federation flow errors in a single uniform shape. The
+// text carries the CLASS, not the value: telling which check (state /
+// cookie / nonce / signature) failed would guide an attacker.
+func (f *FederationPages) errorPage(w http.ResponseWriter, status int, text string) {
+	http.Error(w, text, status)
 }
 
-// istekTamamlamaHatasi, TamamlandiIsaretle'nin hatasini UC SINIFA ayirir
-// ve tek bicimli yaniti yazar. Iki bacakta da (Geri ve baglamaPost) ayni
-// siniflandirma kullanilir; eskiden yalnizca ErrIstekZatenTamamlandi
-// ayriliyordu ve geri kalan HER SEY, siradan bir suresi-dolma dahil,
-// 500 uretiyordu.
+// writeCompletionError splits MarkDone's error into THREE CLASSES and writes
+// the uniform response. The same classification is used on both legs
+// (Callback and linkPost); previously only ErrRequestAlreadyCompleted was
+// separated and EVERYTHING else, including an ordinary expiry, produced 500.
 //
-//	ErrIstekZatenTamamlandi -> 409: istek baska bir kimlige bagli,
-//	                           Subject EZILMEZ.
-//	ErrIstekYok             -> 400: kayit TTL ile dustu. Kullaniciya ne
-//	                           oldugu ve ne yapacagi soylenir.
-//	digerleri               -> 500: GERCEK sunucu hatasi. Suresi-dolmayi
-//	                           buradan cikarmak, gercek olaylarin
-//	                           gurultuye gommesini de onler.
+//	ErrRequestAlreadyCompleted -> 409: the request is bound to another
+//	                              identity, Subject is NOT OVERWRITTEN.
+//	ErrRequestNotFound         -> 400: the record dropped by TTL. The user
+//	                              is told what happened and what to do.
+//	others                     -> 500: a REAL server error. Keeping expiry
+//	                              out of here also prevents real incidents
+//	                              from drowning in noise.
 //
-// Bu ayrim GUVENLIK REDLERINI KAPSAMAZ: capraz-site reddi, cerez
-// eslesmemesi, oturum baglamasi ve CSRF 403 + GENEL mesajda KALIR
-// (saldirgana hangi kontrolun caldigini soylemek istemiyoruz). Burada
-// 400'e giden tek sinif "kayit TTL ile dustu"dur.
-func (f *FedereSayfalar) istekTamamlamaHatasi(w http.ResponseWriter, err error) {
+// This split does NOT COVER SECURITY REJECTIONS: the cross-site rejection,
+// cookie mismatch, session binding and CSRF stay 403 + a GENERIC message
+// (we do not want to tell the attacker which check fired). The only class
+// that goes to 400 here is "the record dropped by TTL".
+func (f *FederationPages) writeCompletionError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, ErrIstekZatenTamamlandi):
-		f.hataSayfasi(w, http.StatusConflict, hataIstekBagli)
-	case errors.Is(err, ErrIstekYok):
-		f.hataSayfasi(w, http.StatusBadRequest, hataIstekSuresiDoldu)
+	case errors.Is(err, ErrRequestAlreadyCompleted):
+		f.errorPage(w, http.StatusConflict, msgRequestAlreadyUsed)
+	case errors.Is(err, ErrRequestNotFound):
+		f.errorPage(w, http.StatusBadRequest, msgRequestExpired)
 	default:
-		f.hataSayfasi(w, http.StatusInternalServerError, hataSunucu)
+		f.errorPage(w, http.StatusInternalServerError, msgServerError)
 	}
 }
 
-// Baslat, federasyon akisini baslatir: state/nonce/PKCE dogrulayicisi
-// uretir, akisi BASLATAN tarayiciya cerez verir ve kullaniciyi yukari
-// akisin authorize adresine yonlendirir.
+// Start starts the federation flow: it generates the state/nonce/PKCE
+// verifier, gives the browser that STARTS the flow a cookie, and redirects
+// the user to the upstream authorize address.
 //
-// BU BACAK K3'TEN MUAF DEGILDIR. Muafiyet YALNIZCA geri donus ucuna
-// aittir (bkz. Geri): orada donus TANIM GEREGI capraz-sitedir. Baslat
-// ise /giris sayfasindaki butondan gelen AYNI SITE ust-duzey bir
-// GET'tir, yani Faz 1'in iki korumasi burada oldugu gibi gecerlidir ve
-// ikisi de ZORUNLUDUR:
+// THIS LEG IS NOT EXEMPT FROM K3. The exemption belongs ONLY to the return
+// endpoint (see Callback): there the return is cross-site BY DEFINITION.
+// Start, on the other hand, is a SAME-SITE top-level GET coming from the
+// button on the /giris page, so both of Phase 1's protections apply here as
+// they do there, and both are REQUIRED:
 //
-//  1. OTURUM BAGLAMASI (oturumBaglamaDogrula): authRequestID tek basina
-//     yetki girdisi DEGILDIR. Baglama olmadan, canli bir
-//     authRequestID'yi ogrenen biri federasyon bacagini KENDI
-//     tarayicisinda kosturup Geri'de istegi KENDI hesabina
-//     tamamlayabilir; kurbanin uygulamasi saldirganin hesabina ait
-//     jetonlari alir. kimlik_fed cerezi baslat ile geri'yi birbirine
-//     baglar ama hicbirini /authorize'i BASLATAN tarayiciya baglamaz;
-//     bunu yapan tek sey Faz 1'in kimlik_oturum baglamasidir.
+//  1. SESSION BINDING (verifySessionBinding): authRequestID alone is NOT an
+//     authorization input. Without the binding, someone who learns a live
+//     authRequestID could run the federation leg in THEIR OWN browser and
+//     complete the request to THEIR OWN account at Callback; the victim's
+//     app would receive tokens belonging to the attacker's account. The
+//     kimlik_fed cookie ties start and callback together but ties neither
+//     to the browser that STARTED /authorize; the only thing that does is
+//     Phase 1's kimlik_oturum binding.
 //
-//  2. CAPRAZ-SITE REDDI (caprazSiteIstek): AuthorizeSar, /authorize'a
-//     CAPRAZ-SITEDEN gelindiginde baglamayi BILEREK KURMAZ ve guvendigi
-//     degismez sudur: "auth istegi olusur ama hicbir tarayici ona bagli
-//     olmadigi icin GET /giris 403 doner ve istek TAMAMLANAMAZ".
-//     Baslat'ta baglama aranmasi bu degismezi zaten korur; capraz-site
-//     reddi ikinci kemerdir ve niyeti okunur kilar.
+//  2. CROSS-SITE REJECTION (isCrossSite): when /authorize is reached FROM A
+//     CROSS-SITE ORIGIN, WrapAuthorize DELIBERATELY does NOT set the binding,
+//     and the invariant it relies on is: "the auth request is created but
+//     no browser is bound to it, so GET /giris returns 403 and the request
+//     CANNOT BE COMPLETED". Requiring a binding in Start already preserves
+//     this invariant; the cross-site rejection is the second belt and makes
+//     the intent readable.
 //
-// Mesru akis etkilenmez: kimlik_oturum SameSite=Lax'tir ve /giris'ten
-// gelen ayni-site ust-duzey GET'te TASINIR.
-func (f *FedereSayfalar) Baslat(w http.ResponseWriter, r *http.Request) {
-	akis, ok := f.akislar[r.PathValue("saglayici")]
+// The legitimate flow is unaffected: kimlik_oturum is SameSite=Lax and is
+// SENT on the same-site top-level GET coming from /giris.
+func (f *FederationPages) Start(w http.ResponseWriter, r *http.Request) {
+	flow, ok := f.upstreams[r.PathValue("saglayici")]
 	if !ok {
-		// Yapilandirilmamis bir saglayicinin butonu hic gorunmez, yani
-		// buraya normalde gelinmez; gelinirse 404, "500" degil.
+		// The button of an unconfigured provider is never visible, so normally we
+		// do not get here; if we do, 404, not "500".
 		http.NotFound(w, r)
 		return
 	}
 	id := r.URL.Query().Get("authRequestID")
 	if id == "" {
-		f.hataSayfasi(w, http.StatusBadRequest, hataIstekGecersiz)
+		f.errorPage(w, http.StatusBadRequest, msgRequestInvalid)
 		return
 	}
-	if caprazSiteIstek(r) {
-		// authRequestID ve cerez degeri LOGLANMAZ.
+	if isCrossSite(r) {
+		// authRequestID and the cookie value are NOT LOGGED.
 		log.Print("federasyon: capraz-site baslatma reddedildi")
-		f.hataSayfasi(w, http.StatusForbidden, hataOturum)
+		f.errorPage(w, http.StatusForbidden, msgSessionInvalid)
 		return
 	}
-	// Baglama TALEP edilir, MINTLENMEZ (Faz 1'in girisGet kurali): yeni
-	// bir baglama kurmak, saldirganin kendi tarayicisinda baglama alip
-	// linki kurbana yollamasina izin verirdi.
-	if _, err := oturumBaglamaDogrula(r.Context(), f.oturumlar, r, id); err != nil {
-		oturumRed(w, "federasyon-baslat", err)
+	// A binding is REQUIRED, NOT MINTED (Phase 1's loginGet rule): minting a
+	// new binding would let an attacker obtain a binding in their own browser
+	// and send the link to the victim.
+	if _, err := verifySessionBinding(r.Context(), f.sessions, r, id); err != nil {
+		rejectSession(w, "federasyon-baslat", err)
 		return
 	}
-	// Istek GERCEKTEN var olmali: var olmayan bir id ile yukari akisa
-	// gitmek, donuste tamamlanacak hicbir sey olmadigi icin kullaniciyi
-	// anlamsiz bir hataya goturur.
-	if _, err := f.istekler.IDileOku(r.Context(), id); err != nil {
-		// authRequestID LOGLANMAZ (Faz 1'in kurali): TamamlandiIsaretle
-		// ile birlesince bekleyen bir istegi belirli bir kullaniciya
-		// baglayan kisa omurlu bir yetki jetonu gibi davranir.
+	// The request must REALLY exist: going upstream with a nonexistent id would
+	// take the user to a meaningless error, since there is nothing to complete
+	// on return.
+	if _, err := f.requests.GetByID(r.Context(), id); err != nil {
+		// authRequestID is NOT LOGGED (Phase 1's rule): combined with MarkDone it
+		// acts like a short-lived authorization token that binds a pending request
+		// to a specific user.
 		log.Printf("federasyon: baslatma istegi gecersiz: %v", err)
-		f.hataSayfasi(w, http.StatusBadRequest, hataIstekGecersiz)
+		f.errorPage(w, http.StatusBadRequest, msgRequestInvalid)
 		return
 	}
 
-	state, err := rasgeleJeton()
-	nonce, err2 := rasgeleJeton()
-	cerezDeger, err3 := rasgeleJeton()
-	dogrulayici, _, err4 := kodDogrulayiciUret()
-	// HATALAR YUTULMAZ: zayif/bos bir state, nonce veya cerez degeri
-	// korumayi fiilen kaldirir.
+	state, err := randomToken()
+	nonce, err2 := randomToken()
+	cookieValue, err3 := randomToken()
+	verifier, _, err4 := generateCodeVerifier()
+	// ERRORS ARE NOT SWALLOWED: a weak/empty state, nonce or cookie value
+	// effectively removes the protection.
 	if err != nil || err2 != nil || err3 != nil || err4 != nil {
 		log.Print("federasyon: rasgele deger uretilemedi")
-		f.hataSayfasi(w, http.StatusInternalServerError, hataSunucu)
+		f.errorPage(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 
-	if err := f.durum.DurumYaz(r.Context(), state, FedereDurum{
-		AuthRequestID:  id,
-		Nonce:          nonce,
-		Saglayici:      akis.Ad,
-		Cerez:          cerezDeger,
-		KodDogrulayici: dogrulayici,
+	if err := f.flows.WriteState(r.Context(), state, FederationState{
+		AuthRequestID: id,
+		Nonce:         nonce,
+		Provider:      flow.Name,
+		Cookie:        cookieValue,
+		CodeVerifier:  verifier,
 	}); err != nil {
-		// state, nonce, cerez ve dogrulayici LOGLANMAZ.
+		// state, nonce, cookie and verifier are NOT LOGGED.
 		log.Printf("federasyon: durum kaydi yazilamadi: %v", err)
-		f.hataSayfasi(w, http.StatusInternalServerError, hataSunucu)
+		f.errorPage(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
-	http.SetCookie(w, f.federasyonCerezi(cerezDeger))
-	http.Redirect(w, r, akis.AuthorizeURL(state, nonce, dogrulayici, f.geriURL(akis.Ad)), http.StatusFound)
+	http.SetCookie(w, f.federationCookie(cookieValue))
+	http.Redirect(w, r, flow.AuthorizeURL(state, nonce, verifier, f.upstreamRedirectURI(flow.Name)), http.StatusFound)
 }
 
-// stateVeKod, geri donusteki state ve code degerlerini okur: GET'te
-// query'den, POST'ta (Apple form_post) govdeden.
-func (f *FedereSayfalar) stateVeKod(r *http.Request) (string, string) {
+// stateAndCode reads the state and code values on return: from the query on
+// GET, from the body on POST (Apple form_post).
+func (f *FederationPages) stateAndCode(r *http.Request) (string, string) {
 	if r.Method == http.MethodPost {
 		if err := r.ParseForm(); err != nil {
 			return "", ""
@@ -403,117 +401,113 @@ func (f *FedereSayfalar) stateVeKod(r *http.Request) (string, string) {
 	return q.Get("state"), q.Get("code")
 }
 
-// Geri, yukari akistan donen kullaniciyi karsilar.
+// Callback receives the user returning from upstream.
 //
-// K3: caprazSiteIstek guard'i BURAYA UYGULANMAZ. Apple'in form_post
-// donusu TANIM GEREGI capraz-sitedir (Sec-Fetch-Site: cross-site) ve
-// guard'i burada kosturmak Apple girisini tumden kirar. Guard'in yerini
-// state (tek kullanimlik) + cerez (K2) + nonce ucgeni alir; UCU DE
-// zorunludur. Bu muafiyet YALNIZCA bu uca aittir: /authorize ve
-// /giris bacaklarinda guard yerinde kalir.
-func (f *FedereSayfalar) Geri(w http.ResponseWriter, r *http.Request) {
-	state, kod := f.stateVeKod(r)
-	// DurumAl GETDEL'dir: kayit TEK KULLANIMLIK. Yakalanan bir callback
-	// (adres cubugu, log, proxy) ikinci kez oynatilamaz.
-	d, err := f.durum.DurumAl(r.Context(), state)
+// K3: the isCrossSite guard is NOT APPLIED HERE. Apple's form_post return
+// is cross-site (Sec-Fetch-Site: cross-site) BY DEFINITION, and running the
+// guard here would break Apple sign-in entirely. The guard's place is taken
+// by the state (single-use) + cookie (K2) + nonce triangle; ALL THREE are
+// REQUIRED. This exemption belongs ONLY to this endpoint: the guard stays in
+// place on the /authorize and /giris legs.
+func (f *FederationPages) Callback(w http.ResponseWriter, r *http.Request) {
+	state, code := f.stateAndCode(r)
+	// TakeState is GETDEL: the record is SINGLE-USE. A captured callback
+	// (address bar, log, proxy) cannot be replayed a second time.
+	d, err := f.flows.TakeState(r.Context(), state)
 	if err != nil {
-		// state LOGLANMAZ; yalnizca hata sinifi.
+		// state is NOT LOGGED; only the error class is.
 		log.Printf("federasyon: durum dogrulanamadi: %v", err)
-		f.hataSayfasi(w, http.StatusForbidden, hataOturum)
+		f.errorPage(w, http.StatusForbidden, msgSessionInvalid)
 		return
 	}
 
-	cerez, cerezHata := r.Cookie(cerezAdFederasyon)
-	if cerezHata != nil || subtle.ConstantTimeCompare([]byte(cerez.Value), []byte(d.Cerez)) != 1 {
-		// Bu dal, BASKA bir tarayicida baslatilmis bir akisin bu
-		// tarayicida tamamlanmasini engeller (hesap devralma):
-		// saldirgan kendi yetkilendirmesinden aldigi gecerli bir
-		// state+code ciftini kurbanin tarayicisinda acsa bile cerez
-		// kurbanin tarayicisinda YOKTUR.
+	cookie, cookieErr := r.Cookie(cookieNameFederation)
+	if cookieErr != nil || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(d.Cookie)) != 1 {
+		// This branch prevents a flow started in ANOTHER browser from being
+		// completed in this browser (account takeover): even if an attacker opens
+		// a valid state+code pair obtained from their own authorization in the
+		// victim's browser, the cookie is NOT in the victim's browser.
 		log.Print("federasyon: cerez baglamasi tutmadi")
-		f.hataSayfasi(w, http.StatusForbidden, hataOturum)
+		f.errorPage(w, http.StatusForbidden, msgSessionInvalid)
 		return
 	}
 
-	// Saglayici YOLDAN DEGIL KAYITTAN okunur: aksi halde saldirgan
-	// Google'da baslatilmis bir akisi /federasyon/apple/geri'ye getirip
-	// token ucu, PKCE dogrulayicisi ve id_token dogrulayicisi secimini
-	// karistirabilirdi.
-	akis, akisVar := f.akislar[d.Saglayici]
-	dogrulayici, dogrulayiciVar := f.dogrulayicilar[d.Saglayici]
-	if !akisVar || !dogrulayiciVar {
-		// Kayit yazildiktan sonra saglayici yapilandirmadan cikarilmis
-		// olabilir (yeniden dagitim). Saglayici adi SABIT bir kume
-		// oldugu icin loglanabilir.
-		log.Printf("federasyon: kayitli saglayici artik yapilandirilmamis (%s)", d.Saglayici)
-		f.hataSayfasi(w, http.StatusInternalServerError, hataSunucu)
+	// The provider is read from the RECORD, NOT THE PATH: otherwise an attacker
+	// could bring a flow started at Google to /federasyon/apple/geri and mix up
+	// the choice of token endpoint, PKCE verifier and id_token verifier.
+	flow, flowExists := f.upstreams[d.Provider]
+	verifier, verifierExists := f.verifiers[d.Provider]
+	if !flowExists || !verifierExists {
+		// The provider may have been removed from the configuration after the record
+		// was written (redeploy). Since provider names are a FIXED set, it is safe
+		// to log.
+		log.Printf("federasyon: kayitli saglayici artik yapilandirilmamis (%s)", d.Provider)
+		f.errorPage(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
-	if kod == "" {
-		// Kullanici saglayicida vazgecmis ya da saglayici hata
-		// dondurmus olabilir; degisilecek bir kod yok.
+	if code == "" {
+		// The user may have declined at the provider, or the provider may have
+		// returned an error; there is no code to exchange.
 		log.Print("federasyon: donuste yetkilendirme kodu yok")
-		f.hataSayfasi(w, http.StatusBadRequest, hataIstekGecersiz)
+		f.errorPage(w, http.StatusBadRequest, msgRequestInvalid)
 		return
 	}
 
-	idToken, err := akis.JetonDegis(r.Context(), f.istemci, kod, d.KodDogrulayici, f.geriURL(akis.Ad))
+	idToken, err := flow.ExchangeCode(r.Context(), f.httpClient, code, d.CodeVerifier, f.upstreamRedirectURI(flow.Name))
 	if err != nil {
-		// Hata metninde kod, client_secret veya yanit govdesi GECMEZ
-		// (bkz. JetonDegis).
+		// The code, client_secret or response body does NOT appear in the error
+		// text (see ExchangeCode).
 		log.Printf("federasyon: kod degisimi basarisiz: %v", err)
-		f.hataSayfasi(w, http.StatusForbidden, hataOturum)
+		f.errorPage(w, http.StatusForbidden, msgSessionInvalid)
 		return
 	}
-	// Imza (RS256), iss, aud, expiry, sub ve NONCE burada dogrulanir;
-	// bu dosya hicbirini yeniden dogrulamaz.
-	iddia, err := dogrulayici.VerifyWithNonce(idToken, d.Nonce)
+	// The signature (RS256), iss, aud, expiry, sub and NONCE are verified here;
+	// this file does not re-verify any of them.
+	claims, err := verifier.VerifyWithNonce(idToken, d.Nonce)
 	if err != nil {
-		// err icinde id_token GECMEZ (bkz. auth.DogrulaNonce).
+		// The id_token does NOT appear in err (see auth.VerifyWithNonce).
 		log.Printf("federasyon: id_token dogrulanamadi: %v", err)
-		f.hataSayfasi(w, http.StatusForbidden, hataOturum)
+		f.errorPage(w, http.StatusForbidden, msgSessionInvalid)
 		return
 	}
 
-	// kullaniciCoz UC deger doner: kullanici, cakisma, hata. Cakisma nil
-	// DEGILSE giris YAPILMAZ -- baglama ya da 409 sayfasina gidilir.
-	ku, cakisma, err := f.kullaniciCoz(r.Context(), akis.Ad, iddia)
+	// resolveUser returns THREE values: user, conflict, err. If conflict is NOT
+	// nil, NO login happens -- we go to the link or 409 page.
+	user, conflict, err := f.resolveUser(r.Context(), flow.Name, claims)
 	if err != nil {
-		// E-posta ve sub LOGLANMAZ.
+		// Email and sub are NOT LOGGED.
 		log.Printf("federasyon: kullanici cozulemedi: %v", err)
-		// Yukari akis e-posta gondermemesi bir SUNUCU hatasi degildir ve
-		// bos e-posta gosteren 409 cakisma sayfasina da gitmez: kullanici
-		// ne oldugunu ve ne yapacagini okumali (bkz.
-		// ErrYukariAkisEpostaYok).
-		if errors.Is(err, ErrYukariAkisEpostaYok) {
-			f.hataSayfasi(w, http.StatusBadRequest, hataEpostaYok)
+		// Upstream not sending an email is NOT a SERVER error and does not go to the
+		// 409 conflict page showing an empty email either: the user must read what
+		// happened and what to do (see ErrUpstreamNoEmail).
+		if errors.Is(err, ErrUpstreamNoEmail) {
+			f.errorPage(w, http.StatusBadRequest, msgUpstreamNoEmail)
 			return
 		}
-		f.hataSayfasi(w, http.StatusInternalServerError, hataSunucu)
+		f.errorPage(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
-	if cakisma != nil {
-		f.cakismaYonlendir(w, r, d.AuthRequestID, cakisma)
+	if conflict != nil {
+		f.handleConflict(w, r, d.AuthRequestID, conflict)
 		return
 	}
 
-	if err := f.istekler.TamamlandiIsaretle(r.Context(), d.AuthRequestID, ku.ID, []string{amrFederasyon}); err != nil {
-		// authRequestID LOGLANMAZ.
+	if err := f.requests.MarkDone(r.Context(), d.AuthRequestID, user.ID, []string{amrFederation}); err != nil {
+		// authRequestID is NOT LOGGED.
 		log.Printf("federasyon: istek tamamlanamadi: %v", err)
-		// Siniflandirma istekTamamlamaHatasi'nda: 409 (baska kimlige
-		// bagli, Subject EZILMEZ), 400 (TTL ile dustu) ve 500 (gercek
-		// sunucu hatasi) birbirinden AYRI.
-		f.istekTamamlamaHatasi(w, err)
+		// The classification is in writeCompletionError: 409 (bound to another
+		// identity, Subject NOT OVERWRITTEN), 400 (dropped by TTL) and 500 (real
+		// server error) are SEPARATE.
+		f.writeCompletionError(w, err)
 		return
 	}
-	// HIJYEN: akis bitti, kimlik_fed cerezinin tarayicida kalmasi icin
-	// bir neden yok. Bu bir GUVENLIK duzeltmesi DEGIL -- guvenlik
-	// dayanagi state kaydinin GETDEL ile tek kullanimlik olmasidir
-	// (bkz. DurumAl), yani geride kalan cerez tek basina hicbir akisi
-	// yeniden oynatamaz. Silme cerezinin Name/Path/Secure/SameSite
-	// ozniteliklerinin yazma anindakiyle AYNI olmasi ZORUNLU: aksi
-	// halde tarayici silmeyi hic uygulamaz, bu yuzden ayni yapici
-	// (federasyonCerezi) kullanilir.
-	http.SetCookie(w, f.federasyonCereziSil())
-	http.Redirect(w, r, f.geriCagirma(r.Context(), d.AuthRequestID), http.StatusFound)
+	// HYGIENE: the flow is over, and there is no reason for the kimlik_fed
+	// cookie to stay in the browser. This is NOT a security fix -- the security
+	// basis is that the state record is single-use via GETDEL, so a leftover
+	// cookie alone cannot replay any flow. The deletion cookie's
+	// Name/Path/Secure/SameSite attributes MUST be the SAME as when written:
+	// otherwise the browser would not apply the deletion at all, which is why
+	// the same constructor (federationCookie) is used.
+	http.SetCookie(w, f.clearFederationCookie())
+	http.Redirect(w, r, f.authCallback(r.Context(), d.AuthRequestID), http.StatusFound)
 }

@@ -115,7 +115,7 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 
 	userStore := NewPostgresUserStore(pool)
 	tokenStore := NewPostgresTokenStore(pool, rdb)
-	requestStore := NewIstekDepo(rdb)
+	requestStore := NewRequestStore(rdb)
 
 	storage := NewStorage(cfg, userStore, tokenStore, requestStore, signingKey)
 	storage.SetHealthDeps(pool, rdb)
@@ -176,17 +176,17 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 		return nil, err
 	}
 
-	federatedStore := NewPostgresFedereDepo(pool)
+	federatedStore := NewPostgresFederatedStore(pool)
 
 	// Rate limit: for POST /giris and POST /kayit. If it cannot be set up
 	// Start RETURNS AN ERROR (fail-closed): coming up with a login endpoint
 	// that has no limit means both unlimited brute force and a CPU DoS
 	// surface that also takes down the main API. See ratelimit.go.
-	rateLimiter, err := NewHizLimit(rdb, HizLimitAyar{
-		GirisIPPerMin:      cfg.LoginIPPerMin,
-		GirisEpostaPerSaat: cfg.LoginEmailPerHour,
-		KayitIPPerSaat:     cfg.SignupIPPerHour,
-		GuvenilenProxy:     cfg.TrustedProxies,
+	rateLimiter, err := NewRateLimiter(rdb, RateLimitConfig{
+		LoginIPPerMin:     cfg.LoginIPPerMin,
+		LoginEmailPerHour: cfg.LoginEmailPerHour,
+		SignupIPPerHour:   cfg.SignupIPPerHour,
+		TrustedProxies:    cfg.TrustedProxies,
 	}, cryptoKey[:])
 	if err != nil {
 		cancelFed()
@@ -290,7 +290,7 @@ func validateConfig(cfg *config.AuthConfig) error {
 	// discovered the moment the user tries to sign in with Apple (Phase 1's
 	// "silent zero" class of problem is not repeated here).
 	for _, f := range cfg.Federation {
-		if f.Name == saglayiciApple {
+		if f.Name == providerApple {
 			if f.AppleTeamID == "" || f.AppleKeyID == "" || f.AppleKeyP8 == "" {
 				return fmt.Errorf("apple federasyonu yapilandirmasi eksik: AUTH_FED_APPLE_TEAM_ID, AUTH_FED_APPLE_KEY_ID ve AUTH_FED_APPLE_KEY_P8 ucu de zorunlu")
 			}
@@ -308,7 +308,7 @@ func validateConfig(cfg *config.AuthConfig) error {
 			// here would mean two places drifting apart separately. The
 			// produced secret is DISCARDED; all we are after is the error
 			// itself.
-			if _, err := appleIstemciSir(f.AppleTeamID, f.AppleKeyID, f.ClientID, f.AppleKeyP8, time.Now()); err != nil {
+			if _, err := appleClientSecret(f.AppleTeamID, f.AppleKeyID, f.ClientID, f.AppleKeyP8, time.Now()); err != nil {
 				// The wrapped errors do not carry the key CONTENT (see
 				// appleClientSecret): only the error class and the key type.
 				// The message tells the operator WHAT to do.
@@ -326,7 +326,7 @@ func validateConfig(cfg *config.AuthConfig) error {
 		// if client_id is empty too, the provider NEVER enters the list in
 		// buildFederationClients (see the silent-zero rule there) and that is
 		// NOT an error, it means "federation off".
-		if f.Name == saglayiciGoogle && f.ClientSecret == "" {
+		if f.Name == providerGoogle && f.ClientSecret == "" {
 			return fmt.Errorf("google federasyonu yapilandirmasi eksik: AUTH_FED_GOOGLE_CLIENT_ID verildiyse AUTH_FED_GOOGLE_CLIENT_SECRET de zorunlu (bos iken token degisimi 401 invalid_client ile duser)")
 		}
 	}
@@ -341,26 +341,26 @@ func validateConfig(cfg *config.AuthConfig) error {
 // leaving the addresses to an environment variable would mean being able
 // to come up with a misconfigured issuer/JWKS pair (that is, trusting some
 // other party).
-var upstreamDefaults = map[string]YukariAkis{
-	saglayiciGoogle: {
-		Ad:           saglayiciGoogle,
+var upstreamDefaults = map[string]Upstream{
+	providerGoogle: {
+		Name:         providerGoogle,
 		Issuer:       "https://accounts.google.com",
 		AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth",
 		TokenURL:     "https://oauth2.googleapis.com/token",
 		JWKSURL:      "https://www.googleapis.com/oauth2/v3/certs",
-		Kapsamlar:    []string{"openid", "email", "profile"},
-		PKCEDestekli: true,
+		Scopes:       []string{"openid", "email", "profile"},
+		SupportsPKCE: true,
 		FormPost:     false,
 	},
-	saglayiciApple: {
-		Ad:        saglayiciApple,
-		Issuer:    "https://appleid.apple.com",
-		AuthURL:   "https://appleid.apple.com/auth/authorize",
-		TokenURL:  "https://appleid.apple.com/auth/token",
-		JWKSURL:   "https://appleid.apple.com/auth/keys",
-		Kapsamlar: []string{"openid", "email", "name"},
+	providerApple: {
+		Name:     providerApple,
+		Issuer:   "https://appleid.apple.com",
+		AuthURL:  "https://appleid.apple.com/auth/authorize",
+		TokenURL: "https://appleid.apple.com/auth/token",
+		JWKSURL:  "https://appleid.apple.com/auth/keys",
+		Scopes:   []string{"openid", "email", "name"},
 		// K4: Apple's PKCE support is not documented.
-		PKCEDestekli: false,
+		SupportsPKCE: false,
 		// When name/email is requested Apple returns with form_post (see K2).
 		FormPost: true,
 	},
@@ -377,11 +377,11 @@ var upstreamDefaults = map[string]YukariAkis{
 // the CALLER's ctx tied to the server lifetime (see Start).
 func setupFederation(
 	ctx context.Context, cfg *config.AuthConfig,
-) (map[string]*YukariAkis, map[string]*auth.UpstreamVerifier, error) {
+) (map[string]*Upstream, map[string]*auth.UpstreamVerifier, error) {
 	if len(cfg.Federation) == 0 {
 		return nil, nil, nil
 	}
-	upstreams := make(map[string]*YukariAkis, len(cfg.Federation))
+	upstreams := make(map[string]*Upstream, len(cfg.Federation))
 	verifiers := make(map[string]*auth.UpstreamVerifier, len(cfg.Federation))
 	// A half-built set is not left behind: on the first error the verifiers
 	// opened so far are closed.
@@ -394,18 +394,18 @@ func setupFederation(
 		defaults, ok := upstreamDefaults[f.Name]
 		if !ok {
 			cleanup()
-			return nil, nil, fmt.Errorf("bilinmeyen federasyon saglayicisi: %q (desteklenenler: %s, %s)", f.Name, saglayiciApple, saglayiciGoogle)
+			return nil, nil, fmt.Errorf("bilinmeyen federasyon saglayicisi: %q (desteklenenler: %s, %s)", f.Name, providerApple, providerGoogle)
 		}
 		upstream := defaults // copy: the fixed table is NOT MODIFIED
-		upstream.IstemciID = f.ClientID
-		upstream.IstemciSir = f.ClientSecret
-		upstream.AppleEkipID = f.AppleTeamID
-		upstream.AppleAnahtarID = f.AppleKeyID
-		upstream.AppleAnahtarP8 = f.AppleKeyP8
+		upstream.ClientID = f.ClientID
+		upstream.ClientSecret = f.ClientSecret
+		upstream.AppleTeamID = f.AppleTeamID
+		upstream.AppleKeyID = f.AppleKeyID
+		upstream.AppleKeyP8 = f.AppleKeyP8
 
 		// audience = OUR client ID: an id_token that the provider issued for
 		// another application must not be accepted by us.
-		verifier, err := auth.NewUpstreamVerifier(ctx, upstream.JWKSURL, upstream.Issuer, upstream.IstemciID)
+		verifier, err := auth.NewUpstreamVerifier(ctx, upstream.JWKSURL, upstream.Issuer, upstream.ClientID)
 		if err != nil {
 			cleanup()
 			return nil, nil, fmt.Errorf("%s dogrulayicisi kurulamadi: %w", f.Name, err)
@@ -435,13 +435,13 @@ func setupFederation(
 func buildMux(
 	provider *op.Provider,
 	userStore UserStore,
-	requestStore *IstekDepo,
-	federatedStore FedereDepo,
-	upstreams map[string]*YukariAkis,
+	requestStore *RequestStore,
+	federatedStore FederatedStore,
+	upstreams map[string]*Upstream,
 	verifiers map[string]*auth.UpstreamVerifier,
 	issuer string,
 	secureCookie bool,
-	rateLimiter *HizLimit,
+	rateLimiter *RateLimiter,
 ) *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -451,14 +451,14 @@ func buildMux(
 	// there. Mounting without wrapping breaks the flow at the redirect
 	// stage.
 	interceptor := op.NewIssuerInterceptor(provider.IssuerFromRequest)
-	pages := NewSayfalar(
+	pages := NewPages(
 		userStore,
 		requestStore,
 		requestStore, // RequestStore also satisfies SessionStore
 		op.AuthCallbackURL(provider),
 		secureCookie,
 	)
-	pages.CallbackDelege(http.HandlerFunc(op.AuthorizeCallbackHandler(provider)))
+	pages.SetCallbackDelegate(http.HandlerFunc(op.AuthorizeCallbackHandler(provider)))
 
 	if len(upstreams) > 0 {
 		names := make([]string, 0, len(upstreams))
@@ -469,14 +469,14 @@ func buildMux(
 		// deliberately random, and if we do not sort the buttons swap places
 		// on every page load.
 		sort.Strings(names)
-		pages.FederasyonSaglayicilari(names)
+		pages.SetFederationProviders(names)
 
 		// requestStore satisfies THREE interfaces at once (FlowStore =
 		// StateStore + PendingLinkStore, FederationRequestStore and
 		// SessionStore); all of them are the short-lived Redis state of the
 		// same flow, and wiring them separately would be a setup that can
 		// break separately in two places.
-		fedPages := NewFedereSayfalar(
+		fedPages := NewFederationPages(
 			upstreams,
 			verifiers,
 			requestStore,
@@ -491,11 +491,11 @@ func buildMux(
 		// Both wrap their POST handlers with the interceptor (see Mount and
 		// MountLink); rateLimiter is NEVER passed as nil, in production Start
 		// does not start at all if the limit cannot be set up.
-		fedPages.Bagla(mux, interceptor, rateLimiter)
-		fedPages.BaglamaBagla(mux, interceptor, rateLimiter)
+		fedPages.Mount(mux, interceptor, rateLimiter)
+		fedPages.MountLink(mux, interceptor, rateLimiter)
 	}
 
-	pages.Bagla(mux, interceptor, rateLimiter)
+	pages.Mount(mux, interceptor, rateLimiter)
 
 	authorizePath := provider.AuthorizationEndpoint().Relative()
 
@@ -508,7 +508,7 @@ func buildMux(
 	// that STARTED the request (see Pages.WrapAuthorize). GET /giris and
 	// GET /kayit no longer MINT a binding.
 	enforcer := &pkceEnforcer{Provider: provider}
-	mux.Handle(authorizePath, interceptor.Handler(pages.AuthorizeSar(http.HandlerFunc(
+	mux.Handle(authorizePath, interceptor.Handler(pages.WrapAuthorize(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			op.Authorize(w, r, enforcer)
 		}))))

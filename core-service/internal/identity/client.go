@@ -41,7 +41,7 @@ func (c *MobileClient) GrantTypes() []oidc.GrantType {
 // authRequestID; once the page completes the login it resumes the flow
 // with this ID.
 func (c *MobileClient) LoginURL(authRequestID string) string {
-	return yolGiris + "?authRequestID=" + authRequestID
+	return pathLogin + "?authRequestID=" + authRequestID
 }
 
 // JWT access token: /api/* verification never touches the data store.

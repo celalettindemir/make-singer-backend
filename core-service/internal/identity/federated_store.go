@@ -14,51 +14,51 @@ import (
 )
 
 var (
-	ErrKimlikYok        = errors.New("federe kimlik bulunamadi")
-	ErrKimlikKullanimda = errors.New("federe kimlik baska hesaba bagli")
+	ErrIdentityNotFound = errors.New("federe kimlik bulunamadi")
+	ErrIdentityInUse    = errors.New("federe kimlik baska hesaba bagli")
 )
 
-// FedereDepo, (saglayici, sub) ile kullanici arasindaki eslesmeyi
-// yonetir. Faz 2'nin federasyon akislari (Apple/Google) bu depoyu
-// kullanarak bizim User'imizi bulur veya olusturur.
-type FedereDepo interface {
-	// KimlikleKullanici, (saglayici, sub) ciftine bagli User'i doner.
-	// Eslesme yoksa ErrKimlikYok doner, nil User degil.
-	KimlikleKullanici(ctx context.Context, saglayici, sub string) (*User, error)
+// FederatedStore manages the mapping between (provider, sub) and a user.
+// The Phase 2 federation flows (Apple/Google) use this store to find or
+// create our User.
+type FederatedStore interface {
+	// UserByIdentity returns the User linked to the (provider, sub) pair.
+	// If there is no mapping it returns ErrIdentityNotFound, not a nil User.
+	UserByIdentity(ctx context.Context, provider, sub string) (*User, error)
 
-	// Bagla, VAR OLAN bir kullaniciya yeni bir federe kimlik baglar.
-	// (saglayici, sub) baska bir hesaba zaten bagliysa veya bu kullanici
-	// bu saglayiciya zaten bagliysa ErrKimlikKullanimda doner.
-	Bagla(ctx context.Context, saglayici, sub, userID string) error
+	// Link attaches a new federated identity to an EXISTING user. It returns
+	// ErrIdentityInUse if (provider, sub) is already linked to another account
+	// or if this user is already linked to this provider.
+	Link(ctx context.Context, provider, sub, userID string) error
 
-	// FedereKullaniciOlustur, sifresi OLMAYAN yeni bir kullanici olusturur
-	// ve onu ayni islemde (saglayici, sub) ile baglar.
-	FedereKullaniciOlustur(ctx context.Context, saglayici, sub, email, ad string, epostaDogrulandi bool) (*User, error)
+	// CreateFederatedUser creates a new user WITHOUT a password and links it
+	// with (provider, sub) in the same transaction.
+	CreateFederatedUser(ctx context.Context, provider, sub, email, name string, emailVerified bool) (*User, error)
 
-	// SaglayicilarByUserID, bir kullanicinin bagli oldugu tum saglayici
-	// adlarini doner (ornek: K1'in 409 sayfasinin metnini beslemek icin).
-	SaglayicilarByUserID(ctx context.Context, userID string) ([]string, error)
+	// ProvidersByUserID returns the names of all providers a user is linked
+	// to (for example, to feed the text of K1's 409 page).
+	ProvidersByUserID(ctx context.Context, userID string) ([]string, error)
 }
 
-type PostgresFedereDepo struct {
-	havuz *pgxpool.Pool
+type PostgresFederatedStore struct {
+	pool *pgxpool.Pool
 }
 
-func NewPostgresFedereDepo(havuz *pgxpool.Pool) *PostgresFedereDepo {
-	return &PostgresFedereDepo{havuz: havuz}
+func NewPostgresFederatedStore(pool *pgxpool.Pool) *PostgresFederatedStore {
+	return &PostgresFederatedStore{pool: pool}
 }
 
-func (d *PostgresFedereDepo) KimlikleKullanici(ctx context.Context, saglayici, sub string) (*User, error) {
+func (d *PostgresFederatedStore) UserByIdentity(ctx context.Context, provider, sub string) (*User, error) {
 	var k User
-	err := d.havuz.QueryRow(ctx,
+	err := d.pool.QueryRow(ctx,
 		`SELECT u.id, u.email, u.email_verified, u.name, coalesce(u.password_hash, ''), u.created_at
 		 FROM federe_kimlikler f
 		 JOIN users u ON u.id = f.user_id
 		 WHERE f.saglayici = $1 AND f.sub = $2`,
-		saglayici, sub,
+		provider, sub,
 	).Scan(&k.ID, &k.Email, &k.EmailVerified, &k.Name, &k.PasswordHash, &k.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrKimlikYok
+		return nil, ErrIdentityNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("federe kimlik okunamadi: %w", err)
@@ -66,96 +66,95 @@ func (d *PostgresFedereDepo) KimlikleKullanici(ctx context.Context, saglayici, s
 	return &k, nil
 }
 
-func (d *PostgresFedereDepo) Bagla(ctx context.Context, saglayici, sub, userID string) error {
-	_, err := d.havuz.Exec(ctx,
+func (d *PostgresFederatedStore) Link(ctx context.Context, provider, sub, userID string) error {
+	_, err := d.pool.Exec(ctx,
 		`INSERT INTO federe_kimlikler (saglayici, sub, user_id) VALUES ($1, $2, $3)`,
-		saglayici, sub, userID)
+		provider, sub, userID)
 	if err != nil {
-		// 23505 = unique_violation. Hem (saglayici, sub) birincil
-		// anahtari, hem de (user_id, saglayici) tekilligi bu kodu
-		// uretir; her iki durumda da anlam aynidir: bu kimlik baska bir
-		// esleseme ile cakisiyor.
-		var pgHata *pgconn.PgError
-		if errors.As(err, &pgHata) && pgHata.Code == "23505" {
-			return ErrKimlikKullanimda
+		// 23505 = unique_violation. Both the (provider, sub) primary key and the
+		// (user_id, provider) uniqueness raise this code; the meaning is the same
+		// in both cases: this identity conflicts with another mapping.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrIdentityInUse
 		}
 		return fmt.Errorf("federe kimlik baglanamadi: %w", err)
 	}
 	return nil
 }
 
-// FedereKullaniciOlustur, sifresi OLMAYAN bir kullanici ile federe
-// kimligini TEK ISLEMDE yazar. Islem zorunlu: iki ayri Exec arasinda
-// hata olursa ortada sifresi de federe kimligi de olmayan, yani HIC
-// GIRILEMEYEN bir hesap kalirdi -- ve e-posta tekil oldugu icin
-// kullanici bir daha kaydolamazdi.
-func (d *PostgresFedereDepo) FedereKullaniciOlustur(
-	ctx context.Context, saglayici, sub, email, ad string, epostaDogrulandi bool,
+// CreateFederatedUser writes a user without a password and its federated
+// identity in ONE TRANSACTION. The transaction is required: if an error
+// happened between two separate Execs, we would be left with an account
+// that has neither a password nor a federated identity, so it could NEVER
+// log in -- and since email is unique, the user could not sign up again.
+func (d *PostgresFederatedStore) CreateFederatedUser(
+	ctx context.Context, provider, sub, email, name string, emailVerified bool,
 ) (*User, error) {
-	islem, err := d.havuz.Begin(ctx)
+	tx, err := d.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("islem acilamadi: %w", err)
 	}
-	defer func() { _ = islem.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	k := &User{
 		ID:            uuid.NewString(),
 		Email:         normalizeEmail(email),
-		EmailVerified: epostaDogrulandi,
-		Name:          strings.TrimSpace(ad),
+		EmailVerified: emailVerified,
+		Name:          strings.TrimSpace(name),
 		CreatedAt:     time.Now().UTC(),
 	}
-	// password_hash ACIKCA NULL: SifreDogru bos hash'te her zaman false
-	// doner, yani bu hesaba sifreyle girilemez.
-	if _, err := islem.Exec(ctx,
+	// password_hash is EXPLICITLY NULL: the password check always returns
+	// false on an empty hash, so this account cannot log in with a password.
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO users (id, email, email_verified, name, password_hash, created_at)
 		 VALUES ($1, $2, $3, $4, NULL, $5)`,
 		k.ID, k.Email, k.EmailVerified, k.Name, k.CreatedAt); err != nil {
-		var pgHata *pgconn.PgError
-		if errors.As(err, &pgHata) && pgHata.Code == "23505" {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return nil, ErrEmailInUse
 		}
 		return nil, fmt.Errorf("federe kullanici olusturulamadi: %w", err)
 	}
-	if _, err := islem.Exec(ctx,
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO federe_kimlikler (saglayici, sub, user_id) VALUES ($1, $2, $3)`,
-		saglayici, sub, k.ID); err != nil {
-		var pgHata *pgconn.PgError
-		if errors.As(err, &pgHata) && pgHata.Code == "23505" {
-			return nil, ErrKimlikKullanimda
+		provider, sub, k.ID); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, ErrIdentityInUse
 		}
 		return nil, fmt.Errorf("federe kimlik yazilamadi: %w", err)
 	}
-	if err := islem.Commit(ctx); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("islem tamamlanamadi: %w", err)
 	}
 	return k, nil
 }
 
-func (d *PostgresFedereDepo) SaglayicilarByUserID(ctx context.Context, userID string) ([]string, error) {
-	satirlar, err := d.havuz.Query(ctx,
+func (d *PostgresFederatedStore) ProvidersByUserID(ctx context.Context, userID string) ([]string, error) {
+	lines, err := d.pool.Query(ctx,
 		`SELECT saglayici FROM federe_kimlikler WHERE user_id = $1 ORDER BY saglayici`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("saglayicilar okunamadi: %w", err)
 	}
-	defer satirlar.Close()
+	defer lines.Close()
 
-	var sag []string
-	for satirlar.Next() {
+	var providers []string
+	for lines.Next() {
 		var s string
-		if err := satirlar.Scan(&s); err != nil {
+		if err := lines.Scan(&s); err != nil {
 			return nil, fmt.Errorf("saglayicilar okunamadi: %w", err)
 		}
-		sag = append(sag, s)
+		providers = append(providers, s)
 	}
-	if err := satirlar.Err(); err != nil {
+	if err := lines.Err(); err != nil {
 		return nil, fmt.Errorf("saglayicilar okunamadi: %w", err)
 	}
-	return sag, nil
+	return providers, nil
 }
 
-// Iki uygulama da arayuzden sapmasin: biri degisirse derleme kirilir.
+// Neither implementation may drift from the interface: if one changes, the build breaks.
 var (
-	_ FedereDepo = (*PostgresFedereDepo)(nil)
-	_ FedereDepo = (*SahteFedereDepo)(nil)
+	_ FederatedStore = (*PostgresFederatedStore)(nil)
+	_ FederatedStore = (*FakeFederatedStore)(nil)
 )

@@ -35,11 +35,11 @@ func TestRedisJSON_KeysUnchanged(t *testing.T) {
 		v    any
 		want []string
 	}{
-		{AuthIstek{}, []string{"AMR", "AuthTime", "ClientID", "CodeChallenge", "CodeChallengeMethod", "ID", "IpucuSubject", "Nonce", "RedirectURI", "ResponseMode", "ResponseType", "Scopes", "State", "Subject"}},
-		{OturumBaglama{}, []string{"Kayitlar"}},
-		{OturumKayit{}, []string{"AuthRequestID", "CSRF"}},
-		{FedereDurum{}, []string{"AuthRequestID", "Cerez", "KodDogrulayici", "Nonce", "Saglayici"}},
-		{BaglamaBekleme{}, []string{"AuthRequestID", "CSRF", "Eposta", "Saglayici", "Sub", "UserID"}},
+		{AuthRequest{}, []string{"AMR", "AuthTime", "ClientID", "CodeChallenge", "CodeChallengeMethod", "ID", "IpucuSubject", "Nonce", "RedirectURI", "ResponseMode", "ResponseType", "Scopes", "State", "Subject"}},
+		{SessionBinding{}, []string{"Kayitlar"}},
+		{SessionEntry{}, []string{"AuthRequestID", "CSRF"}},
+		{FederationState{}, []string{"AuthRequestID", "Cerez", "KodDogrulayici", "Nonce", "Saglayici"}},
+		{PendingLink{}, []string{"AuthRequestID", "CSRF", "Eposta", "Saglayici", "Sub", "UserID"}},
 		{AccessRecord{}, []string{"ClientID", "ExpiresAt", "ID", "Scopes", "UserID"}},
 	}
 	for _, tt := range tests {

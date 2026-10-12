@@ -69,7 +69,7 @@ func newSahteTamamlayici() *sahteTamamlayici {
 	return &sahteTamamlayici{baglanan: map[string]string{}, amrler: map[string][]string{}}
 }
 
-func (t *sahteTamamlayici) TamamlandiIsaretle(_ context.Context, id string, userID string, amr []string) error {
+func (t *sahteTamamlayici) MarkDone(_ context.Context, id string, userID string, amr []string) error {
 	if t.Hata != nil {
 		return t.Hata
 	}
@@ -79,7 +79,7 @@ func (t *sahteTamamlayici) TamamlandiIsaretle(_ context.Context, id string, user
 		if mevcut == userID {
 			return nil
 		}
-		return ErrIstekZatenTamamlandi
+		return ErrRequestAlreadyCompleted
 	}
 	t.baglanan[id] = userID
 	t.amrler[id] = append([]string(nil), amr...)
@@ -99,16 +99,16 @@ func (t *sahteTamamlayici) amrOku(id string) []string {
 }
 
 type sayfaTestOrtami struct {
-	sayfalar   *Sayfalar
+	sayfalar   *Pages
 	kullanici  *sayimUserStore
-	oturumlar  *SahteOturumDepo
+	oturumlar  *FakeSessionStore
 	tamamlayan *sahteTamamlayici
 }
 
 func testSayfalar(t *testing.T) *sayfaTestOrtami {
 	t.Helper()
 	kullanici := &sayimUserStore{ic: NewFakeUserStore()}
-	oturumlar := NewSahteOturumDepo()
+	oturumlar := NewFakeSessionStore()
 	tamamlayan := newSahteTamamlayici()
 	// Gercek geri cagirma op.AuthCallbackURL'den gelir; testte sabit bir
 	// adres yeterli, cunku olculen sey giris mantigi.
@@ -116,7 +116,7 @@ func testSayfalar(t *testing.T) *sayfaTestOrtami {
 	// cerezGuvenli=false: testte TLS yok, Secure cerez httptest'te de
 	// tasinabilir ama yerel gelistirme davranisini taklit ediyoruz.
 	return &sayfaTestOrtami{
-		sayfalar:   NewSayfalar(kullanici, tamamlayan, oturumlar, geri, false),
+		sayfalar:   NewPages(kullanici, tamamlayan, oturumlar, geri, false),
 		kullanici:  kullanici,
 		oturumlar:  oturumlar,
 		tamamlayan: tamamlayan,
@@ -138,11 +138,11 @@ func baglamaKur(t *testing.T, o *sayfaTestOrtami, id string, mevcut *http.Cookie
 	if mevcut != nil {
 		r.AddCookie(mevcut)
 	}
-	if err := o.sayfalar.BaglamaKur(w, r, id); err != nil {
+	if err := o.sayfalar.BindSession(w, r, id); err != nil {
 		t.Fatalf("BaglamaKur: %v", err)
 	}
 	for _, c := range w.Result().Cookies() {
-		if c.Name == cerezAdOturum && c.Value != "" {
+		if c.Name == cookieNameSession && c.Value != "" {
 			return c
 		}
 	}
@@ -182,10 +182,10 @@ func formIstek(o *sayfaTestOrtami, yol, id string, cerez *http.Cookie) *httptest
 	if cerez != nil {
 		r.AddCookie(cerez)
 	}
-	if yol == yolGiris {
-		o.sayfalar.Giris(w, r)
+	if yol == pathLogin {
+		o.sayfalar.Login(w, r)
 	} else {
-		o.sayfalar.Kayit(w, r)
+		o.sayfalar.Signup(w, r)
 	}
 	return w
 }
@@ -198,10 +198,10 @@ func postEt(o *sayfaTestOrtami, yol string, form url.Values, cerez *http.Cookie)
 	if cerez != nil {
 		r.AddCookie(cerez)
 	}
-	if yol == yolGiris {
-		o.sayfalar.Giris(w, r)
+	if yol == pathLogin {
+		o.sayfalar.Login(w, r)
 	} else {
-		o.sayfalar.Kayit(w, r)
+		o.sayfalar.Signup(w, r)
 	}
 	return w
 }
@@ -209,7 +209,7 @@ func postEt(o *sayfaTestOrtami, yol string, form url.Values, cerez *http.Cookie)
 func TestGirisSayfasiFormGosterir(t *testing.T) {
 	o := testSayfalar(t)
 	cerez := baglamaKur(t, o, "abc", nil)
-	w := formIstek(o, yolGiris, "abc", cerez)
+	w := formIstek(o, pathLogin, "abc", cerez)
 	if w.Code != http.StatusOK {
 		t.Fatalf("durum = %d, beklenen 200", w.Code)
 	}
@@ -227,12 +227,12 @@ func TestAuthorizeOturumCereziVerir(t *testing.T) {
 	o := testSayfalar(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/authorize", nil)
-	if err := o.sayfalar.BaglamaKur(w, r, "abc"); err != nil {
+	if err := o.sayfalar.BindSession(w, r, "abc"); err != nil {
 		t.Fatalf("BaglamaKur: %v", err)
 	}
 	var cerez *http.Cookie
 	for _, c := range w.Result().Cookies() {
-		if c.Name == cerezAdOturum {
+		if c.Name == cookieNameSession {
 			cerez = c
 		}
 	}
@@ -253,13 +253,13 @@ func TestAuthorizeOturumCereziVerir(t *testing.T) {
 		t.Errorf("cerez degeri %d karakter, 32 bayt entropi bekleniyordu", len(cerez.Value))
 	}
 	// Baglama depoya yazilmis olmali.
-	baglama, err := o.oturumlar.OturumOku(context.Background(), cerez.Value)
+	baglama, err := o.oturumlar.ReadSession(context.Background(), cerez.Value)
 	if err != nil {
 		t.Fatalf("OturumOku: %v", err)
 	}
-	csrf, bagliMi := baglama.CSRFBul("abc")
+	csrf, bagliMi := baglama.CSRFFor("abc")
 	if !bagliMi {
-		t.Fatalf("authRequestID baglanmamis, kayit sayisi = %d", len(baglama.Kayitlar))
+		t.Fatalf("authRequestID baglanmamis, kayit sayisi = %d", len(baglama.Entries))
 	}
 	if csrf == "" {
 		t.Error("baglamada CSRF jetonu yok")
@@ -271,7 +271,7 @@ func TestAuthorizeOturumCereziVerir(t *testing.T) {
 // BILE gosterilmez. Bu, "saldirgan kendi tarayicisinda baglama alir,
 // linki kurbana yollar" somurusunun kokunu kapatir.
 func TestFormGetBaglamasizReddedilir(t *testing.T) {
-	for _, yol := range []string{yolGiris, yolKayit} {
+	for _, yol := range []string{pathLogin, pathSignup} {
 		t.Run(yol, func(t *testing.T) {
 			o := testSayfalar(t)
 
@@ -298,7 +298,7 @@ func TestFormGetBaglamasizReddedilir(t *testing.T) {
 			}
 
 			// (c) Uydurma cerez degeri.
-			w = formIstek(o, yol, "istek-A", &http.Cookie{Name: cerezAdOturum, Value: "uydurma"})
+			w = formIstek(o, yol, "istek-A", &http.Cookie{Name: cookieNameSession, Value: "uydurma"})
 			if w.Code != http.StatusForbidden {
 				t.Errorf("uydurma cerezle GET durumu = %d, beklenen 403", w.Code)
 			}
@@ -328,18 +328,18 @@ func TestParalelIkiIstekAyniCerezeBaglanir(t *testing.T) {
 	if cerez2.Value != cerez.Value {
 		t.Fatalf("ikinci /authorize cerez degerini degistirdi: %q -> %q", cerez.Value, cerez2.Value)
 	}
-	baglama, err := o.oturumlar.OturumOku(context.Background(), cerez2.Value)
+	baglama, err := o.oturumlar.ReadSession(context.Background(), cerez2.Value)
 	if err != nil {
 		t.Fatalf("OturumOku: %v", err)
 	}
 	for _, id := range []string{"istek-1", "istek-2"} {
-		if _, bagliMi := baglama.CSRFBul(id); !bagliMi {
+		if _, bagliMi := baglama.CSRFFor(id); !bagliMi {
 			t.Errorf("%s baglamada yok", id)
 		}
 	}
 	// Her iki sekmenin formu da acilabilmeli.
 	for _, id := range []string{"istek-1", "istek-2"} {
-		if w := formIstek(o, yolGiris, id, cerez2); w.Code != http.StatusOK {
+		if w := formIstek(o, pathLogin, id, cerez2); w.Code != http.StatusOK {
 			t.Errorf("%s formu durumu = %d, beklenen 200", id, w.Code)
 		}
 	}
@@ -350,22 +350,22 @@ func TestParalelIkiIstekAyniCerezeBaglanir(t *testing.T) {
 func TestOturumBaglamaUstSiniriUygulanir(t *testing.T) {
 	o := testSayfalar(t)
 	var cerez *http.Cookie
-	toplam := oturumBaglamaUstSinir + 3
+	toplam := maxSessionBindings + 3
 	for i := 0; i < toplam; i++ {
 		cerez = baglamaKur(t, o, "istek-"+strconv.Itoa(i), cerez)
 	}
-	baglama, err := o.oturumlar.OturumOku(context.Background(), cerez.Value)
+	baglama, err := o.oturumlar.ReadSession(context.Background(), cerez.Value)
 	if err != nil {
 		t.Fatalf("OturumOku: %v", err)
 	}
-	if len(baglama.Kayitlar) != oturumBaglamaUstSinir {
-		t.Fatalf("kayit sayisi = %d, beklenen %d", len(baglama.Kayitlar), oturumBaglamaUstSinir)
+	if len(baglama.Entries) != maxSessionBindings {
+		t.Fatalf("kayit sayisi = %d, beklenen %d", len(baglama.Entries), maxSessionBindings)
 	}
 	// En eski kayitlar dusmus, en yeni kalmis olmali.
-	if _, bagliMi := baglama.CSRFBul("istek-0"); bagliMi {
+	if _, bagliMi := baglama.CSRFFor("istek-0"); bagliMi {
 		t.Error("ust sinir asildi ama en eski kayit dusmedi")
 	}
-	if _, bagliMi := baglama.CSRFBul("istek-" + strconv.Itoa(toplam-1)); !bagliMi {
+	if _, bagliMi := baglama.CSRFFor("istek-" + strconv.Itoa(toplam-1)); !bagliMi {
 		t.Error("en yeni kayit dusmus")
 	}
 }
@@ -378,10 +378,10 @@ func TestCerezSecureBayragiIssuerSemasinaBagli(t *testing.T) {
 		guvenli bool
 	}{{"https", true}, {"http-yerel", false}} {
 		t.Run(d.ad, func(t *testing.T) {
-			s := NewSayfalar(NewFakeUserStore(), newSahteTamamlayici(), NewSahteOturumDepo(),
+			s := NewPages(NewFakeUserStore(), newSahteTamamlayici(), NewFakeSessionStore(),
 				func(_ context.Context, id string) string { return "/bitti?id=" + id }, d.guvenli)
 			w := httptest.NewRecorder()
-			if err := s.BaglamaKur(w, httptest.NewRequest(http.MethodGet, "/authorize", nil), "abc"); err != nil {
+			if err := s.BindSession(w, httptest.NewRequest(http.MethodGet, "/authorize", nil), "abc"); err != nil {
 				t.Fatalf("BaglamaKur: %v", err)
 			}
 			cerezler := w.Result().Cookies()
@@ -399,7 +399,7 @@ func TestCerezSecureBayragiIssuerSemasinaBagli(t *testing.T) {
 func TestGirisAuthRequestIDsizReddedilir(t *testing.T) {
 	o := testSayfalar(t)
 	w := httptest.NewRecorder()
-	o.sayfalar.Giris(w, httptest.NewRequest(http.MethodGet, yolGiris, nil))
+	o.sayfalar.Login(w, httptest.NewRequest(http.MethodGet, pathLogin, nil))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("durum = %d, beklenen 400 (authRequestID eksik)", w.Code)
 	}
@@ -416,9 +416,9 @@ func TestGirisCerezsizReddedilirVeSifreDogrulanmaz(t *testing.T) {
 
 	form := url.Values{
 		"eposta": {"kurban@ornek.com"}, "sifre": {"dogruSifre12"},
-		"authRequestID": {"abc"}, csrfAlan: {"ne-olursa"},
+		"authRequestID": {"abc"}, fieldCSRF: {"ne-olursa"},
 	}
-	w := postEt(o, yolGiris, form, nil)
+	w := postEt(o, pathLogin, form, nil)
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("durum = %d, beklenen 403 (cerezsiz POST reddedilmeli)", w.Code)
@@ -442,15 +442,15 @@ func TestGirisBaskaAuthRequestIDileReddedilir(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	// Tarayici B "istek-B" icin bir oturum acar.
-	cerezB, csrfB := formAc(t, o, yolGiris, "istek-B")
+	cerezB, csrfB := formAc(t, o, pathLogin, "istek-B")
 	onceByEmail, _ := o.kullanici.sayilar()
 
 	// Ayni cerezle, BASKA bir auth istegini (istek-A) tamamlamaya calis.
 	form := url.Values{
 		"eposta": {"kurban@ornek.com"}, "sifre": {"dogruSifre12"},
-		"authRequestID": {"istek-A"}, csrfAlan: {csrfB},
+		"authRequestID": {"istek-A"}, fieldCSRF: {csrfB},
 	}
-	w := postEt(o, yolGiris, form, cerezB)
+	w := postEt(o, pathLogin, form, cerezB)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("durum = %d, beklenen 403 (cereze bagli id ile form id'si eslesmiyor)", w.Code)
 	}
@@ -468,9 +468,9 @@ func TestGirisUydurmaCerezReddedilir(t *testing.T) {
 	o := testSayfalar(t)
 	form := url.Values{
 		"eposta": {"a@ornek.com"}, "sifre": {"x"},
-		"authRequestID": {"abc"}, csrfAlan: {"y"},
+		"authRequestID": {"abc"}, fieldCSRF: {"y"},
 	}
-	w := postEt(o, yolGiris, form, &http.Cookie{Name: cerezAdOturum, Value: "uydurma-deger"})
+	w := postEt(o, pathLogin, form, &http.Cookie{Name: cookieNameSession, Value: "uydurma-deger"})
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("durum = %d, beklenen 403", w.Code)
 	}
@@ -482,7 +482,7 @@ func TestGirisCSRFEksikVeYanlisReddedilir(t *testing.T) {
 	if _, err := o.kullanici.Create(t.Context(), "kurban@ornek.com", "K", "dogruSifre12"); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	cerez, csrf := formAc(t, o, yolGiris, "istek-1")
+	cerez, csrf := formAc(t, o, pathLogin, "istek-1")
 
 	for _, d := range []struct {
 		ad    string
@@ -496,9 +496,9 @@ func TestGirisCSRFEksikVeYanlisReddedilir(t *testing.T) {
 			onceByEmail, _ := o.kullanici.sayilar()
 			form := url.Values{
 				"eposta": {"kurban@ornek.com"}, "sifre": {"dogruSifre12"},
-				"authRequestID": {"istek-1"}, csrfAlan: {d.jeton},
+				"authRequestID": {"istek-1"}, fieldCSRF: {d.jeton},
 			}
-			w := postEt(o, yolGiris, form, cerez)
+			w := postEt(o, pathLogin, form, cerez)
 			if w.Code != http.StatusForbidden {
 				t.Fatalf("durum = %d, beklenen 403", w.Code)
 			}
@@ -517,12 +517,12 @@ func TestGirisGecerliCerezleCalisir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	cerez, csrf := formAc(t, o, yolGiris, "istek-1")
+	cerez, csrf := formAc(t, o, pathLogin, "istek-1")
 	form := url.Values{
 		"eposta": {"kurban@ornek.com"}, "sifre": {"dogruSifre12"},
-		"authRequestID": {"istek-1"}, csrfAlan: {csrf},
+		"authRequestID": {"istek-1"}, fieldCSRF: {csrf},
 	}
-	w := postEt(o, yolGiris, form, cerez)
+	w := postEt(o, pathLogin, form, cerez)
 	if w.Code != http.StatusFound {
 		t.Fatalf("durum = %d, beklenen 302. govde: %s", w.Code, w.Body.String())
 	}
@@ -542,9 +542,9 @@ func TestKayitCerezsizReddedilirVeKullaniciOlusmaz(t *testing.T) {
 	o := testSayfalar(t)
 	form := url.Values{
 		"eposta": {"yeni@ornek.com"}, "ad": {"Yeni"},
-		"sifre": {"uzunSifre123"}, "authRequestID": {"abc"}, csrfAlan: {"x"},
+		"sifre": {"uzunSifre123"}, "authRequestID": {"abc"}, fieldCSRF: {"x"},
 	}
-	w := postEt(o, yolKayit, form, nil)
+	w := postEt(o, pathSignup, form, nil)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("durum = %d, beklenen 403", w.Code)
 	}
@@ -562,12 +562,12 @@ func TestIkinciKayitSubjectEzmez(t *testing.T) {
 	const id = "istek-1"
 
 	kayitOl := func(eposta string) *httptest.ResponseRecorder {
-		cerez, csrf := formAc(t, o, yolKayit, id)
+		cerez, csrf := formAc(t, o, pathSignup, id)
 		form := url.Values{
 			"eposta": {eposta}, "ad": {"K"}, "sifre": {"uzunSifre123"},
-			"authRequestID": {id}, csrfAlan: {csrf},
+			"authRequestID": {id}, fieldCSRF: {csrf},
 		}
-		return postEt(o, yolKayit, form, cerez)
+		return postEt(o, pathSignup, form, cerez)
 	}
 
 	if w := kayitOl("birinci@ornek.com"); w.Code != http.StatusFound {
@@ -602,14 +602,14 @@ func TestIkinciKayitSubjectEzmez(t *testing.T) {
 func TestYanlisGirisKullaniciVarligiSizdirmaz(t *testing.T) {
 	o := testSayfalar(t)
 	const eposta = "ayni@ornek.com"
-	cerez, csrf := formAc(t, o, yolGiris, "istek-1")
+	cerez, csrf := formAc(t, o, pathLogin, "istek-1")
 
 	girisDene := func() *httptest.ResponseRecorder {
 		form := url.Values{
 			"eposta": {eposta}, "sifre": {"yanlis"},
-			"authRequestID": {"istek-1"}, csrfAlan: {csrf},
+			"authRequestID": {"istek-1"}, fieldCSRF: {csrf},
 		}
-		return postEt(o, yolGiris, form, cerez)
+		return postEt(o, pathLogin, form, cerez)
 	}
 
 	// Durum A: bu e-postayla hic hesap yok.
@@ -645,7 +645,7 @@ func TestSayfaGirdiKacirir(t *testing.T) {
 	// Baglama KURULMALI: aksi halde GET 403'te durur, govde hic
 	// uretilmez ve test vacuous olur.
 	cerez := baglamaKur(t, o, kotu, nil)
-	w := formIstek(o, yolGiris, kotu, cerez)
+	w := formIstek(o, pathLogin, kotu, cerez)
 	if w.Code != http.StatusOK {
 		t.Fatalf("durum = %d, beklenen 200 (sayfa gercekten uretildi mi?)", w.Code)
 	}
@@ -663,13 +663,13 @@ func TestSayfaGirdiKacirir(t *testing.T) {
 // dogrudan olcuyoruz.
 func TestGirisEpostaEchoKacar(t *testing.T) {
 	o := testSayfalar(t)
-	cerez, csrf := formAc(t, o, yolGiris, "istek-1")
+	cerez, csrf := formAc(t, o, pathLogin, "istek-1")
 	kotu := `"><script>alert(1)</script>`
 	form := url.Values{
 		"eposta": {kotu}, "sifre": {"yanlis"},
-		"authRequestID": {"istek-1"}, csrfAlan: {csrf},
+		"authRequestID": {"istek-1"}, fieldCSRF: {csrf},
 	}
-	w := postEt(o, yolGiris, form, cerez)
+	w := postEt(o, pathLogin, form, cerez)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("durum = %d, beklenen 401 (form gercekten islendi mi?)", w.Code)
 	}
@@ -689,7 +689,7 @@ func TestGirisEpostaEchoKacar(t *testing.T) {
 func TestKayitSayfasiFormGosterir(t *testing.T) {
 	o := testSayfalar(t)
 	cerez := baglamaKur(t, o, "abc", nil)
-	w := formIstek(o, yolKayit, "abc", cerez)
+	w := formIstek(o, pathSignup, "abc", cerez)
 	if w.Code != http.StatusOK {
 		t.Fatalf("durum = %d", w.Code)
 	}
@@ -707,12 +707,12 @@ func TestKullanilanEpostaIleKayit(t *testing.T) {
 	if _, err := o.kullanici.Create(t.Context(), "var@ornek.com", "V", "dogruSifre12"); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	cerez, csrf := formAc(t, o, yolKayit, "istek-1")
+	cerez, csrf := formAc(t, o, pathSignup, "istek-1")
 	form := url.Values{
 		"eposta": {"var@ornek.com"}, "ad": {"Yeni"},
-		"sifre": {"baskaSifre12"}, "authRequestID": {"istek-1"}, csrfAlan: {csrf},
+		"sifre": {"baskaSifre12"}, "authRequestID": {"istek-1"}, fieldCSRF: {csrf},
 	}
-	w := postEt(o, yolKayit, form, cerez)
+	w := postEt(o, pathSignup, form, cerez)
 	if w.Code != http.StatusConflict {
 		t.Errorf("durum = %d, beklenen 409 (e-posta kullanimda)", w.Code)
 	}
@@ -745,7 +745,7 @@ func (d *delegeIzleyici) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 func TestCallbackCerezsizReddedilir(t *testing.T) {
 	o := testSayfalar(t)
 	izleyici := &delegeIzleyici{}
-	o.sayfalar.CallbackDelege(izleyici)
+	o.sayfalar.SetCallbackDelegate(izleyici)
 
 	w := callbackIstek(o, "istek-1", nil)
 	if w.Code != http.StatusForbidden {
@@ -760,8 +760,8 @@ func TestCallbackCerezsizReddedilir(t *testing.T) {
 func TestCallbackYanlisCerezReddedilir(t *testing.T) {
 	o := testSayfalar(t)
 	izleyici := &delegeIzleyici{}
-	o.sayfalar.CallbackDelege(izleyici)
-	cerez, _ := formAc(t, o, yolGiris, "istek-B")
+	o.sayfalar.SetCallbackDelegate(izleyici)
+	cerez, _ := formAc(t, o, pathLogin, "istek-B")
 
 	w := callbackIstek(o, "istek-A", cerez)
 	if w.Code != http.StatusForbidden {
@@ -777,8 +777,8 @@ func TestCallbackYanlisCerezReddedilir(t *testing.T) {
 func TestCallbackDogruCerezleDelegeEder(t *testing.T) {
 	o := testSayfalar(t)
 	izleyici := &delegeIzleyici{}
-	o.sayfalar.CallbackDelege(izleyici)
-	cerez, _ := formAc(t, o, yolGiris, "istek-1")
+	o.sayfalar.SetCallbackDelegate(izleyici)
+	cerez, _ := formAc(t, o, pathLogin, "istek-1")
 
 	w := callbackIstek(o, "istek-1", cerez)
 	if w.Code != http.StatusOK {
@@ -793,7 +793,7 @@ func TestCallbackDogruCerezleDelegeEder(t *testing.T) {
 func TestCallbackIDsizReddedilir(t *testing.T) {
 	o := testSayfalar(t)
 	izleyici := &delegeIzleyici{}
-	o.sayfalar.CallbackDelege(izleyici)
+	o.sayfalar.SetCallbackDelegate(izleyici)
 	w := httptest.NewRecorder()
 	o.sayfalar.Callback(w, httptest.NewRequest(http.MethodGet, "/authorize/callback", nil))
 	if w.Code != http.StatusBadRequest {
@@ -821,10 +821,10 @@ func TestBoslukluEpostaIleKayitSonrasiGirisCalisir(t *testing.T) {
 	o := testSayfalar(t)
 
 	// Kayit: bosluklu girdi.
-	cerez, csrf := formAc(t, o, yolKayit, "istek-kayit")
-	w := postEt(o, yolKayit, url.Values{
+	cerez, csrf := formAc(t, o, pathSignup, "istek-kayit")
+	w := postEt(o, pathSignup, url.Values{
 		"authRequestID": {"istek-kayit"},
-		csrfAlan:        {csrf},
+		fieldCSRF:       {csrf},
 		"eposta":        {bosluklu},
 		"ad":            {"Bosluk Kullanici"},
 		"sifre":         {sifre},
@@ -846,10 +846,10 @@ func TestBoslukluEpostaIleKayitSonrasiGirisCalisir(t *testing.T) {
 	for _, girdi := range []string{bosluklu, bosluksuz, "  BOSLUK@ORNEK.COM "} {
 		t.Run("giris girdisi="+strconv.Quote(girdi), func(t *testing.T) {
 			id := "istek-giris-" + girdi
-			cerez, csrf := formAc(t, o, yolGiris, id)
-			w := postEt(o, yolGiris, url.Values{
+			cerez, csrf := formAc(t, o, pathLogin, id)
+			w := postEt(o, pathLogin, url.Values{
 				"authRequestID": {id},
-				csrfAlan:        {csrf},
+				fieldCSRF:       {csrf},
 				"eposta":        {girdi},
 				"sifre":         {sifre},
 			}, cerez)
@@ -862,10 +862,10 @@ func TestBoslukluEpostaIleKayitSonrasiGirisCalisir(t *testing.T) {
 	// NEGATIF KONTROL: duzeltme "her sifre gecer" haline gelmesin.
 	// Yanlis sifre hala 401 almali, yani yukaridaki 302'ler
 	// normalizasyon sayesinde, dogrulamanin gevsemesi sayesinde DEGIL.
-	cerez, csrf = formAc(t, o, yolGiris, "istek-yanlis")
-	w = postEt(o, yolGiris, url.Values{
+	cerez, csrf = formAc(t, o, pathLogin, "istek-yanlis")
+	w = postEt(o, pathLogin, url.Values{
 		"authRequestID": {"istek-yanlis"},
-		csrfAlan:        {csrf},
+		fieldCSRF:       {csrf},
 		"eposta":        {bosluklu},
 		"sifre":         {"yanlisSifre12"},
 	}, cerez)
@@ -882,19 +882,19 @@ func TestBoslukluEpostaIleKayitSonrasiGirisCalisir(t *testing.T) {
 // Sec-Fetch-Site basligi HIC EKLENMEZ (eski/tarayici olmayan istemci).
 func authorizeSar(o *sayfaTestOrtami, fetchSite, id string, cerez *http.Cookie) *httptest.ResponseRecorder {
 	kutuphane := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Location", yolGiris+"?authRequestID="+url.QueryEscape(id))
+		w.Header().Set("Location", pathLogin+"?authRequestID="+url.QueryEscape(id))
 		w.WriteHeader(http.StatusFound)
 	})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/authorize?client_id=makesinger-mobil", nil)
 	if fetchSite != "" {
-		r.Header.Set(baslikFetchSite, fetchSite)
-		r.Header.Set(baslikFetchMode, "navigate")
+		r.Header.Set(headerFetchSite, fetchSite)
+		r.Header.Set(headerFetchMode, "navigate")
 	}
 	if cerez != nil {
 		r.AddCookie(cerez)
 	}
-	o.sayfalar.AuthorizeSar(kutuphane).ServeHTTP(w, r)
+	o.sayfalar.WrapAuthorize(kutuphane).ServeHTTP(w, r)
 	return w
 }
 
@@ -902,11 +902,11 @@ func authorizeSar(o *sayfaTestOrtami, fetchSite, id string, cerez *http.Cookie) 
 // olmadigini depodan okur.
 func bagliMi(t *testing.T, o *sayfaTestOrtami, oturum, id string) bool {
 	t.Helper()
-	baglama, err := o.oturumlar.OturumOku(context.Background(), oturum)
+	baglama, err := o.oturumlar.ReadSession(context.Background(), oturum)
 	if err != nil {
 		return false
 	}
-	_, varMi := baglama.CSRFBul(id)
+	_, varMi := baglama.CSRFFor(id)
 	return varMi
 }
 
@@ -921,7 +921,7 @@ func TestAuthorizeCaprazSiteYeniBaglamaEklemez(t *testing.T) {
 
 	// Saldirganin hazirladigi adres, kurbanin tarayicisinda capraz-site
 	// ust-duzey navigasyonla acilir.
-	w := authorizeSar(o, fetchSiteCapraz, "saldirgan-1", kurbanCerez)
+	w := authorizeSar(o, fetchSiteCrossSite, "saldirgan-1", kurbanCerez)
 
 	// Istegin kendisi kutuphaneye gider (302 yazilir): reddetmek yerine
 	// yalnizca baglama kurulmaz.
@@ -937,14 +937,14 @@ func TestAuthorizeCaprazSiteYeniBaglamaEklemez(t *testing.T) {
 		t.Fatal("capraz-site istek kurbanin kumesine baglama EKLEDI (login-CSRF acik)")
 	}
 	// Kurban o id ile formu ACAMAZ: 403.
-	if g := formIstek(o, yolGiris, "saldirgan-1", kurbanCerez); g.Code != http.StatusForbidden {
+	if g := formIstek(o, pathLogin, "saldirgan-1", kurbanCerez); g.Code != http.StatusForbidden {
 		t.Fatalf("enjekte id icin GET /giris durumu = %d, beklenen 403", g.Code)
 	}
 	// Kurbanin MEVCUT baglamasi BOZULMAMIS olmali (DoS'a cevirmedik).
 	if !bagliMi(t, o, kurbanCerez.Value, "mesru-1") {
 		t.Error("kurbanin mevcut baglamasi kayboldu")
 	}
-	if g := formIstek(o, yolGiris, "mesru-1", kurbanCerez); g.Code != http.StatusOK {
+	if g := formIstek(o, pathLogin, "mesru-1", kurbanCerez); g.Code != http.StatusOK {
 		t.Errorf("kurbanin mesru formu durumu = %d, beklenen 200", g.Code)
 	}
 }
@@ -957,9 +957,9 @@ func TestAuthorizeCaprazSiteYeniBaglamaEklemez(t *testing.T) {
 // Baslik YOK: fail-open (gerekce caprazSiteIstek dokumantasyonunda).
 func TestAuthorizeCaprazSiteOlmayanlardaBaglamaKurulur(t *testing.T) {
 	for _, d := range []struct{ ad, fetchSite string }{
-		{"none-native-uygulama", fetchSiteYok},
-		{"same-origin", fetchSiteAyniOrigin},
-		{"same-site", fetchSiteAyniSite},
+		{"none-native-uygulama", fetchSiteNone},
+		{"same-origin", fetchSiteSameOrigin},
+		{"same-site", fetchSiteSameSite},
 		{"baslik-yok-fail-open", ""},
 	} {
 		t.Run(d.ad, func(t *testing.T) {
@@ -970,7 +970,7 @@ func TestAuthorizeCaprazSiteOlmayanlardaBaglamaKurulur(t *testing.T) {
 			}
 			var oturum string
 			for _, c := range w.Result().Cookies() {
-				if c.Name == cerezAdOturum {
+				if c.Name == cookieNameSession {
 					oturum = c.Value
 				}
 			}
@@ -981,7 +981,7 @@ func TestAuthorizeCaprazSiteOlmayanlardaBaglamaKurulur(t *testing.T) {
 				t.Fatal("baglama depoya yazilmamis")
 			}
 			// Mutlu yol: form acilabilmeli.
-			if g := formIstek(o, yolGiris, "istek-1", &http.Cookie{Name: cerezAdOturum, Value: oturum}); g.Code != http.StatusOK {
+			if g := formIstek(o, pathLogin, "istek-1", &http.Cookie{Name: cookieNameSession, Value: oturum}); g.Code != http.StatusOK {
 				t.Fatalf("form durumu = %d, beklenen 200", g.Code)
 			}
 		})
@@ -993,9 +993,9 @@ func TestAuthorizeCaprazSiteOlmayanlardaBaglamaKurulur(t *testing.T) {
 // handler'i hic baglanmaz (bkz. muxKur).
 func TestGirisSayfasiYalnizcaYapilandirilmisSaglayicilariGosterir(t *testing.T) {
 	o := testSayfalar(t)
-	o.sayfalar.FederasyonSaglayicilari([]string{saglayiciGoogle})
+	o.sayfalar.SetFederationProviders([]string{providerGoogle})
 	cerez := baglamaKur(t, o, "abc", nil)
-	w := formIstek(o, yolGiris, "abc", cerez)
+	w := formIstek(o, pathLogin, "abc", cerez)
 	if w.Code != http.StatusOK {
 		t.Fatalf("durum = %d, beklenen 200", w.Code)
 	}
@@ -1007,7 +1007,7 @@ func TestGirisSayfasiYalnizcaYapilandirilmisSaglayicilariGosterir(t *testing.T) 
 		t.Errorf("google butonunun etiketi yok:\n%s", govde)
 	}
 	// "apple" HICBIR bicimde gecmemeli: ne yol, ne etiket.
-	if strings.Contains(strings.ToLower(govde), saglayiciApple) {
+	if strings.Contains(strings.ToLower(govde), providerApple) {
 		t.Errorf("yapilandirilmamis apple sayfada gecti:\n%s", govde)
 	}
 }
@@ -1018,10 +1018,10 @@ func TestGirisSayfasiYalnizcaYapilandirilmisSaglayicilariGosterir(t *testing.T) 
 // yabanci bir parametre enjekte ederdi.
 func TestGirisSayfasiButonuAuthRequestIDTasir(t *testing.T) {
 	o := testSayfalar(t)
-	o.sayfalar.FederasyonSaglayicilari([]string{saglayiciGoogle})
+	o.sayfalar.SetFederationProviders([]string{providerGoogle})
 	const id = "istek 1&yabanci=1"
 	cerez := baglamaKur(t, o, id, nil)
-	w := formIstek(o, yolGiris, id, cerez)
+	w := formIstek(o, pathLogin, id, cerez)
 	if w.Code != http.StatusOK {
 		t.Fatalf("durum = %d, beklenen 200", w.Code)
 	}

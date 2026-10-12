@@ -314,11 +314,11 @@ const (
 func (b cerezBaglam) fetchSite() string {
 	switch b {
 	case baglamBaslatma:
-		return fetchSiteYok
+		return fetchSiteNone
 	case baglamAyniSite:
-		return fetchSiteAyniOrigin
+		return fetchSiteSameOrigin
 	default:
-		return fetchSiteCapraz
+		return fetchSiteCrossSite
 	}
 }
 
@@ -494,7 +494,7 @@ func (y *yanitKaydi) KonumKod() string {
 // fedCerezi, yanitta yazilan federasyon cerezini doner (yoksa nil).
 func (y *yanitKaydi) fedCerezi() *http.Cookie {
 	for _, c := range y.cerezler {
-		if c.Name == cerezAdFederasyon {
+		if c.Name == cookieNameFederation {
 			return c
 		}
 	}
@@ -562,8 +562,8 @@ func (b *fedTarayici) istek(
 	if form != nil {
 		istek.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	istek.Header.Set(baslikFetchMode, "navigate")
-	istek.Header.Set(baslikFetchSite, baglam.fetchSite())
+	istek.Header.Set(headerFetchMode, "navigate")
+	istek.Header.Set(headerFetchSite, baglam.fetchSite())
 
 	b.kavanoz.baglamKur(baglam)
 	yanit, err := b.istemci.Do(istek)
@@ -750,8 +750,8 @@ func (b *fedTarayici) authorizeBaslatKapsam(t *testing.T, kapsam, yontem string)
 	if err != nil {
 		t.Fatalf("Location cozulemedi: %v", err)
 	}
-	if konum.Path != yolGiris {
-		t.Fatalf("Location yolu = %q, beklenen %q", konum.Path, yolGiris)
+	if konum.Path != pathLogin {
+		t.Fatalf("Location yolu = %q, beklenen %q", konum.Path, pathLogin)
 	}
 	id := konum.Query().Get("authRequestID")
 	if id == "" {
@@ -772,7 +772,7 @@ func (b *fedTarayici) FederasyonAkisiniKostur(t *testing.T, saglayici, istekID s
 // yanitin state'ine ve cerezine ihtiyac duyar.
 func (b *fedTarayici) FederasyonBaslat(t *testing.T, saglayici, istekID string) *yanitKaydi {
 	t.Helper()
-	hedef := b.ortam.issuer + federasyonBaslatYolu(saglayici) +
+	hedef := b.ortam.issuer + federationStartPath(saglayici) +
 		"?" + url.Values{"authRequestID": {istekID}}.Encode()
 	// Kullanici giris sayfasindaki butona basar: ayni-site ust-duzey GET.
 	return b.istek(t, http.MethodGet, hedef, nil, baglamAyniSite)
@@ -835,10 +835,10 @@ func (b *fedTarayici) BaglamaGonder(t *testing.T, govde, sifre string) *yanitKay
 	if csrfEs == nil {
 		t.Fatal("baglama formunda CSRF jetonu yok")
 	}
-	return b.istek(t, http.MethodPost, b.ortam.issuer+yolBaglama, url.Values{
-		alanBeklemeID: {beklemeEs[1]},
-		csrfAlan:      {csrfEs[1]},
-		"sifre":       {sifre},
+	return b.istek(t, http.MethodPost, b.ortam.issuer+pathLink, url.Values{
+		fieldPendingID: {beklemeEs[1]},
+		fieldCSRF:      {csrfEs[1]},
+		"sifre":        {sifre},
 	}, baglamAyniSite)
 }
 
@@ -851,11 +851,11 @@ func (b *fedTarayici) BaglamaGonder(t *testing.T, govde, sifre string) *yanitKay
 // dizi istek yapar ve limite carpan bir test 429'u olcer, akisi degil.
 // Hiz limitinin KENDISI hizlimit_test.go ve
 // TestMuxKurFederasyonKablolamasi'nda dar sinirlarla olculur.
-func gevsekHizAyar() HizLimitAyar {
-	return HizLimitAyar{
-		GirisIPPerMin:      1000,
-		GirisEpostaPerSaat: 1000,
-		KayitIPPerSaat:     1000,
+func gevsekHizAyar() RateLimitConfig {
+	return RateLimitConfig{
+		LoginIPPerMin:     1000,
+		LoginEmailPerHour: 1000,
+		SignupIPPerHour:   1000,
 	}
 }
 
@@ -878,37 +878,37 @@ func akisOrtamiKur(t *testing.T, ayar sahteOPAyar) *akisOrtami {
 // buradan beslenir, yani uretim kablolamasi (muxKur) tek bir yerden
 // kurulur.
 func federasyonKablola(t *testing.T, ayar sahteOPAyar) (
-	map[string]*YukariAkis,
+	map[string]*Upstream,
 	map[string]*auth.UpstreamVerifier,
 	map[string]*sahteOP,
 ) {
 	t.Helper()
-	google := sahteYukariAkisOP(t, saglayiciGoogle, ayar)
+	google := sahteYukariAkisOP(t, providerGoogle, ayar)
 	// Apple'in donusu HER ZAMAN form_post: name/email kapsami istenince
 	// gercek davranis budur (K2) ve uctan uca kanit tam oradan geliyor.
 	appleAyar := ayar
 	appleAyar.FormPost = true
-	apple := sahteYukariAkisOP(t, saglayiciApple, appleAyar)
+	apple := sahteYukariAkisOP(t, providerApple, appleAyar)
 	appleP8, _ := testP8Uret(t)
 
-	akislar := map[string]*YukariAkis{
-		saglayiciGoogle: {
-			Ad: saglayiciGoogle, IstemciID: google.istemciID, IstemciSir: "google-sir",
+	akislar := map[string]*Upstream{
+		providerGoogle: {
+			Name: providerGoogle, ClientID: google.istemciID, ClientSecret: "google-sir",
 			AuthURL: google.sunucu.URL + "/authorize", TokenURL: google.sunucu.URL + "/token",
 			JWKSURL: google.sunucu.URL + "/jwks", Issuer: google.sunucu.URL,
-			Kapsamlar: []string{"openid", "email", "profile"}, PKCEDestekli: true,
+			Scopes: []string{"openid", "email", "profile"}, SupportsPKCE: true,
 		},
-		saglayiciApple: {
-			Ad: saglayiciApple, IstemciID: apple.istemciID,
+		providerApple: {
+			Name: providerApple, ClientID: apple.istemciID,
 			AuthURL: apple.sunucu.URL + "/authorize", TokenURL: apple.sunucu.URL + "/token",
 			JWKSURL: apple.sunucu.URL + "/jwks", Issuer: apple.sunucu.URL,
-			Kapsamlar: []string{"openid", "name", "email"}, FormPost: true,
+			Scopes: []string{"openid", "name", "email"}, FormPost: true,
 			// Apple'in client_secret'i her degisimde ES256 ile uretilir
 			// (K5), bu yuzden testte de GERCEK bir .p8 gerekir.
-			AppleEkipID: "EKIP123", AppleAnahtarID: "ANAHTAR9", AppleAnahtarP8: appleP8,
+			AppleTeamID: "EKIP123", AppleKeyID: "ANAHTAR9", AppleKeyP8: appleP8,
 		},
 	}
-	oplar := map[string]*sahteOP{saglayiciGoogle: google, saglayiciApple: apple}
+	oplar := map[string]*sahteOP{providerGoogle: google, providerApple: apple}
 	dogrulayicilar := map[string]*auth.UpstreamVerifier{}
 	for ad, s := range oplar {
 		d, err := auth.NewUpstreamVerifier(
@@ -942,7 +942,7 @@ func (o *akisOrtami) KayitOl(t *testing.T, eposta, ad, sifre string) {
 	b := o.YeniTarayici(t)
 	id := b.AuthorizeBaslat(t)
 	form := b.istek(t, http.MethodGet,
-		o.issuer+yolKayit+"?"+url.Values{"authRequestID": {id}}.Encode(), nil, baglamAyniSite)
+		o.issuer+pathSignup+"?"+url.Values{"authRequestID": {id}}.Encode(), nil, baglamAyniSite)
 	if form.Durum != http.StatusOK {
 		t.Fatalf("GET /kayit durumu = %d, beklenen 200", form.Durum)
 	}
@@ -950,9 +950,9 @@ func (o *akisOrtami) KayitOl(t *testing.T, eposta, ad, sifre string) {
 	if csrfEs == nil {
 		t.Fatal("kayit formunda CSRF jetonu yok")
 	}
-	yanit := b.istek(t, http.MethodPost, o.issuer+yolKayit, url.Values{
+	yanit := b.istek(t, http.MethodPost, o.issuer+pathSignup, url.Values{
 		"eposta": {eposta}, "ad": {ad}, "sifre": {sifre},
-		"authRequestID": {id}, csrfAlan: {csrfEs[1]},
+		"authRequestID": {id}, fieldCSRF: {csrfEs[1]},
 	}, baglamAyniSite)
 	if yanit.Durum != http.StatusFound {
 		t.Fatalf("POST /kayit durumu = %d, beklenen 302. govde: %s", yanit.Durum, yanit.Govde())
@@ -970,7 +970,7 @@ func (o *akisOrtami) SifreyleGiris(t *testing.T, eposta, sifre string) string {
 	b := o.YeniTarayici(t)
 	id := b.AuthorizeBaslat(t)
 	form := b.istek(t, http.MethodGet,
-		o.issuer+yolGiris+"?"+url.Values{"authRequestID": {id}}.Encode(), nil, baglamAyniSite)
+		o.issuer+pathLogin+"?"+url.Values{"authRequestID": {id}}.Encode(), nil, baglamAyniSite)
 	if form.Durum != http.StatusOK {
 		return ""
 	}
@@ -978,9 +978,9 @@ func (o *akisOrtami) SifreyleGiris(t *testing.T, eposta, sifre string) string {
 	if csrfEs == nil {
 		return ""
 	}
-	yanit := b.istek(t, http.MethodPost, o.issuer+yolGiris, url.Values{
+	yanit := b.istek(t, http.MethodPost, o.issuer+pathLogin, url.Values{
 		"eposta": {eposta}, "sifre": {sifre},
-		"authRequestID": {id}, csrfAlan: {csrfEs[1]},
+		"authRequestID": {id}, fieldCSRF: {csrfEs[1]},
 	}, baglamAyniSite)
 	if yanit.Durum != http.StatusFound {
 		return ""
@@ -996,8 +996,8 @@ func (o *akisOrtami) SifreyleGiris(t *testing.T, eposta, sifre string) string {
 // soyler. Istek hic yoksa false: baglanmamis demektir.
 func (o *akisOrtami) IstekTamamlandiMi(t *testing.T, istekID string) bool {
 	t.Helper()
-	istek, err := o.istekler.IDileOku(t.Context(), istekID)
-	if errors.Is(err, ErrIstekYok) {
+	istek, err := o.istekler.GetByID(t.Context(), istekID)
+	if errors.Is(err, ErrRequestNotFound) {
 		return false
 	}
 	if err != nil {
@@ -1019,10 +1019,10 @@ func (o *akisOrtami) FedereEslesmeSayisi(t *testing.T) int {
 // eslesmeSayisi, sahte depodaki eslesme sayisini doner. Yalnizca
 // testler icin; uretim arayuzunde (FedereDepo) boyle bir islem yok ve
 // olmasina gerek de yok.
-func (d *SahteFedereDepo) eslesmeSayisi() int {
+func (d *FakeFederatedStore) eslesmeSayisi() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return len(d.eslesmeler)
+	return len(d.links)
 }
 
 // ---------------------------------------------------------------------

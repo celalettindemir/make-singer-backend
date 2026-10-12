@@ -14,35 +14,34 @@ import (
 )
 
 const (
-	istekTTL = 10 * time.Minute
-	kodTTL   = 60 * time.Second
+	requestTTL = 10 * time.Minute
+	codeTTL    = 60 * time.Second
 )
 
-// amr claim degerleri: kullanicinin NASIL dogrulandigini soyler.
-// amrSifre, hosted eposta+sifre giris/kayit yolunda kullanilir;
-// amrFederasyon, Apple/Google ile giris ve mevcut hesaba baglama
-// yollarinda kullanilir. Bu iki deger, TamamlandiIsaretle'ye gecirilen
-// TUM amr degerleridir (bkz. K6).
+// amr claim values: they say HOW the user was authenticated.
+// amrPassword is used on the hosted email+password login/signup path;
+// amrFederation is used on the Apple/Google sign-in and link-to-existing-
+// account paths. These two values are ALL the amr values passed to MarkDone
+// (see K6).
 const (
-	amrSifre      = "pwd"
-	amrFederasyon = "fed"
+	amrPassword   = "pwd"
+	amrFederation = "fed"
 )
 
-// ErrIstekYok, istenen auth istegi (veya kod) Redis'te bulunamadiginda
-// donulur. Suresi dolmus, hic olusmamis ya da (kod icin) zaten tuketilmis
-// olabilir.
-var ErrIstekYok = errors.New("auth istegi bulunamadi")
+// ErrRequestNotFound is returned when the requested auth request (or code)
+// cannot be found in Redis. It may have expired, never been created, or (for
+// a code) already been consumed.
+var ErrRequestNotFound = errors.New("auth istegi bulunamadi")
 
-// ErrIstekZatenTamamlandi, zaten tamamlanmis bir auth istegi BASKA bir
-// kullaniciya yeniden baglanmak istendiginde donulur (bkz.
-// TamamlandiIsaretle).
-var ErrIstekZatenTamamlandi = errors.New("auth istegi zaten tamamlandi")
+// ErrRequestAlreadyCompleted is returned when an already-completed auth
+// request is asked to be bound to ANOTHER user again (see MarkDone).
+var ErrRequestAlreadyCompleted = errors.New("auth istegi zaten tamamlandi")
 
-// AuthIstek, op.AuthRequest arayuzunu karsilayan, Redis'te JSON olarak
-// saklanan authorization request kaydidir. Tum alanlar disa acik
-// (buyuk harfli) olmali; aksi halde encoding/json sessizce atlar ve
-// kayit Redis'e yazilirken veri kaybolur.
-type AuthIstek struct {
+// AuthRequest is the authorization request record that satisfies the
+// op.AuthRequest interface and is stored in Redis as JSON. All fields MUST
+// be exported (capitalized); otherwise encoding/json silently skips them
+// and data is lost when the record is written to Redis.
+type AuthRequest struct {
 	ID                  string
 	ClientID            string
 	RedirectURI         string
@@ -54,69 +53,68 @@ type AuthIstek struct {
 	CodeChallenge       string
 	CodeChallengeMethod oidc.CodeChallengeMethod
 
-	// IpucuSubject, id_token_hint ile gelen "sub" degeridir (kutuphane
-	// CreateAuthRequest'in userID parametresinde verir). SADECE ipucu
-	// olarak tutulur: ne istek ID'si olarak kullanilir ne de Done()'u
-	// etkiler. Istek ID'si olarak kullanilmasi es zamanli iki akisin
-	// ayni Redis anahtarini ezmesine yol acardi.
-	IpucuSubject string `json:"IpucuSubject"`
+	// HintSubject is the "sub" value that comes with id_token_hint (the library
+	// supplies it in CreateAuthRequest's userID parameter). It is kept ONLY as a
+	// hint: it is neither used as the request ID nor does it affect Done().
+	// Using it as the request ID would let two concurrent flows overwrite the
+	// same Redis key.
+	HintSubject string `json:"IpucuSubject"`
 
-	// Giris tamamlaninca doldurulur.
+	// Filled in when login completes.
 	Subject  string
 	AuthTime time.Time
 
-	// AMR, giris tamamlaninca doldurulur (bkz. TamamlandiIsaretle) ve
-	// kullanicinin NASIL dogrulandigini soyler (amrSifre veya
-	// amrFederasyon). Disa acik olmak ZORUNDA: encoding/json kucuk
-	// harfli alanlari sessizce atlar, bu da amr'in Redis'ten geri
-	// okundugunda kaybolmasina yol acardi.
+	// AMR is filled in when login completes (see MarkDone) and says HOW the
+	// user was authenticated (amrPassword or amrFederation). It MUST be
+	// exported: encoding/json silently skips lowercase fields, which would make
+	// amr disappear when read back from Redis.
 	AMR []string
 }
 
-var _ op.AuthRequest = (*AuthIstek)(nil)
+var _ op.AuthRequest = (*AuthRequest)(nil)
 
-func (a *AuthIstek) GetID() string { return a.ID }
+func (a *AuthRequest) GetID() string { return a.ID }
 
-// GetACR: makesinger tek bir kimlik dogrulama sinifi kullaniyor, bu
-// yuzden sabit/bos donuyoruz. Coklu ACR gerekirse burada genisletilir.
-func (a *AuthIstek) GetACR() string { return "" }
+// GetACR: makesinger uses a single authentication class, so we return a
+// constant/empty value. If multiple ACRs are needed it is extended here.
+func (a *AuthRequest) GetACR() string { return "" }
 
-// GetAMR, kullanicinin NASIL dogrulandigini soyler ve istek basina
-// hesaplanir. Eskiden sabit []string{"pwd"} donuyordu; Google ile
-// giren bir kullanicinin tokeninda "pwd" yazmasi YANLIS BIR BEYANDIR.
+// GetAMR says HOW the user was authenticated and is computed per request.
+// It used to return a constant []string{"pwd"}; "pwd" appearing in the
+// token of a user who signed in with Google is A FALSE STATEMENT.
 //
-// Alan bossa "pwd" varsayilmaz: amr vermeyi unutan bir cagirani
-// sessizce yanlis beyana cevirmek, hatayi gizlemenin en pahali
-// bicimidir. Bu yuzden bos dilim donulur, "pwd" degil -- bir sonraki
-// okuyucu burayi "daha mantikli" bir varsayilanla "duzeltme" istegi
-// duyabilir, duymamali.
-func (a *AuthIstek) GetAMR() []string {
+// If the field is empty "pwd" is NOT assumed: silently turning a caller that
+// forgot to supply amr into a false statement is the most expensive way of
+// hiding the bug. So an empty slice is returned, not "pwd" -- the next
+// reader may feel the urge to "fix" this with a "more sensible" default;
+// they must not.
+func (a *AuthRequest) GetAMR() []string {
 	if len(a.AMR) == 0 {
 		return []string{}
 	}
 	return a.AMR
 }
 
-// GetAudience: en az client ID'yi icermeli (op kutuphanesi bunu jetonun
-// "aud" alaninda kullanir).
-func (a *AuthIstek) GetAudience() []string { return []string{a.ClientID} }
+// GetAudience: it must include at least the client ID (the op library uses
+// it in the token's "aud" field).
+func (a *AuthRequest) GetAudience() []string { return []string{a.ClientID} }
 
-func (a *AuthIstek) GetAuthTime() time.Time { return a.AuthTime }
+func (a *AuthRequest) GetAuthTime() time.Time { return a.AuthTime }
 
-func (a *AuthIstek) GetClientID() string { return a.ClientID }
+func (a *AuthRequest) GetClientID() string { return a.ClientID }
 
-// GetCodeChallenge: Challenge bos ise PKCE kullanilmiyor demektir, nil
-// donmek zorunlu (op kutuphanesi nil'i "PKCE yok" olarak yorumlar).
+// GetCodeChallenge: if Challenge is empty it means PKCE is not used, and
+// returning nil is mandatory (the op library interprets nil as "no PKCE").
 //
-// FAIL-CLOSED: method S256 DEGILSE (plain veya bos) challenge'i
-// AKTARMIYORUZ. Kutuphane bos/plain method'da duz string
-// karsilastirmasi yapar (pkg/oidc/code_challenge.go VerifyCodeChallenge)
-// ve bu, PKCE'yi fiilen etkisiz kilar. nil donmek, public client'ta
-// token ucunun istegi "PKCE required" ile reddetmesini saglar
-// (pkg/op/token_code.go, AuthMethodNone dali). Birinci katman
-// /authorize'da reddetmektir (bkz. pkceZorlayici, sunucu.go); bu ikinci
-// katman o kontrol atlanirsa bile kod degisimini kapatir.
-func (a *AuthIstek) GetCodeChallenge() *oidc.CodeChallenge {
+// FAIL-CLOSED: if the method is NOT S256 (plain or empty) we DO NOT PASS the
+// challenge on. With an empty/plain method the library does a plain string
+// comparison (pkg/oidc/code_challenge.go VerifyCodeChallenge) and this
+// effectively disables PKCE. Returning nil makes the token endpoint reject
+// the request with "PKCE required" for a public client (pkg/op/token_code.go,
+// the AuthMethodNone branch). The first layer is rejecting at /authorize
+// (see pkceEnforcer, server.go); this second layer closes the code exchange
+// even if that check is bypassed.
+func (a *AuthRequest) GetCodeChallenge() *oidc.CodeChallenge {
 	if a.CodeChallenge == "" || a.CodeChallengeMethod != oidc.CodeChallengeMethodS256 {
 		return nil
 	}
@@ -126,54 +124,54 @@ func (a *AuthIstek) GetCodeChallenge() *oidc.CodeChallenge {
 	}
 }
 
-func (a *AuthIstek) GetNonce() string { return a.Nonce }
+func (a *AuthRequest) GetNonce() string { return a.Nonce }
 
-func (a *AuthIstek) GetRedirectURI() string { return a.RedirectURI }
+func (a *AuthRequest) GetRedirectURI() string { return a.RedirectURI }
 
-func (a *AuthIstek) GetResponseType() oidc.ResponseType { return a.ResponseType }
+func (a *AuthRequest) GetResponseType() oidc.ResponseType { return a.ResponseType }
 
-func (a *AuthIstek) GetResponseMode() oidc.ResponseMode { return a.ResponseMode }
+func (a *AuthRequest) GetResponseMode() oidc.ResponseMode { return a.ResponseMode }
 
-func (a *AuthIstek) GetScopes() []string { return a.Scopes }
+func (a *AuthRequest) GetScopes() []string { return a.Scopes }
 
-func (a *AuthIstek) GetState() string { return a.State }
+func (a *AuthRequest) GetState() string { return a.State }
 
-func (a *AuthIstek) GetSubject() string { return a.Subject }
+func (a *AuthRequest) GetSubject() string { return a.Subject }
 
-// Done: yalnizca Subject dolu VE AuthTime sifir degilse true doner.
-// Guvenlik acisindan kritik: giris tamamlanmadan Done() true donerse
-// authorization code, kullanici hic dogrulanmadan verilir.
-func (a *AuthIstek) Done() bool {
+// Done: returns true only if Subject is set AND AuthTime is non-zero.
+// Critical for security: if Done() returned true before login completed, the
+// authorization code would be issued without the user ever being verified.
+func (a *AuthRequest) Done() bool {
 	return a.Subject != "" && !a.AuthTime.IsZero()
 }
 
-// IstekDepo, authorization request'leri ve tek kullanimlik authorization
-// code'lari Redis'te tutar.
+// RequestStore keeps authorization requests and single-use authorization
+// codes in Redis.
 //
-// Anahtar semasi:
+// Key scheme:
 //
-//	kimlik:istek:<id>   -> JSON, TTL 10 dakika  (giris tamamlanana kadar)
-//	kimlik:kod:<kod>    -> istek id'si, TTL 60 saniye
-type IstekDepo struct {
+//	kimlik:istek:<id>   -> JSON, TTL 10 minutes  (until login completes)
+//	kimlik:kod:<code>   -> request id, TTL 60 seconds
+type RequestStore struct {
 	rdb *redis.Client
 }
 
-func NewIstekDepo(rdb *redis.Client) *IstekDepo { return &IstekDepo{rdb: rdb} }
+func NewRequestStore(rdb *redis.Client) *RequestStore { return &RequestStore{rdb: rdb} }
 
-func istekAnahtar(id string) string { return "kimlik:istek:" + id }
-func kodAnahtar(kod string) string  { return "kimlik:kod:" + kod }
+func requestKey(id string) string { return "kimlik:istek:" + id }
+func codeKey(code string) string  { return "kimlik:kod:" + code }
 
-// Olustur, gelen authorization request'i AuthIstek'e cevirir ve Redis'e
-// yazar. Istek ID'si HER ZAMAN burada uretilir: kutuphanenin
-// CreateAuthRequest'e verdigi userID parametresi id_token_hint'in "sub"
-// degeridir, bir istek ID'si DEGILDIR (pkg/op/auth_request.go,
-// ValidateAuthReqIDTokenHint). Onu ID olarak kullanmak, es zamanli iki
-// akisin ayni Redis anahtarini ezmesine yol acardi; bu yuzden ipucu
-// yalnizca IpucuSubject alaninda saklanir.
-func (d *IstekDepo) Olustur(ctx context.Context, req *oidc.AuthRequest, ipucuSubject string) (*AuthIstek, error) {
-	istek := &AuthIstek{
+// Create turns the incoming authorization request into an AuthRequest and
+// writes it to Redis. The request ID is ALWAYS generated here: the userID
+// parameter the library gives to CreateAuthRequest is the id_token_hint's
+// "sub" value, NOT a request ID (pkg/op/auth_request.go,
+// ValidateAuthReqIDTokenHint). Using it as the ID would let two concurrent
+// flows overwrite the same Redis key; so the hint is stored only in the
+// HintSubject field.
+func (d *RequestStore) Create(ctx context.Context, req *oidc.AuthRequest, hintSubject string) (*AuthRequest, error) {
+	request := &AuthRequest{
 		ID:                  uuid.NewString(),
-		IpucuSubject:        ipucuSubject,
+		HintSubject:         hintSubject,
 		ClientID:            req.ClientID,
 		RedirectURI:         req.RedirectURI,
 		Scopes:              []string(req.Scopes),
@@ -184,152 +182,152 @@ func (d *IstekDepo) Olustur(ctx context.Context, req *oidc.AuthRequest, ipucuSub
 		CodeChallenge:       req.CodeChallenge,
 		CodeChallengeMethod: req.CodeChallengeMethod,
 	}
-	if err := d.yaz(ctx, istek, istekTTL); err != nil {
+	if err := d.write(ctx, request, requestTTL); err != nil {
 		return nil, err
 	}
-	return istek, nil
+	return request, nil
 }
 
-func (d *IstekDepo) yaz(ctx context.Context, istek *AuthIstek, ttl time.Duration) error {
-	veri, err := json.Marshal(istek)
+func (d *RequestStore) write(ctx context.Context, request *AuthRequest, ttl time.Duration) error {
+	data, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("istek serilenemedi: %w", err)
 	}
-	if err := d.rdb.Set(ctx, istekAnahtar(istek.ID), veri, ttl).Err(); err != nil {
+	if err := d.rdb.Set(ctx, requestKey(request.ID), data, ttl).Err(); err != nil {
 		return fmt.Errorf("istek yazilamadi: %w", err)
 	}
 	return nil
 }
 
-// IDileOku, id'si verilen authorization request'i okur.
-func (d *IstekDepo) IDileOku(ctx context.Context, id string) (*AuthIstek, error) {
-	veri, err := d.rdb.Get(ctx, istekAnahtar(id)).Bytes()
+// GetByID reads the authorization request with the given id.
+func (d *RequestStore) GetByID(ctx context.Context, id string) (*AuthRequest, error) {
+	data, err := d.rdb.Get(ctx, requestKey(id)).Bytes()
 	if errors.Is(err, redis.Nil) {
-		return nil, ErrIstekYok
+		return nil, ErrRequestNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("istek okunamadi: %w", err)
 	}
-	var istek AuthIstek
-	if err := json.Unmarshal(veri, &istek); err != nil {
+	var request AuthRequest
+	if err := json.Unmarshal(data, &request); err != nil {
 		return nil, fmt.Errorf("istek cozumlenemedi: %w", err)
 	}
-	return &istek, nil
+	return &request, nil
 }
 
-// KodKaydet, tamamlanmis bir authorization request'e ait kodu, istek
-// id'sine esler. Kod 60 saniye sonra kendiliginden gecersiz olur.
-func (d *IstekDepo) KodKaydet(ctx context.Context, id string, kod string) error {
-	if err := d.rdb.Set(ctx, kodAnahtar(kod), id, kodTTL).Err(); err != nil {
+// SaveCode maps the code belonging to a completed authorization request to
+// the request id. The code becomes invalid on its own after 60 seconds.
+func (d *RequestStore) SaveCode(ctx context.Context, id string, code string) error {
+	if err := d.rdb.Set(ctx, codeKey(code), id, codeTTL).Err(); err != nil {
 		return fmt.Errorf("kod kaydedilemedi: %w", err)
 	}
 	return nil
 }
 
-// KodlaOku, kodu istek id'sine cozer ve kodu ATOMIK olarak siler
-// (GETDEL): kod tek kullanimliktir, ikinci okuma ErrIstekYok doner.
-// Boylece adres cubugundan veya loglardan kod kapan biri, kod zaten
-// kullanildiysa jeton alamaz.
-func (d *IstekDepo) KodlaOku(ctx context.Context, kod string) (*AuthIstek, error) {
-	id, err := d.rdb.GetDel(ctx, kodAnahtar(kod)).Result()
+// GetByCode resolves the code to a request id and deletes the code
+// ATOMICALLY (GETDEL): the code is single-use, a second read returns
+// ErrRequestNotFound. So someone who grabs the code from the address bar or
+// logs cannot obtain a token if the code was already used.
+func (d *RequestStore) GetByCode(ctx context.Context, code string) (*AuthRequest, error) {
+	id, err := d.rdb.GetDel(ctx, codeKey(code)).Result()
 	if errors.Is(err, redis.Nil) {
-		return nil, ErrIstekYok
+		return nil, ErrRequestNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("kod okunamadi: %w", err)
 	}
-	return d.IDileOku(ctx, id)
+	return d.GetByID(ctx, id)
 }
 
-// Sil, authorization request'i Redis'ten kaldirir (ornegin kod
-// degisimi tamamlaninca kullanilir).
-func (d *IstekDepo) Sil(ctx context.Context, id string) error {
-	if err := d.rdb.Del(ctx, istekAnahtar(id)).Err(); err != nil {
+// Delete removes the authorization request from Redis (for example, used
+// when the code exchange completes).
+func (d *RequestStore) Delete(ctx context.Context, id string) error {
+	if err := d.rdb.Del(ctx, requestKey(id)).Err(); err != nil {
 		return fmt.Errorf("istek silinemedi: %w", err)
 	}
 	return nil
 }
 
-// TamamlandiIsaretle, istegi okur, Subject ve AuthTime'i doldurur ve
-// geri yazar. Kalan TTL okunup ayni sure ile yeniden uygulanir; aksi
-// halde her yeniden yazma TTL'i sifirlar ve istek gerekenden uzun
-// yasar (ya da suresi dolmus bir kayit sonsuza kadar kalir).
+// MarkDone reads the request, fills in Subject and AuthTime and writes it
+// back. The remaining TTL is read and re-applied for the same duration;
+// otherwise every rewrite resets the TTL and the request lives longer than
+// necessary (or an expired record stays forever).
 //
-// IKINCI CAGRI: zaten tamamlanmis bir istegin Subject'i EZILMEZ.
-//   - Ayni kullanici icin: NO-OP (nil doner, yeniden yazilmaz).
-//     Gerekce: durust bir cift gonderim (formu iki kez yollamak,
-//     geri tusu) kullaniciya hata gostermemeli; sonuc zaten istenen
-//     durumun aynisi. Yeniden yazmamak AuthTime'in gercek giris anini
-//     korumasini da saglar.
-//   - BASKA bir kullanici icin: REDDEDILIR (ErrIstekZatenTamamlandi).
-//     Gerekce: bu, bekleyen bir auth istegini kod uretilene kadar
-//     istenildigi kadar farkli kimlige yeniden yonlendirme yolunun
-//     kendisiydi; sessizce ezmek yerine acikca basarisiz olmali.
+// SECOND CALL: the Subject of an already-completed request is NOT OVERWRITTEN.
+//   - For the same user: NO-OP (returns nil, nothing is rewritten).
+//     Rationale: an honest double submit (sending the form twice, the back
+//     button) should not show the user an error; the result is already the
+//     desired state. Not rewriting also ensures AuthTime keeps the real
+//     moment of login.
+//   - For ANOTHER user: REJECTED (ErrRequestAlreadyCompleted).
+//     Rationale: this was itself the way to redirect a pending auth request
+//     to as many different identities as desired until the code was
+//     generated; it must fail explicitly instead of overwriting silently.
 //
-// amr de NO-OP durumunda EZILMEZ: ilk gercek giris yontemi dogru
-// olandir. (Ikinci cagri zaten reddediliyorsa amr'in ne oldugu
-// onemsizdir; sadece NO-OP dalinda yeniden yazma hic yapilmadigi icin
-// amr de kendiliginden korunur.)
-func (d *IstekDepo) TamamlandiIsaretle(ctx context.Context, id string, userID string, amr []string) error {
-	istek, err := d.IDileOku(ctx, id)
+// amr is also NOT OVERWRITTEN in the NO-OP case: the first real login
+// method is the correct one. (If the second call is rejected anyway, what
+// amr is does not matter; only, since the NO-OP branch does no rewrite at
+// all, amr is preserved on its own.)
+func (d *RequestStore) MarkDone(ctx context.Context, id string, userID string, amr []string) error {
+	request, err := d.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
-	if istek.Done() {
-		if istek.Subject == userID {
+	if request.Done() {
+		if request.Subject == userID {
 			return nil
 		}
-		return ErrIstekZatenTamamlandi
+		return ErrRequestAlreadyCompleted
 	}
-	ttl, err := d.rdb.TTL(ctx, istekAnahtar(id)).Result()
+	ttl, err := d.rdb.TTL(ctx, requestKey(id)).Result()
 	if err != nil {
 		return fmt.Errorf("TTL okunamadi: %w", err)
 	}
 	if ttl <= 0 {
-		ttl = istekTTL
+		ttl = requestTTL
 	}
-	istek.Subject = userID
-	istek.AuthTime = time.Now()
-	istek.AMR = amr
-	return d.yaz(ctx, istek, ttl)
+	request.Subject = userID
+	request.AuthTime = time.Now()
+	request.AMR = amr
+	return d.write(ctx, request, ttl)
 }
 
-// ---- OturumDepo ----
+// ---- SessionStore ----
 //
-// Cerez baglamasi, auth istegiyle AYNI depoda ve AYNI TTL ile tutulur:
-// baglamanin istekten uzun yasamasi anlamsiz, kisa yasamasi akisi
-// ortasinda kirar.
+// The cookie binding is kept in the SAME store as the auth request with the
+// SAME TTL: a binding outliving the request is meaningless, and one with a
+// shorter life breaks the flow midway.
 
-func oturumAnahtar(oturum string) string { return "kimlik:oturum:" + oturum }
+func sessionKey(session string) string { return "kimlik:oturum:" + session }
 
-var _ OturumDepo = (*IstekDepo)(nil)
+var _ SessionStore = (*RequestStore)(nil)
 
-// OturumYaz, cerez degerini (oturum) auth istegi ve CSRF jetonuna
-// esler.
-func (d *IstekDepo) OturumYaz(ctx context.Context, oturum string, baglama OturumBaglama, ttl time.Duration) error {
-	veri, err := json.Marshal(baglama)
+// WriteSession maps the cookie value (session) to the auth request and the
+// CSRF token.
+func (d *RequestStore) WriteSession(ctx context.Context, session string, binding SessionBinding, ttl time.Duration) error {
+	data, err := json.Marshal(binding)
 	if err != nil {
 		return fmt.Errorf("oturum serilenemedi: %w", err)
 	}
-	if err := d.rdb.Set(ctx, oturumAnahtar(oturum), veri, ttl).Err(); err != nil {
+	if err := d.rdb.Set(ctx, sessionKey(session), data, ttl).Err(); err != nil {
 		return fmt.Errorf("oturum yazilamadi: %w", err)
 	}
 	return nil
 }
 
-// OturumOku, cerez degerine bagli auth istegi ve CSRF jetonunu doner.
-// Kayit yoksa ErrOturumYok doner.
-func (d *IstekDepo) OturumOku(ctx context.Context, oturum string) (OturumBaglama, error) {
-	veri, err := d.rdb.Get(ctx, oturumAnahtar(oturum)).Bytes()
+// ReadSession returns the auth request and CSRF token bound to the cookie
+// value. If there is no record it returns ErrSessionNotFound.
+func (d *RequestStore) ReadSession(ctx context.Context, session string) (SessionBinding, error) {
+	data, err := d.rdb.Get(ctx, sessionKey(session)).Bytes()
 	if errors.Is(err, redis.Nil) {
-		return OturumBaglama{}, ErrOturumYok
+		return SessionBinding{}, ErrSessionNotFound
 	}
 	if err != nil {
-		return OturumBaglama{}, fmt.Errorf("oturum okunamadi: %w", err)
+		return SessionBinding{}, fmt.Errorf("oturum okunamadi: %w", err)
 	}
-	var baglama OturumBaglama
-	if err := json.Unmarshal(veri, &baglama); err != nil {
-		return OturumBaglama{}, fmt.Errorf("oturum cozumlenemedi: %w", err)
+	var binding SessionBinding
+	if err := json.Unmarshal(data, &binding); err != nil {
+		return SessionBinding{}, fmt.Errorf("oturum cozumlenemedi: %w", err)
 	}
-	return baglama, nil
+	return binding, nil
 }

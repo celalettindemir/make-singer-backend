@@ -12,39 +12,39 @@ import (
 	"time"
 )
 
-// ErrYukariAkisYanit, yukari akis saglayicisinin token ucundan
-// beklenmeyen bir yanit geldigini belirtir: HTTP hatasi, cozulemeyen
-// govde, veya 200 ile birlikte gelen {"error":...}/id_token eksikligi.
-// Hata govdesinin kendisi asla bu hataya eklenmez (bkz. JetonDegis):
-// icinde kod veya client_secret parcalari olabilir.
-var ErrYukariAkisYanit = errors.New("yukari akis saglayicisi beklenmeyen yanit verdi")
+// ErrUpstreamResponse signals that an unexpected response came from the
+// upstream provider's token endpoint: an HTTP error, an undecodable body, or
+// a missing id_token / {"error":...} that came with a 200. The error body
+// itself is never added to this error (see ExchangeCode): it may contain
+// pieces of the code or client_secret.
+var ErrUpstreamResponse = errors.New("yukari akis saglayicisi beklenmeyen yanit verdi")
 
-// yukariAkisZamanAsimi, yukari akis token ucuna uygulanan ust sinir.
-// Zaman asimi olmadan cevap vermeyen bir saglayici, giris ucunu tutan
-// goroutine'leri biriktirir.
-const yukariAkisZamanAsimi = 10 * time.Second
+// upstreamTimeout is the upper bound applied to the upstream token endpoint.
+// A provider that does not respond without a timeout accumulates the
+// goroutines holding the login endpoint.
+const upstreamTimeout = 10 * time.Second
 
-// yukariAkisYanitSiniri, token ucunun yanit govdesinden okunacak en
-// fazla bayt sayisi. Kotu niyetli ya da bozuk bir yanit bellegi
-// doldurmasin diye io.ReadAll yerine io.LimitReader kullanilir.
-const yukariAkisYanitSiniri = 1 << 20
+// upstreamResponseLimit is the maximum number of bytes to read from the
+// token endpoint's response body. io.LimitReader is used instead of
+// io.ReadAll so that a malicious or broken response cannot fill memory.
+const upstreamResponseLimit = 1 << 20
 
-// JetonDegis, yukari akis saglayicisindan (Apple veya Google) alinan
-// yetkilendirme kodunu token ucunda id_token ile degistirir. Donen
-// dize DOGRULANMAMIS bir id_token'dir; cagiran taraf bunu Gorev 2'nin
-// auth.DogrulaNonce'una vermekle sorumludur -- bu fonksiyon imza ya
-// da nonce kontrolu yapmaz.
-func (y *YukariAkis) JetonDegis(
-	ctx context.Context, istemci *http.Client, kod, kodDogrulayici, geriURL string,
+// ExchangeCode exchanges the authorization code received from the upstream
+// provider (Apple or Google) for an id_token at the token endpoint. The
+// returned string is an UNVERIFIED id_token; the caller is responsible for
+// passing it to Task 2's auth.VerifyWithNonce -- this function does not
+// check the signature or the nonce.
+func (ic *Upstream) ExchangeCode(
+	ctx context.Context, client *http.Client, code, codeVerifier, callbackURL string,
 ) (string, error) {
-	ctx, iptal := context.WithTimeout(ctx, yukariAkisZamanAsimi)
-	defer iptal()
+	ctx, cancel := context.WithTimeout(ctx, upstreamTimeout)
+	defer cancel()
 
-	sir := y.IstemciSir
-	if y.Ad == saglayiciApple {
+	secret := ic.ClientSecret
+	if ic.Name == providerApple {
 		var err error
-		// K5: her degisimde yeniden uretilir, onbellege alinmaz.
-		sir, err = appleIstemciSir(y.AppleEkipID, y.AppleAnahtarID, y.IstemciID, y.AppleAnahtarP8, time.Now())
+		// K5: regenerated on every exchange, not cached.
+		secret, err = appleClientSecret(ic.AppleTeamID, ic.AppleKeyID, ic.ClientID, ic.AppleKeyP8, time.Now())
 		if err != nil {
 			return "", fmt.Errorf("apple client_secret uretilemedi: %w", err)
 		}
@@ -52,48 +52,49 @@ func (y *YukariAkis) JetonDegis(
 
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
-	form.Set("code", kod)
-	form.Set("redirect_uri", geriURL)
-	form.Set("client_id", y.IstemciID)
-	form.Set("client_secret", sir)
-	if y.PKCEDestekli {
-		form.Set("code_verifier", kodDogrulayici)
+	form.Set("code", code)
+	form.Set("redirect_uri", callbackURL)
+	form.Set("client_id", ic.ClientID)
+	form.Set("client_secret", secret)
+	if ic.SupportsPKCE {
+		form.Set("code_verifier", codeVerifier)
 	}
 
-	istek, err := http.NewRequestWithContext(ctx, http.MethodPost, y.TokenURL, strings.NewReader(form.Encode()))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, ic.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("istek kurulamadi: %w", err)
 	}
-	istek.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	yanit, err := istemci.Do(istek)
+	response, err := client.Do(request)
 	if err != nil {
 		return "", fmt.Errorf("yukari akisa ulasilamadi: %w", err)
 	}
-	defer func() { _ = yanit.Body.Close() }()
+	defer func() { _ = response.Body.Close() }()
 
-	// Govde SINIRLI okunur: kotu niyetli ya da bozuk bir yanit
-	// bellegi doldurmasin.
-	govde, err := io.ReadAll(io.LimitReader(yanit.Body, yukariAkisYanitSiniri))
+	// The body is read with a LIMIT: so that a malicious or broken response
+	// cannot fill memory.
+	body, err := io.ReadAll(io.LimitReader(response.Body, upstreamResponseLimit))
 	if err != nil {
 		return "", fmt.Errorf("yanit okunamadi: %w", err)
 	}
-	if yanit.StatusCode != http.StatusOK {
-		// HATA GOVDESI LOGLANMAZ ve KULLANICIYA GOSTERILMEZ: icinde
-		// kod veya sir parcalari olabilir. Yalnizca durum kodu.
-		return "", fmt.Errorf("%w: durum %d", ErrYukariAkisYanit, yanit.StatusCode)
+	if response.StatusCode != http.StatusOK {
+		// THE ERROR BODY IS NOT LOGGED and NOT SHOWN TO THE USER: it may contain
+		// pieces of the code or secrets. Only the status code.
+		return "", fmt.Errorf("%w: durum %d", ErrUpstreamResponse, response.StatusCode)
 	}
-	var cozulen struct {
+	var decoded struct {
 		IDToken string `json:"id_token"`
-		Hata    string `json:"error"`
+		Error   string `json:"error"`
 	}
-	if err := json.Unmarshal(govde, &cozulen); err != nil {
-		return "", fmt.Errorf("%w: govde cozumlenemedi", ErrYukariAkisYanit)
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return "", fmt.Errorf("%w: govde cozumlenemedi", ErrUpstreamResponse)
 	}
-	// 200 + {"error":...} GERCEK bir durumdur; govdeye bakmadan 200'u
-	// basari saymak bos bir id_token'i dogrulamaya gondermek olur.
-	if cozulen.Hata != "" || cozulen.IDToken == "" {
-		return "", fmt.Errorf("%w: id_token yok", ErrYukariAkisYanit)
+	// 200 + {"error":...} is a REAL situation; counting a 200 as success
+	// without looking at the body would mean sending an empty id_token to
+	// verification.
+	if decoded.Error != "" || decoded.IDToken == "" {
+		return "", fmt.Errorf("%w: id_token yok", ErrUpstreamResponse)
 	}
-	return cozulen.IDToken, nil
+	return decoded.IDToken, nil
 }

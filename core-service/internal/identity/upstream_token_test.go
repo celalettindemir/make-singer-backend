@@ -27,8 +27,8 @@ func TestJetonDegisGoogleAlanlariGonderir(t *testing.T) {
 	}))
 	defer sunucu.Close()
 
-	y := &YukariAkis{Ad: saglayiciGoogle, IstemciID: "ist", IstemciSir: "sir", TokenURL: sunucu.URL, PKCEDestekli: true}
-	idToken, err := y.JetonDegis(context.Background(), sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
+	y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: sunucu.URL, SupportsPKCE: true}
+	idToken, err := y.ExchangeCode(context.Background(), sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
 	if err != nil {
 		t.Fatalf("degisim basarisiz: %v", err)
 	}
@@ -60,8 +60,8 @@ func TestJetonDegisPKCEsizSaglayiciyaDogrulayiciGondermez(t *testing.T) {
 	}))
 	defer sunucu.Close()
 
-	y := &YukariAkis{Ad: saglayiciGoogle, IstemciID: "ist", IstemciSir: "sir", TokenURL: sunucu.URL, PKCEDestekli: false}
-	if _, err := y.JetonDegis(context.Background(), sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri"); err != nil {
+	y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: sunucu.URL, SupportsPKCE: false}
+	if _, err := y.ExchangeCode(context.Background(), sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri"); err != nil {
 		t.Fatalf("degisim basarisiz: %v", err)
 	}
 	if alinan.Get("code_verifier") != "" {
@@ -85,9 +85,9 @@ func TestJetonDegisIdTokenYokHataVerir(t *testing.T) {
 			}))
 			defer sunucu.Close()
 
-			y := &YukariAkis{Ad: saglayiciGoogle, IstemciID: "ist", IstemciSir: "sir", TokenURL: sunucu.URL, PKCEDestekli: true}
-			idToken, err := y.JetonDegis(context.Background(), sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
-			if !errors.Is(err, ErrYukariAkisYanit) {
+			y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: sunucu.URL, SupportsPKCE: true}
+			idToken, err := y.ExchangeCode(context.Background(), sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
+			if !errors.Is(err, ErrUpstreamResponse) {
 				t.Errorf("err = %v, beklenen ErrYukariAkisYanit", err)
 			}
 			if idToken != "" {
@@ -106,8 +106,8 @@ func TestJetonDegisHTTPHatasiYutulmaz(t *testing.T) {
 			}))
 			defer sunucu.Close()
 
-			y := &YukariAkis{Ad: saglayiciGoogle, IstemciID: "ist", IstemciSir: "sir", TokenURL: sunucu.URL, PKCEDestekli: true}
-			idToken, err := y.JetonDegis(context.Background(), sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
+			y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: sunucu.URL, SupportsPKCE: true}
+			idToken, err := y.ExchangeCode(context.Background(), sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
 			if err == nil {
 				t.Fatal("hata bekleniyordu, nil geldi")
 			}
@@ -131,9 +131,9 @@ func TestJetonDegisZamanAsimiUygular(t *testing.T) {
 	ctx, iptal := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer iptal()
 
-	y := &YukariAkis{Ad: saglayiciGoogle, IstemciID: "ist", IstemciSir: "sir", TokenURL: sunucu.URL, PKCEDestekli: true}
+	y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: sunucu.URL, SupportsPKCE: true}
 	basla := time.Now()
-	_, err := y.JetonDegis(ctx, sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
+	_, err := y.ExchangeCode(ctx, sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
 	if err == nil {
 		t.Fatal("zaman asimi hatasi bekleniyordu, nil geldi")
 	}

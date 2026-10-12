@@ -140,11 +140,11 @@ func TestUctanUcaGoogleGirisi(t *testing.T) {
 		Sub:              "google-sub-1",
 	})
 
-	jeton, _ := ortam.federasyonJetonu(t, saglayiciGoogle)
+	jeton, _ := ortam.federasyonJetonu(t, providerGoogle)
 
 	// 0) Yukari akisa GITTIGIMIZ istek de akisin parcasi: kendi PKCE
 	//    ciftimizi ve nonce'umuzu gonderdigimiz orada gorunur.
-	sorgu := ortam.YukariAkis(t, saglayiciGoogle).authorizeSorgusu()
+	sorgu := ortam.YukariAkis(t, providerGoogle).authorizeSorgusu()
 	if sorgu.Get("code_challenge_method") != "S256" || sorgu.Get("code_challenge") == "" {
 		t.Errorf("yukari akisa S256 PKCE gonderilmedi: %v", sorgu)
 	}
@@ -175,8 +175,8 @@ func TestUctanUcaGoogleGirisi(t *testing.T) {
 	}
 	_, idIddia := jwtIddialari(t, idJeton)
 	amr := amrDegerleri(idIddia["amr"])
-	if len(amr) != 1 || amr[0] != amrFederasyon {
-		t.Errorf("amr = %v, beklenen [%s]", amr, amrFederasyon)
+	if len(amr) != 1 || amr[0] != amrFederation {
+		t.Errorf("amr = %v, beklenen [%s]", amr, amrFederation)
 	}
 
 	// 3) id_token OIDC Core 1.0 §2'nin REQUIRED claim'ini TASIMALI:
@@ -242,7 +242,7 @@ func TestUctanUcaAppleGirisiFormPost(t *testing.T) {
 	// GET donusunu olcer ve K2 hakkinda HICBIR SEY soylemez.
 	oturum := ortam.YeniTarayici(t)
 	istekID := oturum.AuthorizeBaslat(t)
-	baslat := oturum.FederasyonBaslat(t, saglayiciApple, istekID)
+	baslat := oturum.FederasyonBaslat(t, providerApple, istekID)
 	if baslat.Durum != http.StatusFound {
 		t.Fatalf("baslat durumu = %d, beklenen 302", baslat.Durum)
 	}
@@ -296,7 +296,7 @@ func TestUctanUcaIkinciGirisAyniHesap(t *testing.T) {
 		Sub:              "google-sub-sabit",
 	})
 
-	ilk, _ := ortam.federasyonJetonu(t, saglayiciGoogle)
+	ilk, _ := ortam.federasyonJetonu(t, providerGoogle)
 	ilkSub := erisimJetonuSub(t, ilk)
 	// ONKOSUL: ilk giris GERCEKTEN bir eslesme yazmis olmali; aksi
 	// halde ikinci girisin "ayni hesap" olmasi hicbir sey kanitlamaz.
@@ -304,7 +304,7 @@ func TestUctanUcaIkinciGirisAyniHesap(t *testing.T) {
 		t.Fatalf("ilk giristen sonra eslesme sayisi = %d, beklenen 1", sayi)
 	}
 
-	ikinci, _ := ortam.federasyonJetonu(t, saglayiciGoogle)
+	ikinci, _ := ortam.federasyonJetonu(t, providerGoogle)
 	if ikinciSub := erisimJetonuSub(t, ikinci); ikinciSub != ilkSub {
 		t.Errorf("ikinci giris BASKA hesaba dustu: %q != %q", ikinciSub, ilkSub)
 	}
@@ -323,7 +323,7 @@ func TestUctanUcaAppleIkinciGiristeEpostaGelmez(t *testing.T) {
 		Sub:              "apple-sub-sabit",
 	})
 
-	ilk, _ := ortam.federasyonJetonu(t, saglayiciApple)
+	ilk, _ := ortam.federasyonJetonu(t, providerApple)
 	ilkSub := erisimJetonuSub(t, ilk)
 	if sayi := ortam.FedereEslesmeSayisi(t); sayi != 1 {
 		t.Fatalf("ilk giristen sonra eslesme sayisi = %d, beklenen 1", sayi)
@@ -332,10 +332,10 @@ func TestUctanUcaAppleIkinciGiristeEpostaGelmez(t *testing.T) {
 	// ONKOSUL: Apple ikinci turda e-postayi HIC gondermez. TEK DEGISEN
 	// budur: Ad gibi diger alanlar DOGRU kalir, yoksa testin hangi
 	// eksikligi olctugu belirsizlesir.
-	apple := ortam.YukariAkis(t, saglayiciApple)
+	apple := ortam.YukariAkis(t, providerApple)
 	apple.ayarla(func(a *sahteOPAyar) { a.Eposta = "" })
 
-	ikinci, _ := ortam.federasyonJetonu(t, saglayiciApple)
+	ikinci, _ := ortam.federasyonJetonu(t, providerApple)
 	if ikinciSub := erisimJetonuSub(t, ikinci); ikinciSub != ilkSub {
 		t.Errorf("e-postasiz ikinci giris BASKA hesaba dustu: %q != %q", ikinciSub, ilkSub)
 	}
@@ -394,11 +394,11 @@ func TestSaldiriBaskaTarayicidaBaslatilanAkisTamamlanamaz(t *testing.T) {
 	kurbanIstek := kurban.AuthorizeBaslat(t)
 
 	// ONKOSUL 1: saldirgan GECERLI bir state+code cifti elde etti.
-	geriURL := yukariAkisKoduAl(t, saldirgan, saglayiciGoogle, saldirganIstek)
+	geriURL := yukariAkisKoduAl(t, saldirgan, providerGoogle, saldirganIstek)
 
 	// ONKOSUL 2: kurban KENDI federasyon bacagini baslatti, yani
 	// kurbanin tarayicisinda da bir kimlik_fed cerezi VAR.
-	kurbanBaslat := kurban.FederasyonBaslat(t, saglayiciGoogle, kurbanIstek)
+	kurbanBaslat := kurban.FederasyonBaslat(t, providerGoogle, kurbanIstek)
 	if kurbanBaslat.Durum != http.StatusFound {
 		t.Fatalf("kurbanin baslat durumu = %d, beklenen 302", kurbanBaslat.Durum)
 	}
@@ -408,8 +408,8 @@ func TestSaldiriBaskaTarayicidaBaslatilanAkisTamamlanamaz(t *testing.T) {
 
 	// ONKOSUL 3: iki cerezin DEGERLERI farkli. Esit olsalardi asagidaki
 	// red cerez baglamasindan degil baska bir seyden gelirdi.
-	kurbanCerez := kurban.kavanoz.cerezDegeri(cerezAdFederasyon)
-	saldirganCerez := saldirgan.kavanoz.cerezDegeri(cerezAdFederasyon)
+	kurbanCerez := kurban.kavanoz.cerezDegeri(cookieNameFederation)
+	saldirganCerez := saldirgan.kavanoz.cerezDegeri(cookieNameFederation)
 	if kurbanCerez == "" || saldirganCerez == "" {
 		t.Fatalf("cerez degerleri okunamadi (kurban %q, saldirgan %q)", kurbanCerez, saldirganCerez)
 	}
@@ -442,7 +442,7 @@ func TestSaldiriBaskaTarayicidaBaslatilanAkisTamamlanamaz(t *testing.T) {
 	// KENDI tarayicisinda calisir. Yani olculen sey cerez baglamasidir,
 	// bozuk bir senaryo kurulumu degil.
 	kendiIstek := saldirgan.AuthorizeBaslat(t)
-	kendiGeri := yukariAkisKoduAl(t, saldirgan, saglayiciGoogle, kendiIstek)
+	kendiGeri := yukariAkisKoduAl(t, saldirgan, providerGoogle, kendiIstek)
 	kendi := saldirgan.akisiTakipEt(t,
 		saldirgan.istek(t, http.MethodGet, kendiGeri, nil, baglamCaprazGet))
 	if kendi.KonumKod() == "" {
@@ -464,10 +464,10 @@ func TestSaldiriCerezsizCallbackReddedilir(t *testing.T) {
 	istekID := oturum.AuthorizeBaslat(t)
 	// ONKOSUL: gecerli bir state+code cifti var ve cerez YAZILDI
 	// (yukariAkisKoduAl ikisini de dogrular).
-	geriURL := yukariAkisKoduAl(t, oturum, saglayiciGoogle, istekID)
+	geriURL := yukariAkisKoduAl(t, oturum, providerGoogle, istekID)
 
 	// Cerez SILINIR: tek degisen sey budur.
-	oturum.kavanoz.cerezSil(cerezAdFederasyon)
+	oturum.kavanoz.cerezSil(cookieNameFederation)
 	red := oturum.istek(t, http.MethodGet, geriURL, nil, baglamCaprazGet)
 	if red.Durum != http.StatusForbidden {
 		t.Errorf("cerezsiz callback durumu = %d, beklenen 403. govde: %s", red.Durum, red.Govde())
@@ -481,7 +481,7 @@ func TestSaldiriCerezsizCallbackReddedilir(t *testing.T) {
 
 	// POZITIF KONTROL: cerez YERINDE olan yeni bir tur tamamlanir.
 	yeniIstek := oturum.AuthorizeBaslat(t)
-	yeniGeri := yukariAkisKoduAl(t, oturum, saglayiciGoogle, yeniIstek)
+	yeniGeri := yukariAkisKoduAl(t, oturum, providerGoogle, yeniIstek)
 	son := oturum.akisiTakipEt(t, oturum.istek(t, http.MethodGet, yeniGeri, nil, baglamCaprazGet))
 	if son.KonumKod() == "" {
 		t.Fatalf("cerezli akis tamamlanmadi (durum %d); test cerezi DEGIL baska bir seyi olcuyor",
@@ -499,7 +499,7 @@ func TestSaldiriCallbackTekrariReddedilir(t *testing.T) {
 
 	oturum := ortam.YeniTarayici(t)
 	istekID := oturum.AuthorizeBaslat(t)
-	geriURL := yukariAkisKoduAl(t, oturum, saglayiciGoogle, istekID)
+	geriURL := yukariAkisKoduAl(t, oturum, providerGoogle, istekID)
 
 	// ONKOSUL: callback BIR KEZ gercekten calisir.
 	ilk := oturum.akisiTakipEt(t, oturum.istek(t, http.MethodGet, geriURL, nil, baglamCaprazGet))
@@ -509,7 +509,7 @@ func TestSaldiriCallbackTekrariReddedilir(t *testing.T) {
 	if !ortam.IstekTamamlandiMi(t, istekID) {
 		t.Fatal("ilk callback istegi tamamlamadi; tekrar testi bos olurdu")
 	}
-	google := ortam.YukariAkis(t, saglayiciGoogle)
+	google := ortam.YukariAkis(t, providerGoogle)
 	if sayi := google.tokenSayaci(); sayi != 1 {
 		t.Fatalf("ilk turda yukari akis token cagrisi = %d, beklenen 1", sayi)
 	}
@@ -538,11 +538,11 @@ func TestSaldiriBaskaUygulamaninTokeniyleGirilemez(t *testing.T) {
 		EpostaDogrulandi: true,
 		Sub:              "google-sub-aud",
 	})
-	google := ortam.YukariAkis(t, saglayiciGoogle)
+	google := ortam.YukariAkis(t, providerGoogle)
 
 	// ONKOSUL: dogru aud ile akis GERCEKTEN tamamlaniyor. Aksi halde
 	// asagidaki red, aud'dan degil baska bir bozukluktan gelirdi.
-	ortam.federasyonJetonu(t, saglayiciGoogle)
+	ortam.federasyonJetonu(t, providerGoogle)
 	if sayi := ortam.FedereEslesmeSayisi(t); sayi != 1 {
 		t.Fatalf("dogru aud ile eslesme sayisi = %d, beklenen 1", sayi)
 	}
@@ -551,7 +551,7 @@ func TestSaldiriBaskaUygulamaninTokeniyleGirilemez(t *testing.T) {
 	google.ayarla(func(a *sahteOPAyar) { a.YanlisAudience = "baska-uygulama" })
 	oturum := ortam.YeniTarayici(t)
 	istekID := oturum.AuthorizeBaslat(t)
-	red := oturum.FederasyonAkisiniKostur(t, saglayiciGoogle, istekID)
+	red := oturum.FederasyonAkisiniKostur(t, providerGoogle, istekID)
 	if red.Durum != http.StatusForbidden {
 		t.Errorf("yanlis aud ile durum = %d, beklenen 403. govde: %s", red.Durum, red.Govde())
 	}
@@ -573,10 +573,10 @@ func TestSaldiriNonceEnjeksiyonuReddedilir(t *testing.T) {
 		EpostaDogrulandi: true,
 		Sub:              "google-sub-nonce",
 	})
-	google := ortam.YukariAkis(t, saglayiciGoogle)
+	google := ortam.YukariAkis(t, providerGoogle)
 
 	// ONKOSUL: dogru nonce ile akis tamamlaniyor.
-	ortam.federasyonJetonu(t, saglayiciGoogle)
+	ortam.federasyonJetonu(t, providerGoogle)
 	if sayi := ortam.FedereEslesmeSayisi(t); sayi != 1 {
 		t.Fatalf("dogru nonce ile eslesme sayisi = %d, beklenen 1", sayi)
 	}
@@ -587,7 +587,7 @@ func TestSaldiriNonceEnjeksiyonuReddedilir(t *testing.T) {
 	google.ayarla(func(a *sahteOPAyar) { a.YanlisNonce = "saldirganin-nonce-degeri" })
 	oturum := ortam.YeniTarayici(t)
 	istekID := oturum.AuthorizeBaslat(t)
-	red := oturum.FederasyonAkisiniKostur(t, saglayiciGoogle, istekID)
+	red := oturum.FederasyonAkisiniKostur(t, providerGoogle, istekID)
 	if red.Durum != http.StatusForbidden {
 		t.Errorf("yanlis nonce ile durum = %d, beklenen 403. govde: %s", red.Durum, red.Govde())
 	}
@@ -625,7 +625,7 @@ func TestSaldiriEpostayaDayaliHesapDevralmaEngellenir(t *testing.T) {
 	// 2) Kurban giris sayfasindan Google'a gider.
 	oturum := ortam.YeniTarayici(t)
 	istekID := oturum.AuthorizeBaslat(t)
-	yanit := oturum.FederasyonAkisiniKostur(t, saglayiciGoogle, istekID)
+	yanit := oturum.FederasyonAkisiniKostur(t, providerGoogle, istekID)
 
 	// 3) Baglama sayfasi cikmali: sifre SORULMALI.
 	govde := yanit.Govde()
@@ -675,7 +675,7 @@ func TestSaldiriFederasyonPKCEyiAtlatmaz(t *testing.T) {
 	//    (Kod TEK KULLANIMLIK oldugu icin iki ayri tur gerekiyor:
 	//    ayni kodu iki kez denemek, ikinci denemede "invalid code"
 	//    olcerdi ve testin neyi olctugu belirsizlesirdi.)
-	kod, oturum := ortam.federasyonKodu(t, saglayiciGoogle)
+	kod, oturum := ortam.federasyonKodu(t, providerGoogle)
 	durum, jeton := ortam.jetonAl(t, kod, oturum.verifier)
 	if durum != http.StatusOK {
 		t.Fatalf("dogru verifier ile token durumu = %d, govde: %v", durum, jeton)
@@ -684,7 +684,7 @@ func TestSaldiriFederasyonPKCEyiAtlatmaz(t *testing.T) {
 	// 3) Federasyon yolundan uretilen kod da S256'ya BAGLI kalir:
 	//    dogru verifier olmadan jetona cevrilemez. Bu, federasyonun
 	//    PKCE'yi "atlatan bir yan kapi" olmadiginin olculebilir hali.
-	yanlisKod, _ := ortam.federasyonKodu(t, saglayiciGoogle)
+	yanlisKod, _ := ortam.federasyonKodu(t, providerGoogle)
 	yanlisVerifier, _ := pkceS256(t)
 	if durum, govde := ortam.jetonAl(t, yanlisKod, yanlisVerifier); durum == http.StatusOK {
 		t.Fatalf("federasyon kodu YANLIS verifier ile jetona cevrildi: %v", govde)

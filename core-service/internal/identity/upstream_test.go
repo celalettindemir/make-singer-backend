@@ -12,46 +12,46 @@ import (
 // yakaladigi bir callback URL'ini tekrar oynatabilir.
 func TestDurumTekKullanimlik(t *testing.T) {
 	rdb := testRedis(t)
-	d := NewIstekDepo(rdb)
+	d := NewRequestStore(rdb)
 	ctx := context.Background()
 
-	istenen := FedereDurum{
-		AuthRequestID:  "istek-1",
-		Nonce:          "nonce-1",
-		Saglayici:      "google",
-		Cerez:          "cerez-degeri",
-		KodDogrulayici: "dogrulayici-1",
+	istenen := FederationState{
+		AuthRequestID: "istek-1",
+		Nonce:         "nonce-1",
+		Provider:      "google",
+		Cookie:        "cerez-degeri",
+		CodeVerifier:  "dogrulayici-1",
 	}
-	if err := d.DurumYaz(ctx, "state-1", istenen); err != nil {
+	if err := d.WriteState(ctx, "state-1", istenen); err != nil {
 		t.Fatalf("durum yazilamadi: %v", err)
 	}
-	okunan, err := d.DurumAl(ctx, "state-1")
+	okunan, err := d.TakeState(ctx, "state-1")
 	if err != nil {
 		t.Fatalf("durum okunamadi: %v", err)
 	}
 	if okunan != istenen {
 		t.Errorf("okunan = %+v, beklenen %+v", okunan, istenen)
 	}
-	if _, err := d.DurumAl(ctx, "state-1"); !errors.Is(err, ErrDurumYok) {
+	if _, err := d.TakeState(ctx, "state-1"); !errors.Is(err, ErrStateNotFound) {
 		t.Errorf("ikinci okuma err = %v, beklenen ErrDurumYok", err)
 	}
 }
 
 func TestBilinmeyenDurumErrDurumYok(t *testing.T) {
 	rdb := testRedis(t)
-	d := NewIstekDepo(rdb)
-	if _, err := d.DurumAl(context.Background(), "hic-yazilmadi"); !errors.Is(err, ErrDurumYok) {
+	d := NewRequestStore(rdb)
+	if _, err := d.TakeState(context.Background(), "hic-yazilmadi"); !errors.Is(err, ErrStateNotFound) {
 		t.Errorf("err = %v, beklenen ErrDurumYok", err)
 	}
 }
 
 func TestAuthorizeURLGoogle(t *testing.T) {
-	y := &YukariAkis{
-		Ad:           "google",
-		IstemciID:    "istemci-123",
+	y := &Upstream{
+		Name:         "google",
+		ClientID:     "istemci-123",
 		AuthURL:      "https://accounts.google.com/o/oauth2/v2/auth",
-		Kapsamlar:    []string{"openid", "email", "profile"},
-		PKCEDestekli: true,
+		Scopes:       []string{"openid", "email", "profile"},
+		SupportsPKCE: true,
 	}
 	u, err := url.Parse(y.AuthorizeURL("st", "nn", "dogrulayici-en-az-43-karakter-olmali-ki-gecerli-olsun", "https://biz/federasyon/google/geri"))
 	if err != nil {
@@ -83,11 +83,11 @@ func TestAuthorizeURLGoogle(t *testing.T) {
 // K4: Apple'in PKCE destegi dokumante degil; bilinmeyen parametre
 // gondermek akisi kirma riskidir.
 func TestAuthorizeURLApplePKCEGondermez(t *testing.T) {
-	y := &YukariAkis{
-		Ad: "apple", IstemciID: "tr.makesinger.giris",
+	y := &Upstream{
+		Name: "apple", ClientID: "tr.makesinger.giris",
 		AuthURL:      "https://appleid.apple.com/auth/authorize",
-		Kapsamlar:    []string{"openid", "email", "name"},
-		PKCEDestekli: false, FormPost: true,
+		Scopes:       []string{"openid", "email", "name"},
+		SupportsPKCE: false, FormPost: true,
 	}
 	u, _ := url.Parse(y.AuthorizeURL("st", "nn", "dogrulayici", "https://biz/federasyon/apple/geri"))
 	q := u.Query()
@@ -107,7 +107,7 @@ func TestAuthorizeURLApplePKCEGondermez(t *testing.T) {
 // cagrilar farkli degerler vermeli (sabit/tahmin edilebilir deger
 // PKCE'yi etkisiz kilar).
 func TestKodDogrulayiciUret(t *testing.T) {
-	d1, m1, err := kodDogrulayiciUret()
+	d1, m1, err := generateCodeVerifier()
 	if err != nil {
 		t.Fatalf("kodDogrulayiciUret: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestKodDogrulayiciUret(t *testing.T) {
 	if m1 == "" {
 		t.Error("meydan okuma bos")
 	}
-	d2, _, err := kodDogrulayiciUret()
+	d2, _, err := generateCodeVerifier()
 	if err != nil {
 		t.Fatalf("ikinci kodDogrulayiciUret: %v", err)
 	}

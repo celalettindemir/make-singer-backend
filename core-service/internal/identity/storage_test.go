@@ -312,7 +312,7 @@ func TestGetRefreshTokenInfoBaskaIstemcininJetonuReddedilir(t *testing.T) {
 func TestCreateAccessAndRefreshTokensYeniAileBaslatir(t *testing.T) {
 	d := testDepo(t)
 	ctx := context.Background()
-	istek := &AuthIstek{
+	istek := &AuthRequest{
 		ID:       "istek1",
 		ClientID: "makesinger-mobil",
 		Subject:  "k1",

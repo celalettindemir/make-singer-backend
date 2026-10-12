@@ -10,122 +10,121 @@ import (
 	"github.com/google/uuid"
 )
 
-// federeAnahtar, (saglayici, sub) ciftini map anahtarina cevirir. "\x00"
-// ayirici secildi: saglayici veya sub degerlerinde gecmesi beklenmeyen,
-// yani ayirici ile veri karismaz.
-func federeAnahtar(saglayici, sub string) string {
-	return saglayici + "\x00" + sub
+// identityKey turns a (provider, sub) pair into a map key. "\x00" was chosen
+// as the separator because it is not expected to appear in provider or sub
+// values, so the separator never mixes with the data.
+func identityKey(provider, sub string) string {
+	return provider + "\x00" + sub
 }
 
-// SahteFedereDepo, testler icin bellek ici FedereDepo.
+// FakeFederatedStore is an in-memory FederatedStore for tests.
 //
-// SOZLESME: PostgresFedereDepo ile BIREBIR AYNI davranmak zorundadir
-// (bkz. TestFedereDepoSozlesmesi). Ayrica SahteUserStore'u PAYLASIR:
-// FedereKullaniciOlustur orada olusturdugu kullaniciyi, KimlikleKullanici
-// ise ayni depodan okur -- aynen Postgres uygulamasinin tek havuzu
-// paylasmasi gibi.
-type SahteFedereDepo struct {
-	mu         sync.Mutex
-	kullanici  *FakeUserStore
-	eslesmeler map[string]string // federeAnahtar(saglayici, sub) -> userID
+// CONTRACT: it MUST behave EXACTLY like PostgresFederatedStore (see
+// TestFederatedStoreContract). It also SHARES the FakeUserStore:
+// CreateFederatedUser creates the user there, and UserByIdentity reads from
+// the same store -- just as the Postgres implementation shares a single pool.
+type FakeFederatedStore struct {
+	mu    sync.Mutex
+	users *FakeUserStore
+	links map[string]string // identityKey(provider, sub) -> userID
 }
 
-func NewSahteFedereDepo(kullanici *FakeUserStore) *SahteFedereDepo {
-	return &SahteFedereDepo{
-		kullanici:  kullanici,
-		eslesmeler: map[string]string{},
+func NewFakeFederatedStore(user *FakeUserStore) *FakeFederatedStore {
+	return &FakeFederatedStore{
+		users: user,
+		links: map[string]string{},
 	}
 }
 
-func (d *SahteFedereDepo) KimlikleKullanici(ctx context.Context, saglayici, sub string) (*User, error) {
+func (d *FakeFederatedStore) UserByIdentity(ctx context.Context, provider, sub string) (*User, error) {
 	d.mu.Lock()
-	userID, ok := d.eslesmeler[federeAnahtar(saglayici, sub)]
+	userID, ok := d.links[identityKey(provider, sub)]
 	d.mu.Unlock()
 	if !ok {
-		return nil, ErrKimlikYok
+		return nil, ErrIdentityNotFound
 	}
-	// SahteUserStore.ByID zaten derin kopya doner.
-	return d.kullanici.ByID(ctx, userID)
+	// FakeUserStore.ByID already returns a deep copy.
+	return d.users.ByID(ctx, userID)
 }
 
-func (d *SahteFedereDepo) Bagla(ctx context.Context, saglayici, sub, userID string) error {
+func (d *FakeFederatedStore) Link(ctx context.Context, provider, sub, userID string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if err := d.baglanabilirMi(saglayici, sub, userID); err != nil {
+	if err := d.canLinkLocked(provider, sub, userID); err != nil {
 		return err
 	}
-	d.eslesmeler[federeAnahtar(saglayici, sub)] = userID
+	d.links[identityKey(provider, sub)] = userID
 	return nil
 }
 
-// baglanabilirMi, Postgres'teki IKI unique kisiti taklit eder: (saglayici,
-// sub) birincil anahtari ve (user_id, saglayici) tekilligi. Caller kilidi
-// tutuyor olmalidir.
-func (d *SahteFedereDepo) baglanabilirMi(saglayici, sub, userID string) error {
-	if _, ok := d.eslesmeler[federeAnahtar(saglayici, sub)]; ok {
-		return ErrKimlikKullanimda
+// canLinkLocked imitates Postgres's TWO unique constraints: the (provider,
+// sub) primary key and the (user_id, provider) uniqueness. The caller must
+// hold the lock.
+func (d *FakeFederatedStore) canLinkLocked(provider, sub, userID string) error {
+	if _, ok := d.links[identityKey(provider, sub)]; ok {
+		return ErrIdentityInUse
 	}
-	onek := saglayici + "\x00"
-	for anahtar, uid := range d.eslesmeler {
-		if uid == userID && strings.HasPrefix(anahtar, onek) {
-			return ErrKimlikKullanimda
+	prefix := provider + "\x00"
+	for key, uid := range d.links {
+		if uid == userID && strings.HasPrefix(key, prefix) {
+			return ErrIdentityInUse
 		}
 	}
 	return nil
 }
 
-func (d *SahteFedereDepo) FedereKullaniciOlustur(
-	ctx context.Context, saglayici, sub, email, ad string, epostaDogrulandi bool,
+func (d *FakeFederatedStore) CreateFederatedUser(
+	ctx context.Context, provider, sub, email, name string, emailVerified bool,
 ) (*User, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if err := d.baglanabilirMi(saglayici, sub, ""); err != nil {
+	if err := d.canLinkLocked(provider, sub, ""); err != nil {
 		return nil, err
 	}
-	k, err := d.kullanici.federeEkle(email, ad, epostaDogrulandi)
+	k, err := d.users.addFederated(email, name, emailVerified)
 	if err != nil {
 		return nil, err
 	}
-	d.eslesmeler[federeAnahtar(saglayici, sub)] = k.ID
+	d.links[identityKey(provider, sub)] = k.ID
 	return k, nil
 }
 
-func (d *SahteFedereDepo) SaglayicilarByUserID(ctx context.Context, userID string) ([]string, error) {
+func (d *FakeFederatedStore) ProvidersByUserID(ctx context.Context, userID string) ([]string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	var sag []string
-	for anahtar, uid := range d.eslesmeler {
+	var providers []string
+	for key, uid := range d.links {
 		if uid != userID {
 			continue
 		}
-		idx := strings.IndexByte(anahtar, 0)
-		sag = append(sag, anahtar[:idx])
+		idx := strings.IndexByte(key, 0)
+		providers = append(providers, key[:idx])
 	}
-	sort.Strings(sag)
-	return sag, nil
+	sort.Strings(providers)
+	return providers, nil
 }
 
-// federeEkle, SahteUserStore'a sifresiz (yalnizca federe) bir kullanici
-// ekler. PostgresUserStore'un federe yolu gibi password_hash'i BOS
-// birakir: SifreDogru boylece her sifre icin false doner. Create ile AYNI
-// e-posta tekilligi kuralini uygular (buyuk/kucuk harf duyarsiz).
-func (s *FakeUserStore) federeEkle(email, ad string, epostaDogrulandi bool) (*User, error) {
-	anahtar := fakeEmailKey(email)
+// addFederated adds a passwordless (federated-only) user to the FakeUserStore.
+// Like PostgresUserStore's federated path, it leaves password_hash EMPTY:
+// PasswordMatches therefore returns false for every password. It applies the
+// SAME email uniqueness rule as Create (case-insensitive).
+func (s *FakeUserStore) addFederated(email, name string, emailVerified bool) (*User, error) {
+	key := fakeEmailKey(email)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.byEmail[anahtar]; ok {
+	if _, ok := s.byEmail[key]; ok {
 		return nil, ErrEmailInUse
 	}
 	k := &User{
 		ID:            uuid.NewString(),
 		Email:         normalizeEmail(email),
-		EmailVerified: epostaDogrulandi,
-		Name:          strings.TrimSpace(ad),
+		EmailVerified: emailVerified,
+		Name:          strings.TrimSpace(name),
 		CreatedAt:     time.Now().UTC(),
 	}
-	s.byEmail[anahtar] = k
+	s.byEmail[key] = k
 	s.byID[k.ID] = k
 	return copyUser(k), nil
 }
 
-var _ FedereDepo = (*SahteFedereDepo)(nil)
+var _ FederatedStore = (*FakeFederatedStore)(nil)

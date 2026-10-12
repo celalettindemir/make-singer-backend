@@ -174,19 +174,19 @@ func TestCerezKavanozuSilme(t *testing.T) {
 	}
 	kavanoz := yeniCerezKavanozu()
 	kavanoz.SetCookies(hedef, []*http.Cookie{
-		{Name: cerezAdFederasyon, Value: "deger", Path: "/federasyon", SameSite: http.SameSiteNoneMode},
+		{Name: cookieNameFederation, Value: "deger", Path: "/federasyon", SameSite: http.SameSiteNoneMode},
 		{Name: "baska", Value: "kalsin", Path: "/", SameSite: http.SameSiteNoneMode},
 	})
 	kavanoz.baglamKur(baglamAyniSite)
 	if n := len(kavanoz.Cookies(hedef)); n != 2 {
 		t.Fatalf("silme oncesi %d cerez, beklenen 2", n)
 	}
-	kavanoz.cerezSil(cerezAdFederasyon)
+	kavanoz.cerezSil(cookieNameFederation)
 	kalan := kavanoz.Cookies(hedef)
 	if len(kalan) != 1 || kalan[0].Name != "baska" {
 		t.Errorf("silmeden sonra kalan = %v, beklenen yalnizca \"baska\"", kalan)
 	}
-	if kavanoz.cerezDegeri(cerezAdFederasyon) != "" {
+	if kavanoz.cerezDegeri(cookieNameFederation) != "" {
 		t.Error("cerezDegeri silinmis cerezi hala donduruyor")
 	}
 }
