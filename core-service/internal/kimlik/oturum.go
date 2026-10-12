@@ -95,7 +95,7 @@ type OturumKayit struct {
 // Alan disa acik (buyuk harfli) olmak ZORUNDA: kayit Redis'e JSON
 // olarak yazilir ve encoding/json kucuk harfli alanlari sessizce atlar.
 type OturumBaglama struct {
-	Kayitlar []OturumKayit
+	Kayitlar []OturumKayit `json:"Kayitlar"`
 }
 
 // CSRFBul, verilen authRequestID bu cereze BAGLI ise o istege ait CSRF

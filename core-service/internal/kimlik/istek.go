@@ -59,7 +59,7 @@ type AuthIstek struct {
 	// olarak tutulur: ne istek ID'si olarak kullanilir ne de Done()'u
 	// etkiler. Istek ID'si olarak kullanilmasi es zamanli iki akisin
 	// ayni Redis anahtarini ezmesine yol acardi.
-	IpucuSubject string
+	IpucuSubject string `json:"IpucuSubject"`
 
 	// Giris tamamlaninca doldurulur.
 	Subject  string

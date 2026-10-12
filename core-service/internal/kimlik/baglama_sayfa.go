@@ -52,10 +52,10 @@ type BaglamaBekleme struct {
 	// yonlendirilebilirdi.
 	UserID string
 	// Saglayici ve Sub, dogru sifre girilince baglanacak federe kimlik.
-	Saglayici string
+	Saglayici string `json:"Saglayici"`
 	Sub       string
 	// Eposta, sayfada GOSTERILEN (salt okunur) adres.
-	Eposta string
+	Eposta string `json:"Eposta"`
 	// CSRF, bu kayda ve bu tarayiciya ozel jeton.
 	CSRF string
 }

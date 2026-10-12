@@ -110,14 +110,14 @@ type FedereDurum struct {
 	Nonce string
 	// Saglayici: "google" | "apple". Geri donus handler'i callback'in
 	// beklenen saglayiciya ait oldugunu dogrulamak icin kullanir.
-	Saglayici string
+	Saglayici string `json:"Saglayici"`
 	// Cerez: bu akisi baslatan tarayicinin cerez degeri (oturum.go'daki
 	// desenle ayni gerekce: authRequestID tek basina yetki girdisi
 	// degildir, baslatan tarayici ile tamamlayan tarayici ayni olmali).
-	Cerez string
+	Cerez string `json:"Cerez"`
 	// KodDogrulayici: PKCE code_verifier. Token degisiminde saglayiciya
 	// gonderilir; LOGLANMAMALI (sir niteliginde).
-	KodDogrulayici string
+	KodDogrulayici string `json:"KodDogrulayici"`
 }
 
 // ErrDurumYok, state icin kayitli bir FedereDurum yok (hic olusmamis,
