@@ -37,6 +37,8 @@ type SosyalServisi interface {
 	Yorumlar(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*sosyal.Sayfa[sosyal.Yorum], error)
 	YorumYaz(ctx context.Context, kullaniciID, yayinID string, g sosyal.YorumGirdisi) (*sosyal.Yorum, error)
 	YorumSil(ctx context.Context, kullaniciID, yorumID string) error
+
+	Sikayet(ctx context.Context, kullaniciID string, g sosyal.SikayetGirdisi) error
 }
 
 var _ SosyalServisi = (*sosyal.Servis)(nil)
@@ -84,6 +86,8 @@ func (h *SosyalHandler) Rotalar(r fiber.Router, l SosyalLimitleri) {
 	r.Get("/yayinlar/:id/yorumlar", h.Yorumlar)
 	r.Post("/yayinlar/:id/yorumlar", l.Yorum, h.YorumYaz)
 	r.Delete("/yorumlar/:id", h.YorumSil)
+
+	r.Post("/sikayetler", h.Sikayet)
 }
 
 // sosyalHatalari, servis hatalarinin sozlesmedeki durum ve kodlaridir.

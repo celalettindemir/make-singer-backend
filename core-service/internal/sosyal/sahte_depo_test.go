@@ -73,6 +73,8 @@ type sahteDepo struct {
 	silinenYorumlar []string
 	sonYorumImleci  *YorumImleci
 	sonYorumLimiti  int
+
+	sikayetler []YeniSikayet
 }
 
 func yeniSahteDepo() *sahteDepo {
@@ -441,5 +443,13 @@ func (d *sahteDepo) YorumSil(_ context.Context, id string) error {
 	}
 	k.Silindi = true
 	d.silinenYorumlar = append(d.silinenYorumlar, id)
+	return nil
+}
+
+func (d *sahteDepo) SikayetEkle(_ context.Context, s YeniSikayet) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	d.sikayetler = append(d.sikayetler, s)
 	return nil
 }

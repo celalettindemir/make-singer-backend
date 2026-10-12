@@ -35,6 +35,7 @@ type Depo interface {
 	BegeniDeposu
 	TakipDeposu
 	YorumDeposu
+	SikayetDeposu
 }
 
 // PostgresDepo, Depo'nun Postgres uygulamasidir. Kimlikler cagri

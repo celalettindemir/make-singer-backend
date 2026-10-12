@@ -46,6 +46,7 @@ type sahteSosyal struct {
 	sonBegen     bool
 	sonTakip     bool
 	sonYorum     sosyal.YorumGirdisi
+	sonSikayet   sosyal.SikayetGirdisi
 }
 
 func (s *sahteSosyal) ProfilBen(_ context.Context, k string) (*sosyal.Profil, error) {
@@ -140,6 +141,11 @@ func (s *sahteSosyal) YorumYaz(_ context.Context, k, id string, g sosyal.YorumGi
 
 func (s *sahteSosyal) YorumSil(_ context.Context, k, id string) error {
 	s.sonKullanici, s.sonYayin = k, id
+	return s.hata
+}
+
+func (s *sahteSosyal) Sikayet(_ context.Context, k string, g sosyal.SikayetGirdisi) error {
+	s.sonKullanici, s.sonSikayet = k, g
 	return s.hata
 }
 
