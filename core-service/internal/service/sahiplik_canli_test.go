@@ -205,7 +205,7 @@ func TestRenderService_GecersizStemAyariIsYaratmaz(t *testing.T) {
 	// Redis nil: dogrulama is kaydindan ONCE olmali, dokunulursa panic.
 	s := NewRenderService(nil, nil, nil, testR2Cfg())
 	req := &model.RenderStartRequest{ProjectID: uuid.New().String(), StemMode: model.StemModeFocus}
-	if _, err := s.StartRender(context.Background(), "kullanici-a", req); !errors.Is(err, model.ErrGecersizStemAyari) {
+	if _, err := s.StartRender(context.Background(), "kullanici-a", req); !errors.Is(err, model.ErrInvalidStemSettings) {
 		t.Fatalf("ErrGecersizStemAyari bekleniyordu, geldi: %v", err)
 	}
 }

@@ -53,7 +53,7 @@ func (h *RenderHandler) Start(c *fiber.Ctx) error {
 
 	result, err := h.service.StartRender(c.Context(), userID, &req)
 	if err != nil {
-		if errors.Is(err, model.ErrGecersizStemAyari) {
+		if errors.Is(err, model.ErrInvalidStemSettings) {
 			return response.ValidationError(c, err.Error(), nil)
 		}
 		return response.ServiceError(c, err.Error())

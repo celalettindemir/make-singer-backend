@@ -48,7 +48,7 @@ func sahipliJobOku(ctx context.Context, rdb *redis.Client, userID, jobID string)
 	if err != nil {
 		return nil, err
 	}
-	if !job.SahibiMi(userID) {
+	if !job.IsOwnedBy(userID) {
 		return nil, ErrJobNotFound
 	}
 	return job, nil

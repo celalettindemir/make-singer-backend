@@ -73,7 +73,7 @@ func (s *RenderService) BuildResult(ctx context.Context, record *model.RenderRes
 // StartRender queues a new render job
 func (s *RenderService) StartRender(ctx context.Context, userID string, req *model.RenderStartRequest) (*model.RenderStartResponse, error) {
 	// Stem ayari is kaydindan ONCE dogrulanir: tutarsiz istek is yaratmaz.
-	stemModu, odak, err := req.StemAyarlari()
+	stemModu, odak, err := req.StemSettings()
 	if err != nil {
 		return nil, err
 	}

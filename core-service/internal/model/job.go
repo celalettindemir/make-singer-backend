@@ -19,9 +19,10 @@ type Job struct {
 	RetryCount  int        `json:"retryCount"`
 }
 
-// SahibiMi: is yalnizca onu baslatan kullaniciya aittir. OwnerID'siz kayit
-// (Faz 3 oncesi) kimseye acilmaz; kayitlar 24 saatlik oldugu icin goc yok.
-func (j *Job) SahibiMi(userID string) bool {
+// IsOwnedBy: a job belongs only to the user who started it. A record without
+// an OwnerID (from before Phase 3) is opened to nobody; records live for 24
+// hours, so no migration is needed.
+func (j *Job) IsOwnedBy(userID string) bool {
 	return userID != "" && j.OwnerID == userID
 }
 

@@ -15,34 +15,35 @@ type RenderStartRequest struct {
 	FocusInstrument *Instrument `json:"focusInstrument" validate:"omitempty,oneof=drums bass piano guitar synth strings brass woodwinds percussion pads lead fx"`
 }
 
-// ErrGecersizStemAyari: stemMode/focusInstrument birlikte tutarsiz.
-var ErrGecersizStemAyari = errors.New("gecersiz stem ayari")
+// ErrInvalidStemSettings: stemMode and focusInstrument are inconsistent.
+var ErrInvalidStemSettings = errors.New("gecersiz stem ayari")
 
-// StemAyarlari, istegin stem modunu normallestirir: bos mod mix'tir (ucuz
-// taraf; eski istemci kazara 62 kredi harcatamaz). focus icin enstruman
-// zorunludur ve aranjmanda olmalidir; diger modlarda enstruman verilemez.
-// Ileride plan bazli kisit (or. stems yalnizca belirli planda) buraya eklenir.
-func (r *RenderStartRequest) StemAyarlari() (StemMode, *Instrument, error) {
-	mod := r.StemMode
-	if mod == "" {
-		mod = StemModeMix
+// StemSettings normalizes the request's stem mode: an empty mode is mix (the
+// cheap side; an old client cannot accidentally spend 62 credits). focus
+// requires an instrument that is part of the arrangement; other modes cannot
+// take an instrument. A plan-based restriction (e.g. stems only on a certain
+// plan) will be added here later.
+func (r *RenderStartRequest) StemSettings() (StemMode, *Instrument, error) {
+	mode := r.StemMode
+	if mode == "" {
+		mode = StemModeMix
 	}
-	if mod != StemModeFocus {
+	if mode != StemModeFocus {
 		if r.FocusInstrument != nil {
-			return "", nil, fmt.Errorf("%w: focusInstrument yalnizca focus modunda", ErrGecersizStemAyari)
+			return "", nil, fmt.Errorf("%w: focusInstrument yalnizca focus modunda", ErrInvalidStemSettings)
 		}
-		return mod, nil, nil
+		return mode, nil, nil
 	}
 	if r.FocusInstrument == nil {
-		return "", nil, fmt.Errorf("%w: focus modu focusInstrument ister", ErrGecersizStemAyari)
+		return "", nil, fmt.Errorf("%w: focus modu focusInstrument ister", ErrInvalidStemSettings)
 	}
 	for _, i := range r.Arrangement.Instruments {
 		if i == *r.FocusInstrument {
-			odak := *r.FocusInstrument
-			return mod, &odak, nil
+			focus := *r.FocusInstrument
+			return mode, &focus, nil
 		}
 	}
-	return "", nil, fmt.Errorf("%w: focusInstrument aranjmanda yok", ErrGecersizStemAyari)
+	return "", nil, fmt.Errorf("%w: focusInstrument aranjmanda yok", ErrInvalidStemSettings)
 }
 
 // Brief contains song parameters
@@ -138,9 +139,9 @@ type StemResult struct {
 	ExpiresAt    *time.Time `json:"expiresAt,omitempty"`
 }
 
-// RenderResultRecord, is kaydinda saklanan render sonucudur. Stem'ler
-// icin imzali URL degil nesne anahtari tutulur; adresler her okumada
-// yeniden uretilir (bkz. MasterResultRecord).
+// RenderResultRecord is the render result stored in the job record. For
+// stems the object key is stored, not a signed URL; URLs are regenerated on
+// every read (see MasterResultRecord).
 type RenderResultRecord struct {
 	ID        string             `json:"id"`
 	BPM       int                `json:"bpm"`
@@ -151,7 +152,7 @@ type RenderResultRecord struct {
 	Stems     []StemResultRecord `json:"stems"`
 }
 
-// StemResultRecord, tek bir stem'in saklanan hali.
+// StemResultRecord is the stored form of a single stem.
 type StemResultRecord struct {
 	ID           string     `json:"id"`
 	Instrument   Instrument `json:"instrument"`
