@@ -446,10 +446,10 @@ func Load() (*Config, error) {
 // in validateConfig inside identity.Start, and if anything is missing
 // Start RETURNS AN ERROR (a startup error, not a silent skip).
 func buildFederationClients() []FederationClient {
-	var liste []FederationClient
+	var list []FederationClient
 
 	if id := viper.GetString("auth.fed_google_client_id"); id != "" {
-		liste = append(liste, FederationClient{
+		list = append(list, FederationClient{
 			Name:         "google",
 			ClientID:     id,
 			ClientSecret: viper.GetString("auth.fed_google_client_secret"),
@@ -457,7 +457,7 @@ func buildFederationClients() []FederationClient {
 	}
 
 	if id := viper.GetString("auth.fed_apple_client_id"); id != "" {
-		liste = append(liste, FederationClient{
+		list = append(list, FederationClient{
 			Name:        "apple",
 			ClientID:    id,
 			AppleTeamID: viper.GetString("auth.fed_apple_team_id"),
@@ -466,5 +466,5 @@ func buildFederationClients() []FederationClient {
 		})
 	}
 
-	return liste
+	return list
 }
