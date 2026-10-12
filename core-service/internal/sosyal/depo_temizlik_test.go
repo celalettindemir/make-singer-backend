@@ -83,3 +83,97 @@ func TestPostgresDepo_KullaniciVerisiniSil(t *testing.T) {
 		t.Fatalf("silinen kullanicinin yayini kalmamali: %v %v", bos, err)
 	}
 }
+
+// izSenaryosu: giden kullanicinin yorumuna kalanin sikayeti, gidenin
+// yayini, begenisi, takibi ve kendi sikayeti kurulur.
+type izSenaryosu struct {
+	giden, kalan, gidenYayini, kalaninYayini string
+}
+
+func izSenaryosuKur(t *testing.T, d *PostgresDepo) izSenaryosu {
+	t.Helper()
+	havuz := d.havuz
+	s := izSenaryosu{giden: uuid.NewString(), kalan: uuid.NewString()}
+	testProfilEkle(t, d, s.giden, "giden")
+	testProfilEkle(t, d, s.kalan, "kalan")
+	s.gidenYayini = testYayinEkle(t, havuz, testYayin{SahipID: s.giden})
+	s.kalaninYayini = testYayinEkle(t, havuz, testYayin{SahipID: s.kalan})
+	testTakipEkle(t, havuz, s.giden, s.kalan)
+	testTakipEkle(t, havuz, s.kalan, s.giden)
+	gidenYorumu, kalanYorumu := uuid.NewString(), uuid.NewString()
+	for _, sorgu := range []string{
+		`INSERT INTO sosyal.begeni (kullanici_id, yayin_id) VALUES ('` + s.giden + `', '` + s.kalaninYayini + `')`,
+		`INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin) VALUES ('` + gidenYorumu + `', '` + s.kalaninYayini + `', '` + s.giden + `', 'g')`,
+		`INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin) VALUES ('` + kalanYorumu + `', '` + s.kalaninYayini + `', '` + s.kalan + `', 'k')`,
+		// kalan, gidenin yorumunu sikayet eder: yorum silinince bu da gitmeli.
+		`INSERT INTO sosyal.sikayet (id, bildiren_id, hedef_turu, hedef_id, yayin_id, neden) VALUES (gen_random_uuid(), '` + s.kalan + `', 'yorum', '` + gidenYorumu + `', '` + s.kalaninYayini + `', 'spam')`,
+		// kalanin kendi yorumuna sikayet (giden bildirdi) bildiren uzerinden gider.
+		`INSERT INTO sosyal.sikayet (id, bildiren_id, hedef_turu, hedef_id, yayin_id, neden) VALUES (gen_random_uuid(), '` + s.giden + `', 'yorum', '` + kalanYorumu + `', '` + s.kalaninYayini + `', 'spam')`,
+		// ucuncu bir kisinin kalanin yayinina sikayeti kalir.
+		`INSERT INTO sosyal.sikayet (id, bildiren_id, hedef_turu, hedef_id, yayin_id, neden) VALUES (gen_random_uuid(), gen_random_uuid(), 'yayin', '` + s.kalaninYayini + `', '` + s.kalaninYayini + `', 'spam')`,
+	} {
+		if _, err := havuz.Exec(context.Background(), sorgu); err != nil {
+			t.Fatalf("kurulum: %v", err)
+		}
+	}
+	return s
+}
+
+func sikayetSayisi(t *testing.T, d *PostgresDepo) int {
+	t.Helper()
+	var n int
+	if err := d.havuz.QueryRow(context.Background(), `SELECT count(*) FROM sosyal.sikayet`).Scan(&n); err != nil {
+		t.Fatalf("sikayet sayimi: %v", err)
+	}
+	return n
+}
+
+// Iz silme profili ve etkilesimleri siler, yayin satirlarina dokunmaz;
+// silinen kullanicinin yorumlarina yapilan sikayetler de gider.
+func TestPostgresDepo_KullaniciIzleriniSil(t *testing.T) {
+	d := NewPostgresDepo(testHavuz(t))
+	ctx := context.Background()
+	s := izSenaryosuKur(t, d)
+
+	if err := d.KullaniciIzleriniSil(ctx, s.giden); err != nil {
+		t.Fatalf("KullaniciIzleriniSil: %v", err)
+	}
+	if err := d.KullaniciIzleriniSil(ctx, s.giden); err != nil {
+		t.Fatalf("tekrar iz silme hatasiz olmali: %v", err)
+	}
+	if _, err := d.ProfilGetir(ctx, s.giden); err == nil {
+		t.Fatal("profil silinmeli")
+	}
+	if idler, err := d.YayinlariListele(ctx, s.giden); err != nil || len(idler) != 1 || idler[0] != s.gidenYayini {
+		t.Fatalf("yayin satirlari kalmali: %v %v", idler, err)
+	}
+	// Profil yokken yayin hicbir okuma yolunda gorunmez.
+	if _, err := d.YayinGetir(ctx, s.gidenYayini, s.kalan); err == nil {
+		t.Fatal("profili silinen kullanicinin yayini gorunmemeli")
+	}
+	var kalanIz int
+	if err := d.havuz.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM sosyal.begeni WHERE kullanici_id = $1)
+		     + (SELECT count(*) FROM sosyal.yorum WHERE yazar_id = $1)
+		     + (SELECT count(*) FROM sosyal.takip WHERE takipci_id = $1 OR takip_edilen_id = $1)`, s.giden).Scan(&kalanIz); err != nil {
+		t.Fatalf("sayim: %v", err)
+	}
+	if kalanIz != 0 {
+		t.Fatalf("gidenin %d izi kaldi", kalanIz)
+	}
+	if n := sikayetSayisi(t, d); n != 1 {
+		t.Fatalf("yalnizca ucuncu kisinin sikayeti kalmali, kalan %d", n)
+	}
+}
+
+// Tam silme de silinen kullanicinin yorumlarina yapilan sikayetleri siler.
+func TestPostgresDepo_KullaniciVerisiniSil_YorumSikayetleri(t *testing.T) {
+	d := NewPostgresDepo(testHavuz(t))
+	s := izSenaryosuKur(t, d)
+	if err := d.KullaniciVerisiniSil(context.Background(), s.giden); err != nil {
+		t.Fatalf("KullaniciVerisiniSil: %v", err)
+	}
+	if n := sikayetSayisi(t, d); n != 1 {
+		t.Fatalf("yalnizca ucuncu kisinin sikayeti kalmali, kalan %d", n)
+	}
+}
