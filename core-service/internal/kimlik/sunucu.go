@@ -278,9 +278,9 @@ func yapilandirmaDogrula(cfg *config.AuthConfig) error {
 	// baslamama hatasi olmali, kullanicinin Apple ile giris denedigi anda
 	// kesfedilen bir sessiz bozukluk degil (Faz 1'in "sessiz sifir"
 	// sinifi sorunu burada tekrarlanmiyor).
-	for _, f := range cfg.Federasyon {
-		if f.Ad == saglayiciApple {
-			if f.AppleEkipID == "" || f.AppleAnahtarID == "" || f.AppleAnahtarP8 == "" {
+	for _, f := range cfg.Federation {
+		if f.Name == saglayiciApple {
+			if f.AppleTeamID == "" || f.AppleKeyID == "" || f.AppleKeyP8 == "" {
 				return fmt.Errorf("apple federasyonu yapilandirmasi eksik: AUTH_FED_APPLE_TEAM_ID, AUTH_FED_APPLE_KEY_ID ve AUTH_FED_APPLE_KEY_P8 ucu de zorunlu")
 			}
 			// "Bos degil" YETMEZ: yukaridaki yorumun yasakladigi sessiz
@@ -297,7 +297,7 @@ func yapilandirmaDogrula(cfg *config.AuthConfig) error {
 			// yapar: .p8 ayristirma mantigi orada TEK bir noktada durur,
 			// burada kopyalanmasi iki yerin ayri ayri sasmasi demek olur.
 			// Uretilen sir ATILIR; aranan sey yalnizca hatanin kendisi.
-			if _, err := appleIstemciSir(f.AppleEkipID, f.AppleAnahtarID, f.IstemciID, f.AppleAnahtarP8, time.Now()); err != nil {
+			if _, err := appleIstemciSir(f.AppleTeamID, f.AppleKeyID, f.ClientID, f.AppleKeyP8, time.Now()); err != nil {
 				// Sarmalanan hatalar anahtar ICERIGI tasimaz (bkz.
 				// appleIstemciSir): yalnizca hata sinifi ve anahtar tipi.
 				// Mesaj operatore NE yapacagini soyler.
@@ -315,7 +315,7 @@ func yapilandirmaDogrula(cfg *config.AuthConfig) error {
 		// client_id de bos ise saglayici federasyonIstemcileriOlustur'da
 		// listeye HIC girmez (bkz. oradaki sessiz sifir kurali) ve bu bir
 		// hata DEGILDIR, "federasyon kapali" demektir.
-		if f.Ad == saglayiciGoogle && f.IstemciSir == "" {
+		if f.Name == saglayiciGoogle && f.ClientSecret == "" {
 			return fmt.Errorf("google federasyonu yapilandirmasi eksik: AUTH_FED_GOOGLE_CLIENT_ID verildiyse AUTH_FED_GOOGLE_CLIENT_SECRET de zorunlu (bos iken token degisimi 401 invalid_client ile duser)")
 		}
 	}
@@ -367,11 +367,11 @@ var yukariAkisSabitleri = map[string]YukariAkis{
 func federasyonKur(
 	ctx context.Context, cfg *config.AuthConfig,
 ) (map[string]*YukariAkis, map[string]*auth.YukariAkisDogrulayici, error) {
-	if len(cfg.Federasyon) == 0 {
+	if len(cfg.Federation) == 0 {
 		return nil, nil, nil
 	}
-	akislar := make(map[string]*YukariAkis, len(cfg.Federasyon))
-	dogrulayicilar := make(map[string]*auth.YukariAkisDogrulayici, len(cfg.Federasyon))
+	akislar := make(map[string]*YukariAkis, len(cfg.Federation))
+	dogrulayicilar := make(map[string]*auth.YukariAkisDogrulayici, len(cfg.Federation))
 	// Yarim kurulmus bir kume geride birakilmaz: ilk hatada o ana kadar
 	// acilan dogrulayicilar kapatilir.
 	temizle := func() {
@@ -379,28 +379,28 @@ func federasyonKur(
 			_ = d.Close()
 		}
 	}
-	for _, f := range cfg.Federasyon {
-		sabit, ok := yukariAkisSabitleri[f.Ad]
+	for _, f := range cfg.Federation {
+		sabit, ok := yukariAkisSabitleri[f.Name]
 		if !ok {
 			temizle()
-			return nil, nil, fmt.Errorf("bilinmeyen federasyon saglayicisi: %q (desteklenenler: %s, %s)", f.Ad, saglayiciApple, saglayiciGoogle)
+			return nil, nil, fmt.Errorf("bilinmeyen federasyon saglayicisi: %q (desteklenenler: %s, %s)", f.Name, saglayiciApple, saglayiciGoogle)
 		}
 		akis := sabit // kopya: sabit tablo DEGISTIRILMEZ
-		akis.IstemciID = f.IstemciID
-		akis.IstemciSir = f.IstemciSir
-		akis.AppleEkipID = f.AppleEkipID
-		akis.AppleAnahtarID = f.AppleAnahtarID
-		akis.AppleAnahtarP8 = f.AppleAnahtarP8
+		akis.IstemciID = f.ClientID
+		akis.IstemciSir = f.ClientSecret
+		akis.AppleEkipID = f.AppleTeamID
+		akis.AppleAnahtarID = f.AppleKeyID
+		akis.AppleAnahtarP8 = f.AppleKeyP8
 
 		// audience = BIZIM istemci kimligimiz: saglayicinin baska bir
 		// uygulama icin verdigi id_token bize kabul edilmemeli.
 		dogrulayici, err := auth.NewYukariAkisDogrulayici(ctx, akis.JWKSURL, akis.Issuer, akis.IstemciID)
 		if err != nil {
 			temizle()
-			return nil, nil, fmt.Errorf("%s dogrulayicisi kurulamadi: %w", f.Ad, err)
+			return nil, nil, fmt.Errorf("%s dogrulayicisi kurulamadi: %w", f.Name, err)
 		}
-		akislar[f.Ad] = &akis
-		dogrulayicilar[f.Ad] = dogrulayici
+		akislar[f.Name] = &akis
+		dogrulayicilar[f.Name] = dogrulayici
 	}
 	return akislar, dogrulayicilar, nil
 }

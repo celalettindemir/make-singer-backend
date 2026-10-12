@@ -37,14 +37,14 @@ type Config struct {
 	Suno      SunoConfig
 	Audio     AudioConfig
 	Auth      AuthConfig
-	Sosyal    SosyalConfig
+	Social    SocialConfig
 }
 
 type ServerConfig struct {
 	Port      string
 	Env       string
 	LogLevel  string
-	ApiDomain string
+	APIDomain string
 }
 
 type RedisConfig struct {
@@ -61,45 +61,45 @@ type RateLimitConfig struct {
 	UploadPerHour  int
 	WSTicketPerMin int
 	SignPerMin     int
-	// SosyalYayinPerHour, POST /api/social/yayinlar icin kullanici basina
-	// saatlik limit.
-	SosyalYayinPerHour int
-	// SosyalYorumPerMin, POST /api/social/yayinlar/{id}/yorumlar icin
-	// kullanici basina dakikalik limit (asimda 429 yavasla).
-	SosyalYorumPerMin int
-	// SosyalCoverPerHour, POST /api/social/yayinlar/{id}/cover-baslat
-	// icin kullanici basina saatlik limit (her cagri stem kopyalar).
-	SosyalCoverPerHour int
-	// PublicPerMin, kimliksiz GET /api/public/s/{slug} icin istemci IP'si
-	// basina dakikalik limit.
+	// SocialPublicationPerHour is the hourly per-user limit for
+	// POST /api/social/yayinlar.
+	SocialPublicationPerHour int
+	// SocialCommentPerMin is the per-minute per-user limit for
+	// POST /api/social/yayinlar/{id}/yorumlar (429 slow-down when exceeded).
+	SocialCommentPerMin int
+	// SocialCoverPerHour is the hourly per-user limit for
+	// POST /api/social/yayinlar/{id}/cover-baslat (each call copies stems).
+	SocialCoverPerHour int
+	// PublicPerMin is the per-minute per-client-IP limit for the
+	// unauthenticated GET /api/public/s/{slug}.
 	PublicPerMin int
-	// PublicWebPerMin, ayni ucun X-Web-Anahtari ile gelen (web sunucusu)
-	// istekleri icin TUM web istekleri ortak dakikalik limit.
+	// PublicWebPerMin is the shared per-minute limit across ALL requests
+	// to the same endpoint that carry X-Web-Anahtari (the web server).
 	PublicWebPerMin int
 }
 
-// SosyalConfig, Kesfet'in yapilandirmasi.
-type SosyalConfig struct {
-	// WebAnahtari, make-singer-frontend'in X-Web-Anahtari basligiyla
-	// gonderdigi paylasilan sir. Bos ise web yolu kapalidir ve web
-	// sunucusu da IP basina sinira tabidir. Sir: SOSYAL_WEB_ANAHTARI ya
-	// da SOSYAL_WEB_ANAHTARI_FILE.
-	WebAnahtari string
+// SocialConfig is the configuration of the Discover (social) feature.
+type SocialConfig struct {
+	// WebKey is the shared secret make-singer-frontend sends in the
+	// X-Web-Anahtari header. If empty, the web path is disabled and the
+	// web server is subject to the per-IP limit as well. The secret comes
+	// from SOSYAL_WEB_ANAHTARI or SOSYAL_WEB_ANAHTARI_FILE.
+	WebKey string
 }
 
 type GroqConfig struct {
 	APIKey  string
 	BaseURL string
 	Model   string
-	// MaxTokens reasoning token'larini da kapsar (gpt-oss once dusunur).
+	// MaxTokens also covers reasoning tokens (gpt-oss thinks first).
 	MaxTokens           int
 	TemperatureGenerate float64
 	TemperatureRewrite  float64
 }
 
-// R2Config, Cloudflare R2 icin genel (public) ve ozel (private) bucket
-// yapilandirmasini tutar. Public bucket export dosyalari, private bucket
-// kullanici calisma dosyalari icindir.
+// R2Config holds the public and private bucket configuration for
+// Cloudflare R2. The public bucket is for export files, the private bucket
+// for user working files.
 type R2Config struct {
 	AccountID       string
 	AccessKeyID     string
@@ -110,10 +110,10 @@ type R2Config struct {
 	PresignTTL      time.Duration
 }
 
-// PresignTTLOrDefault, presigned URL suresini dondurur. Config eksikse
-// (nil) veya PresignTTL ayarlanmamissa (<=0), 1 saatlik varsayilana
-// duser. Bu, TTL degerini okuyan TEK yer olsun diye vardir; sabit
-// "1 saat" degeri baska yerlerde tekrar yazilmamali.
+// PresignTTLOrDefault returns the presigned URL lifetime. If the config is
+// missing (nil) or PresignTTL is unset (<=0), it falls back to the
+// 1-hour default. It exists so this is the ONLY place that reads the TTL;
+// the constant "1 hour" must not be repeated elsewhere.
 func (c *R2Config) PresignTTLOrDefault() time.Duration {
 	if c == nil || c.PresignTTL <= 0 {
 		return time.Hour
@@ -125,7 +125,7 @@ type SunoConfig struct {
 	APIKey  string
 	BaseURL string
 	Model   string
-	// CallbackURL: saglayici zorunlu tutuyor ama biz poll ediyoruz; uc yok.
+	// CallbackURL: the provider requires it but we poll, so no endpoint exists.
 	CallbackURL string
 }
 
@@ -134,57 +134,60 @@ type AudioConfig struct {
 	Timeout    int // seconds
 }
 
-// AuthConfig, kendi OpenID Provider'imizin yapilandirmasi.
-// Issuer zorunludur: bos ise servis baslamaz (/api icin baska auth yolu yok).
+// AuthConfig is the configuration of our own OpenID Provider.
+// Issuer is required: if empty the service does not start (there is no
+// other auth path for /api).
 type AuthConfig struct {
 	Issuer        string        // https://makesinger-auth.celalettindemir.dev
-	Port          string        // ikinci dinleyicinin portu
+	Port          string        // port of the second listener
 	DBURL         string        // Postgres DSN
-	SigningKeyPEM string        // RSA ozel anahtar, PEM
-	CryptoKey     string        // op.Config.CryptoKey icin 32 baytlik sir
-	ClientID      string        // mobil public client
-	RedirectURIs  []string      // izinli redirect adresleri
-	AccessTTL     time.Duration // access token omru
-	RefreshTTL    time.Duration // refresh token omru
+	SigningKeyPEM string        // RSA private key, PEM
+	CryptoKey     string        // 32-byte secret for op.Config.CryptoKey
+	ClientID      string        // mobile public client
+	RedirectURIs  []string      // allowed redirect URIs
+	AccessTTL     time.Duration // access token lifetime
+	RefreshTTL    time.Duration // refresh token lifetime
 
-	// OP dinleyicisinin (ikinci net/http sunucusu) giris/kayit uclari
-	// icin hiz limiti. Bu uclar ana API'nin Fiber zincirinden AYRIDIR,
-	// yani internal/middleware/ratelimit.go onlari HIC gormez; limitler
-	// burada tanimlanir ve internal/kimlik/hizlimit.go uygular.
-	LoginIPPerMin     int // POST /giris, IP basina dakikada
-	LoginEmailPerHour int // POST /giris, e-posta basina saatte
-	SignupIPPerHour   int // POST /kayit, IP basina saatte
+	// Rate limits for the login/signup endpoints of the OP listener (the
+	// second net/http server). These endpoints are SEPARATE from the main
+	// API's Fiber chain, so internal/middleware/ratelimit.go never sees
+	// them; the limits are defined here and internal/identity/ratelimit.go
+	// enforces them.
+	LoginIPPerMin     int // POST /giris, per IP per minute
+	LoginEmailPerHour int // POST /giris, per email per hour
+	SignupIPPerHour   int // POST /kayit, per IP per hour
 
-	// TrustedProxies, istek OP'ye ulasmadan once gecen GUVENILEN ters
-	// proxy sayisidir. X-Forwarded-For'un SONDAN bu kadarinci elemani
-	// gercek istemci adresi sayilir; 0 ise baslik HIC okunmaz ve
-	// RemoteAddr kullanilir. Bkz. kimlik.istemciIP.
+	// TrustedProxies is the number of TRUSTED reverse proxies a request
+	// passes through before reaching the OP. The element that many
+	// positions from the END of X-Forwarded-For is taken as the real
+	// client address; if 0 the header is NEVER read and RemoteAddr is
+	// used. See identity.clientIP.
 	//
-	// VARSAYILAN 0 (FAIL-SAFE). Onde proxy YOKSA 1 degeri tek elemanli
-	// uydurma bir XFF'i guvenilir sayar: saldirgan her istekte farkli
-	// bir IP yazip IP limitini TAMAMEN atlar. Traefik gibi bir ters
-	// proxy arkasindaysa bu deger ACIKCA proxy sayisina ayarlanmali
-	// (AUTH_TRUSTED_PROXIES).
+	// DEFAULT 0 (FAIL-SAFE). With NO proxy in front, a value of 1 would
+	// trust a forged single-element XFF: an attacker could write a
+	// different IP on every request and bypass the IP limit COMPLETELY.
+	// Behind a reverse proxy such as Traefik, this value must be set
+	// EXPLICITLY to the number of proxies (AUTH_TRUSTED_PROXIES).
 	TrustedProxies int
 
-	// Federasyon, yukari akis saglayicilaridir. Bos ise federasyon
-	// uclari HIC BAGLANMAZ ve giris sayfasinda buton gorunmez.
-	Federasyon []FederasyonIstemci
+	// Federation lists the upstream providers. If empty, the federation
+	// endpoints are NEVER mounted and no button appears on the login page.
+	Federation []FederationClient
 }
 
-// FederasyonIstemci, bir yukari akis saglayicisinin yapilandirmasidir.
-// Ad "google" veya "apple" olmalidir; URL'ler sabittir ve koddan
-// gelir, ortamdan yalnizca kimlik bilgileri okunur.
-type FederasyonIstemci struct {
-	Ad        string // "google" | "apple"
-	IstemciID string
-	// Google icin duz client_secret. Apple icin BOS BIRAKILIR: Apple'in
-	// client_secret'i her istekte ES256 ile uretilir (bkz. K5).
-	IstemciSir string
-	// Apple icin zorunlu: .p8 ozel anahtari (PEM), Team ID ve Key ID.
-	AppleEkipID    string
-	AppleAnahtarID string
-	AppleAnahtarP8 string
+// FederationClient is the configuration of one upstream provider.
+// Name must be "google" or "apple"; the URLs are fixed and come from
+// code, only the credentials are read from the environment.
+type FederationClient struct {
+	Name     string // "google" | "apple"
+	ClientID string
+	// Plain client_secret for Google. Left EMPTY for Apple: Apple's
+	// client_secret is generated with ES256 on every request (see K5).
+	ClientSecret string
+	// Required for Apple: the .p8 private key (PEM), Team ID and Key ID.
+	AppleTeamID string
+	AppleKeyID  string
+	AppleKeyP8  string
 }
 
 func Load() (*Config, error) {
@@ -297,48 +300,51 @@ func Load() (*Config, error) {
 	viper.SetDefault("audio.service_url", "http://localhost:8084")
 	viper.SetDefault("audio.timeout", 120)
 
-	// R2 presigned URL varsayilan omru
+	// R2 presigned URL default lifetime
 	viper.SetDefault("r2.presign_ttl", "1h")
 
-	// Auth (kendi OpenID Provider) varsayilanlari
+	// Auth (our own OpenID Provider) defaults
 	viper.SetDefault("auth.port", "8001")
 	viper.SetDefault("auth.access_ttl", "15m")
-	viper.SetDefault("auth.refresh_ttl", "1440h") // 60 gun
+	viper.SetDefault("auth.refresh_ttl", "1440h") // 60 days
 
-	// DIKKAT: viper.SetDefault, deger VAR ama COZULEMIYORSA devreye
-	// GIRMEZ. Ornegin AUTH_ACCESS_TTL="15min" veya AUTH_REFRESH_TTL="60d"
-	// (dokumanlardaki "15 dakika"/"60 gun" ifadelerinin dogal ama
-	// time.ParseDuration'in ANLAMADIGI yazimlari) sessizce 0s olur,
-	// varsayilana DUSMEZ. 0 TTL yikicidir: access kaydi hic yazilmaz ve
-	// jeton exp=now ile uretilir (her /api/* 401), refresh kaydi
-	// dogdugu an olur (tum kullanicilar aninda disari atilir). Bu yuzden
-	// kimlik.Start TTL'leri ACIKCA dogrular ve <= 0 ise HIC BASLAMAZ.
+	// WARNING: viper.SetDefault does NOT kick in when a value EXISTS but
+	// CANNOT BE PARSED. For example AUTH_ACCESS_TTL="15min" or
+	// AUTH_REFRESH_TTL="60d" (natural spellings of the docs' "15 minutes"/
+	// "60 days" that time.ParseDuration does NOT understand) silently
+	// become 0s and do NOT fall back to the default. A 0 TTL is
+	// destructive: the access record is never written and the token is
+	// issued with exp=now (every /api/* returns 401), and the refresh
+	// record expires the moment it is born (all users are logged out
+	// instantly). That is why identity.Start validates the TTLs EXPLICITLY
+	// and NEVER STARTS if one is <= 0.
 
-	// Hiz limiti varsayilanlari (OP giris/kayit uclari).
+	// Rate-limit defaults (OP login/signup endpoints).
 	//
-	// GEREKCELER (uydurma degil, olculen/alintilanan):
-	//   - login_ip_per_min = 10: inceleme sirasinda olculen maliyet istek
-	//     basina ~258 ms CPU (bcrypt cost 12, bkz. kimlik.bcryptCost).
-	//     10/dk bir IP'yi ~%4,3 CPU cekirdegine baglar, yani CPU DoS
-	//     yolu kapanir. Elle giris yapan bir insan dakikada 10 POST'a
-	//     yaklasmaz. Deponun kendi kalibiyla da tutarli:
-	//     ratelimit.lyrics_per_min = 30 (giris ondan seyrek bir islem).
-	//   - login_email_per_hour = 60: dagitik brute-force (her istek ayri
-	//     IP) IP sayacini atlar; hesap basina sayac onu sinirlar. NIST SP
-	//     800-63B 5.2.2 ardisik basarisiz deneme sayisina en fazla 100
-	//     ust siniri verir — 60/saat bunun belirgin altinda, ama gercek
-	//     bir kullanicinin bir saatte ulasamayacagi kadar yukarida.
-	//   - signup_ip_per_hour = 5: e-posta dogrulama ve CAPTCHA MVP'de
-	//     bilerek yok, yani hesap uretimini sinirlayan TEK sey bu.
-	//     Paylasimli bir cikis NAT'i arkasindaki birkac kisiye yeter,
-	//     toplu hesap uretimini bitirir.
-	//   - trusted_proxies = 0: VARSAYILAN GUVENLI OLAN taraftir. 1
-	//     varsayilani, onunde proxy OLMAYAN bir kurulumda tek elemanli
-	//     uydurma bir X-Forwarded-For'u guvenilir sayardi ve saldirgan
-	//     her istekte farkli bir IP yazip IP limitini TAMAMEN atlardi.
-	//     0 iken baslik HIC okunmaz, RemoteAddr kullanilir. Traefik gibi
-	//     bir ters proxy arkasinda bu deger ACIKCA proxy sayisina
-	//     ayarlanmalidir (AUTH_TRUSTED_PROXIES, kume manifestinde 1).
+	// RATIONALE (not made up, measured/quoted):
+	//   - login_ip_per_min = 10: the cost measured during review is
+	//     ~258 ms CPU per request (bcrypt cost 12, see identity.bcryptCost).
+	//     10/min ties one IP to ~4.3% of a CPU core, which closes the CPU
+	//     DoS path. A human logging in by hand does not approach 10 POSTs
+	//     a minute. Also consistent with the repo's own scale:
+	//     ratelimit.lyrics_per_min = 30 (login is a rarer operation).
+	//   - login_email_per_hour = 60: distributed brute force (a different
+	//     IP per request) bypasses the IP counter; the per-account counter
+	//     bounds it. NIST SP 800-63B 5.2.2 sets an upper bound of 100 on
+	//     consecutive failed attempts - 60/hour is clearly below that, yet
+	//     higher than a real user could reach in an hour.
+	//   - signup_ip_per_hour = 5: email verification and CAPTCHA are
+	//     deliberately absent in the MVP, so this is the ONLY thing
+	//     limiting account creation. It is enough for a few people behind
+	//     a shared egress NAT and ends bulk account creation.
+	//   - trusted_proxies = 0: the SAFE-BY-DEFAULT side. A default of 1
+	//     would, in a setup with NO proxy in front, trust a forged
+	//     single-element X-Forwarded-For and an attacker could write a
+	//     different IP on every request and bypass the IP limit COMPLETELY.
+	//     With 0 the header is NEVER read and RemoteAddr is used. Behind a
+	//     reverse proxy such as Traefik this value must be set EXPLICITLY
+	//     to the number of proxies (AUTH_TRUSTED_PROXIES, 1 in the
+	//     cluster manifest).
 	viper.SetDefault("auth.login_ip_per_min", 10)
 	viper.SetDefault("auth.login_email_per_hour", 60)
 	viper.SetDefault("auth.signup_ip_per_hour", 5)
@@ -352,7 +358,7 @@ func Load() (*Config, error) {
 			Port:      viper.GetString("server.port"),
 			Env:       viper.GetString("server.env"),
 			LogLevel:  viper.GetString("server.log_level"),
-			ApiDomain: viper.GetString("server.api_domain"),
+			APIDomain: viper.GetString("server.api_domain"),
 		},
 		Redis: RedisConfig{
 			Addr:     viper.GetString("redis.addr"),
@@ -368,11 +374,11 @@ func Load() (*Config, error) {
 			WSTicketPerMin: viper.GetInt("ratelimit.ws_ticket_per_min"),
 			SignPerMin:     viper.GetInt("ratelimit.sign_per_min"),
 
-			SosyalYayinPerHour: viper.GetInt("ratelimit.sosyal_yayin_per_hour"),
-			SosyalYorumPerMin:  viper.GetInt("ratelimit.sosyal_yorum_per_min"),
-			SosyalCoverPerHour: viper.GetInt("ratelimit.sosyal_cover_per_hour"),
-			PublicPerMin:       viper.GetInt("ratelimit.public_per_min"),
-			PublicWebPerMin:    viper.GetInt("ratelimit.public_web_per_min"),
+			SocialPublicationPerHour: viper.GetInt("ratelimit.sosyal_yayin_per_hour"),
+			SocialCommentPerMin:      viper.GetInt("ratelimit.sosyal_yorum_per_min"),
+			SocialCoverPerHour:       viper.GetInt("ratelimit.sosyal_cover_per_hour"),
+			PublicPerMin:             viper.GetInt("ratelimit.public_per_min"),
+			PublicWebPerMin:          viper.GetInt("ratelimit.public_web_per_min"),
 		},
 		Groq: GroqConfig{
 			APIKey:  viper.GetString("groq.api_key"),
@@ -418,45 +424,45 @@ func Load() (*Config, error) {
 			SignupIPPerHour:   viper.GetInt("auth.signup_ip_per_hour"),
 			TrustedProxies:    viper.GetInt("auth.trusted_proxies"),
 
-			Federasyon: federasyonIstemcileriOlustur(),
+			Federation: buildFederationClients(),
 		},
-		Sosyal: SosyalConfig{
-			WebAnahtari: viper.GetString("sosyal.web_anahtari"),
+		Social: SocialConfig{
+			WebKey: viper.GetString("sosyal.web_anahtari"),
 		},
 	}
 
 	return cfg, nil
 }
 
-// federasyonIstemcileriOlustur, viper'dan okunan AUTH_FED_* degerlerinden
-// federasyon saglayici listesini kurar.
+// buildFederationClients builds the federation provider list from the
+// AUTH_FED_* values read from viper.
 //
-// SESSIZ SIFIR KURALI: bir saglayicinin client_id'si bos ise o saglayici
-// listeye HIC EKLENMEZ. Yarim yapilandirilmis bir saglayiciyla baslamak,
-// kullanicinin butona basip hata gormesi demektir; listeye hic
-// eklenmeyince giris sayfasinda buton da gorunmez (bkz. FederasyonIstemci
-// yorumu). Apple'in uc alaninin (EkipID/AnahtarID/AnahtarP8) hepsinin
-// dolu olmasi burada DENETLENMEZ: o denetim kimlik.Start icindeki
-// yapilandirmaDogrula'da yapilir ve eksikse Start HATA DONER (startup
-// hatasi, sessiz atlama degil).
-func federasyonIstemcileriOlustur() []FederasyonIstemci {
-	var liste []FederasyonIstemci
+// SILENT-OMISSION RULE: if a provider's client_id is empty, that provider
+// is NEVER added to the list. Starting with a half-configured provider
+// would mean the user presses the button and sees an error; when it is not
+// added to the list, no button appears on the login page either (see the
+// FederationClient comment). That all three of Apple's fields
+// (TeamID/KeyID/KeyP8) are filled is NOT checked here: that check is done
+// in validateConfig inside identity.Start, and if anything is missing
+// Start RETURNS AN ERROR (a startup error, not a silent skip).
+func buildFederationClients() []FederationClient {
+	var liste []FederationClient
 
 	if id := viper.GetString("auth.fed_google_client_id"); id != "" {
-		liste = append(liste, FederasyonIstemci{
-			Ad:         "google",
-			IstemciID:  id,
-			IstemciSir: viper.GetString("auth.fed_google_client_secret"),
+		liste = append(liste, FederationClient{
+			Name:         "google",
+			ClientID:     id,
+			ClientSecret: viper.GetString("auth.fed_google_client_secret"),
 		})
 	}
 
 	if id := viper.GetString("auth.fed_apple_client_id"); id != "" {
-		liste = append(liste, FederasyonIstemci{
-			Ad:             "apple",
-			IstemciID:      id,
-			AppleEkipID:    viper.GetString("auth.fed_apple_team_id"),
-			AppleAnahtarID: viper.GetString("auth.fed_apple_key_id"),
-			AppleAnahtarP8: viper.GetString("auth.fed_apple_key_p8"),
+		liste = append(liste, FederationClient{
+			Name:        "apple",
+			ClientID:    id,
+			AppleTeamID: viper.GetString("auth.fed_apple_team_id"),
+			AppleKeyID:  viper.GetString("auth.fed_apple_key_id"),
+			AppleKeyP8:  viper.GetString("auth.fed_apple_key_p8"),
 		})
 	}
 

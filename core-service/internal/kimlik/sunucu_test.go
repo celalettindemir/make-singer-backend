@@ -169,16 +169,16 @@ func TestGecerliYapilandirmaDogrulamayiGecer(t *testing.T) {
 func TestAppleFederasyonuEksikAlanlarlaBaslamaz(t *testing.T) {
 	durumlar := []struct {
 		ad     string
-		federe config.FederasyonIstemci
+		federe config.FederationClient
 	}{
-		{"ekip id eksik", config.FederasyonIstemci{Ad: "apple", IstemciID: "tr.makesinger.giris", AppleAnahtarID: "AB12", AppleAnahtarP8: "pem-verisi"}},
-		{"anahtar id eksik", config.FederasyonIstemci{Ad: "apple", IstemciID: "tr.makesinger.giris", AppleEkipID: "TEAM1", AppleAnahtarP8: "pem-verisi"}},
-		{"anahtar p8 eksik", config.FederasyonIstemci{Ad: "apple", IstemciID: "tr.makesinger.giris", AppleEkipID: "TEAM1", AppleAnahtarID: "AB12"}},
+		{"ekip id eksik", config.FederationClient{Name: "apple", ClientID: "tr.makesinger.giris", AppleKeyID: "AB12", AppleKeyP8: "pem-verisi"}},
+		{"anahtar id eksik", config.FederationClient{Name: "apple", ClientID: "tr.makesinger.giris", AppleTeamID: "TEAM1", AppleKeyP8: "pem-verisi"}},
+		{"anahtar p8 eksik", config.FederationClient{Name: "apple", ClientID: "tr.makesinger.giris", AppleTeamID: "TEAM1", AppleKeyID: "AB12"}},
 	}
 	for _, d := range durumlar {
 		t.Run(d.ad, func(t *testing.T) {
 			cfg := testAuthCfg()
-			cfg.Federasyon = []config.FederasyonIstemci{d.federe}
+			cfg.Federation = []config.FederationClient{d.federe}
 			if err := yapilandirmaDogrula(cfg); err == nil {
 				t.Fatal("eksik apple alanlariyla dogrulama gecti")
 			}
@@ -195,9 +195,9 @@ func TestAppleFederasyonuEksikAlanlarlaBaslamaz(t *testing.T) {
 func TestAppleFederasyonuTamAlanlarlaGecer(t *testing.T) {
 	p8, _ := testP8Uret(t)
 	cfg := testAuthCfg()
-	cfg.Federasyon = []config.FederasyonIstemci{{
-		Ad: "apple", IstemciID: "tr.makesinger.giris",
-		AppleEkipID: "TEAM1", AppleAnahtarID: "AB12", AppleAnahtarP8: p8,
+	cfg.Federation = []config.FederationClient{{
+		Name: "apple", ClientID: "tr.makesinger.giris",
+		AppleTeamID: "TEAM1", AppleKeyID: "AB12", AppleKeyP8: p8,
 	}}
 	if err := yapilandirmaDogrula(cfg); err != nil {
 		t.Errorf("tam apple yapilandirmasi reddedildi: %v", err)
@@ -228,9 +228,9 @@ func TestAppleP8BaslangictaAyristirilir(t *testing.T) {
 	for _, d := range durumlar {
 		t.Run(d.ad, func(t *testing.T) {
 			cfg := testAuthCfg()
-			cfg.Federasyon = []config.FederasyonIstemci{{
-				Ad: "apple", IstemciID: "tr.makesinger.giris",
-				AppleEkipID: "TEAM1", AppleAnahtarID: "AB12", AppleAnahtarP8: d.p8,
+			cfg.Federation = []config.FederationClient{{
+				Name: "apple", ClientID: "tr.makesinger.giris",
+				AppleTeamID: "TEAM1", AppleKeyID: "AB12", AppleKeyP8: d.p8,
 			}}
 			err := yapilandirmaDogrula(cfg)
 			if err == nil {
@@ -254,8 +254,8 @@ func TestAppleP8BaslangictaAyristirilir(t *testing.T) {
 // kontrolu varken Google icin olmamasi acik bir asimetriydi.
 func TestGoogleFederasyonuSecretsizBaslamaz(t *testing.T) {
 	cfg := testAuthCfg()
-	cfg.Federasyon = []config.FederasyonIstemci{{
-		Ad: "google", IstemciID: "123.apps.googleusercontent.com",
+	cfg.Federation = []config.FederationClient{{
+		Name: "google", ClientID: "123.apps.googleusercontent.com",
 	}}
 	err := yapilandirmaDogrula(cfg)
 	if err == nil {
@@ -273,14 +273,14 @@ func TestGoogleFederasyonuSecretsizBaslamaz(t *testing.T) {
 // listesi gecerlidir.
 func TestGoogleFederasyonuSecretVarsaGecer(t *testing.T) {
 	cfg := testAuthCfg()
-	cfg.Federasyon = []config.FederasyonIstemci{{
-		Ad: "google", IstemciID: "123.apps.googleusercontent.com", IstemciSir: "gizli",
+	cfg.Federation = []config.FederationClient{{
+		Name: "google", ClientID: "123.apps.googleusercontent.com", ClientSecret: "gizli",
 	}}
 	if err := yapilandirmaDogrula(cfg); err != nil {
 		t.Errorf("tam google yapilandirmasi reddedildi: %v", err)
 	}
 
-	cfg.Federasyon = nil
+	cfg.Federation = nil
 	if err := yapilandirmaDogrula(cfg); err != nil {
 		t.Errorf("federasyon KAPALI yapilandirma reddedildi: %v", err)
 	}

@@ -50,8 +50,8 @@ func main() {
 	}
 
 	// Configure Swagger host/scheme based on environment
-	if cfg.Server.ApiDomain != "" {
-		docs.SwaggerInfo.Host = cfg.Server.ApiDomain
+	if cfg.Server.APIDomain != "" {
+		docs.SwaggerInfo.Host = cfg.Server.APIDomain
 		docs.SwaggerInfo.Schemes = []string{"https"}
 	} else {
 		docs.SwaggerInfo.Host = "localhost:" + cfg.Server.Port
@@ -265,7 +265,7 @@ func main() {
 	// sunucusu X-Web-Anahtari ile ortak ve daha yuksek sinira gecer.
 	sosyalHandler.PublicRotalar(app.Group("/api/public"),
 		rateLimiter.LimitIP("public", cfg.RateLimit.PublicPerMin, time.Minute,
-			cfg.Sosyal.WebAnahtari, cfg.RateLimit.PublicWebPerMin))
+			cfg.Social.WebKey, cfg.RateLimit.PublicWebPerMin))
 
 	// API routes
 	api := app.Group("/api", apiAuthMiddleware, middleware.SilinmisKullaniciEngeli(hesapisaret.NewRedisDenetci(redisClient)))
@@ -311,10 +311,10 @@ func main() {
 	// Kesfet (sosyal) uclari. Limitler yalnizca ilgili uclardadir; yorum
 	// limiti sozlesme geregi 429 yavasla doner.
 	sosyalHandler.Rotalar(api.Group("/social"), handler.SosyalLimitleri{
-		Yayin: rateLimiter.Limit("sosyal-yayin", cfg.RateLimit.SosyalYayinPerHour, time.Hour),
-		Yorum: rateLimiter.LimitKod("sosyal-yorum", cfg.RateLimit.SosyalYorumPerMin, time.Minute,
+		Yayin: rateLimiter.Limit("sosyal-yayin", cfg.RateLimit.SocialPublicationPerHour, time.Hour),
+		Yorum: rateLimiter.LimitKod("sosyal-yorum", cfg.RateLimit.SocialCommentPerMin, time.Minute,
 			"yavasla", "Biraz yavasla"),
-		Cover: rateLimiter.Limit("sosyal-cover", cfg.RateLimit.SosyalCoverPerHour, time.Hour),
+		Cover: rateLimiter.Limit("sosyal-cover", cfg.RateLimit.SocialCoverPerHour, time.Hour),
 	})
 
 	// WebSocket routes
