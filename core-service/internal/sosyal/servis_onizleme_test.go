@@ -78,9 +78,18 @@ func TestServis_OnizlemeR2siz(t *testing.T) {
 
 func TestServis_OnizlemeBulunamadi(t *testing.T) {
 	s, _ := testServisi(onizlemeDeposu())
-	for _, slug := range []string{"Yok12345", "kisa", "Ab3dEf9h/", "../../xx"} {
+	if _, err := s.Onizleme(context.Background(), "Yok12345"); !errors.Is(err, ErrBulunamadi) {
+		t.Errorf("bilinmeyen slug: %v, beklenen ErrBulunamadi", err)
+	}
+
+	// Gecersiz slug sorgusuz 404'tur: depo her cagride baska bir hata
+	// doner, yani bir cagri sonucu ErrBulunamadi'dan ayirirdi.
+	d := onizlemeDeposu()
+	d.hata = errors.New("depo cagrilmamali")
+	s, _ = testServisi(d)
+	for _, slug := range []string{"kisa", "Ab3dEf9h/", "../../xx", ""} {
 		if _, err := s.Onizleme(context.Background(), slug); !errors.Is(err, ErrBulunamadi) {
-			t.Errorf("%q: %v, beklenen ErrBulunamadi", slug, err)
+			t.Errorf("%q: %v, beklenen ErrBulunamadi (depo cagrilmadan)", slug, err)
 		}
 	}
 }

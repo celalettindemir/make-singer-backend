@@ -63,3 +63,17 @@ func TestPostgresDepo_StemListesi(t *testing.T) {
 		t.Fatalf("olmayan yayin: %v", err)
 	}
 }
+
+// Profili olmayan sahibin cover'i listeye girmez (ozet profil birlesimi).
+func TestPostgresDepo_CoverlarProfilsizSahibiGizler(t *testing.T) {
+	havuz, d, ben, _, yabanci := akisKurulumu(t)
+	ctx := context.Background()
+	kaynak := testYayinEkle(t, havuz, testYayin{SahipID: yabanci, AltyapiAcik: true})
+	gorunen := testYayinEkle(t, havuz, testYayin{SahipID: yabanci, KaynakID: kaynak})
+	testYayinEkle(t, havuz, testYayin{SahipID: uuid.NewString(), KaynakID: kaynak})
+
+	ogeler, err := d.Coverlar(ctx, kaynak, ben, nil, 10)
+	if err != nil || len(ogeler) != 1 || ogeler[0].ID != gorunen {
+		t.Fatalf("coverlar = %+v, %v; beklenen yalnizca %s", ogeler, err, gorunen)
+	}
+}

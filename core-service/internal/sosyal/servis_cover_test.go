@@ -113,6 +113,7 @@ func TestServis_CoverBaslatHatalari(t *testing.T) {
 		{"olmayan", nil, kullaniciA, yayinY, ErrBulunamadi},
 		{"bozuk id", nil, kullaniciA, "x", ErrBulunamadi},
 		{"sahibinin hazirlanan yayini", func(d *sahteDepo) { d.yayinlar[yayinX].Durum = DurumHazirlaniyor }, kullaniciB, yayinX, ErrDurum},
+		{"baskasinin hazirlanan yayini", func(d *sahteDepo) { d.yayinlar[yayinX].Durum = DurumHazirlaniyor }, kullaniciA, yayinX, ErrBulunamadi},
 	}
 	for _, c := range durumlar {
 		d := coverDeposu()

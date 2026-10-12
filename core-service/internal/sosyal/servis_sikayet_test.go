@@ -55,6 +55,10 @@ func TestServis_SikayetHatalari(t *testing.T) {
 			d.yorumKayitlari[yorum1] = &YorumKaydi{ID: yorum1, YayinID: yayinX}
 			d.yayinlar[yayinX].Silindi = true
 		}, SikayetGirdisi{HedefTuru: "yorum", HedefID: yorum1, Neden: "spam"}, ErrBulunamadi},
+		{"gizli (takipciler) yayinin yorumu", func(d *sahteDepo) {
+			d.yorumKayitlari[yorum1] = &YorumKaydi{ID: yorum1, YayinID: yayinX, YazarID: kullaniciB, YayinSahibiID: kullaniciB}
+			d.yayinlar[yayinX].Gorunurluk = GorunurlukTakipciler
+		}, SikayetGirdisi{HedefTuru: "yorum", HedefID: yorum1, Neden: "spam"}, ErrBulunamadi},
 	}
 	for _, c := range durumlar {
 		d := yorumDeposu()
@@ -68,5 +72,22 @@ func TestServis_SikayetHatalari(t *testing.T) {
 		if len(d.sikayetler) != 0 {
 			t.Errorf("%s: sikayet yazilmamali", c.ad)
 		}
+	}
+}
+
+// Bozuk hedefId depoya hic gitmeden 404'tur: depo her cagride baska bir
+// hata doner, yani bir cagri sonucu ErrBulunamadi'dan ayirirdi.
+func TestServis_SikayetBozukKimlikDepoyaGitmez(t *testing.T) {
+	d := yorumDeposu()
+	d.hata = errors.New("depo cagrilmamali")
+	s, _ := testServisi(d)
+	for _, tur := range []string{"yayin", "yorum"} {
+		err := s.Sikayet(context.Background(), kullaniciC, SikayetGirdisi{HedefTuru: tur, HedefID: "uuid-degil", Neden: "spam"})
+		if !errors.Is(err, ErrBulunamadi) {
+			t.Errorf("%s: %v, beklenen ErrBulunamadi (depo cagrilmadan)", tur, err)
+		}
+	}
+	if len(d.sikayetler) != 0 {
+		t.Fatalf("sikayet yazilmamali: %+v", d.sikayetler)
 	}
 }

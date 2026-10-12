@@ -3,6 +3,7 @@ package sosyal
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -62,10 +63,15 @@ func TestServis_YorumYazHatalari(t *testing.T) {
 		{"NUL iceren metin", nil, kullaniciA, yayinX, YorumGirdisi{Metin: "a\x00b"}, ErrDogrulama},
 		{"negatif zaman", nil, kullaniciA, yayinX, YorumGirdisi{Metin: "a", ZamanMs: intp(-1)}, ErrDogrulama},
 		{"sureyi asan zaman", nil, kullaniciA, yayinX, YorumGirdisi{Metin: "a", ZamanMs: intp(180001)}, ErrDogrulama},
+		{"int32'yi asan zaman", func(d *sahteDepo) { d.yayinlar[yayinX].SureSn = 3_000_000 }, kullaniciA, yayinX, YorumGirdisi{Metin: "a", ZamanMs: intp(math.MaxInt32 + 1)}, ErrDogrulama},
 		{"gorunmeyen yayin", func(d *sahteDepo) { d.yayinlar[yayinX].Gorunurluk = GorunurlukTakipciler }, kullaniciA, yayinX, YorumGirdisi{Metin: "a"}, ErrBulunamadi},
 		{"olmayan yayin", nil, kullaniciA, yayinY, YorumGirdisi{Metin: "a"}, ErrBulunamadi},
 		{"bozuk yayin id", nil, kullaniciA, "x", YorumGirdisi{Metin: "a"}, ErrBulunamadi},
 		{"yorum kapali", func(d *sahteDepo) { d.yayinlar[yayinX].YorumAcik = false }, kullaniciA, yayinX, YorumGirdisi{Metin: "a"}, ErrYorumKapali},
+		{"yorum kapali, sahibi de yazamaz", func(d *sahteDepo) {
+			d.profiller[kullaniciB] = &ProfilKaydi{KullaniciID: kullaniciB, KullaniciAdi: "sahip"}
+			d.yayinlar[yayinX].YorumAcik = false
+		}, kullaniciB, yayinX, YorumGirdisi{Metin: "a"}, ErrYorumKapali},
 		{"profil yok", nil, kullaniciC, yayinX, YorumGirdisi{Metin: "a"}, ErrProfilYok},
 	}
 	for _, c := range durumlar {

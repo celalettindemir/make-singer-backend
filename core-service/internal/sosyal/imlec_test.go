@@ -2,6 +2,7 @@ package sosyal
 
 import (
 	"errors"
+	"math"
 	"testing"
 	"time"
 )
@@ -46,5 +47,17 @@ func TestImlec_BozukReddedilir(t *testing.T) {
 		if _, err := puanImleciCoz(ham); !errors.Is(err, ErrDogrulama) {
 			t.Errorf("puan %q: %v", ham, err)
 		}
+	}
+}
+
+// zaman_ms sutunu integer'dir ($4::int); MaxInt32'yi asan z pgx'te 500
+// yerine 422 olmali. Sinirin kendisi gecerlidir.
+func TestYorumImleci_ZInt32Siniri(t *testing.T) {
+	an := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+	if _, err := yorumImleciCoz(*imlecKodla(YorumImleci{G: 0, Z: intp(math.MaxInt32), T: an, ID: yorum1})); err != nil {
+		t.Fatalf("MaxInt32 gecerli olmali: %v", err)
+	}
+	if _, err := yorumImleciCoz(*imlecKodla(YorumImleci{G: 0, Z: intp(math.MaxInt32 + 1), T: an, ID: yorum1})); !errors.Is(err, ErrDogrulama) {
+		t.Fatalf("MaxInt32+1: %v, beklenen ErrDogrulama", err)
 	}
 }

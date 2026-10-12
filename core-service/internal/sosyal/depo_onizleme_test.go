@@ -61,3 +61,13 @@ func TestPostgresDepo_OnizlemeYalnizcaHerkesVeLink(t *testing.T) {
 		t.Fatalf("olmayan slug: %v", err)
 	}
 }
+
+// Profili olmayan sahibin herkes yayini da onizlenmez (404).
+func TestPostgresDepo_OnizlemeProfilsizSahip(t *testing.T) {
+	havuz := testHavuz(t)
+	d := NewPostgresDepo(havuz)
+	testYayinEkle(t, havuz, testYayin{Slug: "Profsiz1", SahipID: uuid.NewString()})
+	if _, err := d.OnizlemeGetir(context.Background(), "Profsiz1"); !errors.Is(err, ErrBulunamadi) {
+		t.Fatalf("profilsiz sahip: %v, beklenen ErrBulunamadi", err)
+	}
+}

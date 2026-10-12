@@ -2,6 +2,7 @@ package sosyal
 
 import (
 	"context"
+	"math"
 	"strings"
 	"unicode/utf8"
 
@@ -66,6 +67,11 @@ func (s *Servis) YorumYaz(ctx context.Context, kullaniciID, yayinID string, g Yo
 	}
 	if g.ZamanMs != nil && *g.ZamanMs < 0 {
 		return nil, dogrulamaHatasi("zamanMs negatif olamaz")
+	}
+	// zaman_ms sutunu integer'dir; sureSn ust sinirsiz oldugundan sure
+	// denetimi tek basina INSERT tasmasini (500) onlemez.
+	if g.ZamanMs != nil && *g.ZamanMs > math.MaxInt32 {
+		return nil, dogrulamaHatasi("zamanMs cok buyuk")
 	}
 	k, err := s.gorunurYayin(ctx, id, yayinID)
 	if err != nil {

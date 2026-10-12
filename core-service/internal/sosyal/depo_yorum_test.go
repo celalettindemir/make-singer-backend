@@ -150,3 +150,22 @@ func TestPostgresDepo_YorumEkleGetirSil(t *testing.T) {
 		t.Fatal("negatif zaman_ms CHECK kisitina takilmali")
 	}
 }
+
+// Profili olmayan (silinmekte olan) yazarin yorumu listeye girmez.
+func TestPostgresDepo_YorumlarProfilsizYazariGizler(t *testing.T) {
+	havuz := testHavuz(t)
+	d := NewPostgresDepo(havuz)
+	sahip, yazar, profilsiz := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	testProfilEkle(t, d, sahip, "sahip")
+	testProfilEkle(t, d, yazar, "yazar")
+	yayin := testYayinEkle(t, havuz, testYayin{SahipID: sahip})
+	t0 := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
+	gorunen := testYorumEkle(t, havuz, "", yayin, yazar, nil, t0)
+	testYorumEkle(t, havuz, "", yayin, profilsiz, nil, t0.Add(time.Minute))
+	testYorumEkle(t, havuz, "", yayin, profilsiz, intp(10), t0)
+
+	ogeler := tumYorumSayfalari(t, d, yayin, sahip, 20)
+	if len(ogeler) != 1 || ogeler[0].ID != gorunen {
+		t.Fatalf("yorumlar = %+v, beklenen yalnizca %s", ogeler, gorunen)
+	}
+}

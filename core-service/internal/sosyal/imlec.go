@@ -3,6 +3,7 @@ package sosyal
 import (
 	"encoding/base64"
 	"encoding/json"
+	"math"
 	"strconv"
 	"time"
 )
@@ -105,7 +106,8 @@ type YorumImleci struct {
 	ID string    `json:"id"`
 }
 
-// yorumImleciCoz, bos dizgede nil doner.
+// yorumImleciCoz, bos dizgede nil doner. z, zaman_ms (integer) sutununa
+// sigmali; MaxInt32'yi asan deger sorguda 500 yerine burada 422'dir.
 func yorumImleciCoz(ham string) (*YorumImleci, error) {
 	if ham == "" {
 		return nil, nil
@@ -116,7 +118,7 @@ func yorumImleciCoz(ham string) (*YorumImleci, error) {
 	}
 	id, ok := kimlikCoz(im.ID)
 	gecerli := ok && !im.T.IsZero() &&
-		((im.G == 0 && im.Z != nil && *im.Z >= 0) || (im.G == 1 && im.Z == nil))
+		((im.G == 0 && im.Z != nil && *im.Z >= 0 && *im.Z <= math.MaxInt32) || (im.G == 1 && im.Z == nil))
 	if !gecerli {
 		return nil, dogrulamaHatasi("imlec gecersiz")
 	}
