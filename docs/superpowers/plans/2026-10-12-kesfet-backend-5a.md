@@ -8810,3 +8810,8 @@ EOF
 - **Feed performance:** `senin-icin` scores every `herkes` publication per page. Fine for launch volumes; add a 7-day window on `y.olusturma` or a materialised score when the table grows.
 - **Health:** `/health` does not report the sosyal pool; add a `sosyal` flag with a ping if operations wants it.
 - **Mobile-contract item, not backend:** the app treats any 404 on `DELETE /yayinlar/{id}` as success; keep that, since the backend answers 404 for a repeat.
+- **Stale-`hazirlaniyor` sweeper (5b):** if the worker crashes during the last attempt, asynq archives the task without calling the handler and the row stays `hazirlaniyor`. A periodic job on `bakim` (asynq Scheduler) should set rows older than about 1 h to `hata`.
+- **`senin-icin` candidate window:** limit scoring to a candidate window (for example `y.olusturma` within the last N days) instead of the whole catalogue.
+- **`KaynakOzeti` live title (5d):** a cover shows the source's live `baslik` even when the viewer can no longer see the source (for example after it switched to `takipciler`).
+- **`durum` in the owner's list items:** `YayinOzeti` has no `durum`, so the owner's profile list cannot mark their own `hazirlaniyor`/`hata` items.
+- **audio-service analysis:** use float32 arrays in `mono_ornekler` and the RMS window (about 1 GB peak for a 10-minute stereo master today), and run the blocking work through `asyncio.to_thread`.

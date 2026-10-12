@@ -336,3 +336,23 @@ func TestLoad_SunoModelEnvIleDegisir(t *testing.T) {
 		t.Errorf("Suno.Model = %q, beklenen V6_MINI", cfg.Suno.Model)
 	}
 }
+
+func TestLoad_SosyalYayinLimiti(t *testing.T) {
+	os.Unsetenv("RATELIMIT_SOSYAL_YAYIN_PER_HOUR")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load hata verdi: %v", err)
+	}
+	if cfg.RateLimit.SosyalYayinPerHour != 30 {
+		t.Errorf("varsayilan SosyalYayinPerHour = %d, beklenen 30", cfg.RateLimit.SosyalYayinPerHour)
+	}
+
+	t.Setenv("RATELIMIT_SOSYAL_YAYIN_PER_HOUR", "7")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load hata verdi: %v", err)
+	}
+	if cfg.RateLimit.SosyalYayinPerHour != 7 {
+		t.Errorf("SosyalYayinPerHour = %d, ortamdan 7 bekleniyordu", cfg.RateLimit.SosyalYayinPerHour)
+	}
+}

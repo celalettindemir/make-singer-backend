@@ -60,6 +60,9 @@ type RateLimitConfig struct {
 	UploadPerHour  int
 	WSTicketPerMin int
 	SignPerMin     int
+	// SosyalYayinPerHour, POST /api/social/yayinlar icin kullanici basina
+	// saatlik limit.
+	SosyalYayinPerHour int
 }
 
 type GroqConfig struct {
@@ -228,6 +231,7 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("auth.fed_apple_team_id", "AUTH_FED_APPLE_TEAM_ID")
 	_ = viper.BindEnv("auth.fed_apple_key_id", "AUTH_FED_APPLE_KEY_ID")
 	_ = viper.BindEnv("auth.fed_apple_key_p8", "AUTH_FED_APPLE_KEY_P8")
+	_ = viper.BindEnv("ratelimit.sosyal_yayin_per_hour", "RATELIMIT_SOSYAL_YAYIN_PER_HOUR")
 
 	// Defaults
 	viper.SetDefault("server.port", "8000")
@@ -243,6 +247,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("ratelimit.upload_per_hour", 50)
 	viper.SetDefault("ratelimit.ws_ticket_per_min", 60)
 	viper.SetDefault("ratelimit.sign_per_min", 60)
+	viper.SetDefault("ratelimit.sosyal_yayin_per_hour", 30)
 
 	// Groq defaults
 	viper.SetDefault("groq.base_url", "https://api.groq.com/openai/v1")
@@ -330,6 +335,8 @@ func Load() (*Config, error) {
 			UploadPerHour:  viper.GetInt("ratelimit.upload_per_hour"),
 			WSTicketPerMin: viper.GetInt("ratelimit.ws_ticket_per_min"),
 			SignPerMin:     viper.GetInt("ratelimit.sign_per_min"),
+
+			SosyalYayinPerHour: viper.GetInt("ratelimit.sosyal_yayin_per_hour"),
 		},
 		Groq: GroqConfig{
 			APIKey:  viper.GetString("groq.api_key"),

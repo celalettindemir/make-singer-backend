@@ -16,6 +16,7 @@ ratelimit:
   upload_per_hour: 50
   ws_ticket_per_min: 60
   sign_per_min: 60
+  sosyal_yayin_per_hour: 30
 
 # Groq AI Configuration
 groq:

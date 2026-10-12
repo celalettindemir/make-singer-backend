@@ -40,15 +40,30 @@ type Kuyruk interface {
 	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
 }
 
+// SosyalTemizleyici, Kesfet verisinin hesap silmede temizlenen yuzu
+// (*sosyal.PostgresDepo uygular).
+type SosyalTemizleyici interface {
+	// YayinlariListele, yumusak silinmisler dahil tum yayin kimlikleri.
+	YayinlariListele(ctx context.Context, userID string) ([]string, error)
+	// KullaniciIzleriniSil, yayinlar DISINDAKI her seyi (profil, begeni,
+	// yorum, takip, sikayet) tek islemde siler. Okuma yollari profile
+	// baglandigi icin kullanici aninda gorunmez olur.
+	KullaniciIzleriniSil(ctx context.Context, userID string) error
+	// KullaniciVerisiniSil, profil, yayin, begeni, yorum, takip ve
+	// sikayetleri tek islemde siler.
+	KullaniciVerisiniSil(ctx context.Context, userID string) error
+}
+
 type HesapService struct {
 	kimlik KimlikSilici
 	silici client.OnekSilici // nil: R2 yapilandirilmamis
 	redis  *redis.Client
 	kuyruk Kuyruk
+	sosyal SosyalTemizleyici // nil: sosyal modul yok
 }
 
-func NewHesapService(kimlikSilici KimlikSilici, silici client.OnekSilici, rdb *redis.Client, kuyruk Kuyruk) *HesapService {
-	return &HesapService{kimlik: kimlikSilici, silici: silici, redis: rdb, kuyruk: kuyruk}
+func NewHesapService(kimlikSilici KimlikSilici, silici client.OnekSilici, rdb *redis.Client, kuyruk Kuyruk, sosyal SosyalTemizleyici) *HesapService {
+	return &HesapService{kimlik: kimlikSilici, silici: silici, redis: rdb, kuyruk: kuyruk, sosyal: sosyal}
 }
 
 // Sil, hesabi ve tum dosyalarini siler. Kimlik kaydi silindikten sonra
@@ -88,21 +103,64 @@ func (s *HesapService) Sil(ctx context.Context, userID string) error {
 	return nil
 }
 
-// Temizle, kullanicinin tum R2 oneklerini siler. R2 yoksa bir sey
-// yapmaz. Bir onek basarisiz olsa da digerleri denenir.
+// Temizle, kullanicinin tum R2 oneklerini ve Kesfet verisini siler. R2
+// yoksa onekler atlanir. Bir onek basarisiz olsa da digerleri denenir.
 func (s *HesapService) Temizle(ctx context.Context, userID string) error {
-	if s.silici == nil {
-		return nil
-	}
 	onekler, err := client.KullaniciOnekleri(userID)
 	if err != nil {
 		return err
 	}
 	var hatalar []error
-	for _, onek := range onekler {
-		if _, err := s.silici.DeletePrefix(ctx, onek); err != nil {
-			hatalar = append(hatalar, fmt.Errorf("%s: %w", onek, err))
+	if s.silici != nil {
+		for _, onek := range onekler {
+			if _, err := s.silici.DeletePrefix(ctx, onek); err != nil {
+				hatalar = append(hatalar, fmt.Errorf("%s: %w", onek, err))
+			}
 		}
+	}
+	if s.sosyal != nil {
+		if err := s.sosyalTemizle(ctx, userID); err != nil {
+			hatalar = append(hatalar, err)
+		}
+	}
+	return errors.Join(hatalar...)
+}
+
+// sosyalTemizle, once profili ve diger izleri siler (kullanici R2 kesintisi
+// suresince de gorunmez olur), sonra her yayinin sosyal/{id}/ onekini,
+// en son yayin satirlarini siler. Bir onek bile basarisizsa yayin
+// satirlari KALIR: gecikmeli gorev ayni kimlikleri yeniden listeleyip
+// temizligi tamamlar (idempotent). Iz silme hatasi R2 dongusunu durdurmaz.
+func (s *HesapService) sosyalTemizle(ctx context.Context, userID string) error {
+	var hatalar []error
+	if err := s.sosyal.KullaniciIzleriniSil(ctx, userID); err != nil {
+		hatalar = append(hatalar, fmt.Errorf("sosyal izler silinemedi: %w", err))
+	}
+	idler, err := s.sosyal.YayinlariListele(ctx, userID)
+	if err != nil {
+		hatalar = append(hatalar, fmt.Errorf("sosyal yayinlar listelenemedi: %w", err))
+		return errors.Join(hatalar...)
+	}
+	if s.silici != nil {
+		onekHatasi := false
+		for _, id := range idler {
+			onek, err := client.SosyalOneki(id)
+			if err != nil {
+				hatalar = append(hatalar, fmt.Errorf("sosyal onek %s: %w", id, err))
+				onekHatasi = true
+				continue
+			}
+			if _, err := s.silici.DeletePrefix(ctx, onek); err != nil {
+				hatalar = append(hatalar, fmt.Errorf("%s: %w", onek, err))
+				onekHatasi = true
+			}
+		}
+		if onekHatasi {
+			return errors.Join(hatalar...)
+		}
+	}
+	if err := s.sosyal.KullaniciVerisiniSil(ctx, userID); err != nil {
+		hatalar = append(hatalar, fmt.Errorf("sosyal veri silinemedi: %w", err))
 	}
 	return errors.Join(hatalar...)
 }
