@@ -17,15 +17,15 @@ import (
 
 // StorageClient defines the interface for object storage operations
 type StorageClient interface {
-	// Upload, nesneyi yazar ve istemciye verilecek adresi TEK seferde
-	// uretir (public: kalici CDN adresi ve sifir zaman, private: imzali
-	// URL ve son kullanma ani). Cagiranin ayrica URLFor cagirmasi gerekmez.
+	// Upload writes the object and produces the URL to give the client in ONE
+	// step (public: permanent CDN URL and zero time, private: signed URL and
+	// expiry time). The caller does not need to call URLFor separately.
 	Upload(ctx context.Context, key string, body io.Reader, contentType string) (string, time.Time, error)
 	Delete(ctx context.Context, key string) error
 	GetSignedURL(ctx context.Context, key string, expiry time.Duration) (string, error)
-	// URLFor, anahtarin onegine gore dogru adresi uretir: public anahtarda
-	// kalici CDN adresi (expires sifir), private anahtarda presigned URL ve
-	// son kullanma ani.
+	// URLFor produces the right URL based on the key's prefix: a permanent CDN
+	// URL for a public key (zero expiry), a presigned URL and its expiry time
+	// for a private key.
 	URLFor(ctx context.Context, key string) (string, time.Time, error)
 }
 
@@ -44,9 +44,9 @@ func NewR2Client(cfg *config.R2Config) (*R2Client, error) {
 	if cfg.PublicBucket == "" || cfg.PrivateBucket == "" {
 		return nil, fmt.Errorf("R2 bucket adlari eksik: public=%q private=%q", cfg.PublicBucket, cfg.PrivateBucket)
 	}
-	// R2_PUBLIC_URL zorunludur: bos olursa public anahtarlar ne gecerli bir
-	// CDN ne de dogru bir R2 adresi uretir ve KeyFromURL CDN adreslerini
-	// tanimaz. Baslangicta patlamasi, uretimde sessizce bozulmasindan iyidir.
+	// R2_PUBLIC_URL is required: if empty, public keys produce neither a valid
+	// CDN URL nor a correct R2 URL, and KeyFromURL does not recognize CDN URLs.
+	// Failing at startup beats silently breaking in production.
 	if cfg.PublicURL == "" {
 		return nil, fmt.Errorf("R2_PUBLIC_URL eksik: public bucket icin CDN adresi zorunludur")
 	}
@@ -147,55 +147,55 @@ func (c *R2Client) IsConfigured() bool {
 	return c.s3Client != nil && c.cfg != nil && c.cfg.PrivateBucket != ""
 }
 
-// OnekSilici, bir onekin altindaki tum nesneleri siler. StorageClient'tan
-// ayri tutulur: yalnizca hesap silme ihtiyac duyar ve mevcut sahte
-// depolarin hepsini bu yontemi uygulamaya zorlamak gereksizdir.
-type OnekSilici interface {
+// PrefixDeleter deletes all objects under a prefix. It is kept separate from
+// StorageClient: only account deletion needs it, and forcing every existing
+// fake store to implement this method would be pointless.
+type PrefixDeleter interface {
 	DeletePrefix(ctx context.Context, prefix string) (int, error)
 }
 
-var _ OnekSilici = (*R2Client)(nil)
+var _ PrefixDeleter = (*R2Client)(nil)
 
-// DeletePrefix, "<tur>/<userId>/" biciminde bir onekin altindaki tum
-// nesneleri sayfa sayfa listeleyip toplu siler ve silinen sayisini
-// dondurur. Onek en az iki segment ve sonda "/" icermek ZORUNDA: "vocals/"
-// gibi bir onek tum kullanicilarin kayitlarini silerdi.
+// DeletePrefix lists all objects under a prefix of the form "<kind>/<userId>/"
+// page by page, deletes them in bulk and returns the number deleted. The
+// prefix MUST have at least two segments and a trailing "/": a prefix like
+// "vocals/" would delete every user's records.
 func (c *R2Client) DeletePrefix(ctx context.Context, prefix string) (int, error) {
-	parcalar := strings.Split(prefix, "/")
-	if !strings.HasSuffix(prefix, "/") || len(parcalar) != 3 || parcalar[0] == "" || parcalar[1] == "" {
+	segments := strings.Split(prefix, "/")
+	if !strings.HasSuffix(prefix, "/") || len(segments) != 3 || segments[0] == "" || segments[1] == "" {
 		return 0, fmt.Errorf("guvensiz onek reddedildi: %q", prefix)
 	}
 	bucket := aws.String(BucketFor(prefix, c.cfg))
-	sayfalayici := s3.NewListObjectsV2Paginator(c.s3Client, &s3.ListObjectsV2Input{
+	paginator := s3.NewListObjectsV2Paginator(c.s3Client, &s3.ListObjectsV2Input{
 		Bucket: bucket,
 		Prefix: aws.String(prefix),
 	})
-	silinen := 0
-	for sayfalayici.HasMorePages() {
-		sayfa, err := sayfalayici.NextPage(ctx)
+	deleted := 0
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return silinen, fmt.Errorf("R2 listelenemedi: %w", err)
+			return deleted, fmt.Errorf("R2 listelenemedi: %w", err)
 		}
-		if len(sayfa.Contents) == 0 {
+		if len(page.Contents) == 0 {
 			continue
 		}
-		// ListObjectsV2 sayfasi en fazla 1000 nesne doner; DeleteObjects
-		// siniri da 1000'dir, yani sayfa basina tek cagri yeter.
-		nesneler := make([]types.ObjectIdentifier, 0, len(sayfa.Contents))
-		for _, o := range sayfa.Contents {
-			nesneler = append(nesneler, types.ObjectIdentifier{Key: o.Key})
+		// A ListObjectsV2 page returns at most 1000 objects; the DeleteObjects
+		// limit is also 1000, so one call per page is enough.
+		objects := make([]types.ObjectIdentifier, 0, len(page.Contents))
+		for _, o := range page.Contents {
+			objects = append(objects, types.ObjectIdentifier{Key: o.Key})
 		}
-		cikti, err := c.s3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		out, err := c.s3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 			Bucket: bucket,
-			Delete: &types.Delete{Objects: nesneler, Quiet: aws.Bool(true)},
+			Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
 		})
 		if err != nil {
-			return silinen, fmt.Errorf("R2 silinemedi: %w", err)
+			return deleted, fmt.Errorf("R2 silinemedi: %w", err)
 		}
-		if len(cikti.Errors) > 0 {
-			return silinen, fmt.Errorf("R2 %d nesneyi silemedi", len(cikti.Errors))
+		if len(out.Errors) > 0 {
+			return deleted, fmt.Errorf("R2 %d nesneyi silemedi", len(out.Errors))
 		}
-		silinen += len(nesneler)
+		deleted += len(objects)
 	}
-	return silinen, nil
+	return deleted, nil
 }

@@ -7,7 +7,7 @@ import (
 	"github.com/makeasinger/api/internal/config"
 )
 
-func TestDeletePrefix_GuvensizOnekReddedilir(t *testing.T) {
+func TestDeletePrefix_RejectsUnsafePrefix(t *testing.T) {
 	c, err := NewR2Client(&config.R2Config{
 		AccountID: "hesap", AccessKeyID: "a", SecretAccessKey: "s",
 		PublicBucket: "pub", PrivateBucket: "priv", PublicURL: "https://cdn.ornek",
@@ -15,9 +15,9 @@ func TestDeletePrefix_GuvensizOnekReddedilir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("istemci kurulamadi: %v", err)
 	}
-	for _, onek := range []string{"", "vocals/", "vocals", "vocals/u1", "/u1/"} {
-		if _, err := c.DeletePrefix(context.Background(), onek); err == nil {
-			t.Errorf("%q kabul edilmemeliydi", onek)
+	for _, prefix := range []string{"", "vocals/", "vocals", "vocals/u1", "/u1/"} {
+		if _, err := c.DeletePrefix(context.Background(), prefix); err == nil {
+			t.Errorf("%q kabul edilmemeliydi", prefix)
 		}
 	}
 }

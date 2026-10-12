@@ -21,15 +21,15 @@ func uzanti(kaynak string) string {
 
 // MasterHedefi, master kopyasinin anahtaridir: sosyal/{id}/master.{ext}.
 func MasterHedefi(yayinID, kaynak string) (string, error) {
-	return client.SosyalAnahtari(yayinID, "master"+uzanti(kaynak))
+	return client.SocialKey(yayinID, "master"+uzanti(kaynak))
 }
 
 // StemHedefi, stem kopyasinin anahtaridir: sosyal/{id}/stems/{stemId}.{ext}.
 func StemHedefi(yayinID, stemID, kaynak string) (string, error) {
-	return client.SosyalAnahtari(yayinID, "stems", stemID+uzanti(kaynak))
+	return client.SocialKey(yayinID, "stems", stemID+uzanti(kaynak))
 }
 
 // OnizlemeHedefi, 30 sn onizlemenin anahtaridir: sosyal/{id}/onizleme.mp3.
 func OnizlemeHedefi(yayinID string) (string, error) {
-	return client.SosyalAnahtari(yayinID, "onizleme.mp3")
+	return client.SocialKey(yayinID, "onizleme.mp3")
 }

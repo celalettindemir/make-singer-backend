@@ -41,7 +41,7 @@ func (s *ExportService) ExportMP3(ctx context.Context, userID string, req *model
 	}
 
 	// Sahiplik denetimi mock dalindan once: dev ve prod ayni davranir.
-	inputKey, err := client.SahipliAnahtarCoz(req.MasterFileURL, userID, s.r2Cfg)
+	inputKey, err := client.ResolveOwnedKey(req.MasterFileURL, userID, s.r2Cfg)
 	if err != nil {
 		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
 	}
@@ -52,7 +52,7 @@ func (s *ExportService) ExportMP3(ctx context.Context, userID string, req *model
 	}
 
 	exportID := uuid.New().String()
-	outputKey, err := client.KullaniciAnahtari("exports", userID, exportID+".mp3")
+	outputKey, err := client.UserKey("exports", userID, exportID+".mp3")
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func (s *ExportService) ExportWAV(ctx context.Context, userID string, req *model
 	}
 
 	// Sahiplik denetimi mock dalindan once: dev ve prod ayni davranir.
-	inputKey, err := client.SahipliAnahtarCoz(req.MasterFileURL, userID, s.r2Cfg)
+	inputKey, err := client.ResolveOwnedKey(req.MasterFileURL, userID, s.r2Cfg)
 	if err != nil {
 		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
 	}
@@ -129,7 +129,7 @@ func (s *ExportService) ExportWAV(ctx context.Context, userID string, req *model
 	}
 
 	exportID := uuid.New().String()
-	outputKey, err := client.KullaniciAnahtari("exports", userID, exportID+".wav")
+	outputKey, err := client.UserKey("exports", userID, exportID+".wav")
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +173,7 @@ func (s *ExportService) ExportStems(ctx context.Context, userID string, req *mod
 
 	// Add stems
 	for i, url := range req.StemURLs {
-		key, err := client.SahipliAnahtarCoz(url, userID, s.r2Cfg)
+		key, err := client.ResolveOwnedKey(url, userID, s.r2Cfg)
 		if err != nil {
 			return nil, fmt.Errorf("zip girdisi cozulemedi: %w", err)
 		}
@@ -186,7 +186,7 @@ func (s *ExportService) ExportStems(ctx context.Context, userID string, req *mod
 	// Add vocals if requested
 	if req.IncludeVocals && len(req.VocalURLs) > 0 {
 		for i, url := range req.VocalURLs {
-			key, err := client.SahipliAnahtarCoz(url, userID, s.r2Cfg)
+			key, err := client.ResolveOwnedKey(url, userID, s.r2Cfg)
 			if err != nil {
 				return nil, fmt.Errorf("zip girdisi cozulemedi: %w", err)
 			}
@@ -199,7 +199,7 @@ func (s *ExportService) ExportStems(ctx context.Context, userID string, req *mod
 
 	// Add master if requested
 	if req.IncludeMaster && req.MasterURL != "" {
-		key, err := client.SahipliAnahtarCoz(req.MasterURL, userID, s.r2Cfg)
+		key, err := client.ResolveOwnedKey(req.MasterURL, userID, s.r2Cfg)
 		if err != nil {
 			return nil, fmt.Errorf("zip girdisi cozulemedi: %w", err)
 		}
@@ -215,7 +215,7 @@ func (s *ExportService) ExportStems(ctx context.Context, userID string, req *mod
 	}
 
 	exportID := uuid.New().String()
-	outputKey, err := client.KullaniciAnahtari("exports", userID, exportID+".zip")
+	outputKey, err := client.UserKey("exports", userID, exportID+".zip")
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +248,7 @@ func (s *ExportService) ExportStems(ctx context.Context, userID string, req *mod
 
 // Mock implementations for development/testing
 func (s *ExportService) exportMP3Mock(userID string, quality int) (*model.ExportMP3Response, error) {
-	key, err := client.KullaniciAnahtari("exports", userID, uuid.New().String()+".mp3")
+	key, err := client.UserKey("exports", userID, uuid.New().String()+".mp3")
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +262,7 @@ func (s *ExportService) exportMP3Mock(userID string, quality int) (*model.Export
 }
 
 func (s *ExportService) exportWAVMock(userID string, bitDepth, sampleRate int) (*model.ExportWAVResponse, error) {
-	key, err := client.KullaniciAnahtari("exports", userID, uuid.New().String()+".wav")
+	key, err := client.UserKey("exports", userID, uuid.New().String()+".wav")
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +277,7 @@ func (s *ExportService) exportWAVMock(userID string, bitDepth, sampleRate int) (
 }
 
 func (s *ExportService) exportStemsMock(userID string, req *model.ExportStemsRequest) (*model.ExportStemsResponse, error) {
-	key, err := client.KullaniciAnahtari("exports", userID, uuid.New().String()+".zip")
+	key, err := client.UserKey("exports", userID, uuid.New().String()+".zip")
 	if err != nil {
 		return nil, err
 	}

@@ -9,8 +9,8 @@ import (
 	"github.com/makeasinger/api/internal/config"
 )
 
-func TestKullaniciAnahtari_Duzen(t *testing.T) {
-	got, err := KullaniciAnahtari("vocals", "kullanici-a", "p1", "s1", "t1.wav")
+func TestUserKey_Layout(t *testing.T) {
+	got, err := UserKey("vocals", "kullanici-a", "p1", "s1", "t1.wav")
 	if err != nil {
 		t.Fatalf("KullaniciAnahtari: %v", err)
 	}
@@ -19,8 +19,8 @@ func TestKullaniciAnahtari_Duzen(t *testing.T) {
 	}
 }
 
-func TestKullaniciAnahtari_GecersizSegmentReddedilir(t *testing.T) {
-	durumlar := map[string][]string{
+func TestUserKey_RejectsInvalidSegment(t *testing.T) {
+	cases := map[string][]string{
 		"bos kullanici":   {"", "p1", "t.wav"},
 		"egik cizgi":      {"kullanici-a", "p1/../b", "t.wav"},
 		"iki nokta":       {"kullanici-a", "..", "t.wav"},
@@ -28,29 +28,29 @@ func TestKullaniciAnahtari_GecersizSegmentReddedilir(t *testing.T) {
 		"bosluk":          {"kullanici-a", "p 1", "t.wav"},
 		"cok uzun":        {"kullanici-a", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "t.wav"},
 	}
-	for ad, d := range durumlar {
-		t.Run(ad, func(t *testing.T) {
-			_, err := KullaniciAnahtari("vocals", d[0], d[1:]...)
-			if !errors.Is(err, ErrGecersizSegment) {
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := UserKey("vocals", tc[0], tc[1:]...)
+			if !errors.Is(err, ErrInvalidSegment) {
 				t.Errorf("ErrGecersizSegment bekleniyordu, geldi: %v", err)
 			}
 		})
 	}
 }
 
-func TestKullaniciAnahtari_BilinmeyenTurVeDosyasizHata(t *testing.T) {
-	if _, err := KullaniciAnahtari("gizli", "kullanici-a", "t.wav"); err == nil {
+func TestUserKey_UnknownKindOrMissingFileErrors(t *testing.T) {
+	if _, err := UserKey("gizli", "kullanici-a", "t.wav"); err == nil {
 		t.Error("bilinmeyen tur icin hata bekleniyordu")
 	}
-	if _, err := KullaniciAnahtari("vocals", "kullanici-a"); !errors.Is(err, ErrGecersizSegment) {
+	if _, err := UserKey("vocals", "kullanici-a"); !errors.Is(err, ErrInvalidSegment) {
 		t.Errorf("dosya adi yokken ErrGecersizSegment bekleniyordu, geldi: %v", err)
 	}
 }
 
-func TestAnahtarSahibiDogrula(t *testing.T) {
-	durumlar := []struct {
-		ad, key, kullanici string
-		gecerli            bool
+func TestVerifyKeyOwner(t *testing.T) {
+	cases := []struct {
+		name, key, user string
+		valid           bool
 	}{
 		{"kendi stem'i", "stems/kullanici-a/p1/s1.mp3", "kullanici-a", true},
 		{"kendi export'u", "exports/kullanici-a/e1.zip", "kullanici-a", true},
@@ -61,37 +61,37 @@ func TestAnahtarSahibiDogrula(t *testing.T) {
 		{"bos kullanici", "stems//p1/s1.mp3", "", false},
 		{"iki nokta segmenti", "stems/kullanici-a/../kullanici-b/s1.mp3", "kullanici-a", false},
 	}
-	for _, d := range durumlar {
-		t.Run(d.ad, func(t *testing.T) {
-			err := AnahtarSahibiDogrula(d.key, d.kullanici)
-			if d.gecerli && err != nil {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := VerifyKeyOwner(tc.key, tc.user)
+			if tc.valid && err != nil {
 				t.Errorf("gecerli olmaliydi: %v", err)
 			}
-			if !d.gecerli && !errors.Is(err, ErrYabanciAnahtar) {
+			if !tc.valid && !errors.Is(err, ErrKeyNotOwned) {
 				t.Errorf("ErrYabanciAnahtar bekleniyordu, geldi: %v", err)
 			}
 		})
 	}
 }
 
-func TestSahipliAnahtarCoz(t *testing.T) {
+func TestResolveOwnedKey(t *testing.T) {
 	cfg := &config.R2Config{AccountID: "hesap123", PublicBucket: "makeasinger-public", PrivateBucket: "makeasinger-private"}
-	kendi := UnsignedURL("stems/kullanici-a/p1/s1.mp3", cfg) + "?X-Amz-Signature=imza"
+	own := UnsignedURL("stems/kullanici-a/p1/s1.mp3", cfg) + "?X-Amz-Signature=imza"
 
-	key, err := SahipliAnahtarCoz(kendi, "kullanici-a", cfg)
+	key, err := ResolveOwnedKey(own, "kullanici-a", cfg)
 	if err != nil || key != "stems/kullanici-a/p1/s1.mp3" {
 		t.Fatalf("kendi anahtari cozulemedi: %q, %v", key, err)
 	}
-	if _, err := SahipliAnahtarCoz(kendi, "kullanici-b", cfg); !errors.Is(err, ErrYabanciAnahtar) {
+	if _, err := ResolveOwnedKey(own, "kullanici-b", cfg); !errors.Is(err, ErrKeyNotOwned) {
 		t.Errorf("baska kullanici icin ErrYabanciAnahtar bekleniyordu, geldi: %v", err)
 	}
-	if _, err := SahipliAnahtarCoz("https://kotu.example.com/stems/kullanici-a/p1/s1.mp3", "kullanici-a", cfg); err == nil || errors.Is(err, ErrYabanciAnahtar) {
+	if _, err := ResolveOwnedKey("https://kotu.example.com/stems/kullanici-a/p1/s1.mp3", "kullanici-a", cfg); err == nil || errors.Is(err, ErrKeyNotOwned) {
 		t.Errorf("taninmayan konak KeyFromURL hatasi vermeli, geldi: %v", err)
 	}
 }
 
-func TestKullaniciOnekleri(t *testing.T) {
-	got, err := KullaniciOnekleri("6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a")
+func TestUserPrefixes(t *testing.T) {
+	got, err := UserPrefixes("6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a")
 	if err != nil {
 		t.Fatalf("beklenmeyen hata: %v", err)
 	}
@@ -107,9 +107,9 @@ func TestKullaniciOnekleri(t *testing.T) {
 	}
 }
 
-func TestKullaniciOnekleri_GecersizID(t *testing.T) {
+func TestUserPrefixes_InvalidID(t *testing.T) {
 	for _, id := range []string{"", "..", "a/b", "x.wav", strings.Repeat("a", 65)} {
-		if _, err := KullaniciOnekleri(id); !errors.Is(err, ErrGecersizSegment) {
+		if _, err := UserPrefixes(id); !errors.Is(err, ErrInvalidSegment) {
 			t.Errorf("%q icin ErrGecersizSegment bekleniyordu, gelen %v", id, err)
 		}
 	}

@@ -10,18 +10,19 @@ import (
 	"github.com/makeasinger/api/internal/config"
 )
 
-// publicOnek: yalnizca bu onekteki nesneler public bucket'a gider. Liste
-// buyurse burasi tek degisim noktasi (ayni kural Python'da bucket_for).
-const publicOnek = "exports/"
+// publicPrefix: only objects under this prefix go to the public bucket. If the
+// list grows, this is the single point of change (the same rule lives in
+// Python's bucket_for).
+const publicPrefix = "exports/"
 
-// IsPublicKey, anahtarin public bucket'a ait olup olmadigini soyler.
+// IsPublicKey reports whether the key belongs to the public bucket.
 func IsPublicKey(key string) bool {
-	return strings.HasPrefix(key, publicOnek)
+	return strings.HasPrefix(key, publicPrefix)
 }
 
-// BucketFor, anahtarin yazilacagi/okunacagi bucket adini dondurur.
-// Bilinmeyen onek PRIVATE'a duser: yanlis tarafa dusen bir dosya sizinti
-// degil, yalnizca erisilemezlik uretsin.
+// BucketFor returns the name of the bucket the key is written to or read from.
+// An unknown prefix falls to PRIVATE: a file on the wrong side should cause
+// only unreachability, not a leak.
 func BucketFor(key string, cfg *config.R2Config) string {
 	if IsPublicKey(key) {
 		return cfg.PublicBucket
@@ -29,28 +30,28 @@ func BucketFor(key string, cfg *config.R2Config) string {
 	return cfg.PrivateBucket
 }
 
-// r2Konak, R2 S3 API'sinin ortak alan adi sonekidir.
-const r2Konak = "r2.cloudflarestorage.com"
+// r2Host is the common domain suffix of the R2 S3 API.
+const r2Host = "r2.cloudflarestorage.com"
 
-// bilinenKonaklar, KeyFromURL'in kabul ettigi konaklarin TAM listesini
-// uretir. Karsilastirma her zaman tam esitlikle yapilir: sonek/icerik
-// eslesmesi yoktur, cunku "kotu-makeasinger-private.example.com" gibi bir
-// konak sonek eslesmesinde kazara tanidik sayilabilirdi.
+// knownHosts produces the FULL list of hosts KeyFromURL accepts. Comparison is
+// always by exact equality: there is no suffix/substring matching, because a
+// host like "evil-makeasinger-private.example.com" could be accidentally
+// accepted by a suffix match.
 //
-// Kabul edilen bicimler:
-//   - <R2_PUBLIC_URL> konagi (CDN)
-//   - <bucket>.<accountID>.r2.cloudflarestorage.com  (AWS SDK presigner'in
-//     hesap uc noktasi uzerinden urettigi gercek bicim)
-//   - <bucket>.r2.cloudflarestorage.com              (sade virtual-host)
-func bilinenKonaklar(cfg *config.R2Config) []string {
+// Accepted forms:
+//   - <R2_PUBLIC_URL> host (CDN)
+//   - <bucket>.<accountID>.r2.cloudflarestorage.com  (the real form the AWS SDK
+//     presigner produces through the account endpoint)
+//   - <bucket>.r2.cloudflarestorage.com              (plain virtual-host)
+func knownHosts(cfg *config.R2Config) []string {
 	if cfg == nil {
 		return nil
 	}
 
-	konaklar := make([]string, 0, 5)
+	hosts := make([]string, 0, 5)
 	if cfg.PublicURL != "" {
 		if pu, err := url.Parse(cfg.PublicURL); err == nil && pu.Host != "" {
-			konaklar = append(konaklar, pu.Host)
+			hosts = append(hosts, pu.Host)
 		}
 	}
 	for _, b := range []string{cfg.PublicBucket, cfg.PrivateBucket} {
@@ -58,16 +59,15 @@ func bilinenKonaklar(cfg *config.R2Config) []string {
 			continue
 		}
 		if cfg.AccountID != "" {
-			konaklar = append(konaklar, fmt.Sprintf("%s.%s.%s", b, cfg.AccountID, r2Konak))
+			hosts = append(hosts, fmt.Sprintf("%s.%s.%s", b, cfg.AccountID, r2Host))
 		}
-		konaklar = append(konaklar, fmt.Sprintf("%s.%s", b, r2Konak))
+		hosts = append(hosts, fmt.Sprintf("%s.%s", b, r2Host))
 	}
-	return konaklar
+	return hosts
 }
 
-// UnsignedURL, bir anahtar icin imzasiz ama KeyFromURL ile geri
-// cozulebilen adres uretir. Yalnizca mock/dev yollari icindir: gercek
-// yollar R2Client.URLFor kullanir.
+// UnsignedURL produces an unsigned URL for a key that KeyFromURL can still
+// resolve back. It is only for mock/dev paths: real paths use R2Client.URLFor.
 func UnsignedURL(key string, cfg *config.R2Config) string {
 	if cfg != nil && IsPublicKey(key) && cfg.PublicURL != "" {
 		return fmt.Sprintf("%s/%s", cfg.PublicURL, key)
@@ -80,15 +80,15 @@ func UnsignedURL(key string, cfg *config.R2Config) string {
 		}
 	}
 	if cfg != nil && cfg.AccountID != "" {
-		return fmt.Sprintf("https://%s.%s.%s/%s", bucket, cfg.AccountID, r2Konak, key)
+		return fmt.Sprintf("https://%s.%s.%s/%s", bucket, cfg.AccountID, r2Host, key)
 	}
-	return fmt.Sprintf("https://%s.%s/%s", bucket, r2Konak, key)
+	return fmt.Sprintf("https://%s.%s/%s", bucket, r2Host, key)
 }
 
-// ResolveURL, bir nesne anahtarindan istemciye verilecek adresi uretir.
-// Depolama istemcisi varsa gercek adres (public: kalici CDN, private:
-// taze imzali URL) uretilir. Istemci yoksa (mock/dev) imzasiz ama ayni
-// kurallarla cozulebilen bir adres dondurulur.
+// ResolveURL produces the URL to give the client from an object key. If a
+// storage client exists, the real URL is produced (public: permanent CDN,
+// private: freshly signed URL). Without a client (mock/dev) it returns an
+// unsigned URL that resolves under the same rules.
 func ResolveURL(ctx context.Context, sc StorageClient, cfg *config.R2Config, key string) (string, time.Time, error) {
 	if sc != nil {
 		return sc.URLFor(ctx, key)
@@ -96,39 +96,39 @@ func ResolveURL(ctx context.Context, sc StorageClient, cfg *config.R2Config, key
 	return UnsignedURL(key, cfg), time.Time{}, nil
 }
 
-// KeyFromURL, istemciden gelen bir URL'den nesne anahtarini cikarir.
-// Presigned (sorgu dizeli) haller de kabul edilir; sorgu dizesi yok sayilir.
-// Taninmayan konak icin hata doner; tahmin edilmez.
+// KeyFromURL extracts the object key from a URL coming from a client.
+// Presigned forms (with a query string) are accepted too; the query string is
+// ignored. An unknown host returns an error; nothing is guessed.
 //
-// Hata mesajlarinda TAM URL asla gecmez: bu mesajlar Redis is kaydina ve
-// WebSocket yayinina dusuyor, imzali URL de bir sirdir.
+// The FULL URL never appears in error messages: these messages land in the
+// Redis job record and the WebSocket broadcast, and a signed URL is a secret.
 func KeyFromURL(rawURL string, cfg *config.R2Config) (string, error) {
 	if rawURL == "" {
-		return "", fmt.Errorf("%w: bos URL", ErrGecersizURL)
+		return "", fmt.Errorf("%w: bos URL", ErrInvalidURL)
 	}
 
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return "", fmt.Errorf("%w: URL cozulemedi", ErrGecersizURL)
+		return "", fmt.Errorf("%w: URL cozulemedi", ErrInvalidURL)
 	}
 	if u.Host == "" {
-		return "", fmt.Errorf("%w: URL'de konak yok", ErrGecersizURL)
+		return "", fmt.Errorf("%w: URL'de konak yok", ErrInvalidURL)
 	}
 
-	tanidik := false
-	for _, k := range bilinenKonaklar(cfg) {
+	known := false
+	for _, k := range knownHosts(cfg) {
 		if u.Host == k {
-			tanidik = true
+			known = true
 			break
 		}
 	}
-	if !tanidik {
-		return "", fmt.Errorf("%w: taninmayan konak: %s", ErrGecersizURL, u.Host)
+	if !known {
+		return "", fmt.Errorf("%w: taninmayan konak: %s", ErrInvalidURL, u.Host)
 	}
 
 	key := strings.TrimPrefix(u.Path, "/")
 	if key == "" {
-		return "", fmt.Errorf("%w: URL'de nesne anahtari yok (konak: %s)", ErrGecersizURL, u.Host)
+		return "", fmt.Errorf("%w: URL'de nesne anahtari yok (konak: %s)", ErrInvalidURL, u.Host)
 	}
 	return key, nil
 }

@@ -14,7 +14,7 @@ type sahteKopyalayici struct {
 	hata     error
 }
 
-func (k *sahteKopyalayici) Kopyala(_ context.Context, kaynak, hedef string) error {
+func (k *sahteKopyalayici) Copy(_ context.Context, kaynak, hedef string) error {
 	if k.hata != nil {
 		return k.hata
 	}

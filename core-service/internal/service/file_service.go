@@ -27,7 +27,7 @@ func NewFileService(storage client.StorageClient, r2Cfg *config.R2Config) *FileS
 func (s *FileService) Sign(ctx context.Context, userID string, urls []string) (*model.FileSignResponse, error) {
 	anahtarlar := make([]string, len(urls))
 	for i, u := range urls {
-		key, err := client.SahipliAnahtarCoz(u, userID, s.r2Cfg)
+		key, err := client.ResolveOwnedKey(u, userID, s.r2Cfg)
 		if err != nil {
 			return nil, err
 		}

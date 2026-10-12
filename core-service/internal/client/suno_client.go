@@ -15,7 +15,7 @@ import (
 	"github.com/makeasinger/api/internal/model"
 )
 
-// MusicGenerator, render worker'in Suno'dan bekledigi islemler.
+// MusicGenerator is the set of operations the render worker expects from Suno.
 type MusicGenerator interface {
 	GenerateMusic(ctx context.Context, req *GenerateMusicRequest) (string, error)
 	WaitMusic(ctx context.Context, taskID string, interval, maxWait time.Duration) (*Track, error)
@@ -26,8 +26,8 @@ type MusicGenerator interface {
 	IsConfigured() bool
 }
 
-// SunoClient, api.sunoapi.org istemcisi. Saglayici her yaniti
-// {code, msg, data} zarfinda doner; HTTP 200 olsa bile code != 200 hatadir.
+// SunoClient is the api.sunoapi.org client. The provider returns every response
+// in a {code, msg, data} envelope; code != 200 is an error even on HTTP 200.
 type SunoClient struct {
 	httpClient  *http.Client
 	baseURL     string
@@ -36,40 +36,41 @@ type SunoClient struct {
 	callbackURL string
 }
 
-// GenerateMusicRequest, worker'in uretim istegi. customMode, model ve
-// callBackUrl client tarafindan eklenir.
+// GenerateMusicRequest is the worker's generation request. customMode, model
+// and callBackUrl are added by the client.
 type GenerateMusicRequest struct {
 	Style        string
 	Title        string
 	Instrumental bool
 }
 
-// Track, tamamlanmis bir uretimin ilk parcasi. ID, stem bolmede audioId'dir.
+// Track is the first track of a completed generation. ID is the audioId when
+// splitting stems.
 type Track struct {
 	ID       string
 	AudioURL string
 	Duration float64
 }
 
-// Stem, indirilmeye hazir tek bir enstruman kanali. Adres sureli; hemen
-// indirilmeli.
+// Stem is a single instrument channel ready to download. The URL expires, so
+// it must be downloaded right away.
 type Stem struct {
 	Instrument model.Instrument
 	URL        string
 }
 
-// IsolatedStem, split_stem_advanced sonucu: secilen enstruman (Extract) ve
-// o enstruman cikarilmis parca (Remove). Adresler sureli ve bosluk
-// icerebilir; net/http istekte kodlar.
+// IsolatedStem is the split_stem_advanced result: the selected instrument
+// (Extract) and the track with that instrument removed (Remove). The URLs
+// expire and may contain spaces; net/http encodes them in the request.
 type IsolatedStem struct {
 	ExtractURL string
 	RemoveURL  string
 	Duration   float64
 }
 
-// sunoStemAdlari, bizim enstrumanlarimizin saglayicinin stemName enum'undaki
-// karsiliklari (harfi harfine; buyuk/kucuk harf ve bosluk onemli).
-var sunoStemAdlari = map[model.Instrument]string{
+// sunoStemNames maps our instruments to the provider's stemName enum values
+// (verbatim; case and spaces matter).
+var sunoStemNames = map[model.Instrument]string{
 	model.InstrumentDrums:      "Drum Kit",
 	model.InstrumentBass:       "Bass",
 	model.InstrumentPiano:      "Piano",
@@ -84,18 +85,19 @@ var sunoStemAdlari = map[model.Instrument]string{
 	model.InstrumentFX:         "Sound Effects",
 }
 
-// SunoStemAdi, enstrumanin split_stem_advanced stemName'ini doner.
-func SunoStemAdi(i model.Instrument) (string, bool) {
-	ad, ok := sunoStemAdlari[i]
-	return ad, ok
+// SunoStemName returns the instrument's split_stem_advanced stemName.
+func SunoStemName(i model.Instrument) (string, bool) {
+	name, ok := sunoStemNames[i]
+	return name, ok
 }
 
-// stemAlanlari, split_stem yanitindaki camelCase alanlarin Instrument
-// karsiliklari. Sira sonuc sirasidir. vocalUrl ve backingVocalsUrl yok:
-// uretim instrumental ve mobil enum'u vokali tanimaz. woodwindsUrl de
-// ayni nedenle atlanir: mobil enstruman enum'u woodwinds'i bilmez.
-var stemAlanlari = []struct {
-	alan       string
+// stemFields maps the camelCase fields of the split_stem response to
+// Instrument. The order is the result order. There is no vocalUrl or
+// backingVocalsUrl: generation is instrumental and the mobile enum does not
+// know vocals. woodwindsUrl is skipped for the same reason: the mobile
+// instrument enum does not know woodwinds.
+var stemFields = []struct {
+	field      string
 	instrument model.Instrument
 }{
 	{"drumsUrl", model.InstrumentDrums},
@@ -109,17 +111,18 @@ var stemAlanlari = []struct {
 	{"brassUrl", model.InstrumentBrass},
 }
 
-// sunoHataDurumlari, beklemeyi aninda bitiren basarisizlik durumlari.
-var sunoHataDurumlari = map[string]bool{
+// sunoFailureStatuses are the failure statuses that end the wait immediately.
+var sunoFailureStatuses = map[string]bool{
 	"CREATE_TASK_FAILED":    true,
 	"GENERATE_AUDIO_FAILED": true,
 	"CALLBACK_EXCEPTION":    true,
 	"SENSITIVE_WORD_ERROR":  true,
 }
 
-// pollHataToleransi: poll sirasinda arka arkaya kac gecici hata yutulur.
-// Kredi harcandiktan sonra tek bir ag hatasi isi bosa cikarmasin.
-const pollHataToleransi = 3
+// pollErrorTolerance: how many consecutive transient errors are swallowed
+// while polling. A single network error must not waste the job after credits
+// have been spent.
+const pollErrorTolerance = 3
 
 // NewSunoClient creates a new Suno API client
 func NewSunoClient(cfg *config.SunoConfig) *SunoClient {
@@ -137,8 +140,8 @@ func (c *SunoClient) IsConfigured() bool {
 	return c.apiKey != ""
 }
 
-// GenerateMusic, custom modda uretim baslatir ve gorev kimligini doner.
-// Bu cagri basariliysa kredi harcanmistir.
+// GenerateMusic starts a generation in custom mode and returns the task id.
+// If this call succeeds, credits have been spent.
 func (c *SunoClient) GenerateMusic(ctx context.Context, req *GenerateMusicRequest) (string, error) {
 	body := map[string]any{
 		"customMode":   true,
@@ -160,10 +163,10 @@ func (c *SunoClient) GenerateMusic(ctx context.Context, req *GenerateMusicReques
 	return data.TaskID, nil
 }
 
-// WaitMusic, uretim SUCCESS olana kadar poll eder ve ilk parcayi doner.
+// WaitMusic polls until the generation is SUCCESS and returns the first track.
 func (c *SunoClient) WaitMusic(ctx context.Context, taskID string, interval, maxWait time.Duration) (*Track, error) {
-	var sonuc *Track
-	err := c.bekle(ctx, interval, maxWait, "muzik", func() (bool, error) {
+	var result *Track
+	err := c.waitFor(ctx, interval, maxWait, "muzik", func() (bool, error) {
 		var data struct {
 			Status       string `json:"status"`
 			ErrorMessage string `json:"errorMessage"`
@@ -176,9 +179,9 @@ func (c *SunoClient) WaitMusic(ctx context.Context, taskID string, interval, max
 			} `json:"response"`
 		}
 		if err := c.get(ctx, "/api/v1/generate/record-info?taskId="+url.QueryEscape(taskID), &data); err != nil {
-			return false, geciciHata{err}
+			return false, transientError{err}
 		}
-		if sunoHataDurumlari[data.Status] {
+		if sunoFailureStatuses[data.Status] {
 			return false, fmt.Errorf("suno uretimi basarisiz (%s): %s", data.Status, data.ErrorMessage)
 		}
 		if data.Status != "SUCCESS" {
@@ -191,14 +194,14 @@ func (c *SunoClient) WaitMusic(ctx context.Context, taskID string, interval, max
 		if p.ID == "" {
 			return false, fmt.Errorf("suno: SUCCESS ama parca kimligi yok")
 		}
-		sonuc = &Track{ID: p.ID, AudioURL: p.AudioURL, Duration: p.Duration}
+		result = &Track{ID: p.ID, AudioURL: p.AudioURL, Duration: p.Duration}
 		return true, nil
 	})
-	return sonuc, err
+	return result, err
 }
 
-// SplitStems, uretilen parcayi 12 kanala boler (split_stem, 50 kredi);
-// 10 enstruman stem'i tutulur (bkz. stemAlanlari).
+// SplitStems splits the generated track into 12 channels (split_stem, 50
+// credits); 10 instrument stems are kept (see stemFields).
 func (c *SunoClient) SplitStems(ctx context.Context, taskID, audioID string) (string, error) {
 	body := map[string]any{
 		"taskId":      taskID,
@@ -218,46 +221,48 @@ func (c *SunoClient) SplitStems(ctx context.Context, taskID, audioID string) (st
 	return data.TaskID, nil
 }
 
-// WaitStems, stem bolme SUCCESS olana kadar poll eder ve enstruman
-// kanallarini doner. Bos alanlar atlanir.
+// WaitStems polls until the stem split is SUCCESS and returns the instrument
+// channels. Empty fields are skipped.
 func (c *SunoClient) WaitStems(ctx context.Context, stemTaskID string, interval, maxWait time.Duration) ([]Stem, error) {
-	var sonuc []Stem
-	err := c.bekle(ctx, interval, maxWait, "stem", func() (bool, error) {
+	var result []Stem
+	err := c.waitFor(ctx, interval, maxWait, "stem", func() (bool, error) {
 		var data struct {
 			SuccessFlag  string                     `json:"successFlag"`
 			ErrorMessage string                     `json:"errorMessage"`
 			Response     map[string]json.RawMessage `json:"response"`
 		}
 		if err := c.get(ctx, "/api/v1/vocal-removal/record-info?taskId="+url.QueryEscape(stemTaskID), &data); err != nil {
-			return false, geciciHata{err}
+			return false, transientError{err}
 		}
-		if sunoHataDurumlari[data.SuccessFlag] {
+		if sunoFailureStatuses[data.SuccessFlag] {
 			return false, fmt.Errorf("suno stem bolme basarisiz (%s): %s", data.SuccessFlag, data.ErrorMessage)
 		}
 		if data.SuccessFlag != "SUCCESS" {
 			return false, nil
 		}
-		for _, a := range stemAlanlari {
-			var adres string
-			if raw, ok := data.Response[a.alan]; ok {
-				_ = json.Unmarshal(raw, &adres) // null ve string disi degerler bos kalir
+		for _, f := range stemFields {
+			var stemURL string
+			if raw, ok := data.Response[f.field]; ok {
+				_ = json.Unmarshal(raw, &stemURL) // null and non-string values stay empty
 			}
-			if adres != "" {
-				sonuc = append(sonuc, Stem{Instrument: a.instrument, URL: adres})
+			if stemURL != "" {
+				result = append(result, Stem{Instrument: f.instrument, URL: stemURL})
 			}
 		}
 		return true, nil
 	})
-	return sonuc, err
+	return result, err
 }
 
-// geciciHata, bekle'nin tolere ettigi hata sinifi (ag, 5xx, bozuk yanit).
-type geciciHata struct{ error }
+// transientError is the error class waitFor tolerates (network, 5xx, malformed
+// response).
+type transientError struct{ error }
 
-func (e geciciHata) Unwrap() error { return e.error }
+func (e transientError) Unwrap() error { return e.error }
 
-// IsolateStem, parcadan tek bir enstrumani ayirir (split_stem_advanced,
-// 20 kredi). Yanit hem enstrumani hem de onsuz parcayi doner.
+// IsolateStem separates a single instrument from the track
+// (split_stem_advanced, 20 credits). The response returns both the instrument
+// and the track without it.
 func (c *SunoClient) IsolateStem(ctx context.Context, taskID, audioID, stemName string) (string, error) {
 	body := map[string]any{
 		"taskId":      taskID,
@@ -278,30 +283,30 @@ func (c *SunoClient) IsolateStem(ctx context.Context, taskID, audioID, stemName 
 	return data.TaskID, nil
 }
 
-// WaitIsolated, split_stem_advanced SUCCESS olana kadar poll eder.
-// Saglayici uretimin her varyanti icin bir originData elemani doner;
-// biz ilk varyanti (WaitMusic'in dondurdugu sunoData[0]) kullaniriz.
+// WaitIsolated polls until split_stem_advanced is SUCCESS. The provider
+// returns one originData element for each variant of the generation; we use
+// the first variant (the sunoData[0] that WaitMusic returns).
 func (c *SunoClient) WaitIsolated(ctx context.Context, stemTaskID string, interval, maxWait time.Duration) (*IsolatedStem, error) {
-	type parca struct {
+	type part struct {
 		AudioURL string  `json:"audio_url"`
 		Duration float64 `json:"duration"`
 	}
-	var sonuc *IsolatedStem
-	err := c.bekle(ctx, interval, maxWait, "ayirma", func() (bool, error) {
+	var result *IsolatedStem
+	err := c.waitFor(ctx, interval, maxWait, "ayirma", func() (bool, error) {
 		var data struct {
 			SuccessFlag  string `json:"successFlag"`
 			ErrorMessage string `json:"errorMessage"`
 			Response     *struct {
 				OriginData []struct {
-					Extract parca `json:"extract"`
-					Remove  parca `json:"remove"`
+					Extract part `json:"extract"`
+					Remove  part `json:"remove"`
 				} `json:"originData"`
 			} `json:"response"`
 		}
 		if err := c.get(ctx, "/api/v1/vocal-removal/record-info?taskId="+url.QueryEscape(stemTaskID), &data); err != nil {
-			return false, geciciHata{err}
+			return false, transientError{err}
 		}
-		if sunoHataDurumlari[data.SuccessFlag] {
+		if sunoFailureStatuses[data.SuccessFlag] {
 			return false, fmt.Errorf("suno ayirma basarisiz (%s): %s", data.SuccessFlag, data.ErrorMessage)
 		}
 		if data.SuccessFlag != "SUCCESS" {
@@ -310,37 +315,37 @@ func (c *SunoClient) WaitIsolated(ctx context.Context, stemTaskID string, interv
 		if data.Response == nil || len(data.Response.OriginData) == 0 {
 			return false, fmt.Errorf("suno: SUCCESS ama originData yok")
 		}
-		ilk := data.Response.OriginData[0]
-		if ilk.Extract.AudioURL == "" || ilk.Remove.AudioURL == "" {
+		first := data.Response.OriginData[0]
+		if first.Extract.AudioURL == "" || first.Remove.AudioURL == "" {
 			return false, fmt.Errorf("suno: SUCCESS ama ayirma adresi eksik")
 		}
-		sonuc = &IsolatedStem{ExtractURL: ilk.Extract.AudioURL, RemoveURL: ilk.Remove.AudioURL, Duration: ilk.Extract.Duration}
+		result = &IsolatedStem{ExtractURL: first.Extract.AudioURL, RemoveURL: first.Remove.AudioURL, Duration: first.Extract.Duration}
 		return true, nil
 	})
-	return sonuc, err
+	return result, err
 }
 
-// bekle, kontrol true donene kadar interval araliklarla cagirir. kontrol'un
-// geciciHata'si arka arkaya pollHataToleransi kez yutulur; diger hatalar
-// aninda doner.
-func (c *SunoClient) bekle(ctx context.Context, interval, maxWait time.Duration, ad string, kontrol func() (bool, error)) error {
-	sonTarih := time.Now().Add(maxWait)
-	ardisikHata := 0
-	for time.Now().Before(sonTarih) {
-		bitti, err := kontrol()
+// waitFor calls check at interval spacing until it returns true. check's
+// transientError is swallowed up to pollErrorTolerance times in a row; other
+// errors return immediately.
+func (c *SunoClient) waitFor(ctx context.Context, interval, maxWait time.Duration, label string, check func() (bool, error)) error {
+	deadline := time.Now().Add(maxWait)
+	consecutiveErrors := 0
+	for time.Now().Before(deadline) {
+		done, err := check()
 		if err != nil {
-			var g geciciHata
-			if !asGecici(err, &g) {
+			var transient transientError
+			if !asTransient(err, &transient) {
 				return err
 			}
-			ardisikHata++
-			log.Printf("[Suno API] %s poll gecici hata %d/%d: %v", ad, ardisikHata, pollHataToleransi, err)
-			if ardisikHata >= pollHataToleransi {
-				return fmt.Errorf("suno %s poll'u %d ardisik hatadan sonra birakildi: %w", ad, ardisikHata, g.error)
+			consecutiveErrors++
+			log.Printf("[Suno API] %s poll gecici hata %d/%d: %v", label, consecutiveErrors, pollErrorTolerance, err)
+			if consecutiveErrors >= pollErrorTolerance {
+				return fmt.Errorf("suno %s poll'u %d ardisik hatadan sonra birakildi: %w", label, consecutiveErrors, transient.error)
 			}
 		} else {
-			ardisikHata = 0
-			if bitti {
+			consecutiveErrors = 0
+			if done {
 				return nil
 			}
 		}
@@ -350,18 +355,19 @@ func (c *SunoClient) bekle(ctx context.Context, interval, maxWait time.Duration,
 		case <-time.After(interval):
 		}
 	}
-	return fmt.Errorf("suno %s beklemesi zaman asimi (%v)", ad, maxWait)
+	return fmt.Errorf("suno %s beklemesi zaman asimi (%v)", label, maxWait)
 }
 
-func asGecici(err error, hedef *geciciHata) bool {
-	g, ok := err.(geciciHata)
+func asTransient(err error, target *transientError) bool {
+	te, ok := err.(transientError)
 	if ok {
-		*hedef = g
+		*target = te
 	}
 	return ok
 }
 
-// post, JSON govdeli POST atar ve zarfin data alanini out'a cozer.
+// post sends a POST with a JSON body and decodes the envelope's data field into
+// out.
 func (c *SunoClient) post(ctx context.Context, path string, body, out any) error {
 	b, err := json.Marshal(body)
 	if err != nil {
@@ -374,7 +380,7 @@ func (c *SunoClient) post(ctx context.Context, path string, body, out any) error
 	return c.do(req, out)
 }
 
-// get, GET atar ve zarfin data alanini out'a cozer.
+// get sends a GET and decodes the envelope's data field into out.
 func (c *SunoClient) get(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
@@ -403,21 +409,21 @@ func (c *SunoClient) do(req *http.Request, out any) error {
 		return fmt.Errorf("suno API error (status %d): %s", resp.StatusCode, string(raw))
 	}
 
-	var zarf struct {
+	var envelope struct {
 		Code int             `json:"code"`
 		Msg  string          `json:"msg"`
 		Data json.RawMessage `json:"data"`
 	}
-	if err := json.Unmarshal(raw, &zarf); err != nil {
+	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return fmt.Errorf("suno yaniti cozulemedi: %w", err)
 	}
-	if zarf.Code != 200 {
-		return fmt.Errorf("suno API error (code %d): %s", zarf.Code, zarf.Msg)
+	if envelope.Code != 200 {
+		return fmt.Errorf("suno API error (code %d): %s", envelope.Code, envelope.Msg)
 	}
-	if out == nil || len(zarf.Data) == 0 || string(zarf.Data) == "null" {
+	if out == nil || len(envelope.Data) == 0 || string(envelope.Data) == "null" {
 		return nil
 	}
-	if err := json.Unmarshal(zarf.Data, out); err != nil {
+	if err := json.Unmarshal(envelope.Data, out); err != nil {
 		return fmt.Errorf("suno data alani cozulemedi: %w", err)
 	}
 	return nil

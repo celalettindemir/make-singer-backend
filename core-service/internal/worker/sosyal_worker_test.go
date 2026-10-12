@@ -55,7 +55,7 @@ type sahteKopyalayici struct {
 	hata     error
 }
 
-func (k *sahteKopyalayici) Kopyala(_ context.Context, kaynak, hedef string) error {
+func (k *sahteKopyalayici) Copy(_ context.Context, kaynak, hedef string) error {
 	if k.hata != nil {
 		return k.hata
 	}
@@ -64,12 +64,12 @@ func (k *sahteKopyalayici) Kopyala(_ context.Context, kaynak, hedef string) erro
 }
 
 type sahteAnalizci struct {
-	istek *client.AnalizRequest
-	yanit *client.AnalizResponse
+	istek *client.AnalysisRequest
+	yanit *client.AnalysisResponse
 	hata  error
 }
 
-func (a *sahteAnalizci) Analiz(_ context.Context, r *client.AnalizRequest) (*client.AnalizResponse, error) {
+func (a *sahteAnalizci) Analyze(_ context.Context, r *client.AnalysisRequest) (*client.AnalysisResponse, error) {
 	a.istek = r
 	return a.yanit, a.hata
 }
@@ -106,7 +106,7 @@ func sosyalTestWorker(kayit *sosyal.HazirlikKaydi, denetci deletionmark.Checker)
 	k := &sosyalKurulum{
 		depo:   &sahteHazirlikDeposu{kayit: kayit},
 		kopya:  &sahteKopyalayici{},
-		analiz: &sahteAnalizci{yanit: &client.AnalizResponse{Peaks: tepeler(64, 0.5), Duration: 184}},
+		analiz: &sahteAnalizci{yanit: &client.AnalysisResponse{Peaks: tepeler(64, 0.5), Duration: 184}},
 	}
 	k.w = NewSosyalWorker(k.depo, k.kopya, k.analiz, nil, denetci)
 	return k
@@ -134,7 +134,7 @@ func TestSosyalWorker_KopyalarAnalizEderYayinlar(t *testing.T) {
 			t.Errorf("kopya %d = %v, beklenen %v", i, k.kopya.kopyalar[i], b)
 		}
 	}
-	if *k.analiz.istek != (client.AnalizRequest{InputKey: "sosyal/" + sYayin + "/master.wav", PreviewKey: "sosyal/" + sYayin + "/onizleme.mp3", PeakCount: 64, PreviewSeconds: 30}) {
+	if *k.analiz.istek != (client.AnalysisRequest{InputKey: "sosyal/" + sYayin + "/master.wav", PreviewKey: "sosyal/" + sYayin + "/onizleme.mp3", PeakCount: 64, PreviewSeconds: 30}) {
 		t.Fatalf("analiz istegi = %+v", *k.analiz.istek)
 	}
 	s := k.depo.yayinlanan
@@ -258,7 +258,7 @@ func TestSosyalWorker_AnalizHatasiYayiniDurdurmaz(t *testing.T) {
 
 func TestSosyalWorker_AnalizCiktisiDenetlenir(t *testing.T) {
 	k := sosyalTestWorker(hazirKayit(), nil)
-	k.analiz.yanit = &client.AnalizResponse{Peaks: tepeler(10, 0.5)}
+	k.analiz.yanit = &client.AnalysisResponse{Peaks: tepeler(10, 0.5)}
 	if err := k.w.Hazirla(context.Background(), hazirlaGorevi()); err != nil {
 		t.Fatalf("Hazirla: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestSosyalWorker_AnalizCiktisiDenetlenir(t *testing.T) {
 	k = sosyalTestWorker(hazirKayit(), nil)
 	p := tepeler(64, 0.5)
 	p[0], p[1], p[2] = -0.2, 1.7, math.NaN()
-	k.analiz.yanit = &client.AnalizResponse{Peaks: p}
+	k.analiz.yanit = &client.AnalysisResponse{Peaks: p}
 	if err := k.w.Hazirla(context.Background(), hazirlaGorevi()); err != nil {
 		t.Fatalf("Hazirla: %v", err)
 	}

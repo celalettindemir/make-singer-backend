@@ -38,7 +38,7 @@ func (s *UploadService) UploadVocal(ctx context.Context, userID, projectID, sect
 
 	// Anahtar kullaniciyla oneklenir; istemci kimlikleri segment
 	// dogrulamasindan gecer. Mock yol da ayni dogrulamayi yapar.
-	key, err := client.KullaniciAnahtari("vocals", userID, projectID, sectionID, takeID+".wav")
+	key, err := client.UserKey("vocals", userID, projectID, sectionID, takeID+".wav")
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +69,7 @@ func (s *UploadService) UploadVocal(ctx context.Context, userID, projectID, sect
 // DeleteVocal, vokali deterministik anahtariyla siler. Eskiden anahtar
 // "vocals/*/<id>.wav" literal glob'uydu ve hicbir nesneyle eslesmiyordu.
 func (s *UploadService) DeleteVocal(ctx context.Context, userID, projectID, sectionID, takeID string) error {
-	key, err := client.KullaniciAnahtari("vocals", userID, projectID, sectionID, takeID+".wav")
+	key, err := client.UserKey("vocals", userID, projectID, sectionID, takeID+".wav")
 	if err != nil {
 		return err
 	}

@@ -26,7 +26,7 @@ type Servis struct {
 
 	// kopyalayici, cover-baslat'in stem kopyalayicisi (KopyalayiciAyarla);
 	// nil: R2 yok, kopya atlanir.
-	kopyalayici client.Kopyalayici
+	kopyalayici client.Copier
 }
 
 // NewServis kurar. depolama nil olabilir (R2 yapilandirilmamis); main

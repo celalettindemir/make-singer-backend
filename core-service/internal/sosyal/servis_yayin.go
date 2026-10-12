@@ -56,9 +56,9 @@ func (s *Servis) hazirlamayaKoy(yayinID string) error {
 // sahiplik denetimiyle anahtara cevirir. Public bucket'taki (exports/)
 // dosya reddedilir: kopya ayni bucket icinde yapilir.
 func (s *Servis) anahtarCoz(ham, kullaniciID, alan string) (string, error) {
-	key, err := client.SahipliAnahtarVeyaURLCoz(ham, kullaniciID, s.r2)
+	key, err := client.ResolveOwnedKeyOrURL(ham, kullaniciID, s.r2)
 	switch {
-	case errors.Is(err, client.ErrYabanciAnahtar):
+	case errors.Is(err, client.ErrKeyNotOwned):
 		return "", ErrSahiplik
 	case err != nil:
 		return "", dogrulamaHatasi(alan + " gecersiz dosya adresi")

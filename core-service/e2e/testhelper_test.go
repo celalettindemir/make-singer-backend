@@ -51,7 +51,7 @@ func e2eR2Cfg() *config.R2Config {
 // e2eURL, sahip onekli anahtardan KeyFromURL ile cozulebilen URL uretir.
 func e2eURL(t *testing.T, tur, userID string, parcalar ...string) string {
 	t.Helper()
-	key, err := client.KullaniciAnahtari(tur, userID, parcalar...)
+	key, err := client.UserKey(tur, userID, parcalar...)
 	if err != nil {
 		t.Fatalf("anahtar: %v", err)
 	}

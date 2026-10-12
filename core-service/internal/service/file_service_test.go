@@ -39,7 +39,7 @@ func TestFileSign_SirayiKoruyupTazeAdresUretir(t *testing.T) {
 func TestFileSign_YabanciAnahtarReddedilir(t *testing.T) {
 	_, err := NewFileService(&sahteDepo{}, testR2Cfg()).Sign(context.Background(), imzaKullanici,
 		[]string{ozelURL("stems/u1/p1/a.mp3"), ozelURL("stems/u2/p1/b.mp3")})
-	if !errors.Is(err, client.ErrYabanciAnahtar) {
+	if !errors.Is(err, client.ErrKeyNotOwned) {
 		t.Fatalf("ErrYabanciAnahtar bekleniyordu, gelen %v", err)
 	}
 }
@@ -47,7 +47,7 @@ func TestFileSign_YabanciAnahtarReddedilir(t *testing.T) {
 func TestFileSign_TaninmayanKonakReddedilir(t *testing.T) {
 	_, err := NewFileService(&sahteDepo{}, testR2Cfg()).Sign(context.Background(), imzaKullanici,
 		[]string{"https://kotu.ornek/stems/u1/p1/a.mp3"})
-	if !errors.Is(err, client.ErrGecersizURL) {
+	if !errors.Is(err, client.ErrInvalidURL) {
 		t.Fatalf("ErrGecersizURL bekleniyordu, gelen %v", err)
 	}
 }

@@ -20,9 +20,9 @@ func testCfg() *config.R2Config {
 
 func TestBucketFor(t *testing.T) {
 	cfg := testCfg()
-	durumlar := []struct {
-		anahtar  string
-		beklenen string
+	cases := []struct {
+		key  string
+		want string
 	}{
 		{"exports/abc.mp3", "makeasinger-public"},
 		{"exports/abc.wav", "makeasinger-public"},
@@ -34,64 +34,63 @@ func TestBucketFor(t *testing.T) {
 		{"", "makeasinger-private"},
 		{"exportsabc.mp3", "makeasinger-private"},
 	}
-	for _, d := range durumlar {
-		if got := BucketFor(d.anahtar, cfg); got != d.beklenen {
-			t.Errorf("BucketFor(%q) = %q, beklenen %q", d.anahtar, got, d.beklenen)
+	for _, tc := range cases {
+		if got := BucketFor(tc.key, cfg); got != tc.want {
+			t.Errorf("BucketFor(%q) = %q, beklenen %q", tc.key, got, tc.want)
 		}
 	}
 }
 
 func TestKeyFromURL(t *testing.T) {
 	cfg := testCfg()
-	durumlar := []struct {
-		ad       string
-		url      string
-		beklenen string
+	cases := []struct {
+		name string
+		url  string
+		want string
 	}{
 		{"cdn adresi", "https://makesinger-cdn.celalettindemir.dev/exports/a.mp3", "exports/a.mp3"},
 		{"r2 endpoint", "https://makeasinger-private.r2.cloudflarestorage.com/vocals/p/s/t.wav", "vocals/p/s/t.wav"},
 		{"presigned", "https://makeasinger-private.r2.cloudflarestorage.com/masters/p/m.wav?X-Amz-Signature=abc&X-Amz-Expires=3600", "masters/p/m.wav"},
-		// AWS SDK presigner'in gercekte urettigi bicim: bucket VE hesap
-		// kimligi konakta. Elle yazilmis "bucket.r2..." testleri bunu
-		// yakalamiyordu.
+		// The form the AWS SDK presigner really produces: bucket AND account id in
+		// the host. Hand-written "bucket.r2..." tests did not catch this.
 		{"hesap kapsamli konak", "https://makeasinger-private.hesap123.r2.cloudflarestorage.com/vocals/p/s/t.wav", "vocals/p/s/t.wav"},
 		{"hesap kapsamli public", "https://makeasinger-public.hesap123.r2.cloudflarestorage.com/exports/a.mp3", "exports/a.mp3"},
 	}
-	for _, d := range durumlar {
-		got, err := KeyFromURL(d.url, cfg)
+	for _, tc := range cases {
+		got, err := KeyFromURL(tc.url, cfg)
 		if err != nil {
-			t.Errorf("%s: beklenmeyen hata: %v", d.ad, err)
+			t.Errorf("%s: beklenmeyen hata: %v", tc.name, err)
 			continue
 		}
-		if got != d.beklenen {
-			t.Errorf("%s: KeyFromURL = %q, beklenen %q", d.ad, got, d.beklenen)
+		if got != tc.want {
+			t.Errorf("%s: KeyFromURL = %q, beklenen %q", tc.name, got, tc.want)
 		}
 	}
 }
 
-func TestKeyFromURL_TaninmayanKonak(t *testing.T) {
+func TestKeyFromURL_UnknownHost(t *testing.T) {
 	cfg := testCfg()
-	kotuler := []string{
+	badHosts := []string{
 		"https://kotu.example.com/vocals/p/s/t.wav",
-		// Sonek/icerik eslesmesine kacilirsa bunlar kazara gecerdi:
+		// If it fell back to suffix/substring matching these would pass by accident:
 		"https://kotu-makeasinger-private.r2.cloudflarestorage.com/vocals/a.wav",
 		"https://makeasinger-private.r2.cloudflarestorage.com.kotu.com/vocals/a.wav",
 		"https://makeasinger-private.baskahesap.r2.cloudflarestorage.com/vocals/a.wav",
 		"https://makesinger-cdn.celalettindemir.dev.kotu.com/exports/a.mp3",
 	}
-	for _, u := range kotuler {
+	for _, u := range badHosts {
 		if _, err := KeyFromURL(u, cfg); err == nil {
 			t.Errorf("taninmayan konak icin hata bekleniyordu: %s", u)
 		}
 	}
 }
 
-// TestKeyFromURL_HataMesajindaImzaliURLYok, hata mesajlarinin Redis is
-// kaydina ve WebSocket yayinina dustugunu varsayar: imza oraya sizmamali.
-func TestKeyFromURL_HataMesajindaImzaliURLYok(t *testing.T) {
+// TestKeyFromURL_ErrorOmitsSignedURL assumes error messages land in the Redis
+// job record and the WebSocket broadcast: the signature must not leak there.
+func TestKeyFromURL_ErrorOmitsSignedURL(t *testing.T) {
 	cfg := testCfg()
-	kotu := "https://kotu.example.com/vocals/a.wav?X-Amz-Signature=cokgizli"
-	_, err := KeyFromURL(kotu, cfg)
+	badURL := "https://kotu.example.com/vocals/a.wav?X-Amz-Signature=cokgizli"
+	_, err := KeyFromURL(badURL, cfg)
 	if err == nil {
 		t.Fatal("hata bekleniyordu")
 	}
@@ -100,49 +99,49 @@ func TestKeyFromURL_HataMesajindaImzaliURLYok(t *testing.T) {
 	}
 }
 
-// TestKeyFromURL_GidisDonus, ASIL kural: kodun kendi urettigi adres, ayni
-// kodla anahtara geri cozulebilmeli. Elle yazilmis URL dizeleri gercek
-// presigner ciktisini temsil etmiyordu.
-func TestKeyFromURL_GidisDonus(t *testing.T) {
+// TestKeyFromURL_RoundTrip is the REAL rule: a URL the code itself produces
+// must resolve back to the key with the same code. Hand-written URL strings
+// did not represent real presigner output.
+func TestKeyFromURL_RoundTrip(t *testing.T) {
 	cfg := testR2Cfg()
 	c, err := NewR2Client(cfg)
 	if err != nil {
 		t.Fatalf("NewR2Client: %v", err)
 	}
 
-	for _, anahtar := range []string{"exports/abc.mp3", "vocals/p1/s1/t1.wav", "masters/p1/m1.wav", "stems/p1/s1.wav"} {
-		url, _, err := c.URLFor(context.Background(), anahtar)
+	for _, key := range []string{"exports/abc.mp3", "vocals/p1/s1/t1.wav", "masters/p1/m1.wav", "stems/p1/s1.wav"} {
+		url, _, err := c.URLFor(context.Background(), key)
 		if err != nil {
-			t.Fatalf("URLFor(%q): %v", anahtar, err)
+			t.Fatalf("URLFor(%q): %v", key, err)
 		}
 		got, err := KeyFromURL(url, cfg)
 		if err != nil {
-			t.Errorf("KeyFromURL(URLFor(%q)) hata verdi: %v", anahtar, err)
+			t.Errorf("KeyFromURL(URLFor(%q)) hata verdi: %v", key, err)
 			continue
 		}
-		if got != anahtar {
-			t.Errorf("gidis donus bozuk: %q -> %q", anahtar, got)
+		if got != key {
+			t.Errorf("gidis donus bozuk: %q -> %q", key, got)
 		}
 	}
 }
 
-// TestUnsignedURL_GidisDonus, mock/dev yollarinin urettigi adresin de
-// ayni kurallarla cozulebildigini dogrular.
-func TestUnsignedURL_GidisDonus(t *testing.T) {
+// TestUnsignedURL_RoundTrip verifies that the URL produced by the mock/dev
+// paths resolves under the same rules too.
+func TestUnsignedURL_RoundTrip(t *testing.T) {
 	cfg := testCfg()
-	for _, anahtar := range []string{"exports/a.mp3", "masters/p/m.wav", "previews/p.mp3"} {
-		got, err := KeyFromURL(UnsignedURL(anahtar, cfg), cfg)
+	for _, key := range []string{"exports/a.mp3", "masters/p/m.wav", "previews/p.mp3"} {
+		got, err := KeyFromURL(UnsignedURL(key, cfg), cfg)
 		if err != nil {
-			t.Errorf("UnsignedURL(%q) cozulemedi: %v", anahtar, err)
+			t.Errorf("UnsignedURL(%q) cozulemedi: %v", key, err)
 			continue
 		}
-		if got != anahtar {
-			t.Errorf("gidis donus bozuk: %q -> %q", anahtar, got)
+		if got != key {
+			t.Errorf("gidis donus bozuk: %q -> %q", key, got)
 		}
 	}
 }
 
-func TestKeyFromURL_BosVeBozuk(t *testing.T) {
+func TestKeyFromURL_EmptyAndMalformed(t *testing.T) {
 	cfg := testCfg()
 	for _, u := range []string{"", "://bozuk", "https://makesinger-cdn.celalettindemir.dev/"} {
 		if _, err := KeyFromURL(u, cfg); err == nil {
@@ -151,11 +150,11 @@ func TestKeyFromURL_BosVeBozuk(t *testing.T) {
 	}
 }
 
-func TestKeyFromURL_HatalarGecersizURLSarar(t *testing.T) {
+func TestKeyFromURL_ErrorsWrapErrInvalidURL(t *testing.T) {
 	cfg := testCfg()
 	for _, u := range []string{"", "://bozuk", "/sadece/yol", "https://cdn.example.com/stems/a.mp3", "https://makesinger-cdn.celalettindemir.dev/"} {
 		_, err := KeyFromURL(u, cfg)
-		if !errors.Is(err, ErrGecersizURL) {
+		if !errors.Is(err, ErrInvalidURL) {
 			t.Errorf("%q: ErrGecersizURL bekleniyordu, geldi: %v", u, err)
 		}
 	}

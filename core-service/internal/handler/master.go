@@ -92,10 +92,10 @@ func (h *MasterHandler) Final(c *fiber.Ctx) error {
 
 	result, err := h.service.StartFinal(c.Context(), userID, &req)
 	if err != nil {
-		if errors.Is(err, client.ErrYabanciAnahtar) {
+		if errors.Is(err, client.ErrKeyNotOwned) {
 			return response.NotFound(c, "File not found")
 		}
-		if errors.Is(err, client.ErrGecersizURL) {
+		if errors.Is(err, client.ErrInvalidURL) {
 			return response.ValidationError(c, "Gecersiz dosya URL'si", nil)
 		}
 		return response.ServiceError(c, err.Error())

@@ -56,13 +56,13 @@ type SosyalTemizleyici interface {
 
 type HesapService struct {
 	kimlik KimlikSilici
-	silici client.OnekSilici // nil: R2 yapilandirilmamis
+	silici client.PrefixDeleter // nil: R2 yapilandirilmamis
 	redis  *redis.Client
 	kuyruk Kuyruk
 	sosyal SosyalTemizleyici // nil: sosyal modul yok
 }
 
-func NewHesapService(kimlikSilici KimlikSilici, silici client.OnekSilici, rdb *redis.Client, kuyruk Kuyruk, sosyal SosyalTemizleyici) *HesapService {
+func NewHesapService(kimlikSilici KimlikSilici, silici client.PrefixDeleter, rdb *redis.Client, kuyruk Kuyruk, sosyal SosyalTemizleyici) *HesapService {
 	return &HesapService{kimlik: kimlikSilici, silici: silici, redis: rdb, kuyruk: kuyruk, sosyal: sosyal}
 }
 
@@ -71,7 +71,7 @@ func NewHesapService(kimlikSilici KimlikSilici, silici client.OnekSilici, rdb *r
 // sonraki adimlarin hatalari loglanir ama istegi basarisiz kilmaz.
 // Eksik kalan R2 temizligini gecikmeli gorev tamamlar.
 func (s *HesapService) Sil(ctx context.Context, userID string) error {
-	if _, err := client.KullaniciOnekleri(userID); err != nil {
+	if _, err := client.UserPrefixes(userID); err != nil {
 		return ErrHesapYok
 	}
 	if err := s.kimlik.HesapSil(ctx, userID); err != nil {
@@ -106,7 +106,7 @@ func (s *HesapService) Sil(ctx context.Context, userID string) error {
 // Temizle, kullanicinin tum R2 oneklerini ve Kesfet verisini siler. R2
 // yoksa onekler atlanir. Bir onek basarisiz olsa da digerleri denenir.
 func (s *HesapService) Temizle(ctx context.Context, userID string) error {
-	onekler, err := client.KullaniciOnekleri(userID)
+	onekler, err := client.UserPrefixes(userID)
 	if err != nil {
 		return err
 	}
@@ -144,7 +144,7 @@ func (s *HesapService) sosyalTemizle(ctx context.Context, userID string) error {
 	if s.silici != nil {
 		onekHatasi := false
 		for _, id := range idler {
-			onek, err := client.SosyalOneki(id)
+			onek, err := client.SocialPrefix(id)
 			if err != nil {
 				hatalar = append(hatalar, fmt.Errorf("sosyal onek %s: %w", id, err))
 				onekHatasi = true

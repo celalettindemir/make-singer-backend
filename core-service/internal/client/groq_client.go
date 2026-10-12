@@ -39,8 +39,8 @@ type ChatCompletionRequest struct {
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 }
 
-// ResponseFormat, Groq'un JSON modunu acar. json_object gecerli JSON
-// sozdizimini garanti eder, semayi degil; sema prompt'ta tarif edilir.
+// ResponseFormat turns on Groq's JSON mode. json_object guarantees valid JSON
+// syntax, not the schema; the schema is described in the prompt.
 type ResponseFormat struct {
 	Type string `json:"type"`
 }
@@ -82,7 +82,7 @@ func NewGroqClient(cfg *config.GroqConfig) *GroqClient {
 	}
 }
 
-// Temperatures, uretim ve yeniden yazma icin yapilandirilmis sicakliklari doner.
+// Temperatures returns the configured temperatures for generation and rewriting.
 func (c *GroqClient) Temperatures() (generate, rewrite float64) {
 	return c.temperatureGenerate, c.temperatureRewrite
 }

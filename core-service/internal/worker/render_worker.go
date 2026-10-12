@@ -142,7 +142,7 @@ func (w *RenderWorker) sunoIleUret(ctx context.Context, payload *model.RenderJob
 
 	// Ucretli cagridan ONCE: sahip/proje anahtar kurmaya uygun degilse
 	// stem'ler yuklenemez ve 62 kredi bosa gider.
-	if _, err := client.KullaniciAnahtari("stems", payload.OwnerID, payload.ProjectID, "x.mp3"); err != nil {
+	if _, err := client.UserKey("stems", payload.OwnerID, payload.ProjectID, "x.mp3"); err != nil {
 		return nil, fmt.Errorf("is sahibi/proje anahtara uygun degil, Suno cagrilmadi: %w: %w", err, asynq.SkipRetry)
 	}
 
@@ -262,7 +262,7 @@ func stemPlani(payload *model.RenderJobPayload) (model.StemMode, string, error) 
 		if payload.FocusInstrument == nil {
 			return "", "", errors.New("focus modu enstruman ister")
 		}
-		ad, ok := client.SunoStemAdi(*payload.FocusInstrument)
+		ad, ok := client.SunoStemName(*payload.FocusInstrument)
 		if !ok {
 			return "", "", fmt.Errorf("enstruman ayrilamaz: %s", *payload.FocusInstrument)
 		}
@@ -331,7 +331,7 @@ func (w *RenderWorker) uploadStems(ctx context.Context, ownerID, projectID strin
 	results := make([]model.StemResultRecord, 0, len(stems))
 	for _, stem := range stems {
 		stemID := uuid.New().String()
-		key, err := client.KullaniciAnahtari("stems", ownerID, projectID, stemID+".mp3")
+		key, err := client.UserKey("stems", ownerID, projectID, stemID+".mp3")
 		if err != nil {
 			return nil, err
 		}
@@ -451,7 +451,7 @@ func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) (*mod
 	var stems []model.StemResultRecord
 	for _, instrument := range enstrumanlar {
 		stemID := uuid.New().String()
-		key, err := client.KullaniciAnahtari("stems", payload.OwnerID, payload.ProjectID, string(instrument)+".wav")
+		key, err := client.UserKey("stems", payload.OwnerID, payload.ProjectID, string(instrument)+".wav")
 		if err != nil {
 			return nil, err
 		}

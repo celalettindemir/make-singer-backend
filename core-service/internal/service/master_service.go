@@ -37,7 +37,7 @@ func (s *MasterService) Preview(ctx context.Context, userID string, req *model.M
 	// This would call your audio processing service
 
 	previewID := uuid.New().String()
-	key, err := client.KullaniciAnahtari("previews", userID, previewID+".mp3")
+	key, err := client.UserKey("previews", userID, previewID+".mp3")
 	if err != nil {
 		return nil, err
 	}
@@ -58,12 +58,12 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 	// Girdi denetimi is kaydindan ONCE: worker bu anahtarlari okuyacak,
 	// yabanci bir anahtar baskasinin dosyasini master'a sokardi.
 	for _, u := range req.StemURLs {
-		if _, err := client.SahipliAnahtarCoz(u, userID, s.r2Cfg); err != nil {
+		if _, err := client.ResolveOwnedKey(u, userID, s.r2Cfg); err != nil {
 			return nil, fmt.Errorf("stem URL: %w", err)
 		}
 	}
 	for _, take := range req.VocalTakes {
-		if _, err := client.SahipliAnahtarCoz(take.FileURL, userID, s.r2Cfg); err != nil {
+		if _, err := client.ResolveOwnedKey(take.FileURL, userID, s.r2Cfg); err != nil {
 			return nil, fmt.Errorf("vokal URL: %w", err)
 		}
 	}

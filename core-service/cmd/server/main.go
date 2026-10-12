@@ -158,7 +158,7 @@ func main() {
 
 	// silici: arayuz degiskeni; r2Client nil iken dogrudan atamak tipli
 	// nil tuzagini kurar (bkz. storage).
-	var silici client.OnekSilici
+	var silici client.PrefixDeleter
 	if r2Client != nil {
 		silici = r2Client
 	}
@@ -169,7 +169,7 @@ func main() {
 
 	// kopyalayici: arayuz degiskeni; r2Client nil iken dogrudan atamak
 	// tipli nil tuzagini kurar (bkz. storage).
-	var kopyalayici client.Kopyalayici
+	var kopyalayici client.Copier
 	if r2Client != nil {
 		kopyalayici = r2Client
 	}

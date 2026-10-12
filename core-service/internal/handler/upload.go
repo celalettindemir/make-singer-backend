@@ -104,7 +104,7 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 	// Upload
 	result, err := h.service.UploadVocal(c.Context(), userID, projectID, sectionID, takeName, f, file.Size)
 	if err != nil {
-		if errors.Is(err, client.ErrGecersizSegment) {
+		if errors.Is(err, client.ErrInvalidSegment) {
 			return response.ValidationError(c, "Invalid projectId or sectionId", nil)
 		}
 		return response.ServiceError(c, err.Error())
@@ -140,7 +140,7 @@ func (h *UploadHandler) DeleteVocal(c *fiber.Ctx) error {
 	}
 
 	if err := h.service.DeleteVocal(c.Context(), userID, projectID, sectionID, takeID); err != nil {
-		if errors.Is(err, client.ErrGecersizSegment) {
+		if errors.Is(err, client.ErrInvalidSegment) {
 			return response.ValidationError(c, "Invalid takeId, projectId or sectionId", nil)
 		}
 		return response.ServiceError(c, err.Error())

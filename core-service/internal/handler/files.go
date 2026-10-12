@@ -48,10 +48,10 @@ func (h *FileHandler) Sign(c *fiber.Ctx) error {
 	}
 	result, err := h.service.Sign(c.Context(), userID, req.URLs)
 	if err != nil {
-		if errors.Is(err, client.ErrYabanciAnahtar) {
+		if errors.Is(err, client.ErrKeyNotOwned) {
 			return response.NotFound(c, "File not found")
 		}
-		if errors.Is(err, client.ErrGecersizURL) {
+		if errors.Is(err, client.ErrInvalidURL) {
 			return response.ValidationError(c, "Gecersiz dosya URL'si", nil)
 		}
 		return response.ServiceError(c, "Adres uretilemedi")

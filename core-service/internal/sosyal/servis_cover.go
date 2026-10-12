@@ -33,7 +33,7 @@ type CoverBaslangici struct {
 // servisi doner. nil (R2 yapilandirilmamis, dev) ise kopya atlanir ve
 // adresler yine uretilir. main tipli nil tuzagina dusmemek icin yalnizca
 // gercek istemciyi gecirir.
-func (s *Servis) KopyalayiciAyarla(k client.Kopyalayici) *Servis {
+func (s *Servis) KopyalayiciAyarla(k client.Copier) *Servis {
 	s.kopyalayici = k
 	return s
 }
@@ -42,7 +42,7 @@ func (s *Servis) KopyalayiciAyarla(k client.Kopyalayici) *Servis {
 // stems/{kullaniciId}/{klasor}/{stemId}.{ext}. Render stem duzeniyle
 // aynidir; uzanti kaynak anahtardan gelir.
 func CoverStemHedefi(kullaniciID, klasor, stemID, kaynak string) (string, error) {
-	return client.KullaniciAnahtari("stems", kullaniciID, klasor, stemID+uzanti(kaynak))
+	return client.UserKey("stems", kullaniciID, klasor, stemID+uzanti(kaynak))
 }
 
 // Coverlar, GET /yayinlar/{id}/coverlar. Kaynak gorunmuyorsa
@@ -106,7 +106,7 @@ func (s *Servis) CoverBaslat(ctx context.Context, kullaniciID, yayinID string) (
 			return nil, fmt.Errorf("cover stem anahtari kurulamadi: %w", err)
 		}
 		if s.kopyalayici != nil {
-			if err := s.kopyalayici.Kopyala(ctx, st.Anahtar, hedef); err != nil {
+			if err := s.kopyalayici.Copy(ctx, st.Anahtar, hedef); err != nil {
 				return nil, fmt.Errorf("cover stem kopyalanamadi: %w", err)
 			}
 		}

@@ -55,10 +55,10 @@ func (h *ExportHandler) MP3(c *fiber.Ctx) error {
 
 	result, err := h.service.ExportMP3(c.Context(), userID, &req)
 	if err != nil {
-		if errors.Is(err, client.ErrYabanciAnahtar) {
+		if errors.Is(err, client.ErrKeyNotOwned) {
 			return response.NotFound(c, "File not found")
 		}
-		if errors.Is(err, client.ErrGecersizURL) {
+		if errors.Is(err, client.ErrInvalidURL) {
 			return response.ValidationError(c, "Gecersiz dosya URL'si", nil)
 		}
 		return response.ServiceError(c, err.Error())
@@ -99,10 +99,10 @@ func (h *ExportHandler) WAV(c *fiber.Ctx) error {
 
 	result, err := h.service.ExportWAV(c.Context(), userID, &req)
 	if err != nil {
-		if errors.Is(err, client.ErrYabanciAnahtar) {
+		if errors.Is(err, client.ErrKeyNotOwned) {
 			return response.NotFound(c, "File not found")
 		}
-		if errors.Is(err, client.ErrGecersizURL) {
+		if errors.Is(err, client.ErrInvalidURL) {
 			return response.ValidationError(c, "Gecersiz dosya URL'si", nil)
 		}
 		return response.ServiceError(c, err.Error())
@@ -143,10 +143,10 @@ func (h *ExportHandler) Stems(c *fiber.Ctx) error {
 
 	result, err := h.service.ExportStems(c.Context(), userID, &req)
 	if err != nil {
-		if errors.Is(err, client.ErrYabanciAnahtar) {
+		if errors.Is(err, client.ErrKeyNotOwned) {
 			return response.NotFound(c, "File not found")
 		}
-		if errors.Is(err, client.ErrGecersizURL) {
+		if errors.Is(err, client.ErrInvalidURL) {
 			return response.ValidationError(c, "Gecersiz dosya URL'si", nil)
 		}
 		return response.ServiceError(c, err.Error())

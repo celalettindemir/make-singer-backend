@@ -13,17 +13,17 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// sahteS3, CopyObject isteklerini kaydeden yerel bir S3 ucu kurar ve
-// R2Client'i ona yonlendirir. Ag disina cikilmaz.
-func sahteS3(t *testing.T) (*R2Client, *[]*http.Request) {
+// fakeS3 sets up a local S3 endpoint that records CopyObject requests and
+// points an R2Client at it. Nothing leaves the network.
+func fakeS3(t *testing.T) (*R2Client, *[]*http.Request) {
 	t.Helper()
 	var (
 		mu       sync.Mutex
-		istekler []*http.Request
+		requests []*http.Request
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		istekler = append(istekler, r.Clone(context.Background()))
+		requests = append(requests, r.Clone(context.Background()))
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/xml")
 		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult><ETag>"e"</ETag></CopyObjectResult>`))
@@ -35,18 +35,18 @@ func sahteS3(t *testing.T) (*R2Client, *[]*http.Request) {
 		Region:       "auto",
 		Credentials:  credentials.NewStaticCredentialsProvider("a", "s", ""),
 	})
-	return &R2Client{s3Client: s3c, cfg: testR2Cfg()}, &istekler
+	return &R2Client{s3Client: s3c, cfg: testR2Cfg()}, &requests
 }
 
-func TestKopyala_AyniBucketIcindeCopyObject(t *testing.T) {
-	c, istekler := sahteS3(t)
-	if err := c.Kopyala(context.Background(), "masters/u1/p1/m.wav", "sosyal/y1/master.wav"); err != nil {
+func TestCopy_SameBucketUsesCopyObject(t *testing.T) {
+	c, requests := fakeS3(t)
+	if err := c.Copy(context.Background(), "masters/u1/p1/m.wav", "sosyal/y1/master.wav"); err != nil {
 		t.Fatalf("Kopyala: %v", err)
 	}
-	if len(*istekler) != 1 {
-		t.Fatalf("tek istek bekleniyordu: %d", len(*istekler))
+	if len(*requests) != 1 {
+		t.Fatalf("tek istek bekleniyordu: %d", len(*requests))
 	}
-	r := (*istekler)[0]
+	r := (*requests)[0]
 	if r.Method != http.MethodPut || !strings.HasSuffix(r.URL.Path, "/makeasinger-private/sosyal/y1/master.wav") {
 		t.Fatalf("istek = %s %s", r.Method, r.URL.Path)
 	}
@@ -55,12 +55,12 @@ func TestKopyala_AyniBucketIcindeCopyObject(t *testing.T) {
 	}
 }
 
-func TestKopyala_BucketlarArasiReddedilir(t *testing.T) {
-	c, istekler := sahteS3(t)
-	if err := c.Kopyala(context.Background(), "exports/u1/e1.mp3", "sosyal/y1/master.mp3"); err == nil {
+func TestCopy_RejectsCrossBucket(t *testing.T) {
+	c, requests := fakeS3(t)
+	if err := c.Copy(context.Background(), "exports/u1/e1.mp3", "sosyal/y1/master.mp3"); err == nil {
 		t.Fatal("public -> private kopya reddedilmeliydi")
 	}
-	if len(*istekler) != 0 {
+	if len(*requests) != 0 {
 		t.Fatal("reddedilen kopya R2'ye gitmemeli")
 	}
 }

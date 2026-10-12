@@ -92,7 +92,7 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	// KeyFromURL ile anahtara donusturulur.
 	stemKeys := make([]string, 0, len(payload.StemURLs))
 	for _, u := range payload.StemURLs {
-		k, err := client.SahipliAnahtarCoz(u, payload.OwnerID, w.r2Cfg)
+		k, err := client.ResolveOwnedKey(u, payload.OwnerID, w.r2Cfg)
 		if err != nil {
 			w.failJob(ctx, jobID, fmt.Sprintf("Stem URL cozulemedi: %v", err))
 			return fmt.Errorf("stem URL cozulemedi: %w: %w", err, asynq.SkipRetry)
@@ -103,7 +103,7 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	// Step 4: Call audio service for mastering
 	w.updateJobStatus(ctx, jobID, model.JobStatusRunning, 20, "Starting mastering process...")
 
-	outputKey, err := client.KullaniciAnahtari("masters", payload.OwnerID, payload.ProjectID, uuid.New().String()+".wav")
+	outputKey, err := client.UserKey("masters", payload.OwnerID, payload.ProjectID, uuid.New().String()+".wav")
 	if err != nil {
 		w.failJob(ctx, jobID, "Gecersiz is sahibi veya proje")
 		return fmt.Errorf("master anahtari: %w: %w", err, asynq.SkipRetry)
@@ -259,7 +259,7 @@ func (w *MasterWorker) buildVocalTakes(payload *model.MasterJobPayload) ([]clien
 	var takes []client.VocalTakeInput
 
 	for _, take := range payload.VocalTakes {
-		k, err := client.SahipliAnahtarCoz(take.FileURL, payload.OwnerID, w.r2Cfg)
+		k, err := client.ResolveOwnedKey(take.FileURL, payload.OwnerID, w.r2Cfg)
 		if err != nil {
 			return nil, fmt.Errorf("vokal URL cozulemedi: %w", err)
 		}
@@ -353,7 +353,7 @@ func (w *MasterWorker) saveJob(ctx context.Context, job *model.Job) {
 // mock ciktisi da KeyFromURL ile cozulebilir (eski sabit
 // "cdn.makeasinger.com" adresi cozulemiyordu).
 func (w *MasterWorker) generateMockRecord(payload *model.MasterJobPayload) (*model.MasterResultRecord, error) {
-	key, err := client.KullaniciAnahtari("masters", payload.OwnerID, payload.ProjectID, uuid.New().String()+".wav")
+	key, err := client.UserKey("masters", payload.OwnerID, payload.ProjectID, uuid.New().String()+".wav")
 	if err != nil {
 		return nil, err
 	}

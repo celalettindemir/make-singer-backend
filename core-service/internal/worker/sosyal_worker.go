@@ -24,17 +24,17 @@ const (
 // SosyalWorker, sosyal:hazirla ve sosyal:dosya-sil islerini yapar.
 type SosyalWorker struct {
 	depo        sosyal.HazirlikDeposu
-	kopyalayici client.Kopyalayici   // nil: R2 yok, kopya atlanir
-	analizci    client.AudioAnalizci // nil: dalga formu ve onizleme yok
-	silici      client.OnekSilici    // nil: R2 yok
+	kopyalayici client.Copier        // nil: R2 yok, kopya atlanir
+	analizci    client.AudioAnalyzer // nil: dalga formu ve onizleme yok
+	silici      client.PrefixDeleter // nil: R2 yok
 	hesap       deletionmark.Checker // nil: denetim yok
 	sonDeneme   func(context.Context) bool
 }
 
 // NewSosyalWorker kurar. Arayuz parametreleri nil olabilir; main tipli nil
 // tuzagina dusmemek icin yalnizca gercek istemcileri gecirir.
-func NewSosyalWorker(depo sosyal.HazirlikDeposu, kopyalayici client.Kopyalayici, analizci client.AudioAnalizci,
-	silici client.OnekSilici, hesap deletionmark.Checker) *SosyalWorker {
+func NewSosyalWorker(depo sosyal.HazirlikDeposu, kopyalayici client.Copier, analizci client.AudioAnalyzer,
+	silici client.PrefixDeleter, hesap deletionmark.Checker) *SosyalWorker {
 	return &SosyalWorker{
 		depo: depo, kopyalayici: kopyalayici, analizci: analizci, silici: silici, hesap: hesap,
 		sonDeneme: asynqSonDeneme,
@@ -157,7 +157,7 @@ func (w *SosyalWorker) kopyalaBir(ctx context.Context, sahipID, kaynak, hedef st
 	if w.kopyalayici == nil {
 		return nil
 	}
-	return w.kopyalayici.Kopyala(ctx, kaynak, hedef)
+	return w.kopyalayici.Copy(ctx, kaynak, hedef)
 }
 
 // analizEt, dalga formu ve onizlemeyi uretir. Her hata loglanir ve
@@ -172,7 +172,7 @@ func (w *SosyalWorker) analizEt(ctx context.Context, id string, sonuc *sosyal.Ha
 		log.Printf("Uyari: onizleme hedefi kurulamadi (%s): %v", id, err)
 		return
 	}
-	yanit, err := w.analizci.Analiz(ctx, &client.AnalizRequest{
+	yanit, err := w.analizci.Analyze(ctx, &client.AnalysisRequest{
 		InputKey: sonuc.MasterAnahtari, PreviewKey: onizleme,
 		PeakCount: dalgaTepeSayisi, PreviewSeconds: onizlemeSaniyesi,
 	})
@@ -202,7 +202,7 @@ func (w *SosyalWorker) DosyaSil(ctx context.Context, t *asynq.Task) error {
 	if err != nil {
 		return err
 	}
-	onek, err := client.SosyalOneki(id)
+	onek, err := client.SocialPrefix(id)
 	if err != nil {
 		return fmt.Errorf("sosyal onek kurulamadi: %v: %w", err, asynq.SkipRetry)
 	}
