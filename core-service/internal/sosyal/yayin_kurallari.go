@@ -21,6 +21,9 @@ const (
 	yapiEnCok         = 200
 	bolumEnCok        = 200
 	satirEnCok        = 200
+	toplamSatirEnCok  = 1000 // tum bolumlerdeki satirlarin toplami
+	satirEnUzun       = 200  // tek bir soz satiri (rune)
+	ogeAlaniEnUzun    = 64   // bolumId, bolum turu, yapi id ve turu (rune)
 )
 
 // GorunurlukGecerli, degerin uc gorunurlukten biri oldugunu soyler.
@@ -33,6 +36,18 @@ func runeAraliginda(s string, enAz, enCok int) bool {
 	return n >= enAz && n <= enCok
 }
 
+// nulIceriyor, degerlerden birinde NUL karakteri olup olmadigini soyler.
+// Postgres metin ve jsonb alanlarinda NUL'u reddeder; istemci 500 yerine
+// 422 almali.
+func nulIceriyor(degerler ...string) bool {
+	for _, d := range degerler {
+		if strings.IndexByte(d, 0) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // yayinIsteginiDuzenle, istegi kirpar, bos dizileri doldurur ve sozlesme
 // kurallarini uygular. Kaynak (cover) ve URL sahipligi servis tarafinda
 // denetlenir; burada yalnizca bicim vardir.
@@ -40,6 +55,8 @@ func yayinIsteginiDuzenle(ist *YayinIstegi) error {
 	ist.Baslik = strings.TrimSpace(ist.Baslik)
 	ist.Aciklama = strings.TrimSpace(ist.Aciklama)
 	switch {
+	case nulIceriyor(ist.Baslik, ist.Aciklama, ist.Tur, ist.Ton.Tonik, ist.Ton.Mod, ist.MasterURL):
+		return dogrulamaHatasi("metin alanlari NUL karakteri iceremez")
 	case !runeAraliginda(ist.Baslik, 1, baslikEnUzun):
 		return dogrulamaHatasi("baslik 1-80 karakter olmali")
 	case !runeAraliginda(ist.Aciklama, 0, aciklamaEnUzun):
@@ -67,17 +84,29 @@ func yayinIsteginiDuzenle(ist *YayinIstegi) error {
 		ist.Yapi = []YapiOgesi{}
 	}
 	for _, o := range ist.Yapi {
-		if o.ID == "" || o.Olcu < 0 {
+		if o.Olcu < 0 || nulIceriyor(o.ID, o.Tur) ||
+			!runeAraliginda(o.ID, 1, ogeAlaniEnUzun) || !runeAraliginda(o.Tur, 0, ogeAlaniEnUzun) {
 			return dogrulamaHatasi("yapi ogesi gecersiz")
 		}
 	}
 	if ist.Sozler.Bolumler == nil {
 		ist.Sozler.Bolumler = []SozBolumu{}
 	}
+	toplamSatir := 0
 	for i := range ist.Sozler.Bolumler {
 		b := &ist.Sozler.Bolumler[i]
-		if len(b.Satirlar) > satirEnCok {
+		toplamSatir += len(b.Satirlar)
+		if len(b.Satirlar) > satirEnCok || toplamSatir > toplamSatirEnCok {
 			return dogrulamaHatasi("sozler cok uzun")
+		}
+		if nulIceriyor(b.BolumID, b.Tur) || !runeAraliginda(b.BolumID, 0, ogeAlaniEnUzun) ||
+			!runeAraliginda(b.Tur, 0, ogeAlaniEnUzun) {
+			return dogrulamaHatasi("soz bolumu gecersiz")
+		}
+		for _, satir := range b.Satirlar {
+			if nulIceriyor(satir) || !runeAraliginda(satir, 0, satirEnUzun) {
+				return dogrulamaHatasi("soz satiri gecersiz")
+			}
 		}
 		if b.Satirlar == nil {
 			b.Satirlar = []string{}
@@ -113,7 +142,8 @@ func yayinIsteginiDuzenle(ist *YayinIstegi) error {
 			return dogrulamaHatasi("stem id tekrar ediyor")
 		}
 		gorulen[st.ID] = true
-		if st.URL == "" || st.Sure <= 0 || !runeAraliginda(st.Enstruman, 1, enstrumanEnUzun) {
+		if st.URL == "" || st.Sure <= 0 || !runeAraliginda(st.Enstruman, 1, enstrumanEnUzun) ||
+			nulIceriyor(st.URL, st.Enstruman) {
 			return dogrulamaHatasi("stem alanlari gecersiz")
 		}
 	}
@@ -126,6 +156,9 @@ func yamayiDuzenle(y *YayinYamasi) error {
 		a := strings.TrimSpace(*y.Aciklama)
 		if !runeAraliginda(a, 0, aciklamaEnUzun) {
 			return dogrulamaHatasi("aciklama en cok 300 karakter olabilir")
+		}
+		if nulIceriyor(a) {
+			return dogrulamaHatasi("aciklama NUL karakteri iceremez")
 		}
 		y.Aciklama = &a
 	}

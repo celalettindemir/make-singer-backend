@@ -118,3 +118,73 @@ func TestYamayiDuzenle(t *testing.T) {
 		t.Fatalf("uzun aciklama: %v", err)
 	}
 }
+
+func TestYayinIsteginiDuzenle_IcIceAlanSinirlari(t *testing.T) {
+	bolum := func(b SozBolumu) func(*YayinIstegi) {
+		return func(i *YayinIstegi) { i.Sozler.Bolumler = []SozBolumu{b} }
+	}
+	durumlar := map[string]func(*YayinIstegi){
+		"uzun satir":     bolum(SozBolumu{BolumID: "b", Tur: "verse", Satirlar: []string{strings.Repeat("ş", 201)}}),
+		"uzun bolum id":  bolum(SozBolumu{BolumID: strings.Repeat("b", 65), Tur: "verse"}),
+		"uzun bolum tur": bolum(SozBolumu{BolumID: "b", Tur: strings.Repeat("v", 65)}),
+		"uzun yapi id":   func(i *YayinIstegi) { i.Yapi = []YapiOgesi{{ID: strings.Repeat("s", 65), Tur: "verse"}} },
+		"uzun yapi tur":  func(i *YayinIstegi) { i.Yapi = []YapiOgesi{{ID: "s", Tur: strings.Repeat("v", 65)}} },
+		"toplam satir": func(i *YayinIstegi) {
+			i.Sozler.Bolumler = make([]SozBolumu, 6)
+			for k := range i.Sozler.Bolumler {
+				i.Sozler.Bolumler[k] = SozBolumu{BolumID: "b", Satirlar: make([]string, 167)} // 1002 satir
+			}
+		},
+	}
+	for ad, boz := range durumlar {
+		ist := gecerliIstek()
+		boz(&ist)
+		if err := yayinIsteginiDuzenle(&ist); !errors.Is(err, ErrDogrulama) {
+			t.Errorf("%s: ErrDogrulama bekleniyordu, gelen %v", ad, err)
+		}
+	}
+
+	ist := gecerliIstek()
+	ist.Yapi = []YapiOgesi{{ID: strings.Repeat("ş", 64), Tur: strings.Repeat("ğ", 64)}}
+	ist.Sozler.Bolumler = make([]SozBolumu, 5)
+	for k := range ist.Sozler.Bolumler {
+		ist.Sozler.Bolumler[k] = SozBolumu{BolumID: strings.Repeat("ş", 64), Tur: strings.Repeat("ğ", 64), Satirlar: make([]string, 200)}
+	}
+	ist.Sozler.Bolumler[0].Satirlar[0] = strings.Repeat("ş", 200)
+	if err := yayinIsteginiDuzenle(&ist); err != nil {
+		t.Fatalf("sinir degerler (1000 satir, 200/64 karakter) kabul edilmeli: %v", err)
+	}
+}
+
+func TestYayinIsteginiDuzenle_NULKarakteriReddedilir(t *testing.T) {
+	durumlar := map[string]func(*YayinIstegi){
+		"baslik":         func(i *YayinIstegi) { i.Baslik = "Ge\x00ce" },
+		"aciklama":       func(i *YayinIstegi) { i.Aciklama = "a\x00" },
+		"tur":            func(i *YayinIstegi) { i.Tur = "p\x00p" },
+		"tonik":          func(i *YayinIstegi) { i.Ton.Tonik = "A\x00" },
+		"master url":     func(i *YayinIstegi) { i.MasterURL = "masters/u/p/m\x00.wav" },
+		"stem url":       func(i *YayinIstegi) { i.Stemler[0].URL = "stems/u/p/d\x00.mp3" },
+		"stem enstruman": func(i *YayinIstegi) { i.Stemler[0].Enstruman = "dr\x00ms" },
+		"satir": func(i *YayinIstegi) {
+			i.Sozler.Bolumler = []SozBolumu{{BolumID: "b", Tur: "verse", Satirlar: []string{"bir\x00"}}}
+		},
+		"bolum id":  func(i *YayinIstegi) { i.Sozler.Bolumler = []SozBolumu{{BolumID: "b\x00", Tur: "verse"}} },
+		"bolum tur": func(i *YayinIstegi) { i.Sozler.Bolumler = []SozBolumu{{BolumID: "b", Tur: "v\x00"}} },
+		"yapi id":   func(i *YayinIstegi) { i.Yapi = []YapiOgesi{{ID: "s\x00", Tur: "verse"}} },
+		"yapi tur":  func(i *YayinIstegi) { i.Yapi = []YapiOgesi{{ID: "s", Tur: "v\x00"}} },
+	}
+	for ad, boz := range durumlar {
+		ist := gecerliIstek()
+		boz(&ist)
+		if err := yayinIsteginiDuzenle(&ist); !errors.Is(err, ErrDogrulama) {
+			t.Errorf("%s: ErrDogrulama bekleniyordu, gelen %v", ad, err)
+		}
+	}
+}
+
+func TestYamayiDuzenle_NULKarakteriReddedilir(t *testing.T) {
+	a := "mer\x00haba"
+	if err := yamayiDuzenle(&YayinYamasi{Aciklama: &a}); !errors.Is(err, ErrDogrulama) {
+		t.Fatalf("NUL iceren aciklama: %v", err)
+	}
+}

@@ -86,3 +86,12 @@ func TestKimlikCoz(t *testing.T) {
 		t.Fatal("gecersiz kimlik kabul edilmemeli")
 	}
 }
+
+func TestProfilGirdisiniDuzenle_NULKarakteriReddedilir(t *testing.T) {
+	if _, err := profilGirdisiniDuzenle(ProfilGirdisi{KullaniciAdi: "ali", GorunenAd: "A\x00li"}); !errors.Is(err, ErrDogrulama) {
+		t.Fatalf("NUL iceren gorunen ad: %v", err)
+	}
+	if _, err := profilGirdisiniDuzenle(ProfilGirdisi{KullaniciAdi: "ali", GorunenAd: "Ali", Bio: "mer\x00haba"}); !errors.Is(err, ErrDogrulama) {
+		t.Fatalf("NUL iceren bio: %v", err)
+	}
+}

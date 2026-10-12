@@ -64,6 +64,9 @@ func profilGirdisiniDuzenle(g ProfilGirdisi) (ProfilGirdisi, error) {
 	}
 	g.GorunenAd = strings.TrimSpace(g.GorunenAd)
 	g.Bio = strings.TrimSpace(g.Bio)
+	if nulIceriyor(g.GorunenAd, g.Bio) {
+		return g, dogrulamaHatasi("gorunenAd ve bio NUL karakteri iceremez")
+	}
 	if n := utf8.RuneCountInString(g.GorunenAd); n < 1 || n > gorunenAdEnUzun {
 		return g, dogrulamaHatasi("gorunenAd 1-40 karakter olmali")
 	}
