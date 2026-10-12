@@ -150,8 +150,9 @@ func (s *Servis) YayinOlustur(ctx context.Context, kullaniciID string, ist Yayin
 
 	if err := s.hazirlamayaKoy(yeni.ID); err != nil {
 		// Kuyruga girmeyen yayin hic hazirlanmaz; sahipsiz bir
-		// "hazirlaniyor" satiri birakmak yerine geri alinir.
-		if kerr := s.depo.YayinKaldir(ctx, yeni.ID); kerr != nil {
+		// "hazirlaniyor" satiri birakmak yerine geri alinir. Istek baglami
+		// (or. kapanista) iptal edilmis olsa da geri alma calismalidir.
+		if kerr := s.depo.YayinKaldir(context.WithoutCancel(ctx), yeni.ID); kerr != nil {
 			log.Printf("Uyari: kuyruga girmeyen yayin geri alinamadi (%s): %v", yeni.ID, kerr)
 		}
 		return nil, fmt.Errorf("hazirlama isi kurulamadi: %w", err)
@@ -288,7 +289,8 @@ func (s *Servis) TekrarDene(ctx context.Context, kullaniciID, yayinID string) (*
 		return nil, err
 	}
 	if err := s.hazirlamayaKoy(k.ID); err != nil {
-		if herr := s.depo.HataYap(ctx, k.ID); herr != nil {
+		// Iptal edilmis istek baglaminda da yayin "hazirlaniyor"da kalmamali.
+		if herr := s.depo.HataYap(context.WithoutCancel(ctx), k.ID); herr != nil {
 			log.Printf("Uyari: kuyruga girmeyen yayin hataya alinamadi (%s): %v", k.ID, herr)
 		}
 		return nil, fmt.Errorf("hazirlama isi kurulamadi: %w", err)

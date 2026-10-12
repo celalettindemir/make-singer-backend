@@ -147,6 +147,22 @@ func TestServis_YayinOlustur_KuyrukHatasindaGeriAlinir(t *testing.T) {
 	}
 }
 
+// Istek baglami kuyruk hatasi sirasinda iptal edilse de geri alma yapilir.
+func TestServis_YayinOlustur_IptalEdilenBaglamdaGeriAlinir(t *testing.T) {
+	d := profilliDepo()
+	s, q := testServisi(d)
+	ctx, iptal := context.WithCancel(context.Background())
+	defer iptal()
+	q.once = iptal
+	q.hata = errors.New("redis kapali")
+	if _, err := s.YayinOlustur(ctx, kullaniciA, yayinIstegiA()); err == nil {
+		t.Fatal("kuyruk hatasi donmeli")
+	}
+	if len(d.kaldirilan) != 1 || d.kaldirilan[0] != d.eklenen[0].ID {
+		t.Fatalf("iptal edilen baglamda da yayin geri alinmali: %v", d.kaldirilan)
+	}
+}
+
 func TestServis_YayinOlustur_Cover(t *testing.T) {
 	coverIstegi := func(kaynak string) YayinIstegi {
 		ist := yayinIstegiA()
@@ -318,6 +334,23 @@ func TestServis_TekrarDene(t *testing.T) {
 	}
 	if d.yayinlar[yayinX].Durum != DurumHata {
 		t.Fatalf("kuyruga girmeyen yayin hataya donmeli: %s", d.yayinlar[yayinX].Durum)
+	}
+}
+
+// Istek baglami kuyruk hatasi sirasinda iptal edilse de yayin hataya doner.
+func TestServis_TekrarDene_IptalEdilenBaglamdaHatayaDoner(t *testing.T) {
+	d := yeniSahteDepo()
+	d.yayinlar[yayinX] = sahteYayin(yayinX, kullaniciA, GorunurlukHerkes, DurumHata)
+	s, q := testServisi(d)
+	ctx, iptal := context.WithCancel(context.Background())
+	defer iptal()
+	q.once = iptal
+	q.hata = errors.New("redis kapali")
+	if _, err := s.TekrarDene(ctx, kullaniciA, yayinX); err == nil {
+		t.Fatal("kuyruk hatasi donmeli")
+	}
+	if d.yayinlar[yayinX].Durum != DurumHata {
+		t.Fatalf("iptal edilen baglamda da yayin hataya donmeli: %s", d.yayinlar[yayinX].Durum)
 	}
 }
 

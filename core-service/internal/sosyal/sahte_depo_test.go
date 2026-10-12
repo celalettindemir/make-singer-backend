@@ -13,9 +13,13 @@ type sahteKuyruk struct {
 	gorevler   []*asynq.Task
 	secenekler [][]asynq.Option
 	hata       error
+	once       func() // dolu ise Enqueue basinda cagrilir (or. istek baglamini iptal eder)
 }
 
 func (q *sahteKuyruk) Enqueue(t *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
+	if q.once != nil {
+		q.once()
+	}
 	if q.hata != nil {
 		return nil, q.hata
 	}
@@ -217,7 +221,10 @@ func (d *sahteDepo) YayinSil(_ context.Context, id, sahipID string) error {
 	return nil
 }
 
-func (d *sahteDepo) YayinKaldir(_ context.Context, id string) error {
+func (d *sahteDepo) YayinKaldir(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err // gercek havuz da olu baglamda sorgu calistirmaz
+	}
 	d.kaldirilan = append(d.kaldirilan, id)
 	return d.hata
 }
@@ -256,7 +263,10 @@ func (d *sahteDepo) Yayinla(_ context.Context, id string, s HazirlikSonucu) erro
 	return nil
 }
 
-func (d *sahteDepo) HataYap(_ context.Context, id string) error {
+func (d *sahteDepo) HataYap(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err // gercek havuz da olu baglamda sorgu calistirmaz
+	}
 	d.hataYapilan = append(d.hataYapilan, id)
 	if k, ok := d.yayinlar[id]; ok && k.Durum == DurumHazirlaniyor {
 		k.Durum = DurumHata

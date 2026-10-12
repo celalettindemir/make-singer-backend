@@ -106,10 +106,16 @@ func (w *SosyalWorker) sahipDenetle(ctx context.Context, sahipID string) error {
 }
 
 // basarisiz, hatayi doner; kalici hatada ya da son denemede yayini hata
-// durumuna alir ki sahibi "Tekrar dene" gorebilsin.
+// durumuna alir ki sahibi "Tekrar dene" gorebilsin. Baglam iptal
+// edildiyse (kapanis) asynq isi yeniden kuyruga alir; yayin isaretlenmez.
+// Suresi dolmus baglamda da isaretlenebilsin diye HataYap iptalden
+// bagimsiz bir baglamla cagrilir.
 func (w *SosyalWorker) basarisiz(ctx context.Context, id string, err error) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return err
+	}
 	if errors.Is(err, asynq.SkipRetry) || w.sonDeneme(ctx) {
-		if herr := w.depo.HataYap(ctx, id); herr != nil {
+		if herr := w.depo.HataYap(context.WithoutCancel(ctx), id); herr != nil {
 			log.Printf("Uyari: yayin hata durumuna alinamadi (%s): %v", id, herr)
 		}
 	}

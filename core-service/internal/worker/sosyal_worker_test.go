@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
@@ -39,7 +40,10 @@ func (d *sahteHazirlikDeposu) Yayinla(_ context.Context, _ string, s sosyal.Hazi
 	return nil
 }
 
-func (d *sahteHazirlikDeposu) HataYap(context.Context, string) error {
+func (d *sahteHazirlikDeposu) HataYap(ctx context.Context, _ string) error {
+	if err := ctx.Err(); err != nil {
+		return err // gercek havuz da olu baglamda sorgu calistirmaz
+	}
 	d.hataYapildi = true
 	return nil
 }
@@ -207,6 +211,36 @@ func TestSosyalWorker_KopyaHatasiSonDenemedeHataOlur(t *testing.T) {
 	}
 	if !k.depo.hataYapildi {
 		t.Fatal("son denemede yayin hata olmali")
+	}
+}
+
+// Son denemede is suresi dolarsa (DeadlineExceeded) yayin yine hata olur.
+func TestSosyalWorker_SonDenemedeSureDolarsaHataOlur(t *testing.T) {
+	k := sosyalTestWorker(hazirKayit(), nil)
+	k.kopya.hata = context.DeadlineExceeded
+	k.w.sonDeneme = func(context.Context) bool { return true }
+	ctx, iptal := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer iptal()
+	if err := k.w.Hazirla(ctx, hazirlaGorevi()); err == nil {
+		t.Fatal("hata donmeli")
+	}
+	if !k.depo.hataYapildi {
+		t.Fatal("suresi dolan son denemede yayin hata olmali")
+	}
+}
+
+// Kapanista (Canceled) asynq isi yeniden kuyruga alir; yayin hata olmamali.
+func TestSosyalWorker_IptalEdilenIsHataYapmaz(t *testing.T) {
+	k := sosyalTestWorker(hazirKayit(), nil)
+	k.kopya.hata = context.Canceled
+	k.w.sonDeneme = func(context.Context) bool { return true }
+	ctx, iptal := context.WithCancel(context.Background())
+	iptal()
+	if err := k.w.Hazirla(ctx, hazirlaGorevi()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("iptal hatasi donmeli: %v", err)
+	}
+	if k.depo.hataYapildi {
+		t.Fatal("iptal edilen is hata durumuna alinmamali")
 	}
 }
 
