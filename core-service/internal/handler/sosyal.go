@@ -66,8 +66,12 @@ type SosyalLimitleri struct {
 }
 
 // Rotalar, uclari verilen gruba baglar; limitler yalnizca ilgili uclara
-// uygulanir.
+// uygulanir. Eksik bir limiter kayit aninda panik eder: Fiber nil
+// handler'i denetlemez, aksi halde ilk istekte 500 olurdu.
 func (h *SosyalHandler) Rotalar(r fiber.Router, l SosyalLimitleri) {
+	if l.Yayin == nil || l.Yorum == nil || l.Cover == nil {
+		panic("handler: SosyalLimitleri eksik; Yayin, Yorum ve Cover limiterlarinin hepsi doldurulmali")
+	}
 	r.Get("/profil/ben", h.ProfilBen)
 	r.Put("/profil/ben", h.ProfilKaydet)
 	r.Get("/profil/kullanici-adi/uygun", h.AdUygun)

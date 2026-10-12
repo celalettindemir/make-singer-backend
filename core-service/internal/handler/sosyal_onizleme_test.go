@@ -62,3 +62,58 @@ func TestSosyal_OnizlemeIPLimitiUygulanir(t *testing.T) {
 		t.Fatalf("durum=%d govde=%v", durum, govde)
 	}
 }
+
+// Cache-Control: no-store yalnizca 200'de degil; 404 ve limiter'in 429'u
+// da bir vekil/CDN tarafindan ara bellege alinmamali.
+func TestSosyal_OnizlemeNoStoreHerYanitta(t *testing.T) {
+	sinir := func(c *fiber.Ctx) error { return response.RateLimited(c) }
+	durumlar := []struct {
+		ad       string
+		app      *fiber.App
+		beklenen int
+	}{
+		{"404", publicUygulama(&sahteSosyal{hata: sosyal.ErrBulunamadi}, gecir), http.StatusNotFound},
+		{"429", publicUygulama(&sahteSosyal{onizleme: &sosyal.Onizleme{}}, sinir), http.StatusTooManyRequests},
+	}
+	for _, d := range durumlar {
+		t.Run(d.ad, func(t *testing.T) {
+			resp, err := d.app.Test(httptest.NewRequest(http.MethodGet, "/api/public/s/Ab3dEf9h", nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != d.beklenen || resp.Header.Get("Cache-Control") != "no-store" {
+				t.Fatalf("durum=%d Cache-Control=%q", resp.StatusCode, resp.Header.Get("Cache-Control"))
+			}
+		})
+	}
+}
+
+// panikBekle, f'nin panik ettigini dogrular.
+func panikBekle(t *testing.T, f func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("eksik limiter ile kayit panik etmeliydi")
+		}
+	}()
+	f()
+}
+
+// P1: unutulan limiter ilk istekte degil, kayit aninda patlamali.
+func TestSosyal_EksikLimiterKayittaPanikEder(t *testing.T) {
+	h := NewSosyalHandler(&sahteSosyal{})
+	durumlar := map[string]SosyalLimitleri{
+		"hepsi-bos": {},
+		"yayin-bos": {Yorum: gecir, Cover: gecir},
+		"yorum-bos": {Yayin: gecir, Cover: gecir},
+		"cover-bos": {Yayin: gecir, Yorum: gecir},
+	}
+	for ad, l := range durumlar {
+		t.Run(ad, func(t *testing.T) {
+			panikBekle(t, func() { h.Rotalar(fiber.New().Group("/api/social"), l) })
+		})
+	}
+	t.Run("ip-limiti-bos", func(t *testing.T) {
+		panikBekle(t, func() { h.PublicRotalar(fiber.New().Group("/api/public"), nil) })
+	})
+}
