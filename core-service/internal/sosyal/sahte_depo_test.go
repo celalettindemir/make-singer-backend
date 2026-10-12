@@ -12,10 +12,25 @@ type sahteDepo struct {
 	profiller map[string]*ProfilKaydi // kullanici id -> kayit
 	sayilar   ProfilSayilari
 	hata      error // dolu ise her cagri bu hatayla doner
+
+	yayinlar      map[string]*YayinKaydi // yayin id -> kayit
+	eklenen       []YeniYayin
+	slugCakismasi int // ilk n YayinEkle errSlugCakisti doner
+	yamalar       []YayinYamasi
+	kaldirilan    []string
+
+	hazirliklar map[string]*HazirlikKaydi
+	yayinlanan  map[string]HazirlikSonucu
+	hataYapilan []string
 }
 
 func yeniSahteDepo() *sahteDepo {
-	return &sahteDepo{profiller: map[string]*ProfilKaydi{}}
+	return &sahteDepo{
+		profiller:   map[string]*ProfilKaydi{},
+		yayinlar:    map[string]*YayinKaydi{},
+		hazirliklar: map[string]*HazirlikKaydi{},
+		yayinlanan:  map[string]HazirlikSonucu{},
+	}
 }
 
 func (d *sahteDepo) ProfilGetir(_ context.Context, id string) (*ProfilKaydi, error) {
@@ -76,4 +91,139 @@ func (d *sahteDepo) ProfilSayilari(context.Context, string, string) (*ProfilSayi
 	}
 	s := d.sayilar
 	return &s, nil
+}
+
+func (d *sahteDepo) YayinEkle(_ context.Context, y YeniYayin) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	if d.slugCakismasi > 0 {
+		d.slugCakismasi--
+		return errSlugCakisti
+	}
+	d.eklenen = append(d.eklenen, y)
+	return nil
+}
+
+// kopya, kaydin izleyiciye gore bir kopyasini doner (depo BenimMi'yi
+// doldurur).
+func (d *sahteDepo) kopya(k *YayinKaydi, izleyiciID string) *YayinKaydi {
+	c := *k
+	c.BenimMi = c.SahipID == izleyiciID
+	return &c
+}
+
+func (d *sahteDepo) YayinGetir(_ context.Context, id, izleyiciID string) (*YayinKaydi, error) {
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	k, ok := d.yayinlar[id]
+	if !ok {
+		return nil, ErrBulunamadi
+	}
+	return d.kopya(k, izleyiciID), nil
+}
+
+func (d *sahteDepo) YayinSlugIleGetir(_ context.Context, slug, izleyiciID string) (*YayinKaydi, error) {
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	for _, k := range d.yayinlar {
+		if k.Slug == slug {
+			return d.kopya(k, izleyiciID), nil
+		}
+	}
+	return nil, ErrBulunamadi
+}
+
+// sahibinCanliYayini, sahibin silinmemis yayinini bulur.
+func (d *sahteDepo) sahibinCanliYayini(id, sahipID string) (*YayinKaydi, bool) {
+	k, ok := d.yayinlar[id]
+	if !ok || k.SahipID != sahipID || k.Silindi {
+		return nil, false
+	}
+	return k, true
+}
+
+func (d *sahteDepo) YayinGuncelle(_ context.Context, id, sahipID string, yama YayinYamasi) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	k, ok := d.sahibinCanliYayini(id, sahipID)
+	if !ok {
+		return ErrBulunamadi
+	}
+	d.yamalar = append(d.yamalar, yama)
+	if yama.Aciklama != nil {
+		k.Aciklama = *yama.Aciklama
+	}
+	if yama.AltyapiAcik != nil {
+		k.AltyapiAcik = *yama.AltyapiAcik
+	}
+	if yama.Gorunurluk != nil {
+		k.Gorunurluk = *yama.Gorunurluk
+	}
+	if yama.YorumAcik != nil {
+		k.YorumAcik = *yama.YorumAcik
+	}
+	return nil
+}
+
+func (d *sahteDepo) YayinSil(_ context.Context, id, sahipID string) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	k, ok := d.sahibinCanliYayini(id, sahipID)
+	if !ok {
+		return ErrBulunamadi
+	}
+	k.Silindi = true
+	return nil
+}
+
+func (d *sahteDepo) YayinKaldir(_ context.Context, id string) error {
+	d.kaldirilan = append(d.kaldirilan, id)
+	return d.hata
+}
+
+func (d *sahteDepo) TekrarDenemeyeAl(_ context.Context, id, sahipID string) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	k, ok := d.sahibinCanliYayini(id, sahipID)
+	if !ok {
+		return ErrBulunamadi
+	}
+	if k.Durum != DurumHata {
+		return ErrDurum
+	}
+	k.Durum = DurumHazirlaniyor
+	return nil
+}
+
+func (d *sahteDepo) HazirlikGetir(_ context.Context, id string) (*HazirlikKaydi, error) {
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	k, ok := d.hazirliklar[id]
+	if !ok {
+		return nil, ErrBulunamadi
+	}
+	return k, nil
+}
+
+func (d *sahteDepo) Yayinla(_ context.Context, id string, s HazirlikSonucu) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	d.yayinlanan[id] = s
+	return nil
+}
+
+func (d *sahteDepo) HataYap(_ context.Context, id string) error {
+	d.hataYapilan = append(d.hataYapilan, id)
+	if k, ok := d.yayinlar[id]; ok && k.Durum == DurumHazirlaniyor {
+		k.Durum = DurumHata
+	}
+	return d.hata
 }

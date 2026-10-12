@@ -29,6 +29,8 @@ type ProfilDeposu interface {
 // Depo, sosyal modulunun tum kalici islemleridir.
 type Depo interface {
 	ProfilDeposu
+	YayinDeposu
+	HazirlikDeposu
 }
 
 // PostgresDepo, Depo'nun Postgres uygulamasidir. Kimlikler cagri
