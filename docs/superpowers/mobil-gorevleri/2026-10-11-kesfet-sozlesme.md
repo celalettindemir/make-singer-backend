@@ -217,7 +217,7 @@ type YayinIstegi = {
   - 404 `kaynak_bulunamadi`.
   - 422 `dogrulama`: gövde çözülemedi ya da bir alan kuralı bozuldu. Metin alanlarından (başlık, açıklama, tür, ton, `masterUrl`, stem, yapı ve söz alanları) biri NUL karakteri içeriyorsa da bu hata döner.
   - 409 `profil_yok`, 429 (kullanıcı başına saatte 30).
-- **Sınırlar** (karakter sayısı rune ile ölçülür; başlık ve açıklama kırpılır): `baslik` 1–80, `aciklama` en çok 300, `tur` 1–40, `ton.tonik` 1–16, `bpm` 20–300, `sureSn` > 0, en çok 32 stem, en çok 200 `yapi` öğesi ve 200 söz bölümü, bölüm başına en çok 200 satır ve toplamda 1000 satır, tek satır en çok 200 karakter, `bolumId`/bölüm türü/yapı `id` ve `tur` en çok 64 karakter.
+- **Sınırlar** (karakter sayısı rune ile ölçülür; başlık ve açıklama kırpılır): `baslik` 1–80, `aciklama` en çok 300, `tur` 1–40, `ton.tonik` 1–16, `bpm` 20–300, `sureSn` > 0, en çok 32 stem, en çok 200 `yapi` öğesi ve 200 söz bölümü, bölüm başına en çok 200 satır ve toplamda 1000 satır, tek satır en çok 200 karakter, `bolumId`/bölüm türü/yapı `id` ve `tur` en çok 64 karakter; stem `enstruman` 1–40 karakter, stem `id` yayın içinde tekil, stem `url` zorunlu ve `sure` > 0.
 
 Sunucu adreslerin sahipliğini `SahipliAnahtarCoz` ile doğrular. Ardından asynq'e bir `sosyal:hazirla` işi koyar. Bu iş:
 1. Dosyaları §3.1'e kopyalar.
@@ -235,7 +235,7 @@ Dalga formu veya önizleme üretilemezse yayın yine `yayinda` olur: dalga formu
 | `POST /yayinlar/{id}/tekrar-dene` | — | `202 { id, slug, durum: "hazirlaniyor" }` | Yalnızca sahibi, yalnızca `hata` durumunda; başka durumda 409 `durum`, sahibi değilse 404 |
 | `PATCH /yayinlar/{id}` | `{ aciklama?, gorunurluk?, altyapiAcik?, yorumAcik? }` | `YayinDetayi` | Yalnızca sahibi. 422 `stem_yok`: `altyapiAcik: true` istenen yayının stem kopyası yok (altyapı kapalı yayınlanmış) ya da yayın bir cover |
 | `DELETE /yayinlar/{id}` | — | `204` | Yalnızca sahibi. Yumuşak silme; dosyalar 24 saat sonra `bakim` kuyruğunda silinir |
-| `POST /yayinlar/{id}/dosyalar` | — | `{ master: { url, expiresAt? } }` | Dinleme için. 1 saat geçerli; adres kalıcıysa `expiresAt` yoktur. Yayın henüz `yayinda` değilse 409 `durum` ("hâlâ hazırlanıyor") |
+| `POST /yayinlar/{id}/dosyalar` | — | `{ master: { url, expiresAt? } }` | Dinleme için. 1 saat geçerli; adres kalıcıysa `expiresAt` yoktur. Yayın `yayinda` değilse (`hazirlaniyor` ya da `hata`) 409 `durum` |
 | `GET /akis?sekme=senin-icin\|takip\|yeni` | sayfalı | `YayinOzeti[]` | §5.1 |
 
 ### 4.4 Beğeni ve takip
@@ -249,7 +249,7 @@ Dalga formu veya önizleme üretilemezse yayın yine `yayinda` olur: dalga formu
 | `GET /oneriler` | `ProfilOzeti[]` (en çok 10, sayfasız) | Takip etmediğin, son 30 günde en çok beğeni alan yayıncılar |
 
 - Takip: kullanıcı adı yoksa 404 `bulunamadi`. `DELETE` kendine de 422 `kendini_takip` döner. Takip eden için profil gerekmez.
-- Öneriler: `herkes` ya da `takipciler` görünürlüğünde en az bir `yayinda` yayını olan yayıncılar. Puan, bu yayınların son 30 günde başkalarından aldığı beğenilerdir; sahibin kendi beğenisi sayılmaz. Eşitlikte son yayını yeni olan öne geçer. Liste boşsa `[]` döner.
+- Öneriler: `herkes` ya da `takipciler` görünürlüğünde en az bir `yayinda` yayını olan yayıncılar. Puan, bu yayınların son 30 günde başkalarından aldığı beğenilerdir; sahibin kendi beğenisi sayılmaz. Silinmiş yayınlar sayılmaz. Eşitlikte son yayını yeni olan öne geçer. Liste boşsa `[]` döner.
 
 ### 4.5 Yorumlar
 
