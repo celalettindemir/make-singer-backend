@@ -30,6 +30,20 @@ type SosyalServisi interface {
 	Akis(ctx context.Context, kullaniciID, sekme, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error)
 	ProfilYayinlari(ctx context.Context, izleyiciID, ad, tur, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error)
 	Begeni(ctx context.Context, kullaniciID, yayinID string, begen bool) (*sosyal.BegeniDurumu, error)
+
+	Takip(ctx context.Context, kullaniciID, ad string, takip bool) (*sosyal.TakipDurumu, error)
+	Oneriler(ctx context.Context, kullaniciID string) ([]sosyal.ProfilOzeti, error)
+
+	Yorumlar(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*sosyal.Sayfa[sosyal.Yorum], error)
+	YorumYaz(ctx context.Context, kullaniciID, yayinID string, g sosyal.YorumGirdisi) (*sosyal.Yorum, error)
+	YorumSil(ctx context.Context, kullaniciID, yorumID string) error
+
+	Sikayet(ctx context.Context, kullaniciID string, g sosyal.SikayetGirdisi) error
+
+	Coverlar(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error)
+	CoverBaslat(ctx context.Context, kullaniciID, yayinID string) (*sosyal.CoverBaslangici, error)
+
+	Onizleme(ctx context.Context, slug string) (*sosyal.Onizleme, error)
 }
 
 var _ SosyalServisi = (*sosyal.Servis)(nil)
@@ -43,9 +57,21 @@ func NewSosyalHandler(servis SosyalServisi) *SosyalHandler {
 	return &SosyalHandler{servis: servis}
 }
 
-// Rotalar, uclari verilen gruba baglar. yayinLimiti yalnizca
-// POST /yayinlar'a uygulanir (kullanici basina saatlik).
-func (h *SosyalHandler) Rotalar(r fiber.Router, yayinLimiti fiber.Handler) {
+// SosyalLimitleri, tek tek uclara uygulanan kullanici basina limitlerdir.
+// Hepsi doldurulmalidir.
+type SosyalLimitleri struct {
+	Yayin fiber.Handler // POST /yayinlar (saatlik)
+	Yorum fiber.Handler // POST /yayinlar/:id/yorumlar (dakikalik, 429 yavasla)
+	Cover fiber.Handler // POST /yayinlar/:id/cover-baslat (saatlik)
+}
+
+// Rotalar, uclari verilen gruba baglar; limitler yalnizca ilgili uclara
+// uygulanir. Eksik bir limiter kayit aninda panik eder: Fiber nil
+// handler'i denetlemez, aksi halde ilk istekte 500 olurdu.
+func (h *SosyalHandler) Rotalar(r fiber.Router, l SosyalLimitleri) {
+	if l.Yayin == nil || l.Yorum == nil || l.Cover == nil {
+		panic("handler: SosyalLimitleri eksik; Yayin, Yorum ve Cover limiterlarinin hepsi doldurulmali")
+	}
 	r.Get("/profil/ben", h.ProfilBen)
 	r.Put("/profil/ben", h.ProfilKaydet)
 	r.Get("/profil/kullanici-adi/uygun", h.AdUygun)
@@ -53,7 +79,7 @@ func (h *SosyalHandler) Rotalar(r fiber.Router, yayinLimiti fiber.Handler) {
 	r.Get("/profiller/:ad/yayinlar", h.ProfilYayinlari)
 	r.Get("/akis", h.Akis)
 
-	r.Post("/yayinlar", yayinLimiti, h.YayinOlustur)
+	r.Post("/yayinlar", l.Yayin, h.YayinOlustur)
 	r.Get("/yayinlar/:id", h.Yayin)
 	r.Patch("/yayinlar/:id", h.YayinGuncelle)
 	r.Delete("/yayinlar/:id", h.YayinSil)
@@ -62,6 +88,19 @@ func (h *SosyalHandler) Rotalar(r fiber.Router, yayinLimiti fiber.Handler) {
 	r.Get("/s/:slug", h.Slug)
 	r.Put("/yayinlar/:id/begeni", h.Begen)
 	r.Delete("/yayinlar/:id/begeni", h.BegeniyiKaldir)
+
+	r.Put("/profiller/:ad/takip", h.TakipEt)
+	r.Delete("/profiller/:ad/takip", h.TakibiBirak)
+	r.Get("/oneriler", h.Oneriler)
+
+	r.Get("/yayinlar/:id/yorumlar", h.Yorumlar)
+	r.Post("/yayinlar/:id/yorumlar", l.Yorum, h.YorumYaz)
+	r.Delete("/yorumlar/:id", h.YorumSil)
+
+	r.Post("/sikayetler", h.Sikayet)
+
+	r.Get("/yayinlar/:id/coverlar", h.Coverlar)
+	r.Post("/yayinlar/:id/cover-baslat", l.Cover, h.CoverBaslat)
 }
 
 // sosyalHatalari, servis hatalarinin sozlesmedeki durum ve kodlaridir.
@@ -81,6 +120,9 @@ var sosyalHatalari = []struct {
 	{sosyal.ErrAltyapiKapali, fiber.StatusForbidden, "altyapi_kapali"},
 	{sosyal.ErrStemYok, fiber.StatusUnprocessableEntity, "stem_yok"},
 	{sosyal.ErrDurum, fiber.StatusConflict, "durum"},
+	{sosyal.ErrKendiniTakip, fiber.StatusUnprocessableEntity, "kendini_takip"},
+	{sosyal.ErrYorumKapali, fiber.StatusForbidden, "yorum_kapali"},
+	{sosyal.ErrYetki, fiber.StatusForbidden, "yetki"},
 }
 
 // sosyalHata, servis hatasini sozlesme govdesine cevirir:

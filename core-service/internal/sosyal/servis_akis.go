@@ -59,6 +59,9 @@ func (s *Servis) Akis(ctx context.Context, kullaniciID, sekme, hamImlec string, 
 	return nil, dogrulamaHatasi("sekme senin-icin, takip ya da yeni olmali")
 }
 
+// referansPayi, uygulama ve veritabani saatleri arasindaki farka taninan paydir.
+const referansPayi = time.Second
+
 // seninIcin, puanli akisi ceker. Ilk sayfa referans zamanini "simdi"
 // alir; sonraki sayfalar imlecteki ayni referansi kullanir.
 func (s *Servis) seninIcin(ctx context.Context, id, hamImlec string, limit int) (*Sayfa[YayinOzeti], error) {
@@ -66,7 +69,11 @@ func (s *Servis) seninIcin(ctx context.Context, id, hamImlec string, limit int) 
 	if err != nil {
 		return nil, err
 	}
-	simdi := s.simdi().Truncate(time.Millisecond)
+	// Referans bir saat payi kadar ileri alinir ve milisaniyeye yukari
+	// yuvarlanir: yayinin olusturma zamani veritabani saatinden gelir, uygulama
+	// saati biraz geride kalirsa ya da kesme milisaniyenin altini atarsa yeni
+	// yayin ilk sayfadan dusmesin.
+	simdi := s.simdi().Add(referansPayi).Truncate(time.Millisecond)
 	referans := simdi
 	if imlec != nil {
 		referans = time.UnixMilli(imlec.N)

@@ -37,6 +37,7 @@ type Config struct {
 	Suno      SunoConfig
 	Audio     AudioConfig
 	Auth      AuthConfig
+	Sosyal    SosyalConfig
 }
 
 type ServerConfig struct {
@@ -63,6 +64,27 @@ type RateLimitConfig struct {
 	// SosyalYayinPerHour, POST /api/social/yayinlar icin kullanici basina
 	// saatlik limit.
 	SosyalYayinPerHour int
+	// SosyalYorumPerMin, POST /api/social/yayinlar/{id}/yorumlar icin
+	// kullanici basina dakikalik limit (asimda 429 yavasla).
+	SosyalYorumPerMin int
+	// SosyalCoverPerHour, POST /api/social/yayinlar/{id}/cover-baslat
+	// icin kullanici basina saatlik limit (her cagri stem kopyalar).
+	SosyalCoverPerHour int
+	// PublicPerMin, kimliksiz GET /api/public/s/{slug} icin istemci IP'si
+	// basina dakikalik limit.
+	PublicPerMin int
+	// PublicWebPerMin, ayni ucun X-Web-Anahtari ile gelen (web sunucusu)
+	// istekleri icin TUM web istekleri ortak dakikalik limit.
+	PublicWebPerMin int
+}
+
+// SosyalConfig, Kesfet'in yapilandirmasi.
+type SosyalConfig struct {
+	// WebAnahtari, make-singer-frontend'in X-Web-Anahtari basligiyla
+	// gonderdigi paylasilan sir. Bos ise web yolu kapalidir ve web
+	// sunucusu da IP basina sinira tabidir. Sir: SOSYAL_WEB_ANAHTARI ya
+	// da SOSYAL_WEB_ANAHTARI_FILE.
+	WebAnahtari string
 }
 
 type GroqConfig struct {
@@ -176,6 +198,7 @@ func Load() (*Config, error) {
 	readSecret("AUTH_DB_URL")
 	readSecret("AUTH_SIGNING_KEY")
 	readSecret("AUTH_CRYPTO_KEY")
+	readSecret("SOSYAL_WEB_ANAHTARI")
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
@@ -232,6 +255,11 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("auth.fed_apple_key_id", "AUTH_FED_APPLE_KEY_ID")
 	_ = viper.BindEnv("auth.fed_apple_key_p8", "AUTH_FED_APPLE_KEY_P8")
 	_ = viper.BindEnv("ratelimit.sosyal_yayin_per_hour", "RATELIMIT_SOSYAL_YAYIN_PER_HOUR")
+	_ = viper.BindEnv("ratelimit.sosyal_yorum_per_min", "RATELIMIT_SOSYAL_YORUM_PER_MIN")
+	_ = viper.BindEnv("ratelimit.sosyal_cover_per_hour", "RATELIMIT_SOSYAL_COVER_PER_HOUR")
+	_ = viper.BindEnv("ratelimit.public_per_min", "RATELIMIT_PUBLIC_PER_MIN")
+	_ = viper.BindEnv("ratelimit.public_web_per_min", "RATELIMIT_PUBLIC_WEB_PER_MIN")
+	_ = viper.BindEnv("sosyal.web_anahtari", "SOSYAL_WEB_ANAHTARI")
 
 	// Defaults
 	viper.SetDefault("server.port", "8000")
@@ -248,6 +276,10 @@ func Load() (*Config, error) {
 	viper.SetDefault("ratelimit.ws_ticket_per_min", 60)
 	viper.SetDefault("ratelimit.sign_per_min", 60)
 	viper.SetDefault("ratelimit.sosyal_yayin_per_hour", 30)
+	viper.SetDefault("ratelimit.sosyal_yorum_per_min", 10)
+	viper.SetDefault("ratelimit.sosyal_cover_per_hour", 20)
+	viper.SetDefault("ratelimit.public_per_min", 30)
+	viper.SetDefault("ratelimit.public_web_per_min", 600)
 
 	// Groq defaults
 	viper.SetDefault("groq.base_url", "https://api.groq.com/openai/v1")
@@ -337,6 +369,10 @@ func Load() (*Config, error) {
 			SignPerMin:     viper.GetInt("ratelimit.sign_per_min"),
 
 			SosyalYayinPerHour: viper.GetInt("ratelimit.sosyal_yayin_per_hour"),
+			SosyalYorumPerMin:  viper.GetInt("ratelimit.sosyal_yorum_per_min"),
+			SosyalCoverPerHour: viper.GetInt("ratelimit.sosyal_cover_per_hour"),
+			PublicPerMin:       viper.GetInt("ratelimit.public_per_min"),
+			PublicWebPerMin:    viper.GetInt("ratelimit.public_web_per_min"),
 		},
 		Groq: GroqConfig{
 			APIKey:  viper.GetString("groq.api_key"),
@@ -383,6 +419,9 @@ func Load() (*Config, error) {
 			TrustedProxies:    viper.GetInt("auth.trusted_proxies"),
 
 			Federasyon: federasyonIstemcileriOlustur(),
+		},
+		Sosyal: SosyalConfig{
+			WebAnahtari: viper.GetString("sosyal.web_anahtari"),
 		},
 	}
 

@@ -106,6 +106,8 @@ Bu dosyalar herkese açık değildir. İmzalı adresler yalnızca §4'teki uçla
 - Temel yol `/api/social`. Tüm uçlar `Authorization: Bearer` ister; tek istisna §4.8.
 - JSON alan adları camelCase'tir. Zamanlar ISO 8601'dir.
 - Hata gövdesi, mevcut `pkg/response` biçimidir: `{ "error": { "code": "…", "message": "…" } }`.
+  - Beklenmeyen sunucu hatası 500 `sunucu_hatasi` döner; ayrıntı yalnızca sunucu logundadır.
+  - Gövde çözülemezse ya da alan kuralı bozulursa 422 `dogrulama` döner (400 kullanılmaz).
 - Liste uçları sayfalıdır.
   - İstek: `?imlec=<opak dize>&limit=<1–50, varsayılan 20>`.
   - Yanıt: `{ "ogeler": [...], "sonrakiImlec": "…" | null }`.
@@ -213,7 +215,9 @@ type YayinIstegi = {
 - **Hatalar:**
   - 403 `sahiplik`: bir adres kullanıcıya ait değil.
   - 404 `kaynak_bulunamadi`.
-  - 422 `dogrulama`.
+  - 422 `dogrulama`: gövde çözülemedi ya da bir alan kuralı bozuldu. Metin alanlarından (başlık, açıklama, tür, ton, `masterUrl`, stem, yapı ve söz alanları) biri NUL karakteri içeriyorsa da bu hata döner.
+  - 409 `profil_yok`, 429 (kullanıcı başına saatte 30).
+- **Sınırlar** (karakter sayısı rune ile ölçülür; başlık ve açıklama kırpılır): `baslik` 1–80, `aciklama` en çok 300, `tur` 1–40, `ton.tonik` 1–16, `bpm` 20–300, `sureSn` > 0, en çok 32 stem, en çok 200 `yapi` öğesi ve 200 söz bölümü, bölüm başına en çok 200 satır ve toplamda 1000 satır, tek satır en çok 200 karakter, `bolumId`/bölüm türü/yapı `id` ve `tur` en çok 64 karakter; stem `enstruman` 1–40 karakter, stem `id` yayın içinde tekil, stem `url` zorunlu ve `sure` > 0.
 
 Sunucu adreslerin sahipliğini `SahipliAnahtarCoz` ile doğrular. Ardından asynq'e bir `sosyal:hazirla` işi koyar. Bu iş:
 1. Dosyaları §3.1'e kopyalar.
@@ -228,10 +232,10 @@ Dalga formu veya önizleme üretilemezse yayın yine `yayinda` olur: dalga formu
 |---|---|---|---|
 | `GET /yayinlar/{id}` | — | `YayinDetayi` | Görme yetkisi yoksa 404 |
 | `GET /s/{slug}` | — | `YayinDetayi` | Slug ile aynı detay (deep link için) |
-| `POST /yayinlar/{id}/tekrar-dene` | — | `202` | Yalnızca sahibi, yalnızca `hata` durumunda |
-| `PATCH /yayinlar/{id}` | `{ aciklama?, gorunurluk?, altyapiAcik?, yorumAcik? }` | `YayinDetayi` | Yalnızca sahibi. `altyapiAcik` false iken true yapılamaz, çünkü stem kopyası yoktur: 422 `stem_yok` |
+| `POST /yayinlar/{id}/tekrar-dene` | — | `202 { id, slug, durum: "hazirlaniyor" }` | Yalnızca sahibi, yalnızca `hata` durumunda; başka durumda 409 `durum`, sahibi değilse 404 |
+| `PATCH /yayinlar/{id}` | `{ aciklama?, gorunurluk?, altyapiAcik?, yorumAcik? }` | `YayinDetayi` | Yalnızca sahibi. 422 `stem_yok`: `altyapiAcik: true` istenen yayının stem kopyası yok (altyapı kapalı yayınlanmış) ya da yayın bir cover |
 | `DELETE /yayinlar/{id}` | — | `204` | Yalnızca sahibi. Yumuşak silme; dosyalar 24 saat sonra `bakim` kuyruğunda silinir |
-| `POST /yayinlar/{id}/dosyalar` | — | `{ master: { url, expiresAt } }` | Dinleme için. 1 saat geçerli |
+| `POST /yayinlar/{id}/dosyalar` | — | `{ master: { url, expiresAt? } }` | Dinleme için. 1 saat geçerli; adres kalıcıysa `expiresAt` yoktur. Yayın `yayinda` değilse (`hazirlaniyor` ya da `hata`) 409 `durum` |
 | `GET /akis?sekme=senin-icin\|takip\|yeni` | sayfalı | `YayinOzeti[]` | §5.1 |
 
 ### 4.4 Beğeni ve takip
@@ -244,20 +248,27 @@ Dalga formu veya önizleme üretilemezse yayın yine `yayinda` olur: dalga formu
 | `DELETE /profiller/{kullaniciAdi}/takip` | `{ takipci: number, takipEdiyorMuyum: false }` | |
 | `GET /oneriler` | `ProfilOzeti[]` (en çok 10, sayfasız) | Takip etmediğin, son 30 günde en çok beğeni alan yayıncılar |
 
+- Takip: kullanıcı adı yoksa 404 `bulunamadi`. `DELETE` kendine de 422 `kendini_takip` döner. Takip eden için profil gerekmez.
+- Öneriler: `herkes` ya da `takipciler` görünürlüğünde en az bir `yayinda` yayını olan yayıncılar. Puan, bu yayınların son 30 günde başkalarından aldığı beğenilerdir; sahibin kendi beğenisi sayılmaz. Silinmiş yayınlar sayılmaz. Eşitlikte son yayını yeni olan öne geçer. Liste boşsa `[]` döner.
+
 ### 4.5 Yorumlar
 
 | Uç | İstek | Yanıt | Hatalar |
 |---|---|---|---|
 | `GET /yayinlar/{id}/yorumlar` | sayfalı | `Yorum[]`: önce `zamanMs` artan, sonra damgasızlar (`olusturma` azalan) | 403 `yorum_kapali` |
-| `POST /yayinlar/{id}/yorumlar` | `{ metin, zamanMs: number \| null }` | `201 Yorum` | 403 `yorum_kapali`, 422 `dogrulama`, 429 `yavasla` (kullanıcı başına dakikada 10) |
-| `DELETE /yorumlar/{id}` | — | `204` | 403: yazar ya da yayın sahibi değilse |
+| `POST /yayinlar/{id}/yorumlar` | `{ metin, zamanMs: number \| null }` | `201 Yorum` | 403 `yorum_kapali`, 409 `profil_yok`: profil henüz oluşturulmamış, 422 `dogrulama`, 429 `yavasla` (kullanıcı başına dakikada 10) |
+| `DELETE /yorumlar/{id}` | — | `204` | 403 `yetki`: yazar ya da yayın sahibi değilse (yayını göremeyene 404). Silinmiş yorum 404 |
+
+- `metin` kırpılır, 1–500 karakterdir. `zamanMs` null ya da 0 ≤ `zamanMs` ≤ `sureSn` × 1000 olmalıdır.
+- `yorumAcik` false ise iki uç da yayın sahibine dahil 403 `yorum_kapali` döner. Yayın görünmüyorsa önce 404 döner.
+- 429 `yavasla` sınırı istek başınadır; geçersiz istekler de sayılır.
 
 ### 4.6 Cover
 
 | Uç | Yanıt | Hatalar |
 |---|---|---|
 | `GET /yayinlar/{id}/coverlar` | sayfalı `YayinOzeti[]` | Altyapı kapalıysa boş liste |
-| `POST /yayinlar/{id}/cover-baslat` | `CoverBaslangici` | 403 `altyapi_kapali`, 404 |
+| `POST /yayinlar/{id}/cover-baslat` | `CoverBaslangici` | 403 `altyapi_kapali` (altyapı kapalı, yayın bir cover ya da stem kopyası yok), 404, 409 `durum` (sahibin henüz `yayinda` olmayan yayını), 429 (kullanıcı başına saatte 20) |
 
 ```ts
 type CoverBaslangici = {
@@ -278,7 +289,7 @@ Sunucu yayının stem'lerini kullanıcının kendi önekine kopyalar. Anahtarlar
 
 | Uç | İstek | Yanıt |
 |---|---|---|
-| `POST /sikayetler` | `{ hedefTuru: 'yayin' \| 'yorum', hedefId, neden, aciklama? }` | `201`. Tekrar gönderilirse yine `201` döner, yeni kayıt açılmaz |
+| `POST /sikayetler` | `{ hedefTuru: 'yayin' \| 'yorum', hedefId, neden, aciklama? }` | `201`, gövdesiz. Tekrar gönderilirse yine `201` döner, yeni kayıt açılmaz. Hedef görünmüyor ya da yoksa 404, alan kuralı bozuksa 422 `dogrulama` |
 
 ### 4.8 Herkese açık önizleme (oturumsuz)
 
@@ -289,8 +300,9 @@ Sunucu yayının stem'lerini kullanıcının kendi önekine kopyalar. Anahtarlar
 ```
 
 - Yalnızca `herkes` ve `link` görünürlüğündeki, durumu `yayinda` olan yayınlar için çalışır. Diğerleri 404 döner.
-- IP başına dakikada 30 istek sınırı vardır; aşılırsa 429 döner.
-- `onizlemeUrl` 1 saat geçerli imzalı bir adrestir.
+- IP başına dakikada 30 istek sınırı vardır; aşılırsa 429 döner. IP, Traefik'in yazdığı `X-Real-Ip` başlığından okunur.
+- Web sunucusu (`make-singer-frontend`) bütün ziyaretçiler adına tek IP'den çağırır. Bu yüzden `X-Web-Anahtari: <SOSYAL_WEB_ANAHTARI>` başlığını gönderir; anahtar doğruysa istek IP yerine ortak bir sayaçta dakikada 600 ile sınırlanır. Anahtar yanlışsa olağan IP sınırı geçerlidir. Sunucuda anahtar boşsa bu yol kapalıdır.
+- `onizlemeUrl` 1 saat geçerli imzalı bir adrestir. Yanıt `Cache-Control: no-store` taşır.
 
 ### 4.9 Görünürlük kuralı
 

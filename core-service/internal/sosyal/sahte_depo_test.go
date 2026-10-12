@@ -62,6 +62,23 @@ type sahteDepo struct {
 
 	akisOgeleri []YayinOzeti
 	sonAkis     akisCagrisi
+
+	takipler      map[[2]string]bool // {takipci, takip edilen}
+	oneriKayitlar []ProfilKaydi
+	sonOneri      [2]any // {izleyici, limit}
+
+	yorumKayitlari  map[string]*YorumKaydi
+	yorumOgeleri    []Yorum
+	eklenenYorumlar []YeniYorum
+	silinenYorumlar []string
+	sonYorumImleci  *YorumImleci
+	sonYorumLimiti  int
+
+	sikayetler []YeniSikayet
+
+	stemListeleri map[string][]StemKaydi
+
+	onizlemeler map[string]*OnizlemeKaydi // slug -> kayit
 }
 
 func yeniSahteDepo() *sahteDepo {
@@ -70,6 +87,9 @@ func yeniSahteDepo() *sahteDepo {
 		yayinlar:    map[string]*YayinKaydi{},
 		hazirliklar: map[string]*HazirlikKaydi{},
 		yayinlanan:  map[string]HazirlikSonucu{},
+		takipler:    map[[2]string]bool{},
+
+		yorumKayitlari: map[string]*YorumKaydi{},
 	}
 }
 
@@ -345,4 +365,118 @@ func (d *sahteDepo) BegeniyiKaldir(_ context.Context, kullaniciID, yayinID strin
 		k.BegeniSayisi--
 	}
 	return nil
+}
+
+func (d *sahteDepo) TakipEt(_ context.Context, takipci, edilen string) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	d.takipler[[2]string{takipci, edilen}] = true
+	return nil
+}
+
+func (d *sahteDepo) TakibiBirak(_ context.Context, takipci, edilen string) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	delete(d.takipler, [2]string{takipci, edilen})
+	return nil
+}
+
+func (d *sahteDepo) TakipDurumu(_ context.Context, takipci, edilen string) (*TakipDurumu, error) {
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	t := &TakipDurumu{TakipEdiyorMuyum: d.takipler[[2]string{takipci, edilen}]}
+	for k := range d.takipler {
+		if k[1] == edilen {
+			t.Takipci++
+		}
+	}
+	return t, nil
+}
+
+func (d *sahteDepo) Oneriler(_ context.Context, izleyiciID string, limit int) ([]ProfilKaydi, error) {
+	d.sonOneri = [2]any{izleyiciID, limit}
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	return d.oneriKayitlar, nil
+}
+
+func (d *sahteDepo) YorumEkle(_ context.Context, y YeniYorum) (*Yorum, error) {
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	d.eklenenYorumlar = append(d.eklenenYorumlar, y)
+	p := d.profiller[y.YazarID]
+	return &Yorum{ID: y.ID, Yazar: p.ozet(), Metin: y.Metin, ZamanMs: y.ZamanMs, Olusturma: time.Now()}, nil
+}
+
+func (d *sahteDepo) Yorumlar(_ context.Context, _, _ string, imlec *YorumImleci, limit int) ([]Yorum, error) {
+	d.sonYorumImleci, d.sonYorumLimiti = imlec, limit
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	n := len(d.yorumOgeleri)
+	if n > limit+1 {
+		n = limit + 1
+	}
+	return d.yorumOgeleri[:n], nil
+}
+
+func (d *sahteDepo) YorumGetir(_ context.Context, id string) (*YorumKaydi, error) {
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	k, ok := d.yorumKayitlari[id]
+	if !ok {
+		return nil, ErrBulunamadi
+	}
+	c := *k
+	return &c, nil
+}
+
+func (d *sahteDepo) YorumSil(_ context.Context, id string) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	k, ok := d.yorumKayitlari[id]
+	if !ok || k.Silindi {
+		return ErrBulunamadi
+	}
+	k.Silindi = true
+	d.silinenYorumlar = append(d.silinenYorumlar, id)
+	return nil
+}
+
+func (d *sahteDepo) SikayetEkle(_ context.Context, s YeniSikayet) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	d.sikayetler = append(d.sikayetler, s)
+	return nil
+}
+
+func (d *sahteDepo) Coverlar(_ context.Context, kaynakID, izleyiciID string, imlec *ZamanImleci, limit int) ([]YayinOzeti, error) {
+	return d.zamanListesi(akisCagrisi{tur: "cover", izleyici: izleyiciID, sahip: kaynakID, zaman: imlec, limit: limit})
+}
+
+func (d *sahteDepo) StemListesi(_ context.Context, yayinID string) ([]StemKaydi, error) {
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	return d.stemListeleri[yayinID], nil
+}
+
+func (d *sahteDepo) OnizlemeGetir(_ context.Context, slug string) (*OnizlemeKaydi, error) {
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	k, ok := d.onizlemeler[slug]
+	if !ok {
+		return nil, ErrBulunamadi
+	}
+	c := *k
+	return &c, nil
 }

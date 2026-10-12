@@ -17,6 +17,14 @@ ratelimit:
   ws_ticket_per_min: 60
   sign_per_min: 60
   sosyal_yayin_per_hour: 30
+  sosyal_yorum_per_min: 10 # asimda 429 yavasla
+  sosyal_cover_per_hour: 20
+  public_per_min: 30 # GET /api/public/s/{slug}, istemci IP'si basina
+  public_web_per_min: 600 # ayni uc, X-Web-Anahtari ile gelen tum web istekleri ortak
+
+# Kesfet (sosyal)
+sosyal:
+  web_anahtari: "" # Set via SOSYAL_WEB_ANAHTARI (or _FILE). Empty = web bypass disabled.
 
 # Groq AI Configuration
 groq:

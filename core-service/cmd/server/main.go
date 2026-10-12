@@ -167,14 +167,14 @@ func main() {
 	hesapService := service.NewHesapService(kimlikSunucu, silici, redisClient, asynqClient, sosyalDepo)
 	hesapHandler := handler.NewHesapHandler(hesapService)
 
-	sosyalHandler := handler.NewSosyalHandler(sosyal.NewServis(sosyalDepo, asynqClient, storage, &cfg.R2))
-
 	// kopyalayici: arayuz degiskeni; r2Client nil iken dogrudan atamak
 	// tipli nil tuzagini kurar (bkz. storage).
 	var kopyalayici client.Kopyalayici
 	if r2Client != nil {
 		kopyalayici = r2Client
 	}
+	sosyalHandler := handler.NewSosyalHandler(
+		sosyal.NewServis(sosyalDepo, asynqClient, storage, &cfg.R2).KopyalayiciAyarla(kopyalayici))
 	sosyalWorker := worker.NewSosyalWorker(sosyalDepo, kopyalayici, audioClient, silici, hesapisaret.NewRedisDenetci(redisClient))
 
 	// Initialize handlers
@@ -258,6 +258,15 @@ func main() {
 	// Swagger UI
 	app.Get("/swagger/*", fiberSwagger.HandlerDefault)
 
+	// Kesfet herkese acik onizleme (oturumsuz, spec §4.8). /api auth
+	// grubundan ONCE kaydedilir: Fiber rotalari kayit sirasiyla eslestirir
+	// ve bu uc zinciri surdurmez, yani auth ve silinmis-kullanici kapisi
+	// hic calismaz. Sinir istemci IP'si basinadir (X-Real-Ip); web
+	// sunucusu X-Web-Anahtari ile ortak ve daha yuksek sinira gecer.
+	sosyalHandler.PublicRotalar(app.Group("/api/public"),
+		rateLimiter.LimitIP("public", cfg.RateLimit.PublicPerMin, time.Minute,
+			cfg.Sosyal.WebAnahtari, cfg.RateLimit.PublicWebPerMin))
+
 	// API routes
 	api := app.Group("/api", apiAuthMiddleware, middleware.SilinmisKullaniciEngeli(hesapisaret.NewRedisDenetci(redisClient)))
 
@@ -299,9 +308,14 @@ func main() {
 
 	api.Delete("/account", hesapHandler.Sil)
 
-	// Kesfet (sosyal) uclari. Yayin limiti yalnizca POST /yayinlar'dadir.
-	sosyalHandler.Rotalar(api.Group("/social"),
-		rateLimiter.Limit("sosyal-yayin", cfg.RateLimit.SosyalYayinPerHour, time.Hour))
+	// Kesfet (sosyal) uclari. Limitler yalnizca ilgili uclardadir; yorum
+	// limiti sozlesme geregi 429 yavasla doner.
+	sosyalHandler.Rotalar(api.Group("/social"), handler.SosyalLimitleri{
+		Yayin: rateLimiter.Limit("sosyal-yayin", cfg.RateLimit.SosyalYayinPerHour, time.Hour),
+		Yorum: rateLimiter.LimitKod("sosyal-yorum", cfg.RateLimit.SosyalYorumPerMin, time.Minute,
+			"yavasla", "Biraz yavasla"),
+		Cover: rateLimiter.Limit("sosyal-cover", cfg.RateLimit.SosyalCoverPerHour, time.Hour),
+	})
 
 	// WebSocket routes
 	app.Use("/ws", func(c *fiber.Ctx) error {

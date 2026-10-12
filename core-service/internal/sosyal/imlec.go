@@ -3,6 +3,7 @@ package sosyal
 import (
 	"encoding/base64"
 	"encoding/json"
+	"math"
 	"strconv"
 	"time"
 )
@@ -93,4 +94,43 @@ func puanImleciCoz(ham string) (*PuanImleci, error) {
 	}
 	im.ID = id
 	return &im, nil
+}
+
+// YorumImleci, yorum listesinin konumudur. Liste iki gruptur: once
+// zamanli yorumlar (G=0; zaman_ms, olusturma, id artan), sonra damgasizlar
+// (G=1; olusturma, id azalan). Z yalnizca G=0'da doludur.
+type YorumImleci struct {
+	G  int       `json:"g"`
+	Z  *int      `json:"z,omitempty"`
+	T  time.Time `json:"t"`
+	ID string    `json:"id"`
+}
+
+// yorumImleciCoz, bos dizgede nil doner. z, zaman_ms (integer) sutununa
+// sigmali; MaxInt32'yi asan deger sorguda 500 yerine burada 422'dir.
+func yorumImleciCoz(ham string) (*YorumImleci, error) {
+	if ham == "" {
+		return nil, nil
+	}
+	var im YorumImleci
+	if err := imlecCoz(ham, &im); err != nil {
+		return nil, err
+	}
+	id, ok := kimlikCoz(im.ID)
+	gecerli := ok && !im.T.IsZero() &&
+		((im.G == 0 && im.Z != nil && *im.Z >= 0 && *im.Z <= math.MaxInt32) || (im.G == 1 && im.Z == nil))
+	if !gecerli {
+		return nil, dogrulamaHatasi("imlec gecersiz")
+	}
+	im.ID = id
+	return &im, nil
+}
+
+// yorumImleci, sayfanin son yorumundan sonraki sayfanin imlecini kurar.
+func yorumImleci(son Yorum) *string {
+	im := YorumImleci{G: 1, T: son.Olusturma, ID: son.ID}
+	if son.ZamanMs != nil {
+		im.G, im.Z = 0, son.ZamanMs
+	}
+	return imlecKodla(im)
 }

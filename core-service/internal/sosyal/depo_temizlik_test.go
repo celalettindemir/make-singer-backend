@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -176,4 +177,58 @@ func TestPostgresDepo_KullaniciVerisiniSil_YorumSikayetleri(t *testing.T) {
 	if n := sikayetSayisi(t, d); n != 1 {
 		t.Fatalf("yalnizca ucuncu kisinin sikayeti kalmali, kalan %d", n)
 	}
+}
+
+// Silinen kullanicinin yorumlarina (baskasinin yayininda, soft-delete
+// edilmis olanlar dahil) yapilan sikayetler gider; yayin cascade'i ile
+// gidenler gider; baskalarinin yorum ve yayinlarina yapilanlar kalir.
+func TestPostgresDepo_KullaniciVerisiniSil_SilinmisYorumVeKalanSikayetler(t *testing.T) {
+	havuz := testHavuz(t)
+	d := NewPostgresDepo(havuz)
+	ctx := context.Background()
+	giden, kalan, ucuncu := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	testProfilEkle(t, d, giden, "giden")
+	testProfilEkle(t, d, kalan, "kalan")
+	kalaninYayini := testYayinEkle(t, havuz, testYayin{SahipID: kalan})
+	gidenYayini := testYayinEkle(t, havuz, testYayin{SahipID: giden})
+
+	gidenYorumu := testYorumEkle(t, havuz, "", kalaninYayini, giden, nil, time.Now())
+	silinmisYorum := testYorumEkle(t, havuz, "", kalaninYayini, giden, intp(5), time.Now())
+	if err := d.YorumSil(ctx, silinmisYorum); err != nil {
+		t.Fatal(err)
+	}
+	kalanYorumu := testYorumEkle(t, havuz, "", kalaninYayini, kalan, nil, time.Now())
+	yorumAltinda := testYorumEkle(t, havuz, "", gidenYayini, kalan, nil, time.Now())
+
+	sikayet := func(bildiren, tur, hedef, yayin string) {
+		t.Helper()
+		if err := d.SikayetEkle(ctx, YeniSikayet{ID: uuid.NewString(), BildirenID: bildiren, HedefTuru: tur,
+			HedefID: hedef, YayinID: yayin, Neden: "spam"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sikayet(kalan, HedefYorum, gidenYorumu, kalaninYayini)    // gider
+	sikayet(ucuncu, HedefYorum, silinmisYorum, kalaninYayini) // gider
+	sikayet(kalan, HedefYayin, gidenYayini, gidenYayini)      // cascade ile gider
+	sikayet(ucuncu, HedefYorum, yorumAltinda, gidenYayini)    // cascade ile gider
+	sikayet(ucuncu, HedefYorum, kalanYorumu, kalaninYayini)   // kalir
+	sikayet(ucuncu, HedefYayin, kalaninYayini, kalaninYayini) // kalir
+
+	if err := d.KullaniciVerisiniSil(ctx, giden); err != nil {
+		t.Fatalf("KullaniciVerisiniSil: %v", err)
+	}
+	satirlar, err := havuz.Query(ctx, `SELECT hedef_id::text FROM sosyal.sikayet ORDER BY hedef_turu`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer satirlar.Close()
+	var hedefler []string
+	for satirlar.Next() {
+		var h string
+		if err := satirlar.Scan(&h); err != nil {
+			t.Fatal(err)
+		}
+		hedefler = append(hedefler, h)
+	}
+	esitSira(t, "kalan sikayetler", hedefler, []string{kalaninYayini, kalanYorumu})
 }

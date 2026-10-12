@@ -56,6 +56,9 @@ services:
       SUNO_BASE_URL: ${SUNO_BASE_URL:-https://api.sunoapi.org}
       AUDIO_SERVICE_URL: http://audio-service:8084
       AUDIO_SERVICE_TIMEOUT: "120"
+      # Kesfet web onizlemesi: make-singer-frontend'in X-Web-Anahtari degeri
+      # (iki stack'te ayni). Bos ise web sunucusu da IP basina 30/dk sinirda.
+      SOSYAL_WEB_ANAHTARI: ${SOSYAL_WEB_ANAHTARI:-}
     secrets:
       - groq_api_key
       - r2_account_id
