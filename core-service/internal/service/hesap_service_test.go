@@ -10,7 +10,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/deletionmark"
-	"github.com/makeasinger/api/internal/kimlik"
+	"github.com/makeasinger/api/internal/identity"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -77,7 +77,7 @@ func TestHesapSil_HerSeyiSilerVeIkinciTemizligiKurar(t *testing.T) {
 }
 
 func TestHesapSil_KimlikYoksaErrHesapYok(t *testing.T) {
-	k, s, q := &sahteKimlik{hata: kimlik.ErrKullaniciYok}, &sahteSilici{}, &sahteKuyruk{}
+	k, s, q := &sahteKimlik{hata: identity.ErrKullaniciYok}, &sahteSilici{}, &sahteKuyruk{}
 	err := NewHesapService(k, s, ulasilamazRedis(), q, nil).Sil(context.Background(), hesapID)
 	if !errors.Is(err, ErrHesapYok) {
 		t.Fatalf("ErrHesapYok bekleniyordu, gelen %v", err)

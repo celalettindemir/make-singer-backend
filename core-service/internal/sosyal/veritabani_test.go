@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/makeasinger/api/internal/kimlik"
+	"github.com/makeasinger/api/internal/identity"
 )
 
 // testHavuz, yerel Postgres'e baglanir, sosyal migration'larini uygular
@@ -24,7 +24,7 @@ func testHavuz(t *testing.T) *pgxpool.Pool {
 	}
 	ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
 	defer iptal()
-	havuz, err := kimlik.Baglan(ctx, dsn)
+	havuz, err := identity.Baglan(ctx, dsn)
 	if err != nil {
 		t.Skip("yerel Postgres yok, atlaniyor")
 	}

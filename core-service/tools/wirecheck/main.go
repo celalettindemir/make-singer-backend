@@ -34,13 +34,13 @@ import (
 // and ARE edited by the package-rename tasks. Only file contents are
 // hashed, so moving a file keeps its line identical.
 var assets = map[string]string{
-	"kimlik-migration-001":    "internal/kimlik/migrations/001_kullanici.sql",
-	"kimlik-migration-002":    "internal/kimlik/migrations/002_refresh_indeks.sql",
-	"kimlik-migration-003":    "internal/kimlik/migrations/003_federe_kimlik.sql",
-	"kimlik-template-baglama": "internal/kimlik/sablonlar/baglama.html",
-	"kimlik-template-cakisma": "internal/kimlik/sablonlar/cakisma.html",
-	"kimlik-template-giris":   "internal/kimlik/sablonlar/giris.html",
-	"kimlik-template-kayit":   "internal/kimlik/sablonlar/kayit.html",
+	"kimlik-migration-001":    "internal/identity/migrations/001_kullanici.sql",
+	"kimlik-migration-002":    "internal/identity/migrations/002_refresh_indeks.sql",
+	"kimlik-migration-003":    "internal/identity/migrations/003_federe_kimlik.sql",
+	"kimlik-template-baglama": "internal/identity/sablonlar/baglama.html",
+	"kimlik-template-cakisma": "internal/identity/sablonlar/cakisma.html",
+	"kimlik-template-giris":   "internal/identity/sablonlar/giris.html",
+	"kimlik-template-kayit":   "internal/identity/sablonlar/kayit.html",
 	"sosyal-migration-001":    "internal/sosyal/migrations/001_sosyal.sql",
 	"config-yaml":             "config.yaml",
 	"env-example":             ".env.example",

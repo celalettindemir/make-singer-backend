@@ -11,7 +11,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/deletionmark"
-	"github.com/makeasinger/api/internal/kimlik"
+	"github.com/makeasinger/api/internal/identity"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -75,7 +75,7 @@ func (s *HesapService) Sil(ctx context.Context, userID string) error {
 		return ErrHesapYok
 	}
 	if err := s.kimlik.HesapSil(ctx, userID); err != nil {
-		if errors.Is(err, kimlik.ErrKullaniciYok) {
+		if errors.Is(err, identity.ErrKullaniciYok) {
 			return ErrHesapYok
 		}
 		return fmt.Errorf("hesap silinemedi: %w", err)

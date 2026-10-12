@@ -24,7 +24,7 @@ import (
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/handler"
-	"github.com/makeasinger/api/internal/kimlik"
+	"github.com/makeasinger/api/internal/identity"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/internal/sosyal"
@@ -83,7 +83,7 @@ func main() {
 	if cfg.Auth.Issuer == "" {
 		log.Fatalf("AUTH_ISSUER zorunlu: kimlik saglayicisi olmadan /api korunamaz")
 	}
-	kimlikSunucu, err := kimlik.Start(ctx, &cfg.Auth, redisClient, cfg.Server.Env)
+	kimlikSunucu, err := identity.Start(ctx, &cfg.Auth, redisClient, cfg.Server.Env)
 	if err != nil {
 		log.Fatalf("Kimlik saglayicisi baslatilamadi, servis baslatilmiyor: %v", err)
 	}
@@ -97,7 +97,7 @@ func main() {
 	// Kesfet (sosyal): kimlikle ayni veritabani, ama kendi havuzu, kendi
 	// semasi (sosyal) ve kendi migration tablosu. Kimlik gibi FATAL:
 	// sosyal tablolari olmayan bir pod her /api/social isteginde 500 doner.
-	sosyalHavuz, err := kimlik.Baglan(ctx, cfg.Auth.DBURL)
+	sosyalHavuz, err := identity.Baglan(ctx, cfg.Auth.DBURL)
 	if err != nil {
 		log.Fatalf("Sosyal veritabanina baglanilamadi: %v", err)
 	}
