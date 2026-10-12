@@ -12,10 +12,10 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const denemeIssuer = "https://kimlik.ornek.dev"
-const denemeIstemci = "makesinger-mobil"
+const testIssuer = "https://kimlik.ornek.dev"
+const testClientID = "makesinger-mobil"
 
-func denemeAnahtar(t *testing.T) *rsa.PrivateKey {
+func testKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
 	a, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -24,22 +24,22 @@ func denemeAnahtar(t *testing.T) *rsa.PrivateKey {
 	return a
 }
 
-func jetonUretTest(t *testing.T, ozel *rsa.PrivateKey, talepler jwt.MapClaims) string {
+func signTestToken(t *testing.T, privKey *rsa.PrivateKey, claims jwt.MapClaims) string {
 	t.Helper()
-	j := jwt.NewWithClaims(jwt.SigningMethodRS256, talepler)
-	imzali, err := j.SignedString(ozel)
+	j := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	signed, err := j.SignedString(privKey)
 	if err != nil {
 		t.Fatalf("imzalama: %v", err)
 	}
-	return imzali
+	return signed
 }
 
-func uygulama(t *testing.T, ozel *rsa.PrivateKey) *fiber.App {
+func newApp(t *testing.T, privKey *rsa.PrivateKey) *fiber.App {
 	t.Helper()
-	return uygulamaMW(t, NewOPAuthMiddleware(denemeIssuer, denemeIstemci, &ozel.PublicKey))
+	return newAppWithMiddleware(t, NewOPAuthMiddleware(testIssuer, testClientID, &privKey.PublicKey))
 }
 
-func uygulamaMW(t *testing.T, mw *AuthMiddleware) *fiber.App {
+func newAppWithMiddleware(t *testing.T, mw *AuthMiddleware) *fiber.App {
 	t.Helper()
 	app := fiber.New()
 	app.Get("/korumali", mw.Authenticate(), func(c *fiber.Ctx) error {
@@ -48,345 +48,346 @@ func uygulamaMW(t *testing.T, mw *AuthMiddleware) *fiber.App {
 	return app
 }
 
-func istek(t *testing.T, app *fiber.App, yetki string) (int, string) {
+func doRequest(t *testing.T, app *fiber.App, authHeader string) (int, string) {
 	t.Helper()
 	r := httptest.NewRequest("GET", "/korumali", nil)
-	if yetki != "" {
-		r.Header.Set("Authorization", yetki)
+	if authHeader != "" {
+		r.Header.Set("Authorization", authHeader)
 	}
-	y, err := app.Test(r, -1)
+	resp, err := app.Test(r, -1)
 	if err != nil {
 		t.Fatalf("Test: %v", err)
 	}
-	govde := make([]byte, 256)
-	n, _ := y.Body.Read(govde)
-	return y.StatusCode, string(govde[:n])
+	body := make([]byte, 256)
+	n, _ := resp.Body.Read(body)
+	return resp.StatusCode, string(body[:n])
 }
 
-func TestGecerliJetonKabulEdilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer,
+func TestAuthenticate_AcceptsValidToken(t *testing.T) {
+	privKey := testKey(t)
+	token := signTestToken(t, privKey, jwt.MapClaims{
+		"iss": testIssuer,
 		"sub": "kullanici-1",
-		"aud": []string{denemeIstemci}, "jti": "jeton-1",
+		"aud": []string{testClientID}, "jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	durum, govde := istek(t, uygulama(t, ozel), "Bearer "+jeton)
-	if durum != 200 {
-		t.Fatalf("durum = %d, beklenen 200", durum)
+	status, body := doRequest(t, newApp(t, privKey), "Bearer "+token)
+	if status != 200 {
+		t.Fatalf("durum = %d, beklenen 200", status)
 	}
-	if govde != "kullanici-1" {
-		t.Errorf("userId = %q, beklenen kullanici-1", govde)
+	if body != "kullanici-1" {
+		t.Errorf("userId = %q, beklenen kullanici-1", body)
 	}
 }
 
-// exp claim'i olmayan jeton sonsuza kadar gecerli olur. Eski HMAC
-// yolunun hatasi tam buydu; burada zorunlu.
-func TestExpsizJetonReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci}, "jti": "jeton-1",
+// A token without an exp claim would be valid forever. That was exactly the
+// bug of the old HMAC path; here it is mandatory.
+func TestAuthenticate_RejectsTokenWithoutExp(t *testing.T) {
+	privKey := testKey(t)
+	token := signTestToken(t, privKey, jwt.MapClaims{
+		"iss": testIssuer, "sub": "k1", "aud": []string{testClientID}, "jti": "jeton-1",
 	})
-	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
-		t.Errorf("durum = %d, beklenen 401", durum)
+	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
+		t.Errorf("durum = %d, beklenen 401", status)
 	}
 }
 
-func TestSuresiGecmisJetonReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci}, "jti": "jeton-1",
+func TestAuthenticate_RejectsExpiredToken(t *testing.T) {
+	privKey := testKey(t)
+	token := signTestToken(t, privKey, jwt.MapClaims{
+		"iss": testIssuer, "sub": "k1", "aud": []string{testClientID}, "jti": "jeton-1",
 		"exp": time.Now().Add(-time.Minute).Unix(),
 	})
-	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
-		t.Errorf("durum = %d, beklenen 401", durum)
+	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
+		t.Errorf("durum = %d, beklenen 401", status)
 	}
 }
 
-// Baska bir anahtarla imzalanmis jeton reddedilmeli.
-func TestBaskaAnahtarlaImzaliJetonReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	sahte := denemeAnahtar(t)
-	jeton := jetonUretTest(t, sahte, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci}, "jti": "jeton-1",
+// A token signed with another key must be rejected.
+func TestAuthenticate_RejectsTokenSignedByOtherKey(t *testing.T) {
+	privKey := testKey(t)
+	otherKey := testKey(t)
+	token := signTestToken(t, otherKey, jwt.MapClaims{
+		"iss": testIssuer, "sub": "k1", "aud": []string{testClientID}, "jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
-		t.Errorf("durum = %d, beklenen 401", durum)
+	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
+		t.Errorf("durum = %d, beklenen 401", status)
 	}
 }
 
-// Yanlis issuer reddedilmeli: baska bir OP'nin jetonu bizim API'mize
-// girmemeli.
-func TestYanlisIssuerReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
+// A wrong issuer must be rejected: another OP's token must not get into
+// our API.
+func TestAuthenticate_RejectsWrongIssuer(t *testing.T) {
+	privKey := testKey(t)
+	token := signTestToken(t, privKey, jwt.MapClaims{
 		"iss": "https://baska.ornek.dev", "sub": "k1",
-		"aud": []string{denemeIstemci}, "jti": "jeton-1",
+		"aud": []string{testClientID}, "jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
-		t.Errorf("durum = %d, beklenen 401", durum)
+	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
+		t.Errorf("durum = %d, beklenen 401", status)
 	}
 }
 
-// iss claim'i hic yoksa da reddedilmeli.
-func TestIssizJetonReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"sub": "k1", "aud": []string{denemeIstemci}, "jti": "jeton-1",
+// A missing iss claim must be rejected too.
+func TestAuthenticate_RejectsTokenWithoutIssuer(t *testing.T) {
+	privKey := testKey(t)
+	token := signTestToken(t, privKey, jwt.MapClaims{
+		"sub": "k1", "aud": []string{testClientID}, "jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
-		t.Errorf("durum = %d, beklenen 401", durum)
+	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
+		t.Errorf("durum = %d, beklenen 401", status)
 	}
 }
 
-// "alg: none" ile imzasiz jeton kabul edilmemeli.
+// An unsigned token with "alg: none" must not be accepted.
 //
-// DIKKAT — ALG ZORLAMAMIZ SU AN TEST KAPSAMINDA DEGIL. Olculdu: bu test
-// VE TestHS256AlgKarisikligiReddedilir, dogrulayicidaki iki katmanin
-// (jwt.WithValidMethods ve keyfunc icindeki alg kontrolu) IKISI BIRLIKTE
-// kaldirildiginda da PASS kalir. Sebep, bizim kodumuz degil jwt/v5'in
-// anahtar-tipi denetimi: keyfunc *rsa.PublicKey donduruyor, HS256'nin
-// Verify'i []byte, "none"un Verify'i jwt.UnsafeAllowNoneSignatureType
-// bekliyor; kutuphane tip uyusmazligindan reddediyor.
+// CAUTION: OUR ALG ENFORCEMENT IS CURRENTLY NOT COVERED BY TESTS. Measured:
+// this test AND TestAuthenticate_RejectsHS256AlgConfusion still PASS when
+// BOTH layers in the verifier (jwt.WithValidMethods and the alg check inside
+// the keyfunc) are removed together. The reason is not our code but jwt/v5's
+// key-type check: the keyfunc returns *rsa.PublicKey, HS256's Verify expects
+// []byte, and "none"'s Verify expects jwt.UnsafeAllowNoneSignatureType; the
+// library rejects on the type mismatch.
 //
-// Yani bu iki test, koruma kutuphaneden geldigi icin gecer. Iki katli
-// zorlamamiz bilincli savunma derinligidir (kutuphane davranisi degisir
-// veya keyfunc ileride farkli bir tip donmeye baslarsa tek koruma kalir)
-// ama su an bir testle OLCULMUYOR. Alg guvencesini degerlendiren biri bu
-// testlere "bizim zorlamamiz calisiyor" kaniti olarak guvenmemeli.
-func TestAlgNoneReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
+// So these two tests pass because the protection comes from the library. Our
+// two-layer enforcement is deliberate defense in depth (it is the only
+// protection left if library behavior changes or the keyfunc starts returning
+// a different type later) but it is NOT MEASURED by a test right now. Anyone
+// assessing the alg guarantee must not rely on these tests as evidence that
+// "our enforcement works".
+func TestAuthenticate_RejectsAlgNone(t *testing.T) {
+	privKey := testKey(t)
 	j := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci}, "jti": "jeton-1",
+		"iss": testIssuer, "sub": "k1", "aud": []string{testClientID}, "jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	imzasiz, err := j.SignedString(jwt.UnsafeAllowNoneSignatureType)
+	unsigned, err := j.SignedString(jwt.UnsafeAllowNoneSignatureType)
 	if err != nil {
 		t.Fatalf("imzasiz jeton uretilemedi: %v", err)
 	}
-	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+imzasiz); durum != 401 {
-		t.Errorf("durum = %d, beklenen 401", durum)
+	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+unsigned); status != 401 {
+		t.Errorf("durum = %d, beklenen 401", status)
 	}
 }
 
-// Klasik algoritma karisikligi saldirisi: saldirgan alg'i HS256 yapar ve
-// (herkese acik olan) RSA acik anahtarini HMAC sirri olarak kullanir.
-// Beklenen algoritmayi biz zorladigimiz icin reddedilmeli.
-func TestHS256AlgKarisikligiReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	acikDER, err := x509.MarshalPKIXPublicKey(&ozel.PublicKey)
+// The classic algorithm confusion attack: the attacker sets alg to HS256 and
+// uses the (publicly available) RSA public key as the HMAC secret. Since we
+// enforce the expected algorithm, it must be rejected.
+func TestAuthenticate_RejectsHS256AlgConfusion(t *testing.T) {
+	privKey := testKey(t)
+	pubDER, err := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
 	if err != nil {
 		t.Fatalf("acik anahtar kodlanamadi: %v", err)
 	}
 	j := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci}, "jti": "jeton-1",
+		"iss": testIssuer, "sub": "k1", "aud": []string{testClientID}, "jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	// Acik anahtar HMAC sirri gibi kullanilir.
-	sahteJeton, err := j.SignedString(acikDER)
+	// The public key is used as the HMAC secret.
+	forgedToken, err := j.SignedString(pubDER)
 	if err != nil {
 		t.Fatalf("HS256 jetonu uretilemedi: %v", err)
 	}
-	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+sahteJeton); durum != 401 {
-		t.Errorf("durum = %d, beklenen 401", durum)
+	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+forgedToken); status != 401 {
+		t.Errorf("durum = %d, beklenen 401", status)
 	}
 }
 
-func TestEksikVeBozukHeader(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	app := uygulama(t, ozel)
-	for ad, yetki := range map[string]string{
+func TestAuthenticate_MissingOrMalformedHeader(t *testing.T) {
+	privKey := testKey(t)
+	app := newApp(t, privKey)
+	for name, authHeader := range map[string]string{
 		"header yok":  "",
 		"Bearer yok":  "abc.def.ghi",
 		"bos jeton":   "Bearer ",
 		"yanlis sema": "Basic abc",
 		"bozuk jeton": "Bearer not.a.jwt",
 	} {
-		if durum, _ := istek(t, app, yetki); durum != 401 {
-			t.Errorf("%s: durum = %d, beklenen 401", ad, durum)
+		if status, _ := doRequest(t, app, authHeader); status != 401 {
+			t.Errorf("%s: durum = %d, beklenen 401", name, status)
 		}
 	}
 }
 
-// sub bos ise userId bos kalir ve rate limit anahtari cokur; reddedilmeli.
-func TestSubBossaReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "", "aud": []string{denemeIstemci}, "jti": "jeton-1",
+// If sub is empty userId stays empty and the rate limit key collapses; it must be rejected.
+func TestAuthenticate_RejectsEmptySub(t *testing.T) {
+	privKey := testKey(t)
+	token := signTestToken(t, privKey, jwt.MapClaims{
+		"iss": testIssuer, "sub": "", "aud": []string{testClientID}, "jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
-		t.Errorf("durum = %d, beklenen 401", durum)
+	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
+		t.Errorf("durum = %d, beklenen 401", status)
 	}
 }
 
-// nbf henuz gelmediyse jeton kabul edilmemeli.
-func TestGelecekNbfReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci}, "jti": "jeton-1",
+// If nbf has not arrived yet the token must not be accepted.
+func TestAuthenticate_RejectsFutureNbf(t *testing.T) {
+	privKey := testKey(t)
+	token := signTestToken(t, privKey, jwt.MapClaims{
+		"iss": testIssuer, "sub": "k1", "aud": []string{testClientID}, "jti": "jeton-1",
 		"nbf": time.Now().Add(time.Hour).Unix(),
 		"exp": time.Now().Add(2 * time.Hour).Unix(),
 	})
-	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
-		t.Errorf("durum = %d, beklenen 401", durum)
+	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
+		t.Errorf("durum = %d, beklenen 401", status)
 	}
 }
 
-// iat gelecekte ise jeton tutarsizdir; reddedilmeli.
-func TestGelecekIatReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci}, "jti": "jeton-1",
+// If iat is in the future the token is inconsistent; it must be rejected.
+func TestAuthenticate_RejectsFutureIat(t *testing.T) {
+	privKey := testKey(t)
+	token := signTestToken(t, privKey, jwt.MapClaims{
+		"iss": testIssuer, "sub": "k1", "aud": []string{testClientID}, "jti": "jeton-1",
 		"iat": time.Now().Add(time.Hour).Unix(),
 		"exp": time.Now().Add(2 * time.Hour).Unix(),
 	})
-	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
-		t.Errorf("durum = %d, beklenen 401", durum)
+	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
+		t.Errorf("durum = %d, beklenen 401", status)
 	}
 }
 
-// Bizim client ID'mizi icermeyen jeton reddedilir.
-func TestYanlisAudReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "aud": []string{"baska-istemci"},
-		// jti var ki tek reddetme sebebi yanlis aud olsun.
+// A token that does not contain our client ID is rejected.
+func TestAuthenticate_RejectsWrongAud(t *testing.T) {
+	privKey := testKey(t)
+	token := signTestToken(t, privKey, jwt.MapClaims{
+		"iss": testIssuer, "sub": "k1", "aud": []string{"baska-istemci"},
+		// jti is present so that the only reason for rejection is the wrong aud.
 		"jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
-		t.Errorf("durum = %d, beklenen 401", durum)
+	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
+		t.Errorf("durum = %d, beklenen 401", status)
 	}
 }
 
-// aud claim'i hic yoksa da reddedilir.
-func TestAudsuzJetonReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	// aud BILEREK yok; jti var ki tek reddetme sebebi aud olsun.
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "jti": "jeton-1",
+// A missing aud claim is rejected too.
+func TestAuthenticate_RejectsTokenWithoutAud(t *testing.T) {
+	privKey := testKey(t)
+	// aud is deliberately absent; jti is present so that the only reason for rejection is aud.
+	token := signTestToken(t, privKey, jwt.MapClaims{
+		"iss": testIssuer, "sub": "k1", "jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	if durum, _ := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
-		t.Errorf("durum = %d, beklenen 401", durum)
+	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
+		t.Errorf("durum = %d, beklenen 401", status)
 	}
 }
 
-// Dogru aud ile jeton gecer ve talepler context'e yazilir.
-func TestDogruAudKabulEdilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "kullanici-9",
-		"aud": []string{denemeIstemci, "baska"}, "jti": "jeton-1",
+// A token with the right aud passes and the claims are written to the context.
+func TestAuthenticate_AcceptsMatchingAud(t *testing.T) {
+	privKey := testKey(t)
+	token := signTestToken(t, privKey, jwt.MapClaims{
+		"iss": testIssuer, "sub": "kullanici-9",
+		"aud": []string{testClientID, "baska"}, "jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	durum, govde := istek(t, uygulama(t, ozel), "Bearer "+jeton)
-	if durum != 200 {
-		t.Fatalf("durum = %d, beklenen 200", durum)
+	status, body := doRequest(t, newApp(t, privKey), "Bearer "+token)
+	if status != 200 {
+		t.Fatalf("durum = %d, beklenen 200", status)
 	}
-	if govde != "kullanici-9" {
-		t.Errorf("userId = %q, beklenen kullanici-9", govde)
+	if body != "kullanici-9" {
+		t.Errorf("userId = %q, beklenen kullanici-9", body)
 	}
 }
 
-// id_token bir access token DEGILDIR: API erisimi vermemeli. Ikisi de
-// ayni anahtarla, ayni iss/aud ile imzalandigi icin diger denetimlerin
-// hicbiri ayirt etmez; ayrim jti/azp/at_hash uzerinden yapilir.
-func TestIDTokenAccessTokenOlarakReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	durumlar := map[string]jwt.MapClaims{
-		// Gercek id_token sekli: azp + at_hash + nonce var, jti yok.
+// An id_token is NOT an access token: it must not grant API access. Both are
+// signed with the same key and the same iss/aud, so none of the other checks
+// tells them apart; the distinction is made via jti/azp/at_hash.
+func TestAuthenticate_RejectsIDTokenAsAccessToken(t *testing.T) {
+	privKey := testKey(t)
+	cases := map[string]jwt.MapClaims{
+		// Real id_token shape: azp + at_hash + nonce present, jti absent.
 		"tam id_token sekli": {
-			"iss": denemeIssuer, "sub": "kullanici-1",
-			"aud": []string{denemeIstemci},
-			"azp": denemeIstemci, "at_hash": "eR1cMQ0Zo5ZhQnQ8Bnp2dA",
+			"iss": testIssuer, "sub": "kullanici-1",
+			"aud": []string{testClientID},
+			"azp": testClientID, "at_hash": "eR1cMQ0Zo5ZhQnQ8Bnp2dA",
 			"nonce": "n-0S6_WzA2Mj", "auth_time": time.Now().Unix(),
 			"exp": time.Now().Add(time.Hour).Unix(),
 		},
-		// jti yok: access token olamaz.
+		// jti absent: it cannot be an access token.
 		"jti yok": {
-			"iss": denemeIssuer, "sub": "kullanici-1",
-			"aud": []string{denemeIstemci},
+			"iss": testIssuer, "sub": "kullanici-1",
+			"aud": []string{testClientID},
 			"exp": time.Now().Add(time.Hour).Unix(),
 		},
-		// jti eklenmis ama azp duruyor: yine id_token.
+		// jti added but azp is still there: still an id_token.
 		"jti var ama azp var": {
-			"iss": denemeIssuer, "sub": "kullanici-1",
-			"aud": []string{denemeIstemci}, "jti": "jeton-1",
-			"azp": denemeIstemci,
+			"iss": testIssuer, "sub": "kullanici-1",
+			"aud": []string{testClientID}, "jti": "jeton-1",
+			"azp": testClientID,
 			"exp": time.Now().Add(time.Hour).Unix(),
 		},
-		// jti eklenmis ama at_hash duruyor.
+		// jti added but at_hash is still there.
 		"jti var ama at_hash var": {
-			"iss": denemeIssuer, "sub": "kullanici-1",
-			"aud": []string{denemeIstemci}, "jti": "jeton-1",
+			"iss": testIssuer, "sub": "kullanici-1",
+			"aud": []string{testClientID}, "jti": "jeton-1",
 			"at_hash": "eR1cMQ0Zo5ZhQnQ8Bnp2dA",
 			"exp":     time.Now().Add(time.Hour).Unix(),
 		},
-		// jti bosluktan olusuyor: yok sayilir.
+		// jti is made of whitespace: treated as absent.
 		"jti bos": {
-			"iss": denemeIssuer, "sub": "kullanici-1",
-			"aud": []string{denemeIstemci}, "jti": "   ",
+			"iss": testIssuer, "sub": "kullanici-1",
+			"aud": []string{testClientID}, "jti": "   ",
 			"exp": time.Now().Add(time.Hour).Unix(),
 		},
 	}
-	for ad, talepler := range durumlar {
-		jeton := jetonUretTest(t, ozel, talepler)
-		if durum, govde := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
-			t.Errorf("%s: durum = %d (govde %q), beklenen 401", ad, durum, govde)
+	for name, claims := range cases {
+		token := signTestToken(t, privKey, claims)
+		if status, body := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
+			t.Errorf("%s: durum = %d (govde %q), beklenen 401", name, status, body)
 		}
 	}
 }
 
-// sub yalnizca "" degil, bosluktan olusuyorsa da reddedilmeli; aksi
-// halde userId "   " olur ve rate limit anahtari anlamsizlasir.
-func TestSubBoslukIseReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "   ",
-		"aud": []string{denemeIstemci}, "jti": "jeton-1",
+// A sub made of whitespace, not only "", must also be rejected; otherwise
+// userId becomes "   " and the rate limit key becomes meaningless.
+func TestAuthenticate_RejectsWhitespaceSub(t *testing.T) {
+	privKey := testKey(t)
+	token := signTestToken(t, privKey, jwt.MapClaims{
+		"iss": testIssuer, "sub": "   ",
+		"aud": []string{testClientID}, "jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	if durum, govde := istek(t, uygulama(t, ozel), "Bearer "+jeton); durum != 401 {
-		t.Errorf("durum = %d (govde %q), beklenen 401", durum, govde)
+	if status, body := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
+		t.Errorf("durum = %d (govde %q), beklenen 401", status, body)
 	}
 }
 
-// Eksik yapilandirmada SESSIZ gevseme olmamali: aud denetimi yapilamayacagi
-// icin dogrulayici her istegi reddeder. Sirasiyla bos istemci, bos issuer
-// ve nil acik anahtar denenir; ucunde de tamamen gecerli bir jeton
-// reddedilmelidir.
-func TestEksikYapilandirmadaHerIstekReddedilir(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci}, "jti": "jeton-1",
+// With missing configuration there must be NO SILENT relaxation: since the aud
+// check cannot be made, the verifier rejects every request. An empty client
+// ID, an empty issuer and a nil public key are tried in turn; in all three a
+// fully valid token must be rejected.
+func TestNewOPAuthMiddleware_IncompleteConfigRejectsAll(t *testing.T) {
+	privKey := testKey(t)
+	token := signTestToken(t, privKey, jwt.MapClaims{
+		"iss": testIssuer, "sub": "k1", "aud": []string{testClientID}, "jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	durumlar := map[string]*AuthMiddleware{
-		"istemci bos":      NewOPAuthMiddleware(denemeIssuer, "", &ozel.PublicKey),
-		"issuer bos":       NewOPAuthMiddleware("", denemeIstemci, &ozel.PublicKey),
-		"acik anahtar nil": NewOPAuthMiddleware(denemeIssuer, denemeIstemci, nil),
+	cases := map[string]*AuthMiddleware{
+		"istemci bos":      NewOPAuthMiddleware(testIssuer, "", &privKey.PublicKey),
+		"issuer bos":       NewOPAuthMiddleware("", testClientID, &privKey.PublicKey),
+		"acik anahtar nil": NewOPAuthMiddleware(testIssuer, testClientID, nil),
 	}
-	for ad, mw := range durumlar {
-		if durum, _ := istek(t, uygulamaMW(t, mw), "Bearer "+jeton); durum != 401 {
-			t.Errorf("%s: durum = %d, beklenen 401", ad, durum)
+	for name, mw := range cases {
+		if status, _ := doRequest(t, newAppWithMiddleware(t, mw), "Bearer "+token); status != 401 {
+			t.Errorf("%s: durum = %d, beklenen 401", name, status)
 		}
 	}
 }
 
-// op alani bos (sifir degerli) bir middleware hicbir jetonu kabul etmemeli:
-// eski HMAC/JWKS yollari kaldirildi, geriye dusulecek baska bir yol yok.
-func TestOPsuzMiddlewareHerIstegiReddeder(t *testing.T) {
-	ozel := denemeAnahtar(t)
-	jeton := jetonUretTest(t, ozel, jwt.MapClaims{
-		"iss": denemeIssuer, "sub": "k1", "aud": []string{denemeIstemci}, "jti": "jeton-1",
+// A middleware whose op field is empty (zero value) must accept no token:
+// the old HMAC/JWKS paths were removed, there is no other path to fall back to.
+func TestAuthenticate_ZeroValueMiddlewareRejectsAll(t *testing.T) {
+	privKey := testKey(t)
+	token := signTestToken(t, privKey, jwt.MapClaims{
+		"iss": testIssuer, "sub": "k1", "aud": []string{testClientID}, "jti": "jeton-1",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	if durum, govde := istek(t, uygulamaMW(t, &AuthMiddleware{}), "Bearer "+jeton); durum != 401 {
-		t.Errorf("durum = %d (govde %q), beklenen 401", durum, govde)
+	if status, body := doRequest(t, newAppWithMiddleware(t, &AuthMiddleware{}), "Bearer "+token); status != 401 {
+		t.Errorf("durum = %d (govde %q), beklenen 401", status, body)
 	}
 }

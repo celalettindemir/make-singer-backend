@@ -268,7 +268,7 @@ func main() {
 			cfg.Social.WebKey, cfg.RateLimit.PublicWebPerMin))
 
 	// API routes
-	api := app.Group("/api", apiAuthMiddleware, middleware.SilinmisKullaniciEngeli(deletionmark.NewRedisChecker(redisClient)))
+	api := app.Group("/api", apiAuthMiddleware, middleware.DeletedUserGate(deletionmark.NewRedisChecker(redisClient)))
 
 	// Lyrics routes
 	lyrics := api.Group("/lyrics", rateLimiter.LyricsLimit(cfg.RateLimit.LyricsPerMin))
@@ -312,7 +312,7 @@ func main() {
 	// limiti sozlesme geregi 429 yavasla doner.
 	sosyalHandler.Rotalar(api.Group("/social"), handler.SosyalLimitleri{
 		Yayin: rateLimiter.Limit("sosyal-yayin", cfg.RateLimit.SocialPublicationPerHour, time.Hour),
-		Yorum: rateLimiter.LimitKod("sosyal-yorum", cfg.RateLimit.SocialCommentPerMin, time.Minute,
+		Yorum: rateLimiter.LimitWithCode("sosyal-yorum", cfg.RateLimit.SocialCommentPerMin, time.Minute,
 			"yavasla", "Biraz yavasla"),
 		Cover: rateLimiter.Limit("sosyal-cover", cfg.RateLimit.SocialCoverPerHour, time.Hour),
 	})
