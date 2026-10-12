@@ -78,7 +78,8 @@ func (rl *RateLimiter) LimitIP(keyPrefix string, maxRequests int, window time.Du
 	}
 }
 
-// istemciIP, Traefik'in yazdigi X-Real-Ip basligini kullanir; Traefik
+// istemciIP, Traefik'in yazdigi X-Real-Ip basligini (anahtar bicimi
+// ipAnahtari'ndadir: IPv6 /64 basina) kullanir; Traefik
 // istemcinin gonderdigi X-Real-Ip'yi (guvenilmeyen kaynaktan) siler ve
 // kendi gordugu adresi yazar. Baslik yoksa ya da gecerli bir IP degilse
 // baglantinin adresi (c.IP()) kullanilir. Fiber'in genel ProxyHeader
@@ -86,10 +87,25 @@ func (rl *RateLimiter) LimitIP(keyPrefix string, maxRequests int, window time.Du
 // Not: API Traefik'i atlayarak dogrudan erisilebilir olursa bu baslik
 // uydurulabilir; bu yuzden API portu disari acilmamalidir.
 func istemciIP(c *fiber.Ctx) string {
-	if ip := net.ParseIP(strings.TrimSpace(c.Get("X-Real-Ip"))); ip != nil {
-		return ip.String()
+	if ham := strings.TrimSpace(c.Get("X-Real-Ip")); net.ParseIP(ham) != nil {
+		return ipAnahtari(ham)
 	}
-	return c.IP()
+	return ipAnahtari(c.IP())
+}
+
+// ipAnahtari, sayac anahtarindaki IP bicimidir. IPv4 (IPv4-eslemeli IPv6
+// dahil) duz IPv4 bicimindedir; IPv6 /64 onekine indirgenir, cunku tek
+// bir istemci olagan bir /64 icinde kaynak adresini serbestce
+// degistirebilir. Ayristirilamayan deger oldugu gibi doner.
+func ipAnahtari(ham string) string {
+	ip := net.ParseIP(ham)
+	if ip == nil {
+		return ham
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String()
 }
 
 // say, key sayacini pencere icinde artirir; maxRequests asilinca asim

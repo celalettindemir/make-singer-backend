@@ -172,3 +172,53 @@ func TestLimitKod_KimliksizIstek401(t *testing.T) {
 		t.Fatalf("durum = %d, beklenen 401", durum)
 	}
 }
+
+func TestIPAnahtari_IPv6Ust64VeIPv4Esleme(t *testing.T) {
+	durumlar := map[string]string{
+		"203.0.113.5":                    "203.0.113.5",
+		"::ffff:203.0.113.5":             "203.0.113.5",
+		"2001:db8:1:2:aaaa:bbbb:cccc:dd": "2001:db8:1:2::",
+		"2001:db8:1:2::1":                "2001:db8:1:2::",
+		"2001:db8:1:3::1":                "2001:db8:1:3::",
+		"gecersiz":                       "gecersiz",
+	}
+	for ham, beklenen := range durumlar {
+		if got := ipAnahtari(ham); got != beklenen {
+			t.Errorf("ipAnahtari(%q) = %q, beklenen %q", ham, got, beklenen)
+		}
+	}
+}
+
+// Ayni /64'teki iki IPv6 adresi ayni sayaci paylasir; komsu /64 ayridir.
+func TestCanliLimitIP_IPv6Ayni64OrtakSayac(t *testing.T) {
+	rdb := canliRedis(t)
+	app := ipUygulamasi(rdb, 2, "", 0)
+	for i, ip := range []string{"2001:db8:1:2::1", "2001:db8:1:2:ffff::9"} {
+		if durum, _ := ipIstek(t, app, map[string]string{"X-Real-Ip": ip}); durum != fiber.StatusOK {
+			t.Fatalf("istek %d: durum = %d", i+1, durum)
+		}
+	}
+	if durum, _ := ipIstek(t, app, map[string]string{"X-Real-Ip": "2001:db8:1:2::abcd"}); durum != fiber.StatusTooManyRequests {
+		t.Fatalf("ayni /64'te 3. istek 429 olmali: %d", durum)
+	}
+	if durum, _ := ipIstek(t, app, map[string]string{"X-Real-Ip": "2001:db8:1:3::1"}); durum != fiber.StatusOK {
+		t.Fatalf("komsu /64 etkilenmemeli: %d", durum)
+	}
+	if n, err := rdb.Get(context.Background(), "ratelimit:onizleme:ip:2001:db8:1:2::").Int(); err != nil || n != 3 {
+		t.Fatalf("/64 anahtari = %d (hata %v), beklenen 3", n, err)
+	}
+}
+
+// IPv4-eslemeli IPv6 adresi IPv4 bicimiyle ayni sayactadir.
+func TestCanliLimitIP_IPv4EslemeliAyniSayac(t *testing.T) {
+	rdb := canliRedis(t)
+	app := ipUygulamasi(rdb, 5, "", 0)
+	for _, ip := range []string{"203.0.113.7", "::ffff:203.0.113.7"} {
+		if durum, _ := ipIstek(t, app, map[string]string{"X-Real-Ip": ip}); durum != fiber.StatusOK {
+			t.Fatalf("%s: durum = %d", ip, durum)
+		}
+	}
+	if n, err := rdb.Get(context.Background(), "ratelimit:onizleme:ip:203.0.113.7").Int(); err != nil || n != 2 {
+		t.Fatalf("IPv4 anahtari = %d (hata %v), beklenen 2", n, err)
+	}
+}
