@@ -166,9 +166,10 @@ func TestPostgresDepo_SayaclarVeKaynak(t *testing.T) {
 	if !c.Kaynak.Silindi || c.Kaynak.Baslik != "Orijinal" {
 		t.Fatalf("silinen kaynak = %+v", *c.Kaynak)
 	}
-	// Kalici silinen orijinal: cover'daki anlik goruntu.
-	if err := d.YayinKaldir(ctx, orijinal); err != nil {
-		t.Fatalf("YayinKaldir: %v", err)
+	// Kalici silinen orijinal (hesap silme gibi): cover'daki anlik goruntu.
+	// YayinKaldir yalnizca hazirlaniyor satiri sildigi icin ham SQL.
+	if _, err := havuz.Exec(ctx, `DELETE FROM sosyal.yayin WHERE id = $1`, orijinal); err != nil {
+		t.Fatalf("kalici silme: %v", err)
 	}
 	c, _ = d.YayinGetir(ctx, cover, izleyici)
 	if *c.Kaynak != (KaynakOzeti{YayinID: orijinal, Baslik: "Eski baslik", SahipKullaniciAdi: "eski_ad", Silindi: true}) {
@@ -296,5 +297,83 @@ func TestPostgresDepo_HataYapVeSilinmisYayinYayinlanmaz(t *testing.T) {
 	}
 	if k, _ := d.YayinGetir(ctx, silinen, sahip); k.Durum != DurumHazirlaniyor {
 		t.Fatalf("silinmis yayin yayinlanmamali: %s", k.Durum)
+	}
+}
+
+// Stems nil olsa bile kayit eklenir ve detay okunur.
+func TestPostgresDepo_NilStemlerleEkleVeGetir(t *testing.T) {
+	havuz := testHavuz(t)
+	d := NewPostgresDepo(havuz)
+	ctx := context.Background()
+	sahip := uuid.NewString()
+	testProfilEkle(t, d, sahip, "sahip")
+	y := ornekYeniYayin(sahip)
+	y.Hazirlik.Stems = nil
+	if err := d.YayinEkle(ctx, y); err != nil {
+		t.Fatalf("YayinEkle: %v", err)
+	}
+	k, err := d.YayinGetir(ctx, y.ID, sahip)
+	if err != nil {
+		t.Fatalf("YayinGetir: %v", err)
+	}
+	if k.StemVar {
+		t.Fatal("stem yokken StemVar false olmali")
+	}
+	var tip string
+	if err := havuz.QueryRow(ctx, `SELECT jsonb_typeof(hazirlik->'stems') FROM sosyal.yayin WHERE id = $1`, y.ID).Scan(&tip); err != nil || tip != "array" {
+		t.Fatalf("stems dizi olarak saklanmali: %q, %v", tip, err)
+	}
+}
+
+// Ham {"stems":null} ve null satirlar iceren satir da detayda okunur.
+func TestPostgresDepo_NullStemVeSatirlarDetayiBozmaz(t *testing.T) {
+	havuz := testHavuz(t)
+	d := NewPostgresDepo(havuz)
+	ctx := context.Background()
+	sahip := uuid.NewString()
+	testProfilEkle(t, d, sahip, "sahip")
+	id := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Hazirlik: `{"masterKey":"masters/u/p/m.wav","stems":null}`})
+	if _, err := havuz.Exec(ctx, `UPDATE sosyal.yayin SET sozler = '{"bolumler":[{"bolumId":"b1","tur":"verse","satirlar":null}]}' WHERE id = $1`, id); err != nil {
+		t.Fatalf("sozler: %v", err)
+	}
+	k, err := d.YayinGetir(ctx, id, sahip)
+	if err != nil {
+		t.Fatalf("YayinGetir: %v", err)
+	}
+	if k.StemVar {
+		t.Fatal("null stems StemVar false olmali")
+	}
+	if len(k.Sozler.Bolumler) != 1 || k.Sozler.Bolumler[0].Satirlar == nil {
+		t.Fatalf("satirlar bos dizi olmali: %+v", k.Sozler)
+	}
+}
+
+// HataYap silinmis yayina, YayinKaldir hazirlaniyor disindaki yayina dokunmaz.
+func TestPostgresDepo_HataYapVeKaldirKorumalari(t *testing.T) {
+	havuz := testHavuz(t)
+	d := NewPostgresDepo(havuz)
+	ctx := context.Background()
+	sahip := uuid.NewString()
+	testProfilEkle(t, d, sahip, "sahip")
+	silinen := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: DurumHazirlaniyor, Silindi: true})
+	if err := d.HataYap(ctx, silinen); err != nil {
+		t.Fatalf("HataYap: %v", err)
+	}
+	if k, _ := d.YayinGetir(ctx, silinen, sahip); k.Durum != DurumHazirlaniyor {
+		t.Fatalf("silinmis yayin hataya alinmamali: %s", k.Durum)
+	}
+	yayinda := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: DurumYayinda})
+	if err := d.YayinKaldir(ctx, yayinda); err != nil {
+		t.Fatalf("YayinKaldir: %v", err)
+	}
+	if _, err := d.YayinGetir(ctx, yayinda, sahip); err != nil {
+		t.Fatalf("yayinda yayin kaldirilmamali: %v", err)
+	}
+	hazir := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: DurumHazirlaniyor})
+	if err := d.YayinKaldir(ctx, hazir); err != nil {
+		t.Fatalf("YayinKaldir: %v", err)
+	}
+	if _, err := d.YayinGetir(ctx, hazir, sahip); !errors.Is(err, ErrBulunamadi) {
+		t.Fatalf("hazirlaniyor yayin kaldirilmali: %v", err)
 	}
 }

@@ -128,7 +128,7 @@ func (d *PostgresDepo) yayinGetir(ctx context.Context, kosul, deger, izleyiciID 
 		SELECT `+ozetSecimi+`,
 		  y.aciklama, y.yorum_acik, y.sozler, y.yapi, y.durum, y.gorunurluk,
 		  y.silinme IS NOT NULL,
-		  COALESCE(jsonb_array_length(y.hazirlik->'stems'), 0) > 0,
+		  (jsonb_typeof(y.hazirlik->'stems') = 'array' AND jsonb_array_length(y.hazirlik->'stems') > 0),
 		  y.master_anahtari,
 		  EXISTS (SELECT 1 FROM sosyal.takip tk WHERE tk.takipci_id = $1 AND tk.takip_edilen_id = y.sahip_id)
 		`+ozetKaynagi+`
@@ -147,6 +147,11 @@ func (d *PostgresDepo) yayinGetir(ctx context.Context, kosul, deger, izleyiciID 
 	k.Sozler = sozler
 	if k.Sozler.Bolumler == nil {
 		k.Sozler.Bolumler = []SozBolumu{}
+	}
+	for i := range k.Sozler.Bolumler {
+		if k.Sozler.Bolumler[i].Satirlar == nil {
+			k.Sozler.Bolumler[i].Satirlar = []string{}
+		}
 	}
 	k.Yapi = yapi
 	if k.Yapi == nil {
@@ -172,6 +177,9 @@ func (d *PostgresDepo) YayinEkle(ctx context.Context, y YeniYayin) error {
 	var kaynak any
 	if y.KaynakYayinID != "" {
 		kaynak = y.KaynakYayinID
+	}
+	if y.Hazirlik.Stems == nil {
+		y.Hazirlik.Stems = []HazirlikStemi{}
 	}
 	_, err := d.havuz.Exec(ctx, `
 		INSERT INTO sosyal.yayin (id, slug, sahip_id, baslik, aciklama, tur, bpm, ton_tonik, ton_mod,
@@ -223,7 +231,7 @@ func (d *PostgresDepo) YayinSil(ctx context.Context, id, sahipID string) error {
 }
 
 func (d *PostgresDepo) YayinKaldir(ctx context.Context, id string) error {
-	if _, err := d.havuz.Exec(ctx, `DELETE FROM sosyal.yayin WHERE id = $1`, id); err != nil {
+	if _, err := d.havuz.Exec(ctx, `DELETE FROM sosyal.yayin WHERE id = $1 AND durum = 'hazirlaniyor'`, id); err != nil {
 		return fmt.Errorf("yayin kaldirilamadi: %w", err)
 	}
 	return nil
@@ -289,7 +297,7 @@ func (d *PostgresDepo) Yayinla(ctx context.Context, id string, s HazirlikSonucu)
 
 func (d *PostgresDepo) HataYap(ctx context.Context, id string) error {
 	_, err := d.havuz.Exec(ctx, `
-		UPDATE sosyal.yayin SET durum = 'hata' WHERE id = $1 AND durum = 'hazirlaniyor'`, id)
+		UPDATE sosyal.yayin SET durum = 'hata' WHERE id = $1 AND durum = 'hazirlaniyor' AND silinme IS NULL`, id)
 	if err != nil {
 		return fmt.Errorf("yayin hata durumuna alinamadi: %w", err)
 	}
