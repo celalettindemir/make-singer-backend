@@ -299,9 +299,13 @@ func main() {
 
 	api.Delete("/account", hesapHandler.Sil)
 
-	// Kesfet (sosyal) uclari. Yayin limiti yalnizca POST /yayinlar'dadir.
-	sosyalHandler.Rotalar(api.Group("/social"),
-		rateLimiter.Limit("sosyal-yayin", cfg.RateLimit.SosyalYayinPerHour, time.Hour))
+	// Kesfet (sosyal) uclari. Limitler yalnizca ilgili uclardadir; yorum
+	// limiti sozlesme geregi 429 yavasla doner.
+	sosyalHandler.Rotalar(api.Group("/social"), handler.SosyalLimitleri{
+		Yayin: rateLimiter.Limit("sosyal-yayin", cfg.RateLimit.SosyalYayinPerHour, time.Hour),
+		Yorum: rateLimiter.LimitKod("sosyal-yorum", cfg.RateLimit.SosyalYorumPerMin, time.Minute,
+			"yavasla", "Biraz yavasla"),
+	})
 
 	// WebSocket routes
 	app.Use("/ws", func(c *fiber.Ctx) error {

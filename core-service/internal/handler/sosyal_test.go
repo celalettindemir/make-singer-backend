@@ -30,6 +30,8 @@ type sahteSosyal struct {
 	begeni      *sosyal.BegeniDurumu
 	takip       *sosyal.TakipDurumu
 	oneriler    []sosyal.ProfilOzeti
+	yorum       *sosyal.Yorum
+	yorumSayfa  *sosyal.Sayfa[sosyal.Yorum]
 
 	sonKullanici string
 	sonAd        string
@@ -43,6 +45,7 @@ type sahteSosyal struct {
 	sonLimit     int
 	sonBegen     bool
 	sonTakip     bool
+	sonYorum     sosyal.YorumGirdisi
 }
 
 func (s *sahteSosyal) ProfilBen(_ context.Context, k string) (*sosyal.Profil, error) {
@@ -125,11 +128,34 @@ func (s *sahteSosyal) Oneriler(_ context.Context, k string) ([]sosyal.ProfilOzet
 	return s.oneriler, s.hata
 }
 
-// sosyalUygulamasi, /api/social grubunu sahte servisle kurar.
+func (s *sahteSosyal) Yorumlar(_ context.Context, k, id, imlec string, limit int) (*sosyal.Sayfa[sosyal.Yorum], error) {
+	s.sonKullanici, s.sonYayin, s.sonImlec, s.sonLimit = k, id, imlec, limit
+	return s.yorumSayfa, s.hata
+}
+
+func (s *sahteSosyal) YorumYaz(_ context.Context, k, id string, g sosyal.YorumGirdisi) (*sosyal.Yorum, error) {
+	s.sonKullanici, s.sonYayin, s.sonYorum = k, id, g
+	return s.yorum, s.hata
+}
+
+func (s *sahteSosyal) YorumSil(_ context.Context, k, id string) error {
+	s.sonKullanici, s.sonYayin = k, id
+	return s.hata
+}
+
+func gecir(c *fiber.Ctx) error { return c.Next() }
+
+// sosyalUygulamasi, /api/social grubunu sahte servisle ve gecirgen
+// limitlerle kurar.
 func sosyalUygulamasi(s *sahteSosyal, userID string) *fiber.App {
+	return sosyalUygulamasiLimitli(s, userID, SosyalLimitleri{Yayin: gecir, Yorum: gecir})
+}
+
+// sosyalUygulamasiLimitli, verilen limitlerle kurar.
+func sosyalUygulamasiLimitli(s *sahteSosyal, userID string, l SosyalLimitleri) *fiber.App {
 	app := fiber.New()
 	grup := app.Group("/api/social", kullaniciOlarak(userID))
-	NewSosyalHandler(s).Rotalar(grup, func(c *fiber.Ctx) error { return c.Next() })
+	NewSosyalHandler(s).Rotalar(grup, l)
 	return app
 }
 

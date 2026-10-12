@@ -33,6 +33,10 @@ type SosyalServisi interface {
 
 	Takip(ctx context.Context, kullaniciID, ad string, takip bool) (*sosyal.TakipDurumu, error)
 	Oneriler(ctx context.Context, kullaniciID string) ([]sosyal.ProfilOzeti, error)
+
+	Yorumlar(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*sosyal.Sayfa[sosyal.Yorum], error)
+	YorumYaz(ctx context.Context, kullaniciID, yayinID string, g sosyal.YorumGirdisi) (*sosyal.Yorum, error)
+	YorumSil(ctx context.Context, kullaniciID, yorumID string) error
 }
 
 var _ SosyalServisi = (*sosyal.Servis)(nil)
@@ -46,9 +50,16 @@ func NewSosyalHandler(servis SosyalServisi) *SosyalHandler {
 	return &SosyalHandler{servis: servis}
 }
 
-// Rotalar, uclari verilen gruba baglar. yayinLimiti yalnizca
-// POST /yayinlar'a uygulanir (kullanici basina saatlik).
-func (h *SosyalHandler) Rotalar(r fiber.Router, yayinLimiti fiber.Handler) {
+// SosyalLimitleri, tek tek uclara uygulanan kullanici basina limitlerdir.
+// Hepsi doldurulmalidir.
+type SosyalLimitleri struct {
+	Yayin fiber.Handler // POST /yayinlar (saatlik)
+	Yorum fiber.Handler // POST /yayinlar/:id/yorumlar (dakikalik, 429 yavasla)
+}
+
+// Rotalar, uclari verilen gruba baglar; limitler yalnizca ilgili uclara
+// uygulanir.
+func (h *SosyalHandler) Rotalar(r fiber.Router, l SosyalLimitleri) {
 	r.Get("/profil/ben", h.ProfilBen)
 	r.Put("/profil/ben", h.ProfilKaydet)
 	r.Get("/profil/kullanici-adi/uygun", h.AdUygun)
@@ -56,7 +67,7 @@ func (h *SosyalHandler) Rotalar(r fiber.Router, yayinLimiti fiber.Handler) {
 	r.Get("/profiller/:ad/yayinlar", h.ProfilYayinlari)
 	r.Get("/akis", h.Akis)
 
-	r.Post("/yayinlar", yayinLimiti, h.YayinOlustur)
+	r.Post("/yayinlar", l.Yayin, h.YayinOlustur)
 	r.Get("/yayinlar/:id", h.Yayin)
 	r.Patch("/yayinlar/:id", h.YayinGuncelle)
 	r.Delete("/yayinlar/:id", h.YayinSil)
@@ -69,6 +80,10 @@ func (h *SosyalHandler) Rotalar(r fiber.Router, yayinLimiti fiber.Handler) {
 	r.Put("/profiller/:ad/takip", h.TakipEt)
 	r.Delete("/profiller/:ad/takip", h.TakibiBirak)
 	r.Get("/oneriler", h.Oneriler)
+
+	r.Get("/yayinlar/:id/yorumlar", h.Yorumlar)
+	r.Post("/yayinlar/:id/yorumlar", l.Yorum, h.YorumYaz)
+	r.Delete("/yorumlar/:id", h.YorumSil)
 }
 
 // sosyalHatalari, servis hatalarinin sozlesmedeki durum ve kodlaridir.
@@ -89,6 +104,8 @@ var sosyalHatalari = []struct {
 	{sosyal.ErrStemYok, fiber.StatusUnprocessableEntity, "stem_yok"},
 	{sosyal.ErrDurum, fiber.StatusConflict, "durum"},
 	{sosyal.ErrKendiniTakip, fiber.StatusUnprocessableEntity, "kendini_takip"},
+	{sosyal.ErrYorumKapali, fiber.StatusForbidden, "yorum_kapali"},
+	{sosyal.ErrYetki, fiber.StatusForbidden, "yetki"},
 }
 
 // sosyalHata, servis hatasini sozlesme govdesine cevirir:

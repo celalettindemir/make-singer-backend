@@ -22,6 +22,8 @@ var (
 	ErrDurum                = errors.New("yayin bu islem icin uygun durumda degil")
 	ErrKimlik               = errors.New("kimlik gecersiz")
 	ErrKendiniTakip         = errors.New("kendini takip edemezsin")
+	ErrYorumKapali          = errors.New("yayinin yorumlari kapali")
+	ErrYetki                = errors.New("bu islem icin yetkin yok")
 )
 
 // dogrulamaHatasi, ErrDogrulama'yi alan bazli bir aciklamayla sarar.
