@@ -39,7 +39,7 @@ func federeDepoKurulumlari() []federeKurulumKurucu {
 		{
 			ad: "sahte",
 			kur: func(t *testing.T) federeKurulum {
-				sahteKullanici := NewSahteUserStore()
+				sahteKullanici := NewFakeUserStore()
 				return federeKurulum{
 					ad:        "sahte",
 					depo:      NewSahteFedereDepo(sahteKullanici),
@@ -57,7 +57,7 @@ func federeDepoKurulumlari() []federeKurulumKurucu {
 				}
 				ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
 				defer iptal()
-				havuz, err := Baglan(ctx, dsn)
+				havuz, err := Connect(ctx, dsn)
 				if err != nil {
 					t.Skip("yerel Postgres yok, atlaniyor")
 				}
@@ -99,7 +99,7 @@ func TestFedereDepoSozlesmesi(t *testing.T) {
 			if ku.PasswordHash != "" {
 				t.Error("federe hesaba sifre hash'i yazilmis")
 			}
-			if ku.SifreDogru("herhangi-bir-sifre-123") {
+			if ku.PasswordMatches("herhangi-bir-sifre-123") {
 				t.Error("sifresiz hesaba sifreyle girilebiliyor")
 			}
 			if !ku.EmailVerified {

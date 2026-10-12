@@ -1,3 +1,9 @@
+// Package identity is the custom OpenID Provider: it carries the second
+// HTTP listener of our own OpenID Provider and the resources attached to
+// it (signing key, storage, token and user stores, the login, signup and
+// federation pages, rate limiting and the database). The API process
+// builds it with a single Start call and cleans it up on shutdown with
+// Server.Shutdown.
 package identity
 
 import (
@@ -23,109 +29,112 @@ import (
 	"github.com/makeasinger/api/internal/config"
 )
 
-// migrationKilitAnahtari, Migrate'i sarmalayan Postgres advisory lock'un
-// sabit anahtaridir. Rasgele degil: kumede rolling update sirasinda ayni
-// isim/amaca sahip her pod ayni kilidi istemeli. Deger, "make-singer
-// kimlik migration" metninin CRC32'sinden turetildi; anlami onemli
-// degil, sadece bu uygulamaya ozgu ve sabit olmasi onemli.
-const migrationKilitAnahtari int64 = 0x6B696D6C696B31 // "kimlik1" bayt dizisi, okunabilir bir imza
+// migrationLockKey is the fixed key of the Postgres advisory lock that
+// wraps Migrate. It is not random: during a rolling update in the cluster
+// every pod with the same name/purpose must ask for the same lock. The
+// value was derived from the CRC32 of the text "make-singer kimlik
+// migration"; its meaning does not matter, only that it is specific to
+// this application and fixed.
+const migrationLockKey int64 = 0x6B696D6C696B31 // the byte sequence "kimlik1", a readable signature
 
-// Sunucu, kendi OpenID Provider'imizin ikinci HTTP dinleyicisini ve ona
-// bagli kaynaklari tasir. main.go bunu tek bir Start cagrisi ile kurar ve
-// kapanista Kapat ile temizler.
-type Sunucu struct {
-	srv     *http.Server
-	havuz   *pgxpool.Pool
-	anahtar *Anahtar
+// Server carries the second HTTP listener of our own OpenID Provider and
+// the resources attached to it. main.go builds it with a single Start call
+// and cleans it up on shutdown with Shutdown.
+type Server struct {
+	srv        *http.Server
+	pool       *pgxpool.Pool
+	signingKey *SigningKey
 
-	// kullanicilar, API tarafindaki hesap silme ucu icin tutulur
-	// (bkz. HesapSil).
-	kullanicilar UserStore
+	// users is kept for the account deletion endpoint on the API side
+	// (see DeleteAccount).
+	users UserStore
 
-	// hazir, dinleyicinin GERCEKTEN hizmet verip vermedigini tutar.
-	// /health eskiden yalnizca "kimlikSunucu != nil" bakiyordu, yani
-	// Start dondukten SONRA dinleyicinin cokmesini (orn. kabul
-	// dongusunun hata ile durmasi) hic yakalamiyor ve hala
-	// "kimlik": true donuyordu: tam kesinti + yanlis saglik sinyali.
-	hazir atomic.Bool
+	// ready tracks whether the listener is REALLY serving. /health used to
+	// look only at "identityServer != nil", so it never caught the listener
+	// crashing AFTER Start returned (e.g. the accept loop stopping with an
+	// error) and still returned "kimlik": true: a full outage + a false
+	// health signal.
+	ready atomic.Bool
 
-	// fedIptal, yukari akis dogrulayicilarinin JWKS arka plan yenileme
-	// ctx'ini iptal eder. SUNUCUNUN omrune baglidir (K7): Kapat onu
-	// cagirir, boylece surec yasarken yenileme yasar.
-	fedIptal context.CancelFunc
+	// fedCancel cancels the JWKS background refresh ctx of the upstream
+	// verifiers. It is tied to the lifetime of the SERVER (K7): Shutdown
+	// calls it, so the refresh lives as long as the process does.
+	fedCancel context.CancelFunc
 
-	// dogrulayicilar, kapanista Close edilmek uzere tutulur. Federasyon
-	// yapilandirilmamissa BOS olur.
-	dogrulayicilar map[string]*auth.UpstreamVerifier
+	// verifiers is kept to be Closed on shutdown. It is EMPTY if
+	// federation is not configured.
+	verifiers map[string]*auth.UpstreamVerifier
 }
 
-// Hazir, OP dinleyicisinin su an hizmet verdigini soyler. /health bunu
-// kullanir; nil alici (OP hic kurulmadi) icin de guvenle cagrilabilir.
-func (s *Sunucu) Hazir() bool {
-	return s != nil && s.hazir.Load()
+// Ready reports that the OP listener is serving right now. /health uses
+// it; it is also safe to call on a nil receiver (the OP was never set
+// up).
+func (s *Server) Ready() bool {
+	return s != nil && s.ready.Load()
 }
 
-// Start, kendi OpenID Provider'imizi ayaga kaldirir ve ikinci bir HTTP
-// dinleyicisinde (cfg.Port) discovery belgesini, JWKS'i ve OIDC
-// uclarini yayinlamaya baslar. Issuer bos ise hic baslamaz: bos issuer
-// ile uretilen discovery belgesi kullanilamaz (main zaten bos issuer ile
-// baslamayi reddeder). env, cfg.Server.Env'dir (SERVER_ENV); issuer http:// ise
-// guvensiz modun sadece yerel gelistirmede acilabilmesi icin kullanilir
-// (bkz. issuerGuvensizIzniDogrula).
-func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env string) (*Sunucu, error) {
+// Start brings up our own OpenID Provider and starts publishing the
+// discovery document, the JWKS and the OIDC endpoints on a second HTTP
+// listener (cfg.Port). It does not start at all if the issuer is empty: a
+// discovery document produced with an empty issuer is unusable (main
+// already refuses to start with an empty issuer). env is cfg.Server.Env
+// (SERVER_ENV); if the issuer is http:// it is used so that insecure mode
+// can only be enabled in local development (see validateInsecureIssuer).
+func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env string) (*Server, error) {
 	if cfg.Issuer == "" {
 		return nil, fmt.Errorf("issuer bos: kimlik saglayicisi baslatilamaz")
 	}
 
-	if err := issuerGuvensizIzniDogrula(cfg.Issuer, env); err != nil {
+	if err := validateInsecureIssuer(cfg.Issuer, env); err != nil {
 		return nil, err
 	}
 
-	if err := yapilandirmaDogrula(cfg); err != nil {
+	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
 
-	anahtar, err := AnahtarYukle(cfg.SigningKeyPEM)
+	signingKey, err := LoadSigningKey(cfg.SigningKeyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("imzalama anahtari yuklenemedi: %w", err)
 	}
 
-	cryptoAnahtar, err := CryptoAnahtar(cfg.CryptoKey)
+	cryptoKey, err := CryptoKey(cfg.CryptoKey)
 	if err != nil {
 		return nil, fmt.Errorf("crypto anahtari gecersiz: %w", err)
 	}
 
-	havuz, err := Baglan(ctx, cfg.DBURL)
+	pool, err := Connect(ctx, cfg.DBURL)
 	if err != nil {
 		return nil, fmt.Errorf("veritabanina baglanilamadi: %w", err)
 	}
 
-	if err := migrateKilitli(ctx, havuz); err != nil {
-		havuz.Close()
+	if err := migrateLocked(ctx, pool); err != nil {
+		pool.Close()
 		return nil, fmt.Errorf("migration basarisiz: %w", err)
 	}
 
-	kullaniciDepo := NewPostgresUserStore(havuz)
-	jetonDepo := NewPostgresTokenStore(havuz, rdb)
-	istekDepo := NewIstekDepo(rdb)
+	userStore := NewPostgresUserStore(pool)
+	tokenStore := NewPostgresTokenStore(pool, rdb)
+	requestStore := NewIstekDepo(rdb)
 
-	depo := NewDepo(cfg, kullaniciDepo, jetonDepo, istekDepo, anahtar)
-	depo.SaglikBagla(havuz, rdb)
+	storage := NewStorage(cfg, userStore, tokenStore, requestStore, signingKey)
+	storage.SetHealthDeps(pool, rdb)
 
 	opCfg := &op.Config{
-		CryptoKey: cryptoAnahtar,
-		// DIKKAT: CodeMethodS256 YALNIZCA discovery belgesini besler
+		CryptoKey: cryptoKey,
+		// NOTE: CodeMethodS256 ONLY feeds the discovery document
 		// (pkg/op/op.go CodeMethodS256Supported -> pkg/op/discovery.go);
-		// hicbir dogrulamada kullanilmaz, yani tek basina HICBIR SEY
-		// ZORLAMAZ. S256 zorunlulugunu BIZ zorluyoruz, iki katmanda:
-		//   1. /authorize: pkceZorlayici (pkce.go), op.AuthorizeValidator
-		//      uzanti noktasi uzerinden — code_challenge yoksa veya
-		//      method S256 degilse (bos dahil) istek reddedilir.
-		//   2. Token ucu: AuthIstek.GetCodeChallenge (istek.go)
-		//      fail-closed; S256 disindaki method'da nil doner ve
-		//      kutuphane public client'ta "PKCE required" ile reddeder.
+		// no validation uses it, so on its own it ENFORCES NOTHING. WE
+		// enforce S256 ourselves, in two layers:
+		//   1. /authorize: pkceEnforcer (pkce.go), through the
+		//      op.AuthorizeValidator extension point — the request is
+		//      rejected if code_challenge is missing or the method is not
+		//      S256 (including empty).
+		//   2. Token endpoint: AuthRequest.GetCodeChallenge (request.go) is
+		//      fail-closed; it returns nil for a method other than S256 and
+		//      the library rejects a public client with "PKCE required".
 		CodeMethodS256:        true,
-		AuthMethodPost:        false, // public client, secret yok
+		AuthMethodPost:        false, // public client, no secret
 		GrantTypeRefreshToken: true,
 		SupportedUILocales:    []language.Tag{language.Turkish, language.English},
 		SupportedScopes: []string{
@@ -133,128 +142,130 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 		},
 	}
 
-	// issuerGuvensizIzniDogrula yukarida gecti; yani buraya http://
-	// issuer ile gelindiyse guvensiz mod bilerek izin verilmis demektir
-	// (yerel gelistirme / Docker ile elle dogrulama). Kutuphane
-	// varsayilan olarak https disinda issuer kabul etmez.
+	// validateInsecureIssuer passed above; so if we got here with an http://
+	// issuer, insecure mode was deliberately allowed (local development /
+	// manual verification with Docker). By default the library accepts no
+	// issuer other than https.
 	var opOpts []op.Option
 	if strings.HasPrefix(cfg.Issuer, "http://") {
 		opOpts = append(opOpts, op.WithAllowInsecure())
 	}
 
-	saglayici, err := op.NewProvider(opCfg, depo, op.StaticIssuer(cfg.Issuer), opOpts...)
+	provider, err := op.NewProvider(opCfg, storage, op.StaticIssuer(cfg.Issuer), opOpts...)
 	if err != nil {
-		havuz.Close()
+		pool.Close()
 		return nil, fmt.Errorf("OpenID Provider kurulamadi: %w", err)
 	}
 
-	// Cerezin Secure bayragi issuer'a gore: https'te ACIK, http://
-	// yerel gelistirmede KAPALI (aksi halde tarayici cerezi hic
-	// saklamaz ve yerel akis kirilir).
-	cerezGuvenli := !strings.HasPrefix(cfg.Issuer, "http://")
+	// The Secure flag of the cookie depends on the issuer: ON for https, OFF
+	// for http:// local development (otherwise the browser never stores the
+	// cookie and the local flow breaks).
+	secureCookie := !strings.HasPrefix(cfg.Issuer, "http://")
 
-	// Yukari akis dogrulayicilari (Faz 2). ctx iptal zinciri BILEREK
-	// KESILIR (context.WithoutCancel): Start'a verilen ctx bir baslatma
-	// zaman asimi olabilir ve o dolunca JWKS'in saatlik arka plan
-	// yenilemesi de olurdu. Iptal Kapat'a baglanir, yani yenileme
-	// sunucunun omru kadar yasar (K7; gerekcesi
-	// auth.NewYukariAkisDogrulayici yorumunda).
-	fedCtx, fedIptal := context.WithCancel(context.WithoutCancel(ctx))
-	akislar, dogrulayicilar, err := federasyonKur(fedCtx, cfg)
+	// Upstream verifiers (Phase 2). The ctx cancellation chain is
+	// DELIBERATELY CUT (context.WithoutCancel): the ctx given to Start may be
+	// a startup timeout, and when it expired the hourly JWKS background
+	// refresh would stop too. Cancellation is tied to Shutdown, so the
+	// refresh lives as long as the server (K7; the rationale is in the
+	// auth.NewUpstreamVerifier comment).
+	fedCtx, cancelFed := context.WithCancel(context.WithoutCancel(ctx))
+	upstreams, verifiers, err := setupFederation(fedCtx, cfg)
 	if err != nil {
-		fedIptal()
-		havuz.Close()
+		cancelFed()
+		pool.Close()
 		return nil, err
 	}
 
-	federeDepo := NewPostgresFedereDepo(havuz)
+	federatedStore := NewPostgresFedereDepo(pool)
 
-	// Hiz limiti: POST /giris ve POST /kayit icin. Kurulamazsa Start
-	// HATA DONER (fail-closed): limitsiz bir giris ucu ile ayaga kalkmak
-	// hem sinirsiz brute-force hem de ana API'yi de dusuren bir CPU DoS
-	// yuzeyi demektir. Bkz. hizlimit.go.
-	hizLimit, err := NewHizLimit(rdb, HizLimitAyar{
+	// Rate limit: for POST /giris and POST /kayit. If it cannot be set up
+	// Start RETURNS AN ERROR (fail-closed): coming up with a login endpoint
+	// that has no limit means both unlimited brute force and a CPU DoS
+	// surface that also takes down the main API. See ratelimit.go.
+	rateLimiter, err := NewHizLimit(rdb, HizLimitAyar{
 		GirisIPPerMin:      cfg.LoginIPPerMin,
 		GirisEpostaPerSaat: cfg.LoginEmailPerHour,
 		KayitIPPerSaat:     cfg.SignupIPPerHour,
 		GuvenilenProxy:     cfg.TrustedProxies,
-	}, cryptoAnahtar[:])
+	}, cryptoKey[:])
 	if err != nil {
-		fedIptal()
-		havuz.Close()
+		cancelFed()
+		pool.Close()
 		return nil, fmt.Errorf("hiz limiti kurulamadi: %w", err)
 	}
 
-	mux := muxKur(
-		saglayici, kullaniciDepo, istekDepo, federeDepo,
-		akislar, dogrulayicilar, cfg.Issuer, cerezGuvenli, hizLimit,
+	mux := buildMux(
+		provider, userStore, requestStore, federatedStore,
+		upstreams, verifiers, cfg.Issuer, secureCookie, rateLimiter,
 	)
 
-	// Dinleyici Start ICINDE, SENKRON acilir. Eskiden ListenAndServe bir
-	// goroutine icinde cagriliyordu; port cakismasi gibi bir hata Start
-	// DONDUKTEN SONRA sessizce olusuyor, /health bunu yakalamiyordu.
-	// Simdi boyle bir hata Start'i basarisiz kilar ve main.go log.Fatalf
-	// ile durur: CrashLoopBackOff dogru ve gorunur sinyaldir.
-	dinleyici, err := net.Listen("tcp", ":"+cfg.Port)
+	// The listener is opened INSIDE Start, SYNCHRONOUSLY. ListenAndServe used
+	// to be called inside a goroutine; an error such as a port conflict
+	// happened silently AFTER Start returned and /health did not catch it.
+	// Now such an error makes Start fail and main.go stops with log.Fatalf:
+	// CrashLoopBackOff is the correct and visible signal.
+	listener, err := net.Listen("tcp", ":"+cfg.Port)
 	if err != nil {
-		fedIptal()
-		havuz.Close()
+		cancelFed()
+		pool.Close()
 		return nil, fmt.Errorf("kimlik dinleyicisi acilamadi (port %s): %w", cfg.Port, err)
 	}
 
 	srv := &http.Server{
 		Handler: mux,
-		// M8: yalnizca ReadHeaderTimeout vardi; govde ve yanit icin sure
-		// siniri YOKTU, yani yavas govde gonderen bir istemci baglantiyi
-		// (ve goroutine'i) sure siz tutabiliyordu (Slowloris benzeri).
-		// Degerler ucun gercek maliyetine gore: en pahali istek bcrypt
-		// ile ~258 ms, formlar birkac yuz bayt.
+		// M8: there was only ReadHeaderTimeout; there was NO time limit for
+		// the body and the response, so a client sending a slow body could
+		// hold the connection (and the goroutine) indefinitely (Slowloris
+		// style). The values follow the real cost of the endpoint: the most
+		// expensive request is bcrypt at ~258 ms, the forms are a few hundred
+		// bytes.
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 
-	sunucu := &Sunucu{
-		srv: srv, havuz: havuz, anahtar: anahtar, kullanicilar: kullaniciDepo,
-		fedIptal: fedIptal, dogrulayicilar: dogrulayicilar,
+	server := &Server{
+		srv: srv, pool: pool, signingKey: signingKey, users: userStore,
+		fedCancel: cancelFed, verifiers: verifiers,
 	}
-	sunucu.hazir.Store(true)
+	server.ready.Store(true)
 	go func() {
-		if err := srv.Serve(dinleyici); err != nil && err != http.ErrServerClosed {
-			// Burada log.Fatal cagirmiyoruz: bu goroutine ana akistan
-			// ayrik, panik yerine sessizce durur. Ama ARTIK sessiz
-			// degil: hazir=false yazilir, /health bunu "kimlik": false
-			// olarak gosterir ve kume pod'u saglikli saymaz.
-			sunucu.hazir.Store(false)
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+			// We do not call log.Fatal here: this goroutine is separate from
+			// the main flow and stops silently instead of panicking. But it is
+			// NO LONGER silent: ready=false is written, /health shows it as
+			// "kimlik": false and the cluster does not count the pod as
+			// healthy.
+			server.ready.Store(false)
 			log.Printf("kimlik dinleyicisi durdu: %v", err)
 		}
 	}()
 
-	return sunucu, nil
+	return server, nil
 }
 
-// yapilandirmaDogrula, OP'nin HIC BASLAMAMASI gereken yapilandirma
-// hatalarini toplar. Hepsi canli olarak dogrulandi: uc durumun
-// ucunde de Start eskiden HATASIZ donuyordu.
+// validateConfig collects the configuration errors for which the OP must
+// NOT START AT ALL. All of them were verified live: in all three cases
+// Start used to return WITHOUT AN ERROR.
 //
-//   - ClientID bos: middleware.NewOPAuthMiddleware kurulumHatasi'na
-//     duser ve HER /api/* istegini 401 reddeder, ama /health hala
-//     "kimlik": true / "auth": true donerdi — tam kesinti + yanlis
-//     saglik sinyali. config.yaml bunun yasak oldugunu yaziyordu ama
-//     kod zorlamiyordu.
-//   - RedirectURIs bos: her /authorize reddedilir, hic kullanici giris
-//     yapamaz.
-//   - AccessTTL <= 0: AccessKaydet kaydi hic yazmaz (jeton_depo.go) ve
-//     access token exp=now ile uretilir => her /api/* 401, her
-//     /userinfo 403.
-//   - RefreshTTL <= 0: her refresh kaydi dogdugu an olu => tum
-//     kullanicilar aninda disari atilir.
+//   - ClientID empty: middleware.NewOPAuthMiddleware falls into setupErr and
+//     rejects EVERY /api/* request with 401, but /health would still return
+//     "kimlik": true / "auth": true — a full outage + a false health
+//     signal. config.yaml said this was forbidden but the code did not
+//     enforce it.
+//   - RedirectURIs empty: every /authorize is rejected, no user can sign
+//     in.
+//   - AccessTTL <= 0: SaveAccess never writes the record (token_store.go)
+//     and the access token is produced with exp=now => every /api/* 401,
+//     every /userinfo 403.
+//   - RefreshTTL <= 0: every refresh record is dead the moment it is born
+//     => all users are logged out instantly.
 //
-// Sure degerleri 0 olmasi UYDURMA bir senaryo degil: viper, cozulemeyen
-// bir sure degerinde (orn. "15min", "60d") varsayilana DUSMEZ, sessizce
-// 0s verir (bkz. config.go'daki not).
-func yapilandirmaDogrula(cfg *config.AuthConfig) error {
+// Duration values of 0 are NOT a made-up scenario: for a duration value
+// that cannot be parsed (e.g. "15min", "60d") viper does NOT fall back to
+// the default, it silently gives 0s (see the note in config.go).
+func validateConfig(cfg *config.AuthConfig) error {
 	if cfg.ClientID == "" {
 		return fmt.Errorf("client_id bos: AUTH_CLIENT_ID zorunlu (bos iken her /api/* istegi 401 reddedilir)")
 	}
@@ -272,49 +283,49 @@ func yapilandirmaDogrula(cfg *config.AuthConfig) error {
 	if cfg.RefreshTTL <= 0 {
 		return fmt.Errorf("refresh_ttl pozitif olmali, cozulen deger: %s (AUTH_REFRESH_TTL gecerli bir sure olmali, orn. 1440h)", cfg.RefreshTTL)
 	}
-	// Apple ucu, alanlarin UCU de dolu olmadan calisamaz: client_secret
-	// her token degisiminde bu uctan ES256 ile uretilir (bkz. K5,
-	// YukariAkis.AppleEkipID/AppleAnahtarID/AppleAnahtarP8). Bu BASTAN
-	// baslamama hatasi olmali, kullanicinin Apple ile giris denedigi anda
-	// kesfedilen bir sessiz bozukluk degil (Faz 1'in "sessiz sifir"
-	// sinifi sorunu burada tekrarlanmiyor).
+	// Apple cannot work unless ALL THREE fields are set: the client_secret
+	// is produced from these three with ES256 on every token exchange (see
+	// K5, Upstream.AppleTeamID/AppleKeyID/AppleKeyP8). This must be an
+	// error that stops the start FROM THE BEGINNING, not a silent breakage
+	// discovered the moment the user tries to sign in with Apple (Phase 1's
+	// "silent zero" class of problem is not repeated here).
 	for _, f := range cfg.Federation {
 		if f.Name == saglayiciApple {
 			if f.AppleTeamID == "" || f.AppleKeyID == "" || f.AppleKeyP8 == "" {
 				return fmt.Errorf("apple federasyonu yapilandirmasi eksik: AUTH_FED_APPLE_TEAM_ID, AUTH_FED_APPLE_KEY_ID ve AUTH_FED_APPLE_KEY_P8 ucu de zorunlu")
 			}
-			// "Bos degil" YETMEZ: yukaridaki yorumun yasakladigi sessiz
-			// bozukluk tam olarak burada aciliyordu. PEM sirlarinin en sik
-			// gercek dagitim hatasi, anahtarin tek satirda ve gercek yeni
-			// satirlar yerine literal \n ile mount edilmesidir; boyle bir
-			// deger BOS DEGILDIR, yani eski kontrolu GECER, ama
-			// pem.Decode nil doner. Sonuc: pod Ready, buton gorunur ve
-			// hata ancak kullanici Apple'da Face ID + iki adimli onayi
-			// bitirdikten SONRA, anlamsiz bir oturum sayfasi olarak
-			// ortaya cikar.
+			// "Not empty" is NOT ENOUGH: the silent breakage that the comment
+			// above forbids was opening up exactly here. The most common real
+			// deployment mistake with PEM secrets is mounting the key on a
+			// single line with a literal \n instead of real newlines; such a
+			// value is NOT EMPTY, so it PASSES the old check, but pem.Decode
+			// returns nil. The result: the pod is Ready, the button shows, and
+			// the error only appears AFTER the user has finished Face ID +
+			// two-step approval at Apple, as a meaningless session page.
 			//
-			// Anahtar GERCEKTEN ayristirilir ve bunu appleIstemciSir
-			// yapar: .p8 ayristirma mantigi orada TEK bir noktada durur,
-			// burada kopyalanmasi iki yerin ayri ayri sasmasi demek olur.
-			// Uretilen sir ATILIR; aranan sey yalnizca hatanin kendisi.
+			// The key is REALLY parsed and appleClientSecret does that: the .p8
+			// parsing logic stands in ONE single place there, and copying it
+			// here would mean two places drifting apart separately. The
+			// produced secret is DISCARDED; all we are after is the error
+			// itself.
 			if _, err := appleIstemciSir(f.AppleTeamID, f.AppleKeyID, f.ClientID, f.AppleKeyP8, time.Now()); err != nil {
-				// Sarmalanan hatalar anahtar ICERIGI tasimaz (bkz.
-				// appleIstemciSir): yalnizca hata sinifi ve anahtar tipi.
-				// Mesaj operatore NE yapacagini soyler.
+				// The wrapped errors do not carry the key CONTENT (see
+				// appleClientSecret): only the error class and the key type.
+				// The message tells the operator WHAT to do.
 				return fmt.Errorf("apple .p8 anahtari kullanilamaz: AUTH_FED_APPLE_KEY_P8 PKCS#8 PEM bloklu bir ECDSA (P-256) ozel anahtari olmali; degeri GERCEK yeni satirlarla mount edin (tek satirda literal \\n dizisi PEM olarak cozulemez): %w", err)
 			}
 		}
-		// Google'in tek zorunlu sirri client_secret'tir ve hicbir yerde
-		// denetlenmiyordu: JetonDegis onu form.Set("client_secret", sir)
-		// ile BOS gonderir, Google token ucu 401 invalid_client doner ve
-		// kullanici 403 gorur. Pod Ready, metrikler temiz, alarm yok --
-		// Apple icin fail-closed baslangic kontrolu varken Google icin
-		// olmamasi acik bir asimetriydi.
+		// Google's only mandatory secret is client_secret and it was checked
+		// nowhere: ExchangeCode sends it EMPTY with form.Set("client_secret",
+		// secret), the Google token endpoint returns 401 invalid_client and
+		// the user sees 403. The pod is Ready, the metrics are clean, there
+		// is no alarm -- having a fail-closed start check for Apple but not
+		// for Google was an obvious asymmetry.
 		//
-		// Kural BILEREK "client_id dolu ama secret bos" uzerine kurulu:
-		// client_id de bos ise saglayici federasyonIstemcileriOlustur'da
-		// listeye HIC girmez (bkz. oradaki sessiz sifir kurali) ve bu bir
-		// hata DEGILDIR, "federasyon kapali" demektir.
+		// The rule is DELIBERATELY built on "client_id set but secret empty":
+		// if client_id is empty too, the provider NEVER enters the list in
+		// buildFederationClients (see the silent-zero rule there) and that is
+		// NOT an error, it means "federation off".
 		if f.Name == saglayiciGoogle && f.ClientSecret == "" {
 			return fmt.Errorf("google federasyonu yapilandirmasi eksik: AUTH_FED_GOOGLE_CLIENT_ID verildiyse AUTH_FED_GOOGLE_CLIENT_SECRET de zorunlu (bos iken token degisimi 401 invalid_client ile duser)")
 		}
@@ -322,15 +333,15 @@ func yapilandirmaDogrula(cfg *config.AuthConfig) error {
 	return nil
 }
 
-// yukariAkisSabitleri, Apple ve Google'in adreslerini ve kapsamlarini
-// tasir.
+// upstreamDefaults carries the addresses and scopes of Apple and Google.
 //
-// Yukari akis adresleri SABITTIR ve koddan gelir; ortamdan YALNIZCA
-// kimlik bilgileri okunur. Her giriste discovery cekmek gereksiz bir ag
-// turu ve fazladan bir hata kaynagidir; adresleri ortam degiskenine
-// birakmak ise yanlis yapilandirilmis bir issuer/JWKS ciftiyle (yani
-// baska bir tarafa guvenerek) ayaga kalkabilmek demektir.
-var yukariAkisSabitleri = map[string]YukariAkis{
+// The upstream addresses are FIXED and come from the code; ONLY the
+// credentials are read from the environment. Fetching discovery on every
+// login is a needless network round trip and an extra source of errors;
+// leaving the addresses to an environment variable would mean being able
+// to come up with a misconfigured issuer/JWKS pair (that is, trusting some
+// other party).
+var upstreamDefaults = map[string]YukariAkis{
 	saglayiciGoogle: {
 		Ad:           saglayiciGoogle,
 		Issuer:       "https://accounts.google.com",
@@ -348,228 +359,230 @@ var yukariAkisSabitleri = map[string]YukariAkis{
 		TokenURL:  "https://appleid.apple.com/auth/token",
 		JWKSURL:   "https://appleid.apple.com/auth/keys",
 		Kapsamlar: []string{"openid", "email", "name"},
-		// K4: Apple'in PKCE destegi dokumante degil.
+		// K4: Apple's PKCE support is not documented.
 		PKCEDestekli: false,
-		// name/email istenince Apple form_post ile doner (bkz. K2).
+		// When name/email is requested Apple returns with form_post (see K2).
 		FormPost: true,
 	},
 }
 
-// federasyonKur, yapilandirmadaki saglayicilari koddaki sabit adreslerle
-// birlestirir ve her biri icin bir yukari akis dogrulayicisi acar.
+// setupFederation merges the providers in the configuration with the fixed
+// addresses in the code and opens an upstream verifier for each of them.
 //
-// Bilinmeyen bir saglayici adi HATA doner: sessizce atlamak, kullanicinin
-// basmadigi bir butonun eksikligini kimsenin fark etmemesi demektir
-// (Faz 1'in "sessiz sifir" sinifi).
+// An unknown provider name returns an ERROR: skipping it silently would
+// mean nobody notices the absence of a button that the user did not press
+// (Phase 1's "silent zero" class).
 //
-// ctx, dogrulayicilarin JWKS arka plan yenilemesinin yasam suresidir ve
-// CAGIRANIN sunucu omrune bagli ctx'i olmalidir (bkz. Start).
-func federasyonKur(
+// ctx is the lifetime of the verifiers' JWKS background refresh and must be
+// the CALLER's ctx tied to the server lifetime (see Start).
+func setupFederation(
 	ctx context.Context, cfg *config.AuthConfig,
 ) (map[string]*YukariAkis, map[string]*auth.UpstreamVerifier, error) {
 	if len(cfg.Federation) == 0 {
 		return nil, nil, nil
 	}
-	akislar := make(map[string]*YukariAkis, len(cfg.Federation))
-	dogrulayicilar := make(map[string]*auth.UpstreamVerifier, len(cfg.Federation))
-	// Yarim kurulmus bir kume geride birakilmaz: ilk hatada o ana kadar
-	// acilan dogrulayicilar kapatilir.
-	temizle := func() {
-		for _, d := range dogrulayicilar {
-			_ = d.Close()
+	upstreams := make(map[string]*YukariAkis, len(cfg.Federation))
+	verifiers := make(map[string]*auth.UpstreamVerifier, len(cfg.Federation))
+	// A half-built set is not left behind: on the first error the verifiers
+	// opened so far are closed.
+	cleanup := func() {
+		for _, v := range verifiers {
+			_ = v.Close()
 		}
 	}
 	for _, f := range cfg.Federation {
-		sabit, ok := yukariAkisSabitleri[f.Name]
+		defaults, ok := upstreamDefaults[f.Name]
 		if !ok {
-			temizle()
+			cleanup()
 			return nil, nil, fmt.Errorf("bilinmeyen federasyon saglayicisi: %q (desteklenenler: %s, %s)", f.Name, saglayiciApple, saglayiciGoogle)
 		}
-		akis := sabit // kopya: sabit tablo DEGISTIRILMEZ
-		akis.IstemciID = f.ClientID
-		akis.IstemciSir = f.ClientSecret
-		akis.AppleEkipID = f.AppleTeamID
-		akis.AppleAnahtarID = f.AppleKeyID
-		akis.AppleAnahtarP8 = f.AppleKeyP8
+		upstream := defaults // copy: the fixed table is NOT MODIFIED
+		upstream.IstemciID = f.ClientID
+		upstream.IstemciSir = f.ClientSecret
+		upstream.AppleEkipID = f.AppleTeamID
+		upstream.AppleAnahtarID = f.AppleKeyID
+		upstream.AppleAnahtarP8 = f.AppleKeyP8
 
-		// audience = BIZIM istemci kimligimiz: saglayicinin baska bir
-		// uygulama icin verdigi id_token bize kabul edilmemeli.
-		dogrulayici, err := auth.NewUpstreamVerifier(ctx, akis.JWKSURL, akis.Issuer, akis.IstemciID)
+		// audience = OUR client ID: an id_token that the provider issued for
+		// another application must not be accepted by us.
+		verifier, err := auth.NewUpstreamVerifier(ctx, upstream.JWKSURL, upstream.Issuer, upstream.IstemciID)
 		if err != nil {
-			temizle()
+			cleanup()
 			return nil, nil, fmt.Errorf("%s dogrulayicisi kurulamadi: %w", f.Name, err)
 		}
-		akislar[f.Name] = &akis
-		dogrulayicilar[f.Name] = dogrulayici
+		upstreams[f.Name] = &upstream
+		verifiers[f.Name] = verifier
 	}
-	return akislar, dogrulayicilar, nil
+	return upstreams, verifiers, nil
 }
 
-// muxKur, OP'nin HTTP yuzeyini kurar. Start'tan ayri bir fonksiyon:
-// testler ayni kablolamayi (sahte depolarla) kurup gercek bir
-// dinleyici uzerinde akisi ucan uca olcebilsin.
+// buildMux builds the HTTP surface of the OP. It is a separate function
+// from Start so that tests can set up the same wiring (with fake stores)
+// and measure the flow end to end over a real listener.
 //
-// Yol ONCELIKLERI (Go 1.22+ ServeMux spesiflik kurali): "/authorize" ve
-// "/authorize/callback" TAM yol desenleridir ve "/" subtree desenini
-// yener; yani ikisi de kutuphaneye gitmek yerine bizim sarmalayicimizdan
-// gecer. Kutuphane kodu DEGISTIRILMEZ veya KOPYALANMAZ: her iki
-// sarmalayici dogrulamadan sonra kutuphanenin kendi handler'ina delege
-// eder.
-// FEDERASYON (Faz 2): akislar BOS ise federasyon uclari HIC BAGLANMAZ ve
-// giris sayfasinda buton gorunmez. Yarim bir yuzey birakmak -- buton yok
-// ama uc cagrilabilir, ya da buton var ama uc yok -- iki yonde de
-// kullaniciyi hataya goturur. Baglandiklarinda yol oncelikleri yukaridaki
-// kurali izler: "/federasyon/{saglayici}/baslat",
-// "/federasyon/{saglayici}/geri" ve "/baglama" tam yol desenleridir ve
-// "/" subtree desenini yener.
-func muxKur(
-	saglayici *op.Provider,
-	kullaniciDepo UserStore,
-	istekDepo *IstekDepo,
-	federeDepo FedereDepo,
-	akislar map[string]*YukariAkis,
-	dogrulayicilar map[string]*auth.UpstreamVerifier,
+// Path PRIORITIES (the Go 1.22+ ServeMux specificity rule): "/authorize"
+// and "/authorize/callback" are EXACT path patterns and beat the "/"
+// subtree pattern; so both go through our wrapper instead of going to the
+// library. The library code is NOT MODIFIED or COPIED: both wrappers
+// delegate to the library's own handler after validation.
+// FEDERATION (Phase 2): if upstreams is EMPTY the federation endpoints are
+// NOT MOUNTED AT ALL and no button shows on the login page. Leaving a half
+// surface -- no button but a callable endpoint, or a button but no
+// endpoint -- leads the user into error in both directions. When they are
+// mounted, the path priorities follow the rule above:
+// "/federasyon/{saglayici}/baslat", "/federasyon/{saglayici}/geri" and
+// "/baglama" are exact path patterns and beat the "/" subtree pattern.
+func buildMux(
+	provider *op.Provider,
+	userStore UserStore,
+	requestStore *IstekDepo,
+	federatedStore FedereDepo,
+	upstreams map[string]*YukariAkis,
+	verifiers map[string]*auth.UpstreamVerifier,
 	issuer string,
-	cerezGuvenli bool,
-	hizLimit *HizLimit,
+	secureCookie bool,
+	rateLimiter *HizLimit,
 ) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	// /giris ve /kayit sayfalarini baglar. POST handler'lari
-	// op.NewIssuerInterceptor ile sarilir: araci issuer'i istek
-	// baglamina koyar, geriCagirma (op.AuthCallbackURL) onu oradan
-	// okur. Sarmadan baglamak akisi yonlendirme asamasinda kirar.
-	araci := op.NewIssuerInterceptor(saglayici.IssuerFromRequest)
-	sayfalar := NewSayfalar(
-		kullaniciDepo,
-		istekDepo,
-		istekDepo, // IstekDepo ayni zamanda OturumDepo'yu karsilar
-		op.AuthCallbackURL(saglayici),
-		cerezGuvenli,
+	// Mounts the /giris and /kayit pages. The POST handlers are wrapped with
+	// op.NewIssuerInterceptor: the interceptor puts the issuer into the
+	// request context and authCallback (op.AuthCallbackURL) reads it from
+	// there. Mounting without wrapping breaks the flow at the redirect
+	// stage.
+	interceptor := op.NewIssuerInterceptor(provider.IssuerFromRequest)
+	pages := NewSayfalar(
+		userStore,
+		requestStore,
+		requestStore, // RequestStore also satisfies SessionStore
+		op.AuthCallbackURL(provider),
+		secureCookie,
 	)
-	sayfalar.CallbackDelege(http.HandlerFunc(op.AuthorizeCallbackHandler(saglayici)))
+	pages.CallbackDelege(http.HandlerFunc(op.AuthorizeCallbackHandler(provider)))
 
-	if len(akislar) > 0 {
-		adlar := make([]string, 0, len(akislar))
-		for ad := range akislar {
-			adlar = append(adlar, ad)
+	if len(upstreams) > 0 {
+		names := make([]string, 0, len(upstreams))
+		for name := range upstreams {
+			names = append(names, name)
 		}
-		// Buton sirasi DETERMINISTIK olmali: map yinelemesi Go'da
-		// bilerek rasgeledir, siralamazsak butonlar her sayfa
-		// yuklemesinde yer degistirir.
-		sort.Strings(adlar)
-		sayfalar.FederasyonSaglayicilari(adlar)
+		// The button order must be DETERMINISTIC: map iteration in Go is
+		// deliberately random, and if we do not sort the buttons swap places
+		// on every page load.
+		sort.Strings(names)
+		pages.FederasyonSaglayicilari(names)
 
-		// istekDepo UC arayuzu birden karsilar (FederasyonDepo =
-		// DurumDepo + BeklemeDepo, FedereIstekDepo ve OturumDepo);
-		// hepsi ayni akisin kisa omurlu Redis durumudur ve ayri ayri
-		// kablolamak iki yerde ayri bozulabilen bir kurulum olurdu.
-		fedSayfalar := NewFedereSayfalar(
-			akislar,
-			dogrulayicilar,
-			istekDepo,
-			federeDepo,
-			kullaniciDepo,
-			istekDepo,
-			istekDepo,
-			op.AuthCallbackURL(saglayici),
+		// requestStore satisfies THREE interfaces at once (FlowStore =
+		// StateStore + PendingLinkStore, FederationRequestStore and
+		// SessionStore); all of them are the short-lived Redis state of the
+		// same flow, and wiring them separately would be a setup that can
+		// break separately in two places.
+		fedPages := NewFedereSayfalar(
+			upstreams,
+			verifiers,
+			requestStore,
+			federatedStore,
+			userStore,
+			requestStore,
+			requestStore,
+			op.AuthCallbackURL(provider),
 			issuer,
-			cerezGuvenli,
+			secureCookie,
 		)
-		// Ikisi de POST handler'larini araci ile sarar (bkz. Bagla ve
-		// BaglamaBagla); hizLimit nil GECILMEZ, uretimde Start limit
-		// kurulamazsa hic baslamaz.
-		fedSayfalar.Bagla(mux, araci, hizLimit)
-		fedSayfalar.BaglamaBagla(mux, araci, hizLimit)
+		// Both wrap their POST handlers with the interceptor (see Mount and
+		// MountLink); rateLimiter is NEVER passed as nil, in production Start
+		// does not start at all if the limit cannot be set up.
+		fedPages.Bagla(mux, interceptor, rateLimiter)
+		fedPages.BaglamaBagla(mux, interceptor, rateLimiter)
 	}
 
-	sayfalar.Bagla(mux, araci, hizLimit)
+	pages.Bagla(mux, interceptor, rateLimiter)
 
-	yolAuthorize := saglayici.AuthorizationEndpoint().Relative()
+	authorizePath := provider.AuthorizationEndpoint().Relative()
 
-	// /authorize: kutuphanenin AuthorizeValidator uzanti noktasiyla
-	// S256 PKCE zorunlu kilinir (bkz. pkce.go). op.Authorize'i kendimiz
-	// cagiriyoruz cunku kutuphanenin kendi router'i validator'u degil
-	// saglayicinin kendisini kullanir.
+	// /authorize: S256 PKCE is made mandatory through the library's
+	// AuthorizeValidator extension point (see pkce.go). We call op.Authorize
+	// ourselves because the library's own router uses the provider itself,
+	// not the validator.
 	//
-	// AuthorizeSar: cerez baglamasi YALNIZCA burada, istegi BASLATAN
-	// tarayici icin kurulur (bkz. Sayfalar.AuthorizeSar). GET /giris ve
-	// GET /kayit artik baglama MINTLEMEZ.
-	zorlayici := &pkceZorlayici{Provider: saglayici}
-	mux.Handle(yolAuthorize, araci.Handler(sayfalar.AuthorizeSar(http.HandlerFunc(
+	// WrapAuthorize: the cookie binding is set up ONLY here, for the browser
+	// that STARTED the request (see Pages.WrapAuthorize). GET /giris and
+	// GET /kayit no longer MINT a binding.
+	enforcer := &pkceEnforcer{Provider: provider}
+	mux.Handle(authorizePath, interceptor.Handler(pages.AuthorizeSar(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			op.Authorize(w, r, zorlayici)
+			op.Authorize(w, r, enforcer)
 		}))))
 
-	// /authorize/callback: cerez baglamasi dogrulanmadan kutuphaneye
-	// GECILMEZ (bkz. Sayfalar.Callback).
-	mux.HandleFunc(yolAuthorize+"/callback", araci.HandlerFunc(sayfalar.Callback))
+	// /authorize/callback: it is NOT PASSED to the library before the cookie
+	// binding is verified (see Pages.Callback).
+	mux.HandleFunc(authorizePath+"/callback", interceptor.HandlerFunc(pages.Callback))
 
-	// Discovery belgesi: kutuphanenin urettigini AYNEN yayinlamiyoruz,
-	// desteklenmeyen akislari ayikliyoruz (bkz. discoveryDuzelt).
-	mux.Handle(oidc.DiscoveryEndpoint, araci.Handler(http.HandlerFunc(
+	// Discovery document: we do not publish what the library produces AS IS,
+	// we filter out the unsupported flows (see trimDiscovery).
+	mux.Handle(oidc.DiscoveryEndpoint, interceptor.Handler(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			belge := op.CreateDiscoveryConfig(r.Context(), saglayici, saglayici.Storage())
-			discoveryDuzelt(belge)
-			op.Discover(w, belge)
+			doc := op.CreateDiscoveryConfig(r.Context(), provider, provider.Storage())
+			trimDiscovery(doc)
+			op.Discover(w, doc)
 		})))
 
-	// Kok yol en sona baglanir: kutuphanenin diger uclari
-	// (/oauth/token, /userinfo, /keys, /end_session) buradan gecer.
-	mux.Handle("/", saglayici)
+	// The root path is mounted last: the library's other endpoints
+	// (/oauth/token, /userinfo, /keys, /end_session) go through here.
+	mux.Handle("/", provider)
 
 	return mux
 }
 
-// discoveryDuzelt, discovery belgesini GERCEKTEN destekledigimiz akislara
-// indirir.
+// trimDiscovery cuts the discovery document down to the flows we REALLY
+// support.
 //
-// NEDEN: zitadel/oidc v3.51.8 bu alanlari yapilandirmadan OKUMAZ,
-// SABIT uretir (pkg/op/discovery.go: ResponseTypes hep code + id_token +
-// "id_token token" doner; GrantTypes hep implicit ekler;
-// GrantTypeJWTAuthorizationSupported sabit true doner) ve
-// device_authorization_endpoint'i kosulsuz yazar. op.Config'de bunlari
-// kisitlayan bir alan YOK, bu yuzden belgeyi yayindan once kendimiz
-// duzeltiyoruz. Kutuphane kodu DEGISTIRILMEZ veya KOPYALANMAZ: belge
-// kutuphanenin kendi op.CreateDiscoveryConfig'i ile uretilir, biz
-// yalnizca yanlis alanlari ayikliyoruz.
+// WHY: zitadel/oidc v3.51.8 does NOT READ these fields from configuration,
+// it produces them as CONSTANTS (pkg/op/discovery.go: ResponseTypes always
+// returns code + id_token + "id_token token"; GrantTypes always adds
+// implicit; GrantTypeJWTAuthorizationSupported always returns true) and
+// writes device_authorization_endpoint unconditionally. There is NO field
+// in op.Config that restricts these, so we fix the document ourselves
+// before publishing it. The library code is NOT MODIFIED or COPIED: the
+// document is produced by the library's own op.CreateDiscoveryConfig and we
+// only filter out the wrong fields.
 //
-// Bu bir GUVENLIK duzeltmesi DEGIL: inceleyici implicit, jwt-bearer ve
-// device akislarinin hepsini denedi, hepsi dogru reddediliyor. Duzeltme
-// UYUMLULUK icin: metadata'ya guvenip implicit deneyen uyumlu bir RP
-// gereksiz yere hata alirdi.
-func discoveryDuzelt(belge *oidc.DiscoveryConfiguration) {
-	// Yalnizca authorization code akisi (PKCE S256 zorunlu, bkz.
-	// pkce.go). id_token / "id_token token" (implicit) desteklenmiyor.
-	belge.ResponseTypesSupported = []string{string(oidc.ResponseTypeCode)}
+// This is NOT a SECURITY fix: the reviewer tried the implicit, jwt-bearer
+// and device flows, and all of them are correctly rejected. The fix is for
+// COMPATIBILITY: a compliant RP that trusted the metadata and tried
+// implicit would get an error for no reason.
+func trimDiscovery(doc *oidc.DiscoveryConfiguration) {
+	// Only the authorization code flow (PKCE S256 mandatory, see
+	// pkce.go). id_token / "id_token token" (implicit) is not supported.
+	doc.ResponseTypesSupported = []string{string(oidc.ResponseTypeCode)}
 
-	// Desteklenen grant'lar: code + refresh_token. Kutuphanenin kosulsuz
-	// ekledigi implicit ve urn:ietf:params:oauth:grant-type:jwt-bearer
-	// burada DUSER.
-	belge.GrantTypesSupported = []oidc.GrantType{
+	// Supported grants: code + refresh_token. The implicit and
+	// urn:ietf:params:oauth:grant-type:jwt-bearer that the library adds
+	// unconditionally are DROPPED here.
+	doc.GrantTypesSupported = []oidc.GrantType{
 		oidc.GrantTypeCode,
 		oidc.GrantTypeRefreshToken,
 	}
 
-	// Device authorization grant uygulanmadi (Depo
-	// op.DeviceAuthorizationStorage'i karsilamiyor), ucu ilan etmek
-	// yanlis.
-	belge.DeviceAuthorizationEndpoint = ""
+	// The device authorization grant is not implemented (Storage does not
+	// satisfy op.DeviceAuthorizationStorage), so advertising the endpoint
+	// would be wrong.
+	doc.DeviceAuthorizationEndpoint = ""
 }
 
-// issuerGuvensizIzniDogrula, issuer http:// ile basliyorsa guvensiz moda
-// (op.WithAllowInsecure) izin verilip verilmeyecegine karar verir.
-// Kutuphane (zitadel/oidc) host'a bakmadan yalnizca semaya gore karar
-// verir; bu yuzden guvensiz izni BIZ, iki kosul BIRLIKTE saglandiginda
-// veriyoruz:
-//  1. env production degil (SERVER_ENV=production ise izin YOK).
-//  2. issuer'in host kismi localhost, 127.0.0.1 veya ::1 (port'lu
-//     haller dahil, url.Hostname() ile cozulur).
+// validateInsecureIssuer decides whether insecure mode
+// (op.WithAllowInsecure) may be allowed when the issuer starts with
+// http://. The library (zitadel/oidc) decides only by the scheme without
+// looking at the host; that is why WE grant the insecure permission only
+// when two conditions hold TOGETHER:
+//  1. env is not production (if SERVER_ENV=production there is NO
+//     permission).
+//  2. the host part of the issuer is localhost, 127.0.0.1 or ::1
+//     (including the forms with a port, resolved with url.Hostname()).
 //
-// Aksi halde https zorunlu hatasi doner ve Start hicbir baglanti
-// acmadan durur. Issuer sir degildir, hata mesajinda ve uyari
-// loglarinda acikca gecebilir.
-func issuerGuvensizIzniDogrula(issuer, env string) error {
+// Otherwise the https-required error is returned and Start stops without
+// opening any connection. The issuer is not a secret, it may appear openly
+// in the error message and in the warning logs.
+func validateInsecureIssuer(issuer, env string) error {
 	if !strings.HasPrefix(issuer, "http://") {
 		return nil
 	}
@@ -588,69 +601,70 @@ func issuerGuvensizIzniDogrula(issuer, env string) error {
 	return nil
 }
 
-// migrateKilitli, Migrate'i bir Postgres advisory lock ile sarar. Kumede
-// rolling update sirasinda iki pod es zamanli Migrate kosarsa ikisi de
-// "uygulanmadi" kontrolunu gecebilir ve schema_migrations birincil
-// anahtar cakismasina duser; kilit bunu engeller. Kilidi ayni baglanti
-// uzerinden alip birakmak icin havuzdan tek bir baglanti odunc aliyoruz.
-func migrateKilitli(ctx context.Context, havuz *pgxpool.Pool) error {
-	baglanti, err := havuz.Acquire(ctx)
+// migrateLocked wraps Migrate in a Postgres advisory lock. If two pods run
+// Migrate at the same time during a rolling update in the cluster, both
+// can pass the "not applied" check and hit a schema_migrations primary
+// key conflict; the lock prevents that. To take and release the lock on
+// the same connection we borrow a single connection from the pool.
+func migrateLocked(ctx context.Context, pool *pgxpool.Pool) error {
+	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("migration icin baglanti alinamadi: %w", err)
 	}
-	defer baglanti.Release()
+	defer conn.Release()
 
-	if _, err := baglanti.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationKilitAnahtari); err != nil {
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationLockKey); err != nil {
 		return fmt.Errorf("migration kilidi alinamadi: %w", err)
 	}
 	defer func() {
-		// Kilidi ayni baglanti uzerinden birak; birakma hatasi migration
-		// sonucunu degistirmez ama sessizce yutulmamali, iz birakilmali.
-		if _, err := baglanti.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationKilitAnahtari); err != nil {
+		// Release the lock on the same connection; a release error does not
+		// change the migration result but must not be swallowed silently, it
+		// has to leave a trace.
+		if _, err := conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationLockKey); err != nil {
 			log.Printf("migration kilidi birakilamadi: %v", err)
 		}
 	}()
 
-	return Migrate(ctx, havuz)
+	return Migrate(ctx, pool)
 }
 
-// Kapat, HTTP dinleyicisini nazikce durdurur ve veritabani havuzunu
-// kapatir. Havuz, dinleyici kapanisi hata verse bile HER YOLDA kapatilir;
-// aksi halde Shutdown hatasinda havuz sizar.
-func (s *Sunucu) Kapat(ctx context.Context) error {
-	// Kapanis baslar baslamaz /health "kimlik": false demeli.
-	s.hazir.Store(false)
+// Shutdown gracefully stops the HTTP listener and closes the database
+// pool. The pool is closed on EVERY PATH even if the listener shutdown
+// returns an error; otherwise the pool leaks when Shutdown fails.
+func (s *Server) Shutdown(ctx context.Context) error {
+	// As soon as shutdown begins /health must say "kimlik": false.
+	s.ready.Store(false)
 	shutdownErr := s.srv.Shutdown(ctx)
 	if shutdownErr != nil {
 		shutdownErr = fmt.Errorf("dinleyici kapatilamadi: %w", shutdownErr)
 	}
-	s.havuz.Close()
-	// JWKS yenileme goroutine'leri surec yasadigi surece yasar; kapanista
-	// ACIKCA durdurulur, aksi halde kapatilmis bir sunucunun arkasinda
-	// saatlik ag cagrilari surer.
-	if s.fedIptal != nil {
-		s.fedIptal()
+	s.pool.Close()
+	// The JWKS refresh goroutines live as long as the process does; they are
+	// stopped EXPLICITLY on shutdown, otherwise hourly network calls would
+	// continue behind a server that has been shut down.
+	if s.fedCancel != nil {
+		s.fedCancel()
 	}
-	for ad, d := range s.dogrulayicilar {
-		if err := d.Close(); err != nil {
-			log.Printf("%s dogrulayicisi kapatilamadi: %v", ad, err)
+	for name, v := range s.verifiers {
+		if err := v.Close(); err != nil {
+			log.Printf("%s dogrulayicisi kapatilamadi: %v", name, err)
 		}
 	}
 	return shutdownErr
 }
 
-// APIAcikAnahtar, access token dogrulamasi icin API tarafinin kullanacagi
-// ham RSA acik anahtarini dondurur. Anahtar.AcikAnahtar()'dan bilincli
-// olarak farkli: o JWKS yayini icin op.Key sarmalayicisi doner, bu ise
-// dogrudan *rsa.PublicKey.
-func (s *Sunucu) APIAcikAnahtar() *rsa.PublicKey {
-	return &s.anahtar.ozel.PublicKey
+// APIPublicKey returns the raw RSA public key that the API side will use
+// for access token verification. It is deliberately different from
+// SigningKey.PublicKey(): that returns the op.Key wrapper for publishing
+// the JWKS, while this returns a *rsa.PublicKey directly.
+func (s *Server) APIPublicKey() *rsa.PublicKey {
+	return &s.signingKey.private.PublicKey
 }
 
-// HesapSil, kullanicinin kimlik kaydini siler. Federe eslesmeler ve
-// refresh aileleri ON DELETE CASCADE ile gider; yeni access token
-// uretilemez. Elde kalan access token'lar icin API tarafindaki
-// silinmis kullanici engeli devreye girer.
-func (s *Sunucu) HesapSil(ctx context.Context, userID string) error {
-	return s.kullanicilar.Sil(ctx, userID)
+// DeleteAccount deletes the user's identity record. Federated links and
+// refresh families go away with ON DELETE CASCADE; no new access token can
+// be produced. For the access tokens that remain, the deleted-user block
+// on the API side comes into play.
+func (s *Server) DeleteAccount(ctx context.Context, userID string) error {
+	return s.users.Delete(ctx, userID)
 }

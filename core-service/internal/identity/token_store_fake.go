@@ -9,31 +9,31 @@ import (
 	"github.com/google/uuid"
 )
 
-// SahteTokenStore, testler icin bellek ici TokenStore. Rotasyon, yeniden
-// kullanim tespiti ve aile iptali mantigi PostgresTokenStore ile BIREBIR
-// ayni sirada ve ayni kosullarla isler; testler iki uygulamayi ayni
-// sozlesmeye gore olcer.
-type SahteTokenStore struct {
+// FakeTokenStore is an in-memory TokenStore for tests. The rotation, reuse
+// detection and family revocation logic works in EXACTLY the same order
+// and under the same conditions as PostgresTokenStore; the tests measure
+// both implementations against the same contract.
+type FakeTokenStore struct {
 	mu      sync.Mutex
-	access  map[string]*AccessKayit
-	refresh map[string]*RefreshKayit // anahtar: token_hash'in string hali
+	access  map[string]*AccessRecord
+	refresh map[string]*RefreshRecord // key: the string form of token_hash
 }
 
-func NewSahteTokenStore() *SahteTokenStore {
-	return &SahteTokenStore{
-		access:  map[string]*AccessKayit{},
-		refresh: map[string]*RefreshKayit{},
+func NewFakeTokenStore() *FakeTokenStore {
+	return &FakeTokenStore{
+		access:  map[string]*AccessRecord{},
+		refresh: map[string]*RefreshRecord{},
 	}
 }
 
-func (s *SahteTokenStore) AccessKaydet(ctx context.Context, id, userID, clientID string, scopes []string, expiresAt time.Time) error {
-	// Redis tarafinda TTL <= 0 ise kayit hic yazilmaz; burada da ayni.
+func (s *FakeTokenStore) SaveAccess(ctx context.Context, id, userID, clientID string, scopes []string, expiresAt time.Time) error {
+	// On the Redis side no record is written when TTL <= 0; same here.
 	if time.Until(expiresAt) <= 0 {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.access[id] = &AccessKayit{
+	s.access[id] = &AccessRecord{
 		ID:        id,
 		UserID:    userID,
 		ClientID:  clientID,
@@ -43,224 +43,229 @@ func (s *SahteTokenStore) AccessKaydet(ctx context.Context, id, userID, clientID
 	return nil
 }
 
-func (s *SahteTokenStore) AccessOku(ctx context.Context, id string) (*AccessKayit, error) {
+func (s *FakeTokenStore) GetAccess(ctx context.Context, id string) (*AccessRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	kayit, ok := s.access[id]
+	record, ok := s.access[id]
 	if !ok {
-		return nil, ErrJetonYok
+		return nil, ErrTokenNotFound
 	}
-	if time.Now().UTC().After(kayit.ExpiresAt) {
-		return nil, ErrJetonYok
+	if time.Now().UTC().After(record.ExpiresAt) {
+		return nil, ErrTokenNotFound
 	}
-	return accessKopya(kayit), nil
+	return copyAccess(record), nil
 }
 
-// AccessSil, Postgres uygulamasiyla ayni sekilde kaydi kaldirir; kayit
-// yoksa sessizce basarili sayilir.
-func (s *SahteTokenStore) AccessSil(ctx context.Context, id string) error {
+// DeleteAccess removes the record the same way the Postgres implementation
+// does; if there is no record it silently counts as success.
+func (s *FakeTokenStore) DeleteAccess(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.access, id)
 	return nil
 }
 
-// RefreshOlustur yeni bir AILE baslatir: family_id yeni uretilir.
-func (s *SahteTokenStore) RefreshOlustur(ctx context.Context, k *RefreshKayit) (string, error) {
-	jeton, err := jetonUret()
+// CreateRefresh starts a new FAMILY: family_id is freshly generated.
+func (s *FakeTokenStore) CreateRefresh(ctx context.Context, r *RefreshRecord) (string, error) {
+	token, err := generateToken()
 	if err != nil {
 		return "", err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.ekle(k, uuid.NewString(), jeton)
-	return jeton, nil
+	s.insertLocked(r, uuid.NewString(), token)
+	return token, nil
 }
 
-// ekle, s.mu kilitliyken cagrilir. Postgres'teki INSERT ile ayni alanlari
-// doldurur; jetonun kendisi degil ozeti saklanir.
-func (s *SahteTokenStore) ekle(k *RefreshKayit, familyID, jeton string) {
-	ozet := jetonOzet(jeton)
-	s.refresh[string(ozet)] = &RefreshKayit{
+// insertLocked is called while s.mu is held. It fills the same fields as
+// the INSERT in Postgres; the hash of the token is stored, not the token
+// itself.
+func (s *FakeTokenStore) insertLocked(r *RefreshRecord, familyID, token string) {
+	hash := hashToken(token)
+	s.refresh[string(hash)] = &RefreshRecord{
 		ID:        uuid.NewString(),
 		FamilyID:  familyID,
-		UserID:    k.UserID,
-		ClientID:  k.ClientID,
-		TokenHash: ozet,
-		Scopes:    slices.Clone(k.Scopes),
-		Audience:  slices.Clone(k.Audience),
-		AMR:       slices.Clone(k.AMR),
-		AuthTime:  k.AuthTime,
-		ExpiresAt: k.ExpiresAt,
+		UserID:    r.UserID,
+		ClientID:  r.ClientID,
+		TokenHash: hash,
+		Scopes:    slices.Clone(r.Scopes),
+		Audience:  slices.Clone(r.Audience),
+		AMR:       slices.Clone(r.AMR),
+		AuthTime:  r.AuthTime,
+		ExpiresAt: r.ExpiresAt,
 	}
 }
 
-// RefreshDondur, Postgres uygulamasiyla ayni sirayla karar verir:
-// kayit yok -> revoked -> used (aile iptali) -> suresi gecmis -> rotasyon.
-// Bellek ici oldugu icin tek kilit, Postgres'teki islem + FOR UPDATE
-// satir kilidinin karsiligidir.
-func (s *SahteTokenStore) RefreshDondur(ctx context.Context, sunulan string, yeni *RefreshKayit) (string, error) {
+// RotateRefresh decides in the same order as the Postgres implementation:
+// no record -> revoked -> used (family revocation) -> expired -> rotation.
+// Since it is in-memory, the single lock stands in for the transaction +
+// FOR UPDATE row lock in Postgres.
+func (s *FakeTokenStore) RotateRefresh(ctx context.Context, presented string, fresh *RefreshRecord) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	kayit, ok := s.refresh[string(jetonOzet(sunulan))]
+	record, ok := s.refresh[string(hashToken(presented))]
 	if !ok {
-		return "", ErrJetonYok
+		return "", ErrTokenNotFound
 	}
-	// Sira onemli: iptal edilmis jeton zaten olu oldugu icin (aile bir
-	// kez iptal edildikten sonra) yeniden kullanim alarmi tekrar
-	// calmasin; yeniden kullanim kontrolu ondan sonra gelir.
-	if kayit.RevokedAt != nil {
-		return "", ErrJetonYok
+	// Order matters: a revoked token is already dead (once the family has
+	// been revoked), so the reuse alarm must not fire again; the reuse
+	// check comes after it.
+	if record.RevokedAt != nil {
+		return "", ErrTokenNotFound
 	}
-	if kayit.UsedAt != nil {
-		// Yeniden kullanim: ailenin tamamini oldur ve ayri bir hata don.
-		s.aileIptal(kayit.FamilyID)
-		return "", ErrJetonTekrar
+	if record.UsedAt != nil {
+		// Reuse: kill the whole family and return a distinct error.
+		s.revokeFamilyLocked(record.FamilyID)
+		return "", ErrTokenReused
 	}
-	// Sahiplik: cagiran katmanda bir hata olursa ayni aileye baska bir
-	// kullanicinin (veya baska istemcinin) kaydi eklenmesin. Ucuz savunma,
-	// uyusmazlikta jeton hic yokmus gibi davranilir.
-	if kayit.UserID != yeni.UserID || kayit.ClientID != yeni.ClientID {
-		return "", ErrJetonYok
+	// Ownership: if the calling layer has a bug, another user's (or
+	// another client's) record must not be added to the same family. A
+	// cheap defense: on a mismatch the token is treated as if it did not
+	// exist.
+	if record.UserID != fresh.UserID || record.ClientID != fresh.ClientID {
+		return "", ErrTokenNotFound
 	}
-	if time.Now().UTC().After(kayit.ExpiresAt) {
-		return "", ErrJetonYok
+	if time.Now().UTC().After(record.ExpiresAt) {
+		return "", ErrTokenNotFound
 	}
-	jeton, err := jetonUret()
+	token, err := generateToken()
 	if err != nil {
 		return "", err
 	}
-	simdi := time.Now().UTC()
-	kayit.UsedAt = &simdi
-	// Yeni kayit AYNI family_id ile eklenir: zincirin izi korunur ki
-	// sonradan bir yeniden kullanim gorulurse tum zincir iptal edilebilsin.
-	s.ekle(yeni, kayit.FamilyID, jeton)
-	return jeton, nil
+	now := time.Now().UTC()
+	record.UsedAt = &now
+	// The new record is added with the SAME family_id: the trace of the chain
+	// is preserved so that if a reuse is seen later the whole chain can be
+	// revoked.
+	s.insertLocked(fresh, record.FamilyID, token)
+	return token, nil
 }
 
-// RefreshOku, Postgres uygulamasiyla BIREBIR ayni sirayla karar verir:
-// kayit yok -> ErrJetonYok, revoked -> ErrJetonYok, used ->
-// ErrJetonTekrar (yeniden kullanim), suresi gecmis -> ErrJetonYok.
-// Iki uygulamanin burada ayrismasi daha once bir kusura yol acti; sira ve
-// hatalar aynen korunmali.
-func (s *SahteTokenStore) RefreshOku(ctx context.Context, sunulan string) (*RefreshKayit, error) {
+// GetRefresh decides in EXACTLY the same order as the Postgres
+// implementation: no record -> ErrTokenNotFound, revoked ->
+// ErrTokenNotFound, used -> ErrTokenReused (reuse), expired ->
+// ErrTokenNotFound. A divergence between the two implementations here has
+// caused a defect before; the order and the errors must be kept as they
+// are.
+func (s *FakeTokenStore) GetRefresh(ctx context.Context, presented string) (*RefreshRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	kayit, ok := s.refresh[string(jetonOzet(sunulan))]
+	record, ok := s.refresh[string(hashToken(presented))]
 	if !ok {
-		return nil, ErrJetonYok
+		return nil, ErrTokenNotFound
 	}
-	if kayit.RevokedAt != nil {
-		return nil, ErrJetonYok
+	if record.RevokedAt != nil {
+		return nil, ErrTokenNotFound
 	}
-	if kayit.UsedAt != nil {
-		return nil, ErrJetonTekrar
+	if record.UsedAt != nil {
+		return nil, ErrTokenReused
 	}
-	if time.Now().UTC().After(kayit.ExpiresAt) {
-		return nil, ErrJetonYok
+	if time.Now().UTC().After(record.ExpiresAt) {
+		return nil, ErrTokenNotFound
 	}
-	return refreshKopya(kayit), nil
+	return copyRefresh(record), nil
 }
 
-// RefreshAileID, Postgres uygulamasiyla ayni sozlesme: ham jetondan aile
-// kimligi, gecerlilik filtrelemesi olmadan.
-func (s *SahteTokenStore) RefreshAileID(ctx context.Context, sunulan string) (string, error) {
+// RefreshFamilyID has the same contract as the Postgres implementation: the
+// family ID from the raw token, without validity filtering.
+func (s *FakeTokenStore) RefreshFamilyID(ctx context.Context, presented string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	kayit, ok := s.refresh[string(jetonOzet(sunulan))]
+	record, ok := s.refresh[string(hashToken(presented))]
 	if !ok {
-		return "", ErrJetonYok
+		return "", ErrTokenNotFound
 	}
-	return kayit.FamilyID, nil
+	return record.FamilyID, nil
 }
 
-// RefreshIDileOku, Postgres uygulamasiyla ayni sozlesmeyi karsilar: ID ile
-// arar (jetonun kendisiyle degil) ve gecerlilik filtrelemesi yapmaz.
-// Sahte depo jetonu (hash'ini) anahtar olarak tuttugu icin ID ile aramak
-// dogrusal bir tarama gerektirir; testler icin bu yeterlidir.
-func (s *SahteTokenStore) RefreshIDileOku(ctx context.Context, id string) (*RefreshKayit, error) {
+// GetRefreshByID satisfies the same contract as the Postgres
+// implementation: it looks up by ID (not by the token itself) and does not
+// filter for validity. Since the fake store keeps the token (its hash) as
+// the key, looking up by ID requires a linear scan; that is enough for
+// tests.
+func (s *FakeTokenStore) GetRefreshByID(ctx context.Context, id string) (*RefreshRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, kayit := range s.refresh {
-		if kayit.ID == id {
-			return refreshKopya(kayit), nil
+	for _, record := range s.refresh {
+		if record.ID == id {
+			return copyRefresh(record), nil
 		}
 	}
-	return nil, ErrJetonYok
+	return nil, ErrTokenNotFound
 }
 
-func (s *SahteTokenStore) AileIptal(ctx context.Context, familyID string) error {
+func (s *FakeTokenStore) RevokeFamily(ctx context.Context, familyID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.aileIptal(familyID)
+	s.revokeFamilyLocked(familyID)
 	return nil
 }
 
-// aileIptal, s.mu kilitliyken cagrilir. Postgres karsiligi:
+// revokeFamilyLocked is called while s.mu is held. Postgres equivalent:
 // UPDATE ... WHERE family_id = $1 AND revoked_at IS NULL
-func (s *SahteTokenStore) aileIptal(familyID string) {
-	simdi := time.Now().UTC()
-	for _, kayit := range s.refresh {
-		if kayit.FamilyID == familyID && kayit.RevokedAt == nil {
-			iptal := simdi
-			kayit.RevokedAt = &iptal
+func (s *FakeTokenStore) revokeFamilyLocked(familyID string) {
+	now := time.Now().UTC()
+	for _, record := range s.refresh {
+		if record.FamilyID == familyID && record.RevokedAt == nil {
+			revokedAt := now
+			record.RevokedAt = &revokedAt
 		}
 	}
 }
 
-// KullaniciIptal, Postgres karsiligi:
+// RevokeUser: Postgres equivalent:
 // UPDATE ... WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL
-func (s *SahteTokenStore) KullaniciIptal(ctx context.Context, userID, clientID string) error {
+func (s *FakeTokenStore) RevokeUser(ctx context.Context, userID, clientID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	simdi := time.Now().UTC()
-	for _, kayit := range s.refresh {
-		if kayit.UserID == userID && kayit.ClientID == clientID && kayit.RevokedAt == nil {
-			iptal := simdi
-			kayit.RevokedAt = &iptal
+	now := time.Now().UTC()
+	for _, record := range s.refresh {
+		if record.UserID == userID && record.ClientID == clientID && record.RevokedAt == nil {
+			revokedAt := now
+			record.RevokedAt = &revokedAt
 		}
 	}
 	return nil
 }
 
-// TumKayitlar, testlerin depolanan bicimi denetlemesi icindir.
-func (s *SahteTokenStore) TumKayitlar() []*RefreshKayit {
+// AllRecords is for tests to inspect the stored form.
+func (s *FakeTokenStore) AllRecords() []*RefreshRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	hepsi := make([]*RefreshKayit, 0, len(s.refresh))
-	for _, kayit := range s.refresh {
-		hepsi = append(hepsi, refreshKopya(kayit))
+	all := make([]*RefreshRecord, 0, len(s.refresh))
+	for _, record := range s.refresh {
+		all = append(all, copyRefresh(record))
 	}
-	return hepsi
+	return all
 }
 
-// refreshKopya / accessKopya / zamanKopya: sahte depo cagirana DAHILI
-// isaretci vermez. PostgresTokenStore her okumada satiri yeniden
-// tarayarak dogal olarak taze bir yapi doner; cagiran donen kaydi
-// mutasyona ugratsa (orn. RevokedAt = nil) veritabani bozulmaz. Sahte
-// deponun ayni yalitimi elle saglamasi gerekir, yoksa testler gecerken
-// uretim sasar.
-func refreshKopya(k *RefreshKayit) *RefreshKayit {
-	kopya := *k
-	kopya.TokenHash = slices.Clone(k.TokenHash)
-	kopya.Scopes = slices.Clone(k.Scopes)
-	kopya.Audience = slices.Clone(k.Audience)
-	kopya.AMR = slices.Clone(k.AMR)
-	kopya.UsedAt = zamanKopya(k.UsedAt)
-	kopya.RevokedAt = zamanKopya(k.RevokedAt)
-	return &kopya
+// copyRefresh / copyAccess / copyTime: the fake store never hands an
+// INTERNAL pointer to the caller. PostgresTokenStore naturally returns a
+// fresh struct because it rescans the row on every read; if the caller
+// mutates the returned record (e.g. RevokedAt = nil) the database is not
+// corrupted. The fake store has to provide the same isolation by hand,
+// otherwise production drifts while the tests pass.
+func copyRefresh(r *RefreshRecord) *RefreshRecord {
+	clone := *r
+	clone.TokenHash = slices.Clone(r.TokenHash)
+	clone.Scopes = slices.Clone(r.Scopes)
+	clone.Audience = slices.Clone(r.Audience)
+	clone.AMR = slices.Clone(r.AMR)
+	clone.UsedAt = copyTime(r.UsedAt)
+	clone.RevokedAt = copyTime(r.RevokedAt)
+	return &clone
 }
 
-func accessKopya(k *AccessKayit) *AccessKayit {
-	kopya := *k
-	kopya.Scopes = slices.Clone(k.Scopes)
-	return &kopya
+func copyAccess(r *AccessRecord) *AccessRecord {
+	clone := *r
+	clone.Scopes = slices.Clone(r.Scopes)
+	return &clone
 }
 
-func zamanKopya(t *time.Time) *time.Time {
+func copyTime(t *time.Time) *time.Time {
 	if t == nil {
 		return nil
 	}
-	k := *t
-	return &k
+	r := *t
+	return &r
 }

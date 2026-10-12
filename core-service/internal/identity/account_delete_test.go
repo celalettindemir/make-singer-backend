@@ -12,7 +12,7 @@ import (
 // ON DELETE CASCADE ile gitmeli (canli Postgres; yoksa atlanir).
 func TestHesapSilCascade(t *testing.T) {
 	kullanicilar := testPostgresUserStore(t)
-	havuz := kullanicilar.havuz
+	havuz := kullanicilar.pool
 	jetonlar := NewPostgresTokenStore(havuz, nil)
 	federe := NewPostgresFedereDepo(havuz)
 	ctx := context.Background()
@@ -27,11 +27,11 @@ func TestHesapSilCascade(t *testing.T) {
 	if err := federe.Bagla(ctx, "google", "sub-"+uuid.NewString(), k.ID); err != nil {
 		t.Fatalf("Bagla: %v", err)
 	}
-	if _, err := jetonlar.RefreshOlustur(ctx, yeniRefresh(k.ID)); err != nil {
+	if _, err := jetonlar.CreateRefresh(ctx, yeniRefresh(k.ID)); err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
 
-	if err := kullanicilar.Sil(ctx, k.ID); err != nil {
+	if err := kullanicilar.Delete(ctx, k.ID); err != nil {
 		t.Fatalf("Sil: %v", err)
 	}
 
@@ -41,7 +41,7 @@ func TestHesapSilCascade(t *testing.T) {
 	if federeSayi != 0 || refreshSayi != 0 {
 		t.Fatalf("cascade calismadi: federe=%d refresh=%d", federeSayi, refreshSayi)
 	}
-	if err := kullanicilar.Sil(ctx, k.ID); !errors.Is(err, ErrKullaniciYok) {
+	if err := kullanicilar.Delete(ctx, k.ID); !errors.Is(err, ErrUserNotFound) {
 		t.Errorf("ikinci Sil = %v, beklenen ErrKullaniciYok", err)
 	}
 }

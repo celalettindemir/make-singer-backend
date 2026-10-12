@@ -8,59 +8,59 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/op"
 )
 
-// MobilIstemci, tek birinci-taraf istemcimizi tanimlar: native public
-// client, yalnizca authorization code + PKCE.
-type MobilIstemci struct {
+// MobileClient defines our only first-party client: a native public
+// client, authorization code + PKCE only.
+type MobileClient struct {
 	cfg *config.AuthConfig
 }
 
-func NewMobilIstemci(cfg *config.AuthConfig) *MobilIstemci {
-	return &MobilIstemci{cfg: cfg}
+func NewMobileClient(cfg *config.AuthConfig) *MobileClient {
+	return &MobileClient{cfg: cfg}
 }
 
-var _ op.Client = (*MobilIstemci)(nil)
+var _ op.Client = (*MobileClient)(nil)
 
-func (c *MobilIstemci) GetID() string          { return c.cfg.ClientID }
-func (c *MobilIstemci) RedirectURIs() []string { return c.cfg.RedirectURIs }
+func (c *MobileClient) GetID() string          { return c.cfg.ClientID }
+func (c *MobileClient) RedirectURIs() []string { return c.cfg.RedirectURIs }
 
-// Cikis sonrasi geri donus de ayni adreslere sinirlidir.
-func (c *MobilIstemci) PostLogoutRedirectURIs() []string { return c.cfg.RedirectURIs }
+// The return after logout is restricted to the same addresses.
+func (c *MobileClient) PostLogoutRedirectURIs() []string { return c.cfg.RedirectURIs }
 
-func (c *MobilIstemci) ApplicationType() op.ApplicationType { return op.ApplicationTypeNative }
-func (c *MobilIstemci) AuthMethod() oidc.AuthMethod         { return oidc.AuthMethodNone }
+func (c *MobileClient) ApplicationType() op.ApplicationType { return op.ApplicationTypeNative }
+func (c *MobileClient) AuthMethod() oidc.AuthMethod         { return oidc.AuthMethodNone }
 
-func (c *MobilIstemci) ResponseTypes() []oidc.ResponseType {
+func (c *MobileClient) ResponseTypes() []oidc.ResponseType {
 	return []oidc.ResponseType{oidc.ResponseTypeCode}
 }
 
-func (c *MobilIstemci) GrantTypes() []oidc.GrantType {
+func (c *MobileClient) GrantTypes() []oidc.GrantType {
 	return []oidc.GrantType{oidc.GrantTypeCode, oidc.GrantTypeRefreshToken}
 }
 
-// LoginURL, kullaniciyi kendi giris sayfamiza yollar. authRequestID'yi
-// tasimak zorunludur; sayfa girisi tamamladiktan sonra bu id ile
-// akisi surdurur.
-func (c *MobilIstemci) LoginURL(authRequestID string) string {
+// LoginURL sends the user to our own login page. It must carry
+// authRequestID; once the page completes the login it resumes the flow
+// with this ID.
+func (c *MobileClient) LoginURL(authRequestID string) string {
 	return yolGiris + "?authRequestID=" + authRequestID
 }
 
-// JWT access token: /api/* dogrulamasi veri deposuna gitmez.
-func (c *MobilIstemci) AccessTokenType() op.AccessTokenType { return op.AccessTokenTypeJWT }
+// JWT access token: /api/* verification never touches the data store.
+func (c *MobileClient) AccessTokenType() op.AccessTokenType { return op.AccessTokenTypeJWT }
 
-func (c *MobilIstemci) IDTokenLifetime() time.Duration { return time.Hour }
-func (c *MobilIstemci) DevMode() bool                  { return false }
+func (c *MobileClient) IDTokenLifetime() time.Duration { return time.Hour }
+func (c *MobileClient) DevMode() bool                  { return false }
 
-func (c *MobilIstemci) RestrictAdditionalIdTokenScopes() func([]string) []string {
+func (c *MobileClient) RestrictAdditionalIdTokenScopes() func([]string) []string {
 	return func(scopes []string) []string { return scopes }
 }
 
-func (c *MobilIstemci) RestrictAdditionalAccessTokenScopes() func([]string) []string {
+func (c *MobileClient) RestrictAdditionalAccessTokenScopes() func([]string) []string {
 	return func(scopes []string) []string { return scopes }
 }
 
-// Izin verilen scope'lar acikca listelenir; tanimsiz bir scope sessizce
-// kabul edilmez.
-func (c *MobilIstemci) IsScopeAllowed(scope string) bool {
+// Allowed scopes are listed explicitly; an undefined scope is never
+// accepted silently.
+func (c *MobileClient) IsScopeAllowed(scope string) bool {
 	switch scope {
 	case oidc.ScopeOpenID, oidc.ScopeProfile, oidc.ScopeEmail, oidc.ScopeOfflineAccess:
 		return true
@@ -68,8 +68,8 @@ func (c *MobilIstemci) IsScopeAllowed(scope string) bool {
 	return false
 }
 
-// id_token, userinfo claim'lerini de tasir: mobil ayrica /userinfo
-// cagirmak zorunda kalmaz.
-func (c *MobilIstemci) IDTokenUserinfoClaimsAssertion() bool { return true }
+// The id_token also carries the userinfo claims: the mobile app does not
+// have to call /userinfo separately.
+func (c *MobileClient) IDTokenUserinfoClaimsAssertion() bool { return true }
 
-func (c *MobilIstemci) ClockSkew() time.Duration { return 0 }
+func (c *MobileClient) ClockSkew() time.Duration { return 0 }

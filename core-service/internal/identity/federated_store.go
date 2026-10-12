@@ -100,7 +100,7 @@ func (d *PostgresFedereDepo) FedereKullaniciOlustur(
 
 	k := &User{
 		ID:            uuid.NewString(),
-		Email:         epostaNormalize(email),
+		Email:         normalizeEmail(email),
 		EmailVerified: epostaDogrulandi,
 		Name:          strings.TrimSpace(ad),
 		CreatedAt:     time.Now().UTC(),
@@ -113,7 +113,7 @@ func (d *PostgresFedereDepo) FedereKullaniciOlustur(
 		k.ID, k.Email, k.EmailVerified, k.Name, k.CreatedAt); err != nil {
 		var pgHata *pgconn.PgError
 		if errors.As(err, &pgHata) && pgHata.Code == "23505" {
-			return nil, ErrEpostaKullanimda
+			return nil, ErrEmailInUse
 		}
 		return nil, fmt.Errorf("federe kullanici olusturulamadi: %w", err)
 	}

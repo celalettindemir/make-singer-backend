@@ -187,7 +187,7 @@ func (f *FedereSayfalar) kullaniciCoz(
 		return nil, nil, fmt.Errorf("federe kimlik okunamadi: %w", err)
 	}
 
-	eposta := epostaNormalize(iddia.Email)
+	eposta := normalizeEmail(iddia.Email)
 	// 2) Gizli aktarma adresinde cakisma kontrolu HIC yapilmaz.
 	gizliAktarma := strings.HasSuffix(strings.ToLower(eposta), gizliAktarmaSoneki)
 
@@ -212,7 +212,7 @@ func (f *FedereSayfalar) kullaniciCoz(
 				MevcutSaglayicilar: f.saglayicilar(ctx, mevcut.ID),
 				SifreliHesap:       false,
 			}, nil
-		case !errors.Is(err, ErrKullaniciYok):
+		case !errors.Is(err, ErrUserNotFound):
 			return nil, nil, fmt.Errorf("kullanici okunamadi: %w", err)
 		}
 	}
@@ -236,7 +236,7 @@ func (f *FedereSayfalar) kullaniciCoz(
 	}
 	yeni, err := f.federe.FedereKullaniciOlustur(
 		ctx, saglayici, iddia.UserID, eposta, iddia.Name, bool(iddia.EmailVerified))
-	if errors.Is(err, ErrEpostaKullanimda) {
+	if errors.Is(err, ErrEmailInUse) {
 		// Gizli aktarma adresi zaten kayitli ya da arada bir yaris
 		// olustu. Her iki halde de BAGLAMA YOK: o satirin ayni kisiye
 		// ait oldugunu kanitlayamayiz.
@@ -512,7 +512,7 @@ func (f *FedereSayfalar) baglamaPost(w http.ResponseWriter, r *http.Request) {
 	if f.hiz != nil && !f.hiz.HesapSayaci(w, r, b.UserID) {
 		return
 	}
-	if !mevcut.SifreDogru(r.FormValue("sifre")) {
+	if !mevcut.PasswordMatches(r.FormValue("sifre")) {
 		// Kayit TUKETILMEZ: bir yazim hatasi tum federasyon turunu
 		// bastan yapmayi gerektirmesin. Denemeleri sinirlayan sey hiz
 		// limitleridir (IP basina + yukaridaki hesap basina sayac).

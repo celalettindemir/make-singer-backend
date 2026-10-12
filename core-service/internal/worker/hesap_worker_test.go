@@ -18,7 +18,7 @@ func (k *kayitSilici) DeletePrefix(ctx context.Context, prefix string) (int, err
 
 type bosKimlik struct{}
 
-func (bosKimlik) HesapSil(ctx context.Context, userID string) error { return nil }
+func (bosKimlik) DeleteAccount(ctx context.Context, userID string) error { return nil }
 
 func TestHesapWorker_OnekleriTemizler(t *testing.T) {
 	s := &kayitSilici{}

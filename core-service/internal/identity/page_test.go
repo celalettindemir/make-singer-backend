@@ -44,8 +44,8 @@ func (s *sayimUserStore) ByID(ctx context.Context, id string) (*User, error) {
 	return s.ic.ByID(ctx, id)
 }
 
-func (s *sayimUserStore) Sil(ctx context.Context, id string) error {
-	return s.ic.Sil(ctx, id)
+func (s *sayimUserStore) Delete(ctx context.Context, id string) error {
+	return s.ic.Delete(ctx, id)
 }
 
 func (s *sayimUserStore) sayilar() (int, int) {
@@ -107,7 +107,7 @@ type sayfaTestOrtami struct {
 
 func testSayfalar(t *testing.T) *sayfaTestOrtami {
 	t.Helper()
-	kullanici := &sayimUserStore{ic: NewSahteUserStore()}
+	kullanici := &sayimUserStore{ic: NewFakeUserStore()}
 	oturumlar := NewSahteOturumDepo()
 	tamamlayan := newSahteTamamlayici()
 	// Gercek geri cagirma op.AuthCallbackURL'den gelir; testte sabit bir
@@ -378,7 +378,7 @@ func TestCerezSecureBayragiIssuerSemasinaBagli(t *testing.T) {
 		guvenli bool
 	}{{"https", true}, {"http-yerel", false}} {
 		t.Run(d.ad, func(t *testing.T) {
-			s := NewSayfalar(NewSahteUserStore(), newSahteTamamlayici(), NewSahteOturumDepo(),
+			s := NewSayfalar(NewFakeUserStore(), newSahteTamamlayici(), NewSahteOturumDepo(),
 				func(_ context.Context, id string) string { return "/bitti?id=" + id }, d.guvenli)
 			w := httptest.NewRecorder()
 			if err := s.BaglamaKur(w, httptest.NewRequest(http.MethodGet, "/authorize", nil), "abc"); err != nil {

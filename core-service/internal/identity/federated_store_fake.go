@@ -26,11 +26,11 @@ func federeAnahtar(saglayici, sub string) string {
 // paylasmasi gibi.
 type SahteFedereDepo struct {
 	mu         sync.Mutex
-	kullanici  *SahteUserStore
+	kullanici  *FakeUserStore
 	eslesmeler map[string]string // federeAnahtar(saglayici, sub) -> userID
 }
 
-func NewSahteFedereDepo(kullanici *SahteUserStore) *SahteFedereDepo {
+func NewSahteFedereDepo(kullanici *FakeUserStore) *SahteFedereDepo {
 	return &SahteFedereDepo{
 		kullanici:  kullanici,
 		eslesmeler: map[string]string{},
@@ -109,23 +109,23 @@ func (d *SahteFedereDepo) SaglayicilarByUserID(ctx context.Context, userID strin
 // ekler. PostgresUserStore'un federe yolu gibi password_hash'i BOS
 // birakir: SifreDogru boylece her sifre icin false doner. Create ile AYNI
 // e-posta tekilligi kuralini uygular (buyuk/kucuk harf duyarsiz).
-func (s *SahteUserStore) federeEkle(email, ad string, epostaDogrulandi bool) (*User, error) {
-	anahtar := sahteEpostaAnahtar(email)
+func (s *FakeUserStore) federeEkle(email, ad string, epostaDogrulandi bool) (*User, error) {
+	anahtar := fakeEmailKey(email)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.epostayaGor[anahtar]; ok {
-		return nil, ErrEpostaKullanimda
+	if _, ok := s.byEmail[anahtar]; ok {
+		return nil, ErrEmailInUse
 	}
 	k := &User{
 		ID:            uuid.NewString(),
-		Email:         epostaNormalize(email),
+		Email:         normalizeEmail(email),
 		EmailVerified: epostaDogrulandi,
 		Name:          strings.TrimSpace(ad),
 		CreatedAt:     time.Now().UTC(),
 	}
-	s.epostayaGor[anahtar] = k
-	s.idyeGore[k.ID] = k
-	return kullaniciKopya(k), nil
+	s.byEmail[anahtar] = k
+	s.byID[k.ID] = k
+	return copyUser(k), nil
 }
 
 var _ FedereDepo = (*SahteFedereDepo)(nil)

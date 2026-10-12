@@ -23,7 +23,7 @@ func testPEM(t *testing.T) string {
 }
 
 func TestAnahtarYuklenirVeArayuzleriKarsilar(t *testing.T) {
-	a, err := AnahtarYukle(testPEM(t))
+	a, err := LoadSigningKey(testPEM(t))
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
 	}
@@ -42,11 +42,11 @@ func TestAnahtarYuklenirVeArayuzleriKarsilar(t *testing.T) {
 // JWKS gecersizlesir.
 func TestAnahtarIDKararli(t *testing.T) {
 	p := testPEM(t)
-	a1, err := AnahtarYukle(p)
+	a1, err := LoadSigningKey(p)
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
 	}
-	a2, err := AnahtarYukle(p)
+	a2, err := LoadSigningKey(p)
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
 	}
@@ -56,8 +56,8 @@ func TestAnahtarIDKararli(t *testing.T) {
 }
 
 func TestAnahtarIDFarkliAnahtarlardaFarkli(t *testing.T) {
-	a1, _ := AnahtarYukle(testPEM(t))
-	a2, _ := AnahtarYukle(testPEM(t))
+	a1, _ := LoadSigningKey(testPEM(t))
+	a2, _ := LoadSigningKey(testPEM(t))
 	if a1.ID() == a2.ID() {
 		t.Error("farkli anahtarlar ayni kid verdi")
 	}
@@ -69,7 +69,7 @@ func TestBozukPEMReddedilir(t *testing.T) {
 		"cop":       "bu bir PEM degil",
 		"govde yok": "-----BEGIN RSA PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----\n",
 	} {
-		if _, err := AnahtarYukle(girdi); err == nil {
+		if _, err := LoadSigningKey(girdi); err == nil {
 			t.Errorf("%s: hata beklenirken nil dondu", ad)
 		}
 	}
@@ -78,14 +78,14 @@ func TestBozukPEMReddedilir(t *testing.T) {
 // Sifreleme anahtari tam 32 bayt olmali; kisa bir sir sessizce
 // sifirlarla doldurulursa sifreleme zayiflar.
 func TestCryptoAnahtarUzunlugu(t *testing.T) {
-	if _, err := CryptoAnahtar(strings.Repeat("a", 31)); err == nil {
+	if _, err := CryptoKey(strings.Repeat("a", 31)); err == nil {
 		t.Error("31 baytlik anahtar kabul edildi")
 	}
-	if _, err := CryptoAnahtar(strings.Repeat("a", 33)); err == nil {
+	if _, err := CryptoKey(strings.Repeat("a", 33)); err == nil {
 		t.Error("33 baytlik anahtar kabul edildi")
 	}
 	gizli := strings.Repeat("a", 32)
-	b, err := CryptoAnahtar(gizli)
+	b, err := CryptoKey(gizli)
 	if err != nil {
 		t.Fatalf("32 baytlik anahtar reddedildi: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestPKCS8FormatKabulu(t *testing.T) {
 	blok := &pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8Bytes}
 	pemMetni := string(pem.EncodeToMemory(blok))
 
-	a, err := AnahtarYukle(pemMetni)
+	a, err := LoadSigningKey(pemMetni)
 	if err != nil {
 		t.Fatalf("PKCS#8 anahtari yuklemedi: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestKisaBitAnahtariReddedilir(t *testing.T) {
 	blok := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(rsaAnahtar)}
 	pemMetni := string(pem.EncodeToMemory(blok))
 
-	_, err = AnahtarYukle(pemMetni)
+	_, err = LoadSigningKey(pemMetni)
 	if err == nil {
 		t.Error("1024 bitlik anahtar kabul edildi")
 	}
@@ -141,15 +141,15 @@ func TestKisaBitAnahtariReddedilir(t *testing.T) {
 
 // JWKS'e ozel anahtar asla girmemeli.
 func TestAcikAnahtarOzelAnahtarSizdirmaz(t *testing.T) {
-	a, err := AnahtarYukle(testPEM(t))
+	a, err := LoadSigningKey(testPEM(t))
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
 	}
-	var _ op.Key = a.AcikAnahtar()
-	switch a.AcikAnahtar().Key().(type) {
+	var _ op.Key = a.PublicKey()
+	switch a.PublicKey().Key().(type) {
 	case *rsa.PublicKey:
 		// dogru
 	default:
-		t.Fatalf("AcikAnahtar().Key() tipi %T, *rsa.PublicKey olmali", a.AcikAnahtar().Key())
+		t.Fatalf("AcikAnahtar().Key() tipi %T, *rsa.PublicKey olmali", a.PublicKey().Key())
 	}
 }

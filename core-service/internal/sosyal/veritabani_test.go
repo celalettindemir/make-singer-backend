@@ -24,7 +24,7 @@ func testHavuz(t *testing.T) *pgxpool.Pool {
 	}
 	ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
 	defer iptal()
-	havuz, err := identity.Baglan(ctx, dsn)
+	havuz, err := identity.Connect(ctx, dsn)
 	if err != nil {
 		t.Skip("yerel Postgres yok, atlaniyor")
 	}

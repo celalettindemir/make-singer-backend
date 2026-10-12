@@ -24,7 +24,7 @@ func testPostgres(t *testing.T) *PostgresTokenStore {
 	}
 	ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
 	defer iptal()
-	havuz, err := Baglan(ctx, dsn)
+	havuz, err := Connect(ctx, dsn)
 	if err != nil {
 		t.Skip("yerel Postgres yok, atlaniyor")
 	}
@@ -45,13 +45,13 @@ func pgTestKullanici(t *testing.T, s *PostgresTokenStore) string {
 	t.Helper()
 	id := uuid.NewString()
 	ctx := context.Background()
-	if _, err := s.havuz.Exec(ctx,
+	if _, err := s.pool.Exec(ctx,
 		`INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3)`,
 		id, id+"@test.invalid", "test-yerel-hash"); err != nil {
 		t.Fatalf("test kullanicisi eklenemedi: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = s.havuz.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, id)
+		_, _ = s.pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, id)
 	})
 	return id
 }
@@ -66,22 +66,22 @@ func TestPGYenidenKullanimAileyiIptalEder(t *testing.T) {
 	ctx := context.Background()
 	userID := pgTestKullanici(t, s)
 
-	anahtar, err := AnahtarYukle(testPEM(t))
+	anahtar, err := LoadSigningKey(testPEM(t))
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
 	}
-	d := NewDepo(testAuthCfg(), NewSahteUserStore(), s, nil, anahtar)
+	d := NewStorage(testAuthCfg(), NewFakeUserStore(), s, nil, anahtar)
 
 	kayit := yeniRefresh(userID)
-	eski, err := s.RefreshOlustur(ctx, kayit)
+	eski, err := s.CreateRefresh(ctx, kayit)
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	yeni, err := s.RefreshDondur(ctx, eski, yeniRefresh(userID))
+	yeni, err := s.RotateRefresh(ctx, eski, yeniRefresh(userID))
 	if err != nil {
 		t.Fatalf("RefreshDondur: %v", err)
 	}
-	if _, err := s.RefreshOku(ctx, yeni); err != nil {
+	if _, err := s.GetRefresh(ctx, yeni); err != nil {
 		t.Fatalf("rotasyon sonrasi yeni jeton gecersiz: %v", err)
 	}
 
@@ -91,12 +91,12 @@ func TestPGYenidenKullanimAileyiIptalEder(t *testing.T) {
 	}
 	// ...ve ailenin TAMAMI olmus olmali. SQL ile dogrula: ayni aileden
 	// kac satir var ve kaci hala yasiyor.
-	familyID, err := s.RefreshAileID(ctx, eski)
+	familyID, err := s.RefreshFamilyID(ctx, eski)
 	if err != nil {
 		t.Fatalf("RefreshAileID: %v", err)
 	}
 	var toplam, yasayan int
-	if err := s.havuz.QueryRow(ctx,
+	if err := s.pool.QueryRow(ctx,
 		`SELECT count(*), count(*) FILTER (WHERE revoked_at IS NULL)
 		   FROM refresh_tokens WHERE family_id = $1`, familyID).
 		Scan(&toplam, &yasayan); err != nil {
@@ -121,34 +121,34 @@ func TestPGRefreshOkuHataSirasi(t *testing.T) {
 	ctx := context.Background()
 	userID := pgTestKullanici(t, s)
 
-	eski, err := s.RefreshOlustur(ctx, yeniRefresh(userID))
+	eski, err := s.CreateRefresh(ctx, yeniRefresh(userID))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	if _, err := s.RefreshDondur(ctx, eski, yeniRefresh(userID)); err != nil {
+	if _, err := s.RotateRefresh(ctx, eski, yeniRefresh(userID)); err != nil {
 		t.Fatalf("RefreshDondur: %v", err)
 	}
 	// used_at dolu, revoked_at bos: yeniden kullanim.
-	if _, err := s.RefreshOku(ctx, eski); !errors.Is(err, ErrJetonTekrar) {
+	if _, err := s.GetRefresh(ctx, eski); !errors.Is(err, ErrTokenReused) {
 		t.Fatalf("hata = %v, beklenen ErrJetonTekrar", err)
 	}
 	// Aile iptal edildikten sonra ayni jeton artik ErrJetonYok: alarm
 	// tekrar calmaz.
-	familyID, err := s.RefreshAileID(ctx, eski)
+	familyID, err := s.RefreshFamilyID(ctx, eski)
 	if err != nil {
 		t.Fatalf("RefreshAileID: %v", err)
 	}
-	if err := s.AileIptal(ctx, familyID); err != nil {
+	if err := s.RevokeFamily(ctx, familyID); err != nil {
 		t.Fatalf("AileIptal: %v", err)
 	}
-	if _, err := s.RefreshOku(ctx, eski); !errors.Is(err, ErrJetonYok) {
+	if _, err := s.GetRefresh(ctx, eski); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
 	}
 	// Bilinmeyen jeton: ne kayit ne aile.
-	if _, err := s.RefreshOku(ctx, "uydurma"); !errors.Is(err, ErrJetonYok) {
+	if _, err := s.GetRefresh(ctx, "uydurma"); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
 	}
-	if _, err := s.RefreshAileID(ctx, "uydurma"); !errors.Is(err, ErrJetonYok) {
+	if _, err := s.RefreshFamilyID(ctx, "uydurma"); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
 	}
 }

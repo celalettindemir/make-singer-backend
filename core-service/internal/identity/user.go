@@ -7,14 +7,14 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// bcryptCost 12: 2026 icin makul bir denge. Dusurmek sifre kirmayi
-// kolaylastirir, yukseltmek giris gecikmesini hissedilir yapar.
+// bcryptCost 12: a reasonable balance for 2026. Lowering it makes
+// cracking passwords easier, raising it makes the login delay noticeable.
 const bcryptCost = 12
 
 var (
-	ErrKullaniciYok     = errors.New("kullanici bulunamadi")
-	ErrEpostaKullanimda = errors.New("eposta kullanimda")
-	ErrSifreKisa        = errors.New("sifre en az 10 karakter olmali")
+	ErrUserNotFound     = errors.New("kullanici bulunamadi")
+	ErrEmailInUse       = errors.New("eposta kullanimda")
+	ErrPasswordTooShort = errors.New("sifre en az 10 karakter olmali")
 )
 
 type User struct {
@@ -26,21 +26,21 @@ type User struct {
 	CreatedAt     time.Time
 }
 
-// SifreDogru, verilen sifrenin hash ile uyustugunu soyler. Hash bos ise
-// HER ZAMAN false doner: sifresiz (yalnizca federe) hesaplara sifreyle
-// girilemez.
-func (u *User) SifreDogru(sifre string) bool {
+// PasswordMatches reports whether the given password matches the hash. If
+// the hash is empty it ALWAYS returns false: accounts without a password
+// (federated only) cannot be signed in to with a password.
+func (u *User) PasswordMatches(password string) bool {
 	if u == nil || u.PasswordHash == "" {
 		return false
 	}
-	return bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(sifre)) == nil
+	return bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) == nil
 }
 
-func sifreHashle(sifre string) (string, error) {
-	if len([]rune(sifre)) < 10 {
-		return "", ErrSifreKisa
+func hashPassword(password string) (string, error) {
+	if len([]rune(password)) < 10 {
+		return "", ErrPasswordTooShort
 	}
-	b, err := bcrypt.GenerateFromPassword([]byte(sifre), bcryptCost)
+	b, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	if err != nil {
 		return "", err
 	}

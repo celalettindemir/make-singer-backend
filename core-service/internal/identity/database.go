@@ -13,10 +13,11 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-// Baglan, Postgres havuzunu kurar ve baglantinin gercekten kuruldugunu
-// dogrular. DSN bos ise hata doner: kimlik saglayicisi veritabani olmadan
-// calisamaz, sessizce devam etmek kullanici hesaplarini kaybettirir.
-func Baglan(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+// Connect sets up the Postgres pool and verifies that a connection was
+// really established. It returns an error if the DSN is empty: the identity
+// provider cannot work without a database, and continuing silently would
+// lose user accounts.
+func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("auth veritabani DSN'i bos")
 	}
@@ -27,39 +28,40 @@ func Baglan(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	cfg.MaxConns = 10
 	cfg.MaxConnLifetime = time.Hour
 
-	havuz, err := pgxpool.NewWithConfig(ctx, cfg)
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("havuz kurulamadi: %w", err)
 	}
-	pingCtx, iptal := context.WithTimeout(ctx, 10*time.Second)
-	defer iptal()
-	if err := havuz.Ping(pingCtx); err != nil {
-		havuz.Close()
+	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := pool.Ping(pingCtx); err != nil {
+		pool.Close()
 		return nil, fmt.Errorf("veritabanina ulasilamadi: %w", err)
 	}
-	return havuz, nil
+	return pool, nil
 }
 
-func migrationAdlari() ([]string, error) {
-	girdiler, err := migrationFS.ReadDir("migrations")
+func migrationNames() ([]string, error) {
+	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
 		return nil, err
 	}
-	var adlar []string
-	for _, g := range girdiler {
-		if !g.IsDir() {
-			adlar = append(adlar, g.Name())
+	var names []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			names = append(names, entry.Name())
 		}
 	}
-	sort.Strings(adlar)
-	return adlar, nil
+	sort.Strings(names)
+	return names, nil
 }
 
-// Migrate, uygulanmamis migration'lari sirayla calistirir. Her migration
-// kendi islemi icinde kosar ve schema_migrations'a yazilir; yarida kalan
-// bir migration kismi sema birakmaz.
-func Migrate(ctx context.Context, havuz *pgxpool.Pool) error {
-	_, err := havuz.Exec(ctx, `
+// Migrate runs the migrations that have not been applied yet, in order.
+// Each migration runs in its own transaction and is recorded in
+// schema_migrations; a migration that stops halfway leaves no partial
+// schema.
+func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
+	_, err := pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version    text PRIMARY KEY,
 			applied_at timestamptz NOT NULL DEFAULT now()
@@ -68,40 +70,40 @@ func Migrate(ctx context.Context, havuz *pgxpool.Pool) error {
 		return fmt.Errorf("schema_migrations olusturulamadi: %w", err)
 	}
 
-	adlar, err := migrationAdlari()
+	names, err := migrationNames()
 	if err != nil {
 		return err
 	}
-	for _, ad := range adlar {
-		var varMi bool
-		err := havuz.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)`, ad,
-		).Scan(&varMi)
+	for _, name := range names {
+		var exists bool
+		err := pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)`, name,
+		).Scan(&exists)
 		if err != nil {
-			return fmt.Errorf("%s kontrol edilemedi: %w", ad, err)
+			return fmt.Errorf("%s kontrol edilemedi: %w", name, err)
 		}
-		if varMi {
+		if exists {
 			continue
 		}
-		sql, err := migrationFS.ReadFile("migrations/" + ad)
+		script, err := migrationFS.ReadFile("migrations/" + name)
 		if err != nil {
-			return fmt.Errorf("%s okunamadi: %w", ad, err)
+			return fmt.Errorf("%s okunamadi: %w", name, err)
 		}
-		islem, err := havuz.Begin(ctx)
+		tx, err := pool.Begin(ctx)
 		if err != nil {
-			return fmt.Errorf("%s icin islem baslatilamadi: %w", ad, err)
+			return fmt.Errorf("%s icin islem baslatilamadi: %w", name, err)
 		}
-		if _, err := islem.Exec(ctx, string(sql)); err != nil {
-			_ = islem.Rollback(ctx)
-			return fmt.Errorf("%s uygulanamadi: %w", ad, err)
+		if _, err := tx.Exec(ctx, string(script)); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("%s uygulanamadi: %w", name, err)
 		}
-		if _, err := islem.Exec(ctx,
-			`INSERT INTO schema_migrations (version) VALUES ($1)`, ad); err != nil {
-			_ = islem.Rollback(ctx)
-			return fmt.Errorf("%s kaydedilemedi: %w", ad, err)
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO schema_migrations (version) VALUES ($1)`, name); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("%s kaydedilemedi: %w", name, err)
 		}
-		if err := islem.Commit(ctx); err != nil {
-			return fmt.Errorf("%s commit edilemedi: %w", ad, err)
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("%s commit edilemedi: %w", name, err)
 		}
 	}
 	return nil

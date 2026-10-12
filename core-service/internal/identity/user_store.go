@@ -13,115 +13,118 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// epostaNormalize, e-postayi SAKLAMA ve ARAMA icin TEK bicime getirir.
+// normalizeEmail brings an email address to ONE single form for STORAGE
+// and LOOKUP.
 //
-// NEDEN TEK BIR YARDIMCI: eskiden Create "strings.TrimSpace(email)"
-// uyguluyor, ByEmail ise parametreye HIC trim uygulamiyordu
-// (WHERE lower(email) = lower($1)) ve sayfa katmani form degerini ham
-// geciyordu. Sonuc GERCEK bir uretim hatasiydi: e-postasini bastaki veya
-// sondaki bosluklarla yazan kullanici " x@y.com " ile kayit olup
-// "x@y.com" olarak saklaniyor, sonra AYNI girdiyle giris yapmaya
-// calistiginda bulunamiyor ve "E-posta veya sifre hatali" aliyordu —
-// hesabi var ama o girdiyle asla giremiyordu. Artik Create, ByEmail ve
-// giris/kayit sayfalari AYNI yoldan geciyor.
+// WHY ONE SINGLE HELPER: Create used to apply "strings.TrimSpace(email)"
+// while ByEmail applied NO trim at all to its parameter
+// (WHERE lower(email) = lower($1)), and the page layer passed the raw form
+// value. The result was a REAL production bug: a user who typed the email
+// with leading or trailing spaces signed up with " x@y.com ", which was
+// stored as "x@y.com", and then could not be found when trying to sign in
+// with the SAME input and got "E-posta veya sifre hatali" — the account
+// existed but could never be entered with that input. Now Create, ByEmail
+// and the login/signup pages all go through the SAME path.
 //
-// Buyuk/kucuk harf BILINCLI OLARAK degistirilmez: tekillik ve arama
-// Postgres tarafinda lower(email) uzerinden yapilir (unique index +
-// ByEmail sorgusu), yani kullanicinin yazdigi bicim goruntuleme icin
-// korunur ve yine de "E@t" ile "e@t" ayni hesaptir.
-func epostaNormalize(eposta string) string {
-	return strings.TrimSpace(eposta)
+// Letter case is DELIBERATELY not changed: uniqueness and lookup are done
+// on the Postgres side through lower(email) (unique index + ByEmail
+// query), so the form the user typed is kept for display and "E@t" and
+// "e@t" are still the same account.
+func normalizeEmail(email string) string {
+	return strings.TrimSpace(email)
 }
 
 type UserStore interface {
 	Create(ctx context.Context, email, name, password string) (*User, error)
 	ByEmail(ctx context.Context, email string) (*User, error)
 	ByID(ctx context.Context, id string) (*User, error)
-	// Sil, kullaniciyi kalici olarak siler. refresh_tokens ve
-	// federe_kimlikler FK uzerinden ON DELETE CASCADE ile birlikte gider.
-	Sil(ctx context.Context, id string) error
+	// Delete permanently deletes the user. refresh_tokens and
+	// federe_kimlikler go with it through the FK's ON DELETE CASCADE.
+	Delete(ctx context.Context, id string) error
 }
 
 type PostgresUserStore struct {
-	havuz *pgxpool.Pool
+	pool *pgxpool.Pool
 }
 
-func NewPostgresUserStore(havuz *pgxpool.Pool) *PostgresUserStore {
-	return &PostgresUserStore{havuz: havuz}
+func NewPostgresUserStore(pool *pgxpool.Pool) *PostgresUserStore {
+	return &PostgresUserStore{pool: pool}
 }
 
 func (s *PostgresUserStore) Create(ctx context.Context, email, name, password string) (*User, error) {
-	hash, err := sifreHashle(password)
+	hash, err := hashPassword(password)
 	if err != nil {
 		return nil, err
 	}
-	k := &User{
+	u := &User{
 		ID:           uuid.NewString(),
-		Email:        epostaNormalize(email),
+		Email:        normalizeEmail(email),
 		Name:         strings.TrimSpace(name),
 		PasswordHash: hash,
 		CreatedAt:    time.Now().UTC(),
 	}
-	_, err = s.havuz.Exec(ctx,
+	_, err = s.pool.Exec(ctx,
 		`INSERT INTO users (id, email, email_verified, name, password_hash, created_at)
 		 VALUES ($1, $2, false, $3, $4, $5)`,
-		k.ID, k.Email, k.Name, k.PasswordHash, k.CreatedAt)
+		u.ID, u.Email, u.Name, u.PasswordHash, u.CreatedAt)
 	if err != nil {
-		// 23505 = unique_violation. Tek unique kisit lower(email)
-		// uzerindedir, yani bu hata her zaman "eposta kullanimda" demektir.
-		var pgHata *pgconn.PgError
-		if errors.As(err, &pgHata) && pgHata.Code == "23505" {
-			return nil, ErrEpostaKullanimda
+		// 23505 = unique_violation. The only unique constraint is on
+		// lower(email), so this error always means "email in use".
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, ErrEmailInUse
 		}
 		return nil, fmt.Errorf("kullanici olusturulamadi: %w", err)
 	}
-	return k, nil
+	return u, nil
 }
 
 func (s *PostgresUserStore) ByEmail(ctx context.Context, email string) (*User, error) {
-	return s.tekil(ctx,
+	return s.queryOne(ctx,
 		`SELECT id, email, email_verified, name, coalesce(password_hash, ''), created_at
-		 FROM users WHERE lower(email) = lower($1)`, epostaNormalize(email))
+		 FROM users WHERE lower(email) = lower($1)`, normalizeEmail(email))
 }
 
 func (s *PostgresUserStore) ByID(ctx context.Context, id string) (*User, error) {
-	return s.tekil(ctx,
+	return s.queryOne(ctx,
 		`SELECT id, email, email_verified, name, coalesce(password_hash, ''), created_at
 		 FROM users WHERE id = $1`, id)
 }
 
-func (s *PostgresUserStore) Sil(ctx context.Context, id string) error {
-	// uuid olmayan id Postgres'te tip hatasi verir; sahte depoyla ayni
-	// sonuc icin "yok" doneriz (ByID bu durumda genel hata doner, ama
-	// silme icin "yok" daha guvenli ve sahte depoyla tutarlidir).
+func (s *PostgresUserStore) Delete(ctx context.Context, id string) error {
+	// An id that is not a uuid gives a type error in Postgres; for the same
+	// result as the fake store we return "not found" (ByID returns a
+	// generic error in this case, but "not found" is safer for deletion and
+	// consistent with the fake store).
 	if _, err := uuid.Parse(id); err != nil {
-		return ErrKullaniciYok
+		return ErrUserNotFound
 	}
-	etiket, err := s.havuz.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+	tag, err := s.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("kullanici silinemedi: %w", err)
 	}
-	if etiket.RowsAffected() == 0 {
-		return ErrKullaniciYok
+	if tag.RowsAffected() == 0 {
+		return ErrUserNotFound
 	}
 	return nil
 }
 
-func (s *PostgresUserStore) tekil(ctx context.Context, sorgu string, arg any) (*User, error) {
-	var k User
-	err := s.havuz.QueryRow(ctx, sorgu, arg).Scan(
-		&k.ID, &k.Email, &k.EmailVerified, &k.Name, &k.PasswordHash, &k.CreatedAt)
+func (s *PostgresUserStore) queryOne(ctx context.Context, query string, arg any) (*User, error) {
+	var u User
+	err := s.pool.QueryRow(ctx, query, arg).Scan(
+		&u.ID, &u.Email, &u.EmailVerified, &u.Name, &u.PasswordHash, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrKullaniciYok
+		return nil, ErrUserNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("kullanici okunamadi: %w", err)
 	}
-	return &k, nil
+	return &u, nil
 }
 
-// Iki uygulama da arayuzden sapmasin: biri degisirse derleme kirilir.
+// Neither implementation may drift from the interface: if one changes,
+// the build breaks.
 var (
 	_ UserStore = (*PostgresUserStore)(nil)
-	_ UserStore = (*SahteUserStore)(nil)
+	_ UserStore = (*FakeUserStore)(nil)
 )

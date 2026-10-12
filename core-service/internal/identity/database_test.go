@@ -46,7 +46,7 @@ func TestMigrationlarGomulu(t *testing.T) {
 }
 
 func TestMigrationSirali(t *testing.T) {
-	adlar, err := migrationAdlari()
+	adlar, err := migrationNames()
 	if err != nil {
 		t.Fatalf("migrationAdlari: %v", err)
 	}

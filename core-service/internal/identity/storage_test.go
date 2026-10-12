@@ -10,13 +10,13 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/op"
 )
 
-func testDepo(t *testing.T) *Depo {
+func testDepo(t *testing.T) *Storage {
 	t.Helper()
-	a, err := AnahtarYukle(testPEM(t))
+	a, err := LoadSigningKey(testPEM(t))
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
 	}
-	return NewDepo(testAuthCfg(), NewSahteUserStore(), NewSahteTokenStore(), nil, a)
+	return NewStorage(testAuthCfg(), NewFakeUserStore(), NewFakeTokenStore(), nil, a)
 }
 
 func TestDepoArayuzuKarsilar(t *testing.T) {
@@ -52,11 +52,11 @@ func TestSecretIleDogrulamaHepReddedilir(t *testing.T) {
 func TestTekrarKullanimInvalidRefreshOlur(t *testing.T) {
 	d := testDepo(t)
 	ctx := context.Background()
-	birinci, err := d.jetonlar.RefreshOlustur(ctx, yeniRefresh("k1"))
+	birinci, err := d.tokens.CreateRefresh(ctx, yeniRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	if _, err := d.jetonlar.RefreshDondur(ctx, birinci, yeniRefresh("k1")); err != nil {
+	if _, err := d.tokens.RotateRefresh(ctx, birinci, yeniRefresh("k1")); err != nil {
 		t.Fatalf("RefreshDondur: %v", err)
 	}
 	if _, err := d.TokenRequestByRefreshToken(ctx, birinci); !errors.Is(err, op.ErrInvalidRefreshToken) {
@@ -86,7 +86,7 @@ func TestGetRefreshTokenInfoGecersizIcinInvalidRefreshDoner(t *testing.T) {
 func TestGetRefreshTokenInfoGecerli(t *testing.T) {
 	d := testDepo(t)
 	ctx := context.Background()
-	jeton, err := d.jetonlar.RefreshOlustur(ctx, yeniRefresh("k1"))
+	jeton, err := d.tokens.CreateRefresh(ctx, yeniRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
@@ -114,11 +114,11 @@ func TestGetRefreshTokenInfoGecerli(t *testing.T) {
 func TestRevokeTokenRefreshAileyiIptalEder(t *testing.T) {
 	d := testDepo(t)
 	ctx := context.Background()
-	birinci, err := d.jetonlar.RefreshOlustur(ctx, yeniRefresh("k1"))
+	birinci, err := d.tokens.CreateRefresh(ctx, yeniRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	ikinci, err := d.jetonlar.RefreshDondur(ctx, birinci, yeniRefresh("k1"))
+	ikinci, err := d.tokens.RotateRefresh(ctx, birinci, yeniRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshDondur: %v", err)
 	}
@@ -132,19 +132,19 @@ func TestRevokeTokenRefreshAileyiIptalEder(t *testing.T) {
 		t.Fatalf("RevokeToken: %v", oidcErr)
 	}
 	// Hedef alinan jeton olmus olmali...
-	if _, err := d.jetonlar.RefreshOku(ctx, ikinci); !errors.Is(err, ErrJetonYok) {
+	if _, err := d.tokens.GetRefresh(ctx, ikinci); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("iptal edilen jeton hala gecerli (err=%v)", err)
 	}
 	// ...ve AYNI AILEDEN, iptal cagrisinda hic adi gecmeyen bir baska jeton
 	// da olmus olmali: aile iptali tek jetonu degil, TUM zinciri kapatir.
-	ucuncu, err := d.jetonlar.RefreshDondur(ctx, ikinci, yeniRefresh("k1"))
+	ucuncu, err := d.tokens.RotateRefresh(ctx, ikinci, yeniRefresh("k1"))
 	// Not: ikinci zaten RevokeToken ile iptal edildigi icin RefreshDondur
 	// da basarisiz olmali; bu, "aile gercekten olu mu" sorusunun ikinci
 	// bir kaniti.
 	if err == nil {
 		t.Fatalf("iptal edilmis ailede rotasyon basarili oldu, yeni jeton = %q", ucuncu)
 	}
-	if !errors.Is(err, ErrJetonYok) {
+	if !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("beklenmeyen hata turu: %v", err)
 	}
 }
@@ -154,13 +154,13 @@ func TestRevokeTokenRefreshAileyiIptalEder(t *testing.T) {
 func TestRevokeTokenAccessKaydiSiler(t *testing.T) {
 	d := testDepo(t)
 	ctx := context.Background()
-	if err := d.jetonlar.AccessKaydet(ctx, "at1", "k1", "makesinger-mobil", []string{"openid"}, time.Now().UTC().Add(15*time.Minute)); err != nil {
+	if err := d.tokens.SaveAccess(ctx, "at1", "k1", "makesinger-mobil", []string{"openid"}, time.Now().UTC().Add(15*time.Minute)); err != nil {
 		t.Fatalf("AccessKaydet: %v", err)
 	}
 	if oidcErr := d.RevokeToken(ctx, "at1", "k1", "makesinger-mobil"); oidcErr != nil {
 		t.Fatalf("RevokeToken: %v", oidcErr)
 	}
-	if _, err := d.jetonlar.AccessOku(ctx, "at1"); !errors.Is(err, ErrJetonYok) {
+	if _, err := d.tokens.GetAccess(ctx, "at1"); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("iptal edilen access kaydi hala gecerli (err=%v)", err)
 	}
 }
@@ -207,7 +207,7 @@ func (hataliByIDUserStore) ByID(context.Context, string) (*User, error) {
 	return nil, errKullaniciOkunamadi
 }
 
-func (hataliByIDUserStore) Sil(context.Context, string) error {
+func (hataliByIDUserStore) Delete(context.Context, string) error {
 	return errKullaniciOkunamadi
 }
 
@@ -240,7 +240,7 @@ func (s sahteIDTokenIstek) GetSubject() string   { return s.sub }
 // degil: boylece kutuphanenin hatayi GERCEKTEN jeton uretimini
 // durdurmak icin kullandigi da kanitlanir.
 func TestIDTokenUretimiKullaniciOkunamazsaBasarisiz(t *testing.T) {
-	a, err := AnahtarYukle(testPEM(t))
+	a, err := LoadSigningKey(testPEM(t))
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
 	}
@@ -251,13 +251,13 @@ func TestIDTokenUretimiKullaniciOkunamazsaBasarisiz(t *testing.T) {
 	// 1) Vacuous gecis kontrolu: CALISAN bir depoyla jeton URETILIR ve
 	//    sub'u tasir. Aksi halde asagidaki iddia "CreateIDToken hep
 	//    patliyor" diye de gecerdi.
-	saglam := NewDepo(cfg, NewSahteUserStore(), NewSahteTokenStore(), nil, a)
-	kullanici, err := saglam.kullanici.Create(ctx, "k@ornek.com", "K", "cok-gizli-sifre")
+	saglam := NewStorage(cfg, NewFakeUserStore(), NewFakeTokenStore(), nil, a)
+	kullanici, err := saglam.users.Create(ctx, "k@ornek.com", "K", "cok-gizli-sifre")
 	if err != nil {
 		t.Fatalf("kullanici olusturulamadi: %v", err)
 	}
 	jeton, err := op.CreateIDToken(ctx, cfg.Issuer, sahteIDTokenIstek{sub: kullanici.ID},
-		time.Hour, "", "", saglam, saglam.istemci)
+		time.Hour, "", "", saglam, saglam.client)
 	if err != nil {
 		t.Fatalf("saglam depoyla id_token uretilemedi: %v", err)
 	}
@@ -266,8 +266,8 @@ func TestIDTokenUretimiKullaniciOkunamazsaBasarisiz(t *testing.T) {
 	}
 
 	// 2) ByID hata donduren depoda jeton uretimi BASARISIZ olmali.
-	bozuk := NewDepo(cfg, hataliByIDUserStore{}, NewSahteTokenStore(), nil, a)
-	bozukJeton, err := op.CreateIDToken(ctx, cfg.Issuer, istek, time.Hour, "", "", bozuk, bozuk.istemci)
+	bozuk := NewStorage(cfg, hataliByIDUserStore{}, NewFakeTokenStore(), nil, a)
+	bozukJeton, err := op.CreateIDToken(ctx, cfg.Issuer, istek, time.Hour, "", "", bozuk, bozuk.client)
 	if err == nil {
 		t.Fatalf("kullanici okunamazken id_token URETILDI: %q", bozukJeton)
 	}
@@ -297,7 +297,7 @@ func TestGetRefreshTokenInfoBaskaIstemcininJetonuReddedilir(t *testing.T) {
 	ctx := context.Background()
 	baskaIstemci := yeniRefresh("k1")
 	baskaIstemci.ClientID = "makesinger-web"
-	jeton, err := d.jetonlar.RefreshOlustur(ctx, baskaIstemci)
+	jeton, err := d.tokens.CreateRefresh(ctx, baskaIstemci)
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
@@ -329,10 +329,10 @@ func TestCreateAccessAndRefreshTokensYeniAileBaslatir(t *testing.T) {
 	if !exp.After(time.Now().UTC()) {
 		t.Errorf("access suresi gecmiste: %v", exp)
 	}
-	if _, err := d.jetonlar.AccessOku(ctx, accessID); err != nil {
+	if _, err := d.tokens.GetAccess(ctx, accessID); err != nil {
 		t.Errorf("access kaydi okunamadi: %v", err)
 	}
-	if kayit, err := d.jetonlar.RefreshOku(ctx, refreshToken); err != nil {
+	if kayit, err := d.tokens.GetRefresh(ctx, refreshToken); err != nil {
 		t.Errorf("refresh jetonu okunamadi: %v", err)
 	} else if kayit.UserID != "k1" || kayit.ClientID != "makesinger-mobil" {
 		t.Errorf("refresh kaydi yanlis doldu: %+v", kayit)
@@ -346,11 +346,11 @@ func TestCreateAccessAndRefreshTokensYeniAileBaslatir(t *testing.T) {
 func TestCreateAccessAndRefreshTokensRotasyonYapar(t *testing.T) {
 	d := testDepo(t)
 	ctx := context.Background()
-	eski, err := d.jetonlar.RefreshOlustur(ctx, yeniRefresh("k1"))
+	eski, err := d.tokens.CreateRefresh(ctx, yeniRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	istek := &refreshIstek{userID: "k1", clientID: "makesinger-mobil", scopes: []string{"openid"}}
+	istek := &refreshRequest{userID: "k1", clientID: "makesinger-mobil", scopes: []string{"openid"}}
 	accessID, yeniJeton, _, err := d.CreateAccessAndRefreshTokens(ctx, istek, eski)
 	if err != nil {
 		t.Fatalf("CreateAccessAndRefreshTokens: %v", err)
@@ -358,7 +358,7 @@ func TestCreateAccessAndRefreshTokensRotasyonYapar(t *testing.T) {
 	if accessID == "" || yeniJeton == "" || yeniJeton == eski {
 		t.Fatalf("rotasyon beklenen sekilde calismadi: accessID=%q yeniJeton=%q", accessID, yeniJeton)
 	}
-	if _, err := d.jetonlar.RefreshOku(ctx, yeniJeton); err != nil {
+	if _, err := d.tokens.GetRefresh(ctx, yeniJeton); err != nil {
 		t.Errorf("yeni jeton gecersiz: %v", err)
 	}
 	// Eski jeton TEKRAR sunulursa: calinti tespiti tetiklenmeli ve dogru
@@ -376,7 +376,7 @@ func TestCreateAccessAndRefreshTokensRotasyonYapar(t *testing.T) {
 // etmesi sart: yeniden kullanim tespiti yalnizca RefreshDondur'da
 // yasarsa uretimde hic calismaz, ama RefreshDondur'u dogrudan cagiran bir
 // test bunu asla goremez.
-func refreshAkisiTaklit(t *testing.T, d *Depo, refreshToken string) error {
+func refreshAkisiTaklit(t *testing.T, d *Storage, refreshToken string) error {
 	t.Helper()
 	istek, err := d.TokenRequestByRefreshToken(context.Background(), refreshToken)
 	if err != nil {
@@ -394,17 +394,17 @@ func refreshAkisiTaklit(t *testing.T, d *Depo, refreshToken string) error {
 func TestTokenRequestByRefreshTokenYenidenKullanimdaAileyiIptalEder(t *testing.T) {
 	d := testDepo(t)
 	ctx := context.Background()
-	eski, err := d.jetonlar.RefreshOlustur(ctx, yeniRefresh("k1"))
+	eski, err := d.tokens.CreateRefresh(ctx, yeniRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
 	// Mesru istemci normal sekilde rotasyon yapiyor: eski jeton "used"
 	// olur, yeni jeton gecerlidir.
-	yeni, err := d.jetonlar.RefreshDondur(ctx, eski, yeniRefresh("k1"))
+	yeni, err := d.tokens.RotateRefresh(ctx, eski, yeniRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshDondur: %v", err)
 	}
-	if _, err := d.jetonlar.RefreshOku(ctx, yeni); err != nil {
+	if _, err := d.tokens.GetRefresh(ctx, yeni); err != nil {
 		t.Fatalf("rotasyon sonrasi yeni jeton gecersiz: %v", err)
 	}
 
@@ -415,14 +415,14 @@ func TestTokenRequestByRefreshTokenYenidenKullanimdaAileyiIptalEder(t *testing.T
 
 	// Asil olculen: ailenin GERI KALANI da olmus olmali. Mesru istemcinin
 	// elindeki GUNCEL jeton artik calismamali.
-	if _, err := d.jetonlar.RefreshOku(ctx, yeni); !errors.Is(err, ErrJetonYok) {
+	if _, err := d.tokens.GetRefresh(ctx, yeni); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("aile iptal edilmemis, guncel jeton hala gecerli (err=%v)", err)
 	}
 	if err := refreshAkisiTaklit(t, d, yeni); err == nil {
 		t.Error("iptal edilmis aileyle refresh akisi basarili oldu")
 	}
 	// Depodaki her kayit iptal edilmis olmali: aile toptan olur.
-	for _, kayit := range d.jetonlar.(*SahteTokenStore).TumKayitlar() {
+	for _, kayit := range d.tokens.(*FakeTokenStore).AllRecords() {
 		if kayit.RevokedAt == nil {
 			t.Errorf("aile uyesi iptal edilmemis: id=%s", kayit.ID)
 		}
@@ -435,11 +435,11 @@ func TestTokenRequestByRefreshTokenYenidenKullanimdaAileyiIptalEder(t *testing.T
 func TestTokenRequestByRefreshTokenHatasiAyrismaz(t *testing.T) {
 	d := testDepo(t)
 	ctx := context.Background()
-	eski, err := d.jetonlar.RefreshOlustur(ctx, yeniRefresh("k1"))
+	eski, err := d.tokens.CreateRefresh(ctx, yeniRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	if _, err := d.jetonlar.RefreshDondur(ctx, eski, yeniRefresh("k1")); err != nil {
+	if _, err := d.tokens.RotateRefresh(ctx, eski, yeniRefresh("k1")); err != nil {
 		t.Fatalf("RefreshDondur: %v", err)
 	}
 	_, kullanilmisHata := d.TokenRequestByRefreshToken(ctx, eski)

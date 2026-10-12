@@ -11,25 +11,25 @@ import (
 
 // izlemeTokenStore, KullaniciIptal'in cagrilip cagrilmadigini izler.
 type izlemeTokenStore struct {
-	*SahteTokenStore
+	*FakeTokenStore
 	kullaniciIptalSayisi int
 }
 
-func (s *izlemeTokenStore) KullaniciIptal(ctx context.Context, userID, clientID string) error {
+func (s *izlemeTokenStore) RevokeUser(ctx context.Context, userID, clientID string) error {
 	s.kullaniciIptalSayisi++
-	return s.SahteTokenStore.KullaniciIptal(ctx, userID, clientID)
+	return s.FakeTokenStore.RevokeUser(ctx, userID, clientID)
 }
 
 // testDepoJetonlu, depo_test.go'daki testDepo'nun belirli bir
 // TokenStore ile kurulan surumudur (orada sabit NewSahteTokenStore
 // kullanilir).
-func testDepoJetonlu(t *testing.T, jetonlar TokenStore) *Depo {
+func testDepoJetonlu(t *testing.T, jetonlar TokenStore) *Storage {
 	t.Helper()
-	anahtar, err := AnahtarYukle(testPEM(t))
+	anahtar, err := LoadSigningKey(testPEM(t))
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
 	}
-	return NewDepo(testAuthCfg(), NewSahteUserStore(), jetonlar, nil, anahtar)
+	return NewStorage(testAuthCfg(), NewFakeUserStore(), jetonlar, nil, anahtar)
 }
 
 // M2: parametresiz GET /end_session, bos userID/clientID ile
@@ -39,7 +39,7 @@ func testDepoJetonlu(t *testing.T, jetonlar TokenStore) *Depo {
 // amplifikasyon). Bos kimlikle iptal edilecek jeton zaten yok, bu
 // yuzden erken donmek dogru.
 func TestTerminateSessionBosKimlikleDepoyaDokunmaz(t *testing.T) {
-	izleme := &izlemeTokenStore{SahteTokenStore: NewSahteTokenStore()}
+	izleme := &izlemeTokenStore{FakeTokenStore: NewFakeTokenStore()}
 	d := testDepoJetonlu(t, izleme)
 	ctx := context.Background()
 
@@ -71,20 +71,20 @@ func TestTerminateSessionBosKimlikleDepoyaDokunmaz(t *testing.T) {
 // kazanmiyor), ama mimarinin tamami "yeniden kullanim => aileyi oldur"
 // ilkesine dayaniyorken bir tespit kanali sessizce kayboluyordu.
 func TestGetRefreshTokenInfoYenidenKullanimdaAileyiIptalEder(t *testing.T) {
-	depo := NewSahteTokenStore()
+	depo := NewFakeTokenStore()
 	d := testDepoJetonlu(t, depo)
 	ctx := context.Background()
 
-	eski, err := depo.RefreshOlustur(ctx, yeniRefresh("k1"))
+	eski, err := depo.CreateRefresh(ctx, yeniRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	yeni, err := depo.RefreshDondur(ctx, eski, yeniRefresh("k1"))
+	yeni, err := depo.RotateRefresh(ctx, eski, yeniRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshDondur: %v", err)
 	}
 	// Rotasyondan sonra yeni jeton gecerli olmali (aile henuz canli).
-	if _, err := depo.RefreshOku(ctx, yeni); err != nil {
+	if _, err := depo.GetRefresh(ctx, yeni); err != nil {
 		t.Fatalf("rotasyon sonrasi yeni jeton gecersiz: %v", err)
 	}
 
@@ -96,7 +96,7 @@ func TestGetRefreshTokenInfoYenidenKullanimdaAileyiIptalEder(t *testing.T) {
 	}
 
 	// ... ve AILE iptal edilmis olmali: yeni jeton da artik gecersiz.
-	if _, err := depo.RefreshOku(ctx, yeni); err == nil {
+	if _, err := depo.GetRefresh(ctx, yeni); err == nil {
 		t.Error("yeniden kullanimdan sonra aile iptal edilmedi: yeni jeton hala gecerli")
 	}
 }
@@ -105,18 +105,18 @@ func TestGetRefreshTokenInfoYenidenKullanimdaAileyiIptalEder(t *testing.T) {
 // Bilinmeyen bir jeton icin hicbir aile olmemeli, aksi halde yukaridaki
 // test "her cagri aileyi olduruyor" durumunda da gecerdi.
 func TestGetRefreshTokenInfoBilinmeyenJetonAileyiIptalEtmez(t *testing.T) {
-	depo := NewSahteTokenStore()
+	depo := NewFakeTokenStore()
 	d := testDepoJetonlu(t, depo)
 	ctx := context.Background()
 
-	gecerli, err := depo.RefreshOlustur(ctx, yeniRefresh("k1"))
+	gecerli, err := depo.CreateRefresh(ctx, yeniRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
 	if _, _, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", "boyle-bir-jeton-yok"); !errors.Is(err, op.ErrInvalidRefreshToken) {
 		t.Fatalf("hata = %v, beklenen op.ErrInvalidRefreshToken", err)
 	}
-	if _, err := depo.RefreshOku(ctx, gecerli); err != nil {
+	if _, err := depo.GetRefresh(ctx, gecerli); err != nil {
 		t.Errorf("bilinmeyen jeton yuzunden gecerli jeton iptal edildi: %v", err)
 	}
 }
@@ -124,11 +124,11 @@ func TestGetRefreshTokenInfoBilinmeyenJetonAileyiIptalEtmez(t *testing.T) {
 // GECERLI bir refresh jetonu icin GetRefreshTokenInfo hala dogru
 // bilgiyi dondurmeli: M7 duzeltmesi mutlu yolu kirmasin.
 func TestGetRefreshTokenInfoGecerliJetonuDondurur(t *testing.T) {
-	depo := NewSahteTokenStore()
+	depo := NewFakeTokenStore()
 	d := testDepoJetonlu(t, depo)
 	ctx := context.Background()
 
-	jeton, err := depo.RefreshOlustur(ctx, yeniRefresh("k1"))
+	jeton, err := depo.CreateRefresh(ctx, yeniRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestDiscoveryDuzeltDesteklenmeyenAkislariAyiklar(t *testing.T) {
 		// Duzeltmenin DOKUNMAMASI gereken bir alan.
 		CodeChallengeMethodsSupported: []oidc.CodeChallengeMethod{oidc.CodeChallengeMethodS256},
 	}
-	discoveryDuzelt(belge)
+	trimDiscovery(belge)
 
 	if len(belge.ResponseTypesSupported) != 1 || belge.ResponseTypesSupported[0] != "code" {
 		t.Errorf("response_types_supported = %v, beklenen [code]", belge.ResponseTypesSupported)

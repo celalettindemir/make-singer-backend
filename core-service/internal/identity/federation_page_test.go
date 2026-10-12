@@ -259,7 +259,7 @@ type fedOrtam struct {
 	f         *FedereSayfalar
 	mux       *http.ServeMux
 	depo      *IstekDepo
-	kullanici *SahteUserStore
+	kullanici *FakeUserStore
 	federe    *SahteFedereDepo
 	oturumlar *SahteOturumDepo
 	istekler  *sahteFedereIstekler
@@ -280,7 +280,7 @@ func testFedereSayfalar(t *testing.T) *fedOrtam {
 	t.Helper()
 	rdb := testRedis(t) // Redis yoksa burada atlanir
 	depo := NewIstekDepo(rdb)
-	kullanici := NewSahteUserStore()
+	kullanici := NewFakeUserStore()
 	federe := NewSahteFedereDepo(kullanici)
 	oturumlar := NewSahteOturumDepo()
 	istekler := newSahteFedereIstekler()

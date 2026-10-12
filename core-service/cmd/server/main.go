@@ -91,13 +91,13 @@ func main() {
 	defer func() {
 		kapatCtx, iptal := context.WithTimeout(context.Background(), 10*time.Second)
 		defer iptal()
-		_ = kimlikSunucu.Kapat(kapatCtx)
+		_ = kimlikSunucu.Shutdown(kapatCtx)
 	}()
 
 	// Kesfet (sosyal): kimlikle ayni veritabani, ama kendi havuzu, kendi
 	// semasi (sosyal) ve kendi migration tablosu. Kimlik gibi FATAL:
 	// sosyal tablolari olmayan bir pod her /api/social isteginde 500 doner.
-	sosyalHavuz, err := identity.Baglan(ctx, cfg.Auth.DBURL)
+	sosyalHavuz, err := identity.Connect(ctx, cfg.Auth.DBURL)
 	if err != nil {
 		log.Fatalf("Sosyal veritabanina baglanilamadi: %v", err)
 	}
@@ -189,7 +189,7 @@ func main() {
 	// /api/* icin tek yol: kendi OP'umuzun RS256 access token'i. Acik
 	// anahtar surec icinden okunur, JWKS ucuna ag uzerinden gidilmez.
 	apiAuthMiddleware := middleware.NewOPAuthMiddleware(
-		cfg.Auth.Issuer, cfg.Auth.ClientID, kimlikSunucu.APIAcikAnahtar()).Authenticate()
+		cfg.Auth.Issuer, cfg.Auth.ClientID, kimlikSunucu.APIPublicKey()).Authenticate()
 	rateLimiter := middleware.NewRateLimiter(redisClient)
 
 	// Initialize Fiber app
@@ -231,7 +231,7 @@ func main() {
 		// dondu mu) YETERLI DEGIL — dinleyici sonradan cokerse pod hala
 		// "saglikli" gorunuyordu. Hazir(), dinleyicinin su an hizmet
 		// verdigini soyler ve nil alici icin de guvenlidir.
-		kimlikHazir := kimlikSunucu.Hazir()
+		kimlikHazir := kimlikSunucu.Ready()
 
 		// OP olmadan servis islevsizdir: her /api/* istegi 401 doner.
 		// Boyle bir pod "ok" demeyi birakmali, yoksa yanlis saglik

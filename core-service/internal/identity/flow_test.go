@@ -96,11 +96,11 @@ func testSunucuKurAyarli(
 	t.Helper()
 	rdb := testRedis(t) // Redis yoksa burada atlanir
 
-	anahtar, err := AnahtarYukle(testPEM(t))
+	anahtar, err := LoadSigningKey(testPEM(t))
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
 	}
-	cryptoAnahtar, err := CryptoAnahtar(testCryptoAnahtari)
+	cryptoAnahtar, err := CryptoKey(testCryptoAnahtari)
 	if err != nil {
 		t.Fatalf("CryptoAnahtar: %v", err)
 	}
@@ -115,9 +115,9 @@ func testSunucuKurAyarli(
 	cfg.Issuer = issuer
 	cfg.RedirectURIs = []string{testRedirectURI}
 
-	kullanici := NewSahteUserStore()
+	kullanici := NewFakeUserStore()
 	istekler := NewIstekDepo(rdb)
-	depo := NewDepo(cfg, kullanici, NewSahteTokenStore(), istekler, anahtar)
+	depo := NewStorage(cfg, kullanici, NewFakeTokenStore(), istekler, anahtar)
 
 	opCfg := &op.Config{
 		CryptoKey:             cryptoAnahtar,
@@ -161,7 +161,7 @@ func testSunucuKurAyarli(
 	// cerezGuvenli=false: test dinleyicisi http, Secure cerez
 	// tasinmazdi.
 	srv := &http.Server{
-		Handler: muxKur(
+		Handler: buildMux(
 			saglayici, kullanici, istekler, federeDepo,
 			akislar, dogrulayicilar, issuer, false, hizLimit,
 		),

@@ -17,7 +17,7 @@ import (
 
 type hSahteKimlik struct{ hata error }
 
-func (k hSahteKimlik) HesapSil(ctx context.Context, userID string) error { return k.hata }
+func (k hSahteKimlik) DeleteAccount(ctx context.Context, userID string) error { return k.hata }
 
 type hBosKuyruk struct{}
 
@@ -49,7 +49,7 @@ func TestHesapHandler_Sil204(t *testing.T) {
 }
 
 func TestHesapHandler_Yok404(t *testing.T) {
-	if got := hesapSilDurum(t, hesapUygulamasi(identity.ErrKullaniciYok, "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a")); got != http.StatusNotFound {
+	if got := hesapSilDurum(t, hesapUygulamasi(identity.ErrUserNotFound, "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a")); got != http.StatusNotFound {
 		t.Fatalf("durum = %d, beklenen 404", got)
 	}
 }

@@ -19,7 +19,7 @@ type sahteKimlik struct {
 	hata    error
 }
 
-func (k *sahteKimlik) HesapSil(ctx context.Context, userID string) error {
+func (k *sahteKimlik) DeleteAccount(ctx context.Context, userID string) error {
 	k.silinen = append(k.silinen, userID)
 	return k.hata
 }
@@ -77,7 +77,7 @@ func TestHesapSil_HerSeyiSilerVeIkinciTemizligiKurar(t *testing.T) {
 }
 
 func TestHesapSil_KimlikYoksaErrHesapYok(t *testing.T) {
-	k, s, q := &sahteKimlik{hata: identity.ErrKullaniciYok}, &sahteSilici{}, &sahteKuyruk{}
+	k, s, q := &sahteKimlik{hata: identity.ErrUserNotFound}, &sahteSilici{}, &sahteKuyruk{}
 	err := NewHesapService(k, s, ulasilamazRedis(), q, nil).Sil(context.Background(), hesapID)
 	if !errors.Is(err, ErrHesapYok) {
 		t.Fatalf("ErrHesapYok bekleniyordu, gelen %v", err)

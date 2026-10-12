@@ -40,7 +40,7 @@ func TestRedisJSON_KeysUnchanged(t *testing.T) {
 		{OturumKayit{}, []string{"AuthRequestID", "CSRF"}},
 		{FedereDurum{}, []string{"AuthRequestID", "Cerez", "KodDogrulayici", "Nonce", "Saglayici"}},
 		{BaglamaBekleme{}, []string{"AuthRequestID", "CSRF", "Eposta", "Saglayici", "Sub", "UserID"}},
-		{AccessKayit{}, []string{"ClientID", "ExpiresAt", "ID", "Scopes", "UserID"}},
+		{AccessRecord{}, []string{"ClientID", "ExpiresAt", "ID", "Scopes", "UserID"}},
 	}
 	for _, tt := range tests {
 		if got := jsonKeys(t, tt.v); !reflect.DeepEqual(got, tt.want) {

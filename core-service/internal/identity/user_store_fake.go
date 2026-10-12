@@ -9,109 +9,109 @@ import (
 	"github.com/google/uuid"
 )
 
-// SahteUserStore, testler icin bellek ici UserStore.
+// FakeUserStore is an in-memory UserStore for tests.
 //
-// SOZLESME: PostgresUserStore ile BIREBIR AYNI davranmak zorundadir
-// (bkz. TestUserStoreSozlesmesi). Uyusmayan bir sahte depo, testler
-// gecerken uretimin sasmasina yol acar; bu dalda tam bu ayrisma uc ayri
-// kusur uretti:
+// CONTRACT: it must behave EXACTLY like PostgresUserStore (see
+// TestUserStore_Contract). A fake store that does not match lets
+// production drift while the tests pass; on this branch exactly this
+// divergence produced three separate defects:
 //
-//   - Create/ByEmail e-postayi normalize etmiyordu (uretim trim ediyor),
-//     yani Email/Name alanlari uretimden FARKLI saklaniyordu.
-//   - Buyuk/kucuk harf duyarsiz tekillik eksikti: " e@t " ve "e@t" icin
-//     Postgres ErrEpostaKullanimda donerken sahte depo IKINCI hesabi
-//     olusturuyordu.
-//   - ByEmail/ByID DAHILI isaretci donduruyordu; cagiran donen *User'i
-//     mutasyona ugratirsa depo bozuluyordu. PostgresUserStore her
-//     okumada satiri yeniden tarayarak dogal olarak taze bir yapi doner,
-//     sahte deponun ayni yalitimi ELLE saglamasi gerekir (jeton
-//     depolarindaki refreshKopya/accessKopya ile ayni gerekce).
-type SahteUserStore struct {
-	mu          sync.Mutex
-	epostayaGor map[string]*User
-	idyeGore    map[string]*User
+//   - Create/ByEmail did not normalize the email (production trims), so
+//     the Email/Name fields were stored DIFFERENTLY from production.
+//   - Case-insensitive uniqueness was missing: for " e@t " and "e@t"
+//     Postgres returned ErrEmailInUse while the fake store created a
+//     SECOND account.
+//   - ByEmail/ByID returned an INTERNAL pointer; if the caller mutated
+//     the returned *User the store was corrupted. PostgresUserStore
+//     naturally returns a fresh struct because it rescans the row on every
+//     read, so the fake store has to provide the same isolation BY HAND
+//     (same reason as copyRefresh/copyAccess in the token stores).
+type FakeUserStore struct {
+	mu      sync.Mutex
+	byEmail map[string]*User
+	byID    map[string]*User
 }
 
-func NewSahteUserStore() *SahteUserStore {
-	return &SahteUserStore{
-		epostayaGor: map[string]*User{},
-		idyeGore:    map[string]*User{},
+func NewFakeUserStore() *FakeUserStore {
+	return &FakeUserStore{
+		byEmail: map[string]*User{},
+		byID:    map[string]*User{},
 	}
 }
 
-// sahteEpostaAnahtar, Postgres'teki "UNIQUE (lower(email))" kisitini
-// taklit eder: once uretimin uyguladigi normalizasyon (trim), sonra
-// buyuk/kucuk harf duyarsizlik.
-func sahteEpostaAnahtar(eposta string) string {
-	return strings.ToLower(epostaNormalize(eposta))
+// fakeEmailKey imitates the "UNIQUE (lower(email))" constraint in
+// Postgres: first the normalization that production applies (trim), then
+// case insensitivity.
+func fakeEmailKey(email string) string {
+	return strings.ToLower(normalizeEmail(email))
 }
 
-func (s *SahteUserStore) Create(ctx context.Context, email, name, password string) (*User, error) {
-	hash, err := sifreHashle(password)
+func (s *FakeUserStore) Create(ctx context.Context, email, name, password string) (*User, error) {
+	hash, err := hashPassword(password)
 	if err != nil {
 		return nil, err
 	}
-	anahtar := sahteEpostaAnahtar(email)
+	key := fakeEmailKey(email)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.epostayaGor[anahtar]; ok {
-		return nil, ErrEpostaKullanimda
+	if _, ok := s.byEmail[key]; ok {
+		return nil, ErrEmailInUse
 	}
-	k := &User{
+	u := &User{
 		ID: uuid.NewString(),
-		// Uretimdeki PostgresUserStore.Create ile AYNI normalizasyon.
-		Email:        epostaNormalize(email),
+		// The SAME normalization as PostgresUserStore.Create in production.
+		Email:        normalizeEmail(email),
 		Name:         strings.TrimSpace(name),
 		PasswordHash: hash,
 		CreatedAt:    time.Now().UTC(),
 	}
-	s.epostayaGor[anahtar] = k
-	s.idyeGore[k.ID] = k
-	return kullaniciKopya(k), nil
+	s.byEmail[key] = u
+	s.byID[u.ID] = u
+	return copyUser(u), nil
 }
 
-func (s *SahteUserStore) ByEmail(ctx context.Context, email string) (*User, error) {
+func (s *FakeUserStore) ByEmail(ctx context.Context, email string) (*User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if k, ok := s.epostayaGor[sahteEpostaAnahtar(email)]; ok {
-		return kullaniciKopya(k), nil
+	if u, ok := s.byEmail[fakeEmailKey(email)]; ok {
+		return copyUser(u), nil
 	}
-	return nil, ErrKullaniciYok
+	return nil, ErrUserNotFound
 }
 
-func (s *SahteUserStore) ByID(ctx context.Context, id string) (*User, error) {
+func (s *FakeUserStore) ByID(ctx context.Context, id string) (*User, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if k, ok := s.idyeGore[id]; ok {
-		return kullaniciKopya(k), nil
+	if u, ok := s.byID[id]; ok {
+		return copyUser(u), nil
 	}
-	return nil, ErrKullaniciYok
+	return nil, ErrUserNotFound
 }
 
-func (s *SahteUserStore) Sil(ctx context.Context, id string) error {
+func (s *FakeUserStore) Delete(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k, bulundu := s.idyeGore[id]
-	if !bulundu {
-		return ErrKullaniciYok
+	u, found := s.byID[id]
+	if !found {
+		return ErrUserNotFound
 	}
-	delete(s.idyeGore, id)
-	for anahtar, aday := range s.epostayaGor {
-		if aday.ID == k.ID {
-			delete(s.epostayaGor, anahtar)
+	delete(s.byID, id)
+	for key, candidate := range s.byEmail {
+		if candidate.ID == u.ID {
+			delete(s.byEmail, key)
 		}
 	}
 	return nil
 }
 
-// kullaniciKopya, cagirana DAHILI isaretci vermemek icin kaydin yuzeysel
-// bir kopyasini doner. User yalnizca deger alanlardan (string, bool,
-// time.Time) olustugu icin yuzeysel kopya yeterlidir; dilim/isaretci
-// alan eklenirse burada da klonlanmasi gerekir.
-func kullaniciKopya(k *User) *User {
-	if k == nil {
+// copyUser returns a shallow copy of the record so that no INTERNAL
+// pointer is handed to the caller. User consists only of value fields
+// (string, bool, time.Time), so a shallow copy is enough; if a slice or
+// pointer field is added it has to be cloned here too.
+func copyUser(u *User) *User {
+	if u == nil {
 		return nil
 	}
-	kopya := *k
-	return &kopya
+	clone := *u
+	return &clone
 }

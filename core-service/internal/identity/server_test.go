@@ -157,7 +157,7 @@ func TestBosIstemciYapilandirmasiIleBaslamaz(t *testing.T) {
 // Gecerli bir yapilandirma bu dogrulamalarin HICBIRINE takilmamali:
 // aksi halde yukaridaki testler "her sey reddediliyor" diye de gecerdi.
 func TestGecerliYapilandirmaDogrulamayiGecer(t *testing.T) {
-	if err := yapilandirmaDogrula(testAuthCfg()); err != nil {
+	if err := validateConfig(testAuthCfg()); err != nil {
 		t.Errorf("gecerli yapilandirma reddedildi: %v", err)
 	}
 }
@@ -179,7 +179,7 @@ func TestAppleFederasyonuEksikAlanlarlaBaslamaz(t *testing.T) {
 		t.Run(d.ad, func(t *testing.T) {
 			cfg := testAuthCfg()
 			cfg.Federation = []config.FederationClient{d.federe}
-			if err := yapilandirmaDogrula(cfg); err == nil {
+			if err := validateConfig(cfg); err == nil {
 				t.Fatal("eksik apple alanlariyla dogrulama gecti")
 			}
 		})
@@ -199,7 +199,7 @@ func TestAppleFederasyonuTamAlanlarlaGecer(t *testing.T) {
 		Name: "apple", ClientID: "tr.makesinger.giris",
 		AppleTeamID: "TEAM1", AppleKeyID: "AB12", AppleKeyP8: p8,
 	}}
-	if err := yapilandirmaDogrula(cfg); err != nil {
+	if err := validateConfig(cfg); err != nil {
 		t.Errorf("tam apple yapilandirmasi reddedildi: %v", err)
 	}
 }
@@ -232,7 +232,7 @@ func TestAppleP8BaslangictaAyristirilir(t *testing.T) {
 				Name: "apple", ClientID: "tr.makesinger.giris",
 				AppleTeamID: "TEAM1", AppleKeyID: "AB12", AppleKeyP8: d.p8,
 			}}
-			err := yapilandirmaDogrula(cfg)
+			err := validateConfig(cfg)
 			if err == nil {
 				t.Fatal("ayristirilamayan .p8 ile dogrulama GECTI; baslangicta reddedilmeliydi")
 			}
@@ -257,7 +257,7 @@ func TestGoogleFederasyonuSecretsizBaslamaz(t *testing.T) {
 	cfg.Federation = []config.FederationClient{{
 		Name: "google", ClientID: "123.apps.googleusercontent.com",
 	}}
-	err := yapilandirmaDogrula(cfg)
+	err := validateConfig(cfg)
 	if err == nil {
 		t.Fatal("client_secret bos iken dogrulama GECTI")
 	}
@@ -276,12 +276,12 @@ func TestGoogleFederasyonuSecretVarsaGecer(t *testing.T) {
 	cfg.Federation = []config.FederationClient{{
 		Name: "google", ClientID: "123.apps.googleusercontent.com", ClientSecret: "gizli",
 	}}
-	if err := yapilandirmaDogrula(cfg); err != nil {
+	if err := validateConfig(cfg); err != nil {
 		t.Errorf("tam google yapilandirmasi reddedildi: %v", err)
 	}
 
 	cfg.Federation = nil
-	if err := yapilandirmaDogrula(cfg); err != nil {
+	if err := validateConfig(cfg); err != nil {
 		t.Errorf("federasyon KAPALI yapilandirma reddedildi: %v", err)
 	}
 }
@@ -292,22 +292,22 @@ func TestGoogleFederasyonuSecretVarsaGecer(t *testing.T) {
 // veriyor mu" sorusunu yanitlar. nil alici icin de guvenli olmali:
 // /health, OP hic kurulmadiginda da bunu cagiriyor.
 func TestHazirDinleyiciDurumunuYansitir(t *testing.T) {
-	var yok *Sunucu
-	if yok.Hazir() {
+	var yok *Server
+	if yok.Ready() {
 		t.Error("nil Sunucu hazir gorundu")
 	}
 
-	s := &Sunucu{}
-	if s.Hazir() {
+	s := &Server{}
+	if s.Ready() {
 		t.Error("baslatilmamis Sunucu hazir gorundu")
 	}
-	s.hazir.Store(true)
-	if !s.Hazir() {
+	s.ready.Store(true)
+	if !s.Ready() {
 		t.Error("hazir=true iken Hazir() false dondu")
 	}
 	// Dinleyici cokerse (veya kapanirsa) /health bunu gormeli.
-	s.hazir.Store(false)
-	if s.Hazir() {
+	s.ready.Store(false)
+	if s.Ready() {
 		t.Error("dinleyici durduktan sonra hala hazir gorunuyor")
 	}
 }
@@ -353,7 +353,7 @@ func TestHizLimitiKurulamazsaStartBasarisiz(t *testing.T) {
 	}
 	ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
 	defer iptal()
-	if kapatmaHata := sunucu.Kapat(ctx); kapatmaHata != nil {
+	if kapatmaHata := sunucu.Shutdown(ctx); kapatmaHata != nil {
 		t.Fatalf("Kapat: %v", kapatmaHata)
 	}
 
@@ -363,7 +363,7 @@ func TestHizLimitiKurulamazsaStartBasarisiz(t *testing.T) {
 	s, err := Start(context.Background(), bozuk, rdb, "development")
 	if err == nil {
 		if s != nil {
-			_ = s.Kapat(context.Background())
+			_ = s.Shutdown(context.Background())
 		}
 		t.Fatal("hiz limiti kurulamadigi halde Start basarili oldu")
 	}

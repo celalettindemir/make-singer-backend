@@ -7,31 +7,31 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/op"
 )
 
-// pkceZorlayici, kutuphanenin op.AuthorizeValidator uzanti noktasini
-// karsilayarak /authorize'da S256 PKCE'yi ZORUNLU kilar.
+// pkceEnforcer implements the library's op.AuthorizeValidator extension
+// point and makes S256 PKCE MANDATORY at /authorize.
 //
-// NEDEN BIZ ZORLUYORUZ: op.Config.CodeMethodS256 YALNIZCA discovery
-// belgesini besler (pkg/op/op.go CodeMethodS256Supported ->
-// pkg/op/discovery.go); hicbir dogrulamada kullanilmaz.
-// ValidateAuthRequestClient code_challenge'a hic bakmaz,
-// AuthorizeCodeChallenge method'u denetlemez ve
-// oidc.VerifyCodeChallenge S256 disindaki method'da (plain veya BOS)
-// duz string karsilastirmasi yapar — yani challenge == verifier olur ve
-// PKCE fiilen devre disi kalir.
-type pkceZorlayici struct {
+// WHY WE ENFORCE IT OURSELVES: op.Config.CodeMethodS256 ONLY feeds the
+// discovery document (pkg/op/op.go CodeMethodS256Supported ->
+// pkg/op/discovery.go); no validation uses it.
+// ValidateAuthRequestClient never looks at code_challenge,
+// AuthorizeCodeChallenge does not check the method, and
+// oidc.VerifyCodeChallenge does a plain string comparison for any method
+// other than S256 (plain or EMPTY) — so challenge == verifier holds and
+// PKCE is effectively disabled.
+type pkceEnforcer struct {
 	*op.Provider
 }
 
-var _ op.AuthorizeValidator = (*pkceZorlayici)(nil)
+var _ op.AuthorizeValidator = (*pkceEnforcer)(nil)
 
-// ValidateAuthRequest, kutuphanenin varsayilan dogrulamasini kosar ve
-// uzerine S256 PKCE sartini ekler.
+// ValidateAuthRequest runs the library's default validation and adds the
+// S256 PKCE requirement on top of it.
 //
-// SIRA ONEMLI: once op.ValidateAuthRequestClient, SONRA PKCE. Cunku
-// redirect_uri'yi dogrulayan kutuphanedir ve PKCE hatasi istemcinin
-// redirect_uri'sine 302 ile doner (op.AuthRequestError). Dogrulanmamis
-// bir redirect_uri'ye hata dondurmek ACIK YONLENDIRME olurdu.
-func (z *pkceZorlayici) ValidateAuthRequest(
+// ORDER MATTERS: op.ValidateAuthRequestClient first, PKCE AFTER. The
+// library is what validates redirect_uri, and a PKCE error returns to the
+// client's redirect_uri with a 302 (op.AuthRequestError). Returning an
+// error to an unvalidated redirect_uri would be an OPEN REDIRECT.
+func (e *pkceEnforcer) ValidateAuthRequest(
 	ctx context.Context,
 	authReq *oidc.AuthRequest,
 	storage op.Storage,
@@ -46,21 +46,21 @@ func (z *pkceZorlayici) ValidateAuthRequest(
 	if err != nil {
 		return "", err
 	}
-	if err := pkceS256Zorunlu(authReq); err != nil {
+	if err := requirePKCES256(authReq); err != nil {
 		return "", err
 	}
 	return sub, nil
 }
 
-// pkceS256Zorunlu, code_challenge'in var oldugunu ve method'un S256
-// oldugunu dogrular. Bos method da REDDEDILIR: kutuphane bos method'u
-// plain gibi (duz karsilastirma) isler.
+// requirePKCES256 verifies that code_challenge is present and that the
+// method is S256. An empty method is REJECTED too: the library treats an
+// empty method like plain (plain comparison).
 //
-// Reddin /authorize'da olmasi onemli: aksi halde kullanici giris
-// sayfasina yonlendirilir, sifresini girer, kod uretilir ve hata ancak
-// token ucunda ("PKCE required") ortaya cikar — yani kimlik bilgileri
-// bastan olu bir akisa girilmis olur.
-func pkceS256Zorunlu(authReq *oidc.AuthRequest) error {
+// Rejecting at /authorize matters: otherwise the user is redirected to the
+// login page, enters the password, a code is issued, and the error only
+// surfaces at the token endpoint ("PKCE required") — so the credentials
+// would have been entered into a dead flow from the start.
+func requirePKCES256(authReq *oidc.AuthRequest) error {
 	if authReq.CodeChallenge == "" {
 		return oidc.ErrInvalidRequest().WithDescription(
 			"code_challenge is required: this provider only accepts PKCE with code_challenge_method=S256")

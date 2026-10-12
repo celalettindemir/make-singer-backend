@@ -18,11 +18,11 @@ import (
 )
 
 var (
-	ErrJetonYok    = errors.New("jeton bulunamadi")
-	ErrJetonTekrar = errors.New("jeton yeniden kullanildi")
+	ErrTokenNotFound = errors.New("jeton bulunamadi")
+	ErrTokenReused   = errors.New("jeton yeniden kullanildi")
 )
 
-type AccessKayit struct {
+type AccessRecord struct {
 	ID        string
 	UserID    string
 	ClientID  string
@@ -30,7 +30,7 @@ type AccessKayit struct {
 	ExpiresAt time.Time
 }
 
-type RefreshKayit struct {
+type RefreshRecord struct {
 	ID        string
 	FamilyID  string
 	UserID    string
@@ -46,35 +46,35 @@ type RefreshKayit struct {
 }
 
 type TokenStore interface {
-	AccessKaydet(ctx context.Context, id, userID, clientID string, scopes []string, expiresAt time.Time) error
-	AccessOku(ctx context.Context, id string) (*AccessKayit, error)
-	// AccessSil, tek bir access token kaydini siler. op.Storage.RevokeToken
-	// bir access token'i hedef aldiginda cagirir: jeton kendisi (JWT
-	// oldugu icin) hala imza gecerliyse dogrulanir, ama introspection ve
-	// /userinfo artik onu bulamaz.
-	AccessSil(ctx context.Context, id string) error
-	RefreshOlustur(ctx context.Context, k *RefreshKayit) (string, error)
-	RefreshDondur(ctx context.Context, sunulan string, yeni *RefreshKayit) (string, error)
-	RefreshOku(ctx context.Context, sunulan string) (*RefreshKayit, error)
-	// RefreshIDileOku, RefreshOku'nun aksine JETONUN KENDISIYLE degil,
-	// veritabani ID'siyle arar. op.Storage.RevokeToken bunu gerektirir:
-	// bkz. RefreshIDileOku'nun kendi yorumu.
-	RefreshIDileOku(ctx context.Context, id string) (*RefreshKayit, error)
-	// RefreshAileID, sunulan JETONUN ailesinin kimligini doner ve
-	// gecerlilik filtrelemesi YAPMAZ (kullanilmis, iptal edilmis ve suresi
-	// gecmis kayitlar da bulunur). RefreshOku yeniden kullanim tespit
-	// ettiginde kaydin kendisini DONDURMEDIGI icin (hata yolunda yarim
-	// veri dondurmek cagiranin onu gecerli sanmasina acik kapi birakir)
-	// aile kimligine bu dar metotla ulasilir; RefreshIDileOku burada ise
-	// yaramaz, cunku elimizde veritabani ID'si degil ham jeton vardir.
-	RefreshAileID(ctx context.Context, sunulan string) (string, error)
-	AileIptal(ctx context.Context, familyID string) error
-	KullaniciIptal(ctx context.Context, userID, clientID string) error
+	SaveAccess(ctx context.Context, id, userID, clientID string, scopes []string, expiresAt time.Time) error
+	GetAccess(ctx context.Context, id string) (*AccessRecord, error)
+	// DeleteAccess deletes a single access token record. op.Storage.RevokeToken
+	// calls it when it targets an access token: the token itself (being a
+	// JWT) still verifies as long as its signature is valid, but
+	// introspection and /userinfo can no longer find it.
+	DeleteAccess(ctx context.Context, id string) error
+	CreateRefresh(ctx context.Context, r *RefreshRecord) (string, error)
+	RotateRefresh(ctx context.Context, presented string, fresh *RefreshRecord) (string, error)
+	GetRefresh(ctx context.Context, presented string) (*RefreshRecord, error)
+	// GetRefreshByID, unlike GetRefresh, looks up by the database ID, NOT
+	// by the TOKEN ITSELF. op.Storage.RevokeToken requires this: see the
+	// comment on GetRefreshByID itself.
+	GetRefreshByID(ctx context.Context, id string) (*RefreshRecord, error)
+	// RefreshFamilyID returns the family ID of the PRESENTED TOKEN and does
+	// NOT filter for validity (used, revoked and expired records are found
+	// too). Because GetRefresh does NOT return the record itself when it
+	// detects reuse (returning partial data on the error path would leave
+	// the door open for the caller to take it as valid), the family ID is
+	// reached through this narrow method; GetRefreshByID is no use here,
+	// because what we have is the raw token, not the database ID.
+	RefreshFamilyID(ctx context.Context, presented string) (string, error)
+	RevokeFamily(ctx context.Context, familyID string) error
+	RevokeUser(ctx context.Context, userID, clientID string) error
 }
 
-// jetonUret, 32 baytlik kriptografik rastgele jeton uretir ve URL'de
-// tasinabilir bicimde dondurur.
-func jetonUret() (string, error) {
+// generateToken produces a 32-byte cryptographically random token and
+// returns it in a URL-safe form.
+func generateToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("jeton uretilemedi: %w", err)
@@ -82,122 +82,126 @@ func jetonUret() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// jetonOzet, saklanacak degeri uretir. Jetonun kendisi HICBIR ZAMAN
-// saklanmaz: veritabani sizarsa jetonlar kullanilamaz olmali.
-func jetonOzet(jeton string) []byte {
-	o := sha256.Sum256([]byte(jeton))
-	return o[:]
+// hashToken produces the value that gets stored. The token itself is
+// NEVER stored: if the database leaks, the tokens must be unusable.
+func hashToken(token string) []byte {
+	sum := sha256.Sum256([]byte(token))
+	return sum[:]
 }
 
-// accessAnahtar, access token kaydinin Redis anahtaridir. Access
-// kayitlari kisa omurludur ve TTL ile kendiliginden silinir; bu yuzden
-// Postgres'te degil Redis'te tutulurlar.
-func accessAnahtar(id string) string { return "kimlik:at:" + id }
+// accessKey is the Redis key of an access token record. Access records
+// are short-lived and are deleted automatically by their TTL; that is why
+// they are kept in Redis rather than in Postgres.
+func accessKey(id string) string { return "kimlik:at:" + id }
 
-// PostgresTokenStore: refresh kayitlari Postgres'te (kalici, aile
-// iliskisi ve iptal gecmisi gerektigi icin), access kayitlari Redis'te
-// (kisa omurlu, TTL ile silinir).
+// PostgresTokenStore: refresh records live in Postgres (durable, since
+// they need the family relation and the revocation history), access
+// records live in Redis (short-lived, deleted by TTL).
 type PostgresTokenStore struct {
-	havuz *pgxpool.Pool
-	rdb   *redis.Client
+	pool *pgxpool.Pool
+	rdb  *redis.Client
 }
 
-func NewPostgresTokenStore(havuz *pgxpool.Pool, rdb *redis.Client) *PostgresTokenStore {
-	return &PostgresTokenStore{havuz: havuz, rdb: rdb}
+func NewPostgresTokenStore(pool *pgxpool.Pool, rdb *redis.Client) *PostgresTokenStore {
+	return &PostgresTokenStore{pool: pool, rdb: rdb}
 }
 
-func (s *PostgresTokenStore) AccessKaydet(ctx context.Context, id, userID, clientID string, scopes []string, expiresAt time.Time) error {
-	kayit := AccessKayit{
+func (s *PostgresTokenStore) SaveAccess(ctx context.Context, id, userID, clientID string, scopes []string, expiresAt time.Time) error {
+	record := AccessRecord{
 		ID:        id,
 		UserID:    userID,
 		ClientID:  clientID,
 		Scopes:    scopes,
 		ExpiresAt: expiresAt,
 	}
-	veri, err := json.Marshal(kayit)
+	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("access kaydi serilenemedi: %w", err)
 	}
-	// TTL = access omru: kayit kendiliginden silinir, Redis'e kalici veri
-	// yazilmaz. Okuma tarafi yine de ExpiresAt'i kontrol eder (saat kaymasi
-	// ve TTL'in henuz isletilmemis olmasi ihtimaline karsi savunma).
+	// TTL = access lifetime: the record deletes itself and no permanent data
+	// is written to Redis. The read side still checks ExpiresAt (a defense
+	// against clock skew and against the TTL not having been enforced
+	// yet).
 	ttl := time.Until(expiresAt)
 	if ttl <= 0 {
 		return nil
 	}
-	if err := s.rdb.Set(ctx, accessAnahtar(id), veri, ttl).Err(); err != nil {
+	if err := s.rdb.Set(ctx, accessKey(id), data, ttl).Err(); err != nil {
 		return fmt.Errorf("access kaydi yazilamadi: %w", err)
 	}
 	return nil
 }
 
-func (s *PostgresTokenStore) AccessOku(ctx context.Context, id string) (*AccessKayit, error) {
-	veri, err := s.rdb.Get(ctx, accessAnahtar(id)).Bytes()
+func (s *PostgresTokenStore) GetAccess(ctx context.Context, id string) (*AccessRecord, error) {
+	data, err := s.rdb.Get(ctx, accessKey(id)).Bytes()
 	if errors.Is(err, redis.Nil) {
-		return nil, ErrJetonYok
+		return nil, ErrTokenNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("access kaydi okunamadi: %w", err)
 	}
-	var kayit AccessKayit
-	if err := json.Unmarshal(veri, &kayit); err != nil {
+	var record AccessRecord
+	if err := json.Unmarshal(data, &record); err != nil {
 		return nil, fmt.Errorf("access kaydi cozumlenemedi: %w", err)
 	}
-	if time.Now().UTC().After(kayit.ExpiresAt) {
-		return nil, ErrJetonYok
+	if time.Now().UTC().After(record.ExpiresAt) {
+		return nil, ErrTokenNotFound
 	}
-	return &kayit, nil
+	return &record, nil
 }
 
-// AccessSil, access kaydini Redis'ten kaldirir. Kayit zaten yoksa
-// (suresi dolmus veya hic yazilmamis) sessizce basarili sayilir.
-func (s *PostgresTokenStore) AccessSil(ctx context.Context, id string) error {
-	if err := s.rdb.Del(ctx, accessAnahtar(id)).Err(); err != nil {
+// DeleteAccess removes the access record from Redis. If the record does
+// not exist already (expired or never written) it silently counts as
+// success.
+func (s *PostgresTokenStore) DeleteAccess(ctx context.Context, id string) error {
+	if err := s.rdb.Del(ctx, accessKey(id)).Err(); err != nil {
 		return fmt.Errorf("access kaydi silinemedi: %w", err)
 	}
 	return nil
 }
 
-// RefreshOlustur yeni bir AILE baslatir: family_id yeni uretilir. Rotasyon
-// bu aileyi surdurur, yeniden kullanim tespiti ise aileyi toptan iptal eder.
-func (s *PostgresTokenStore) RefreshOlustur(ctx context.Context, k *RefreshKayit) (string, error) {
-	jeton, err := jetonUret()
+// CreateRefresh starts a new FAMILY: family_id is freshly generated.
+// Rotation continues this family, while reuse detection revokes the whole
+// family.
+func (s *PostgresTokenStore) CreateRefresh(ctx context.Context, r *RefreshRecord) (string, error) {
+	token, err := generateToken()
 	if err != nil {
 		return "", err
 	}
-	if err := s.refreshEkle(ctx, s.havuz, k, uuid.NewString(), jeton); err != nil {
+	if err := s.insertRefresh(ctx, s.pool, r, uuid.NewString(), token); err != nil {
 		return "", err
 	}
-	return jeton, nil
+	return token, nil
 }
 
-// calistirici, hem havuzun hem de islemin karsiladigi asgari arayuz:
-// refreshEkle ayni SQL'i islem icinde de islem disinda da kullanabilsin.
-type calistirici interface {
+// execer is the minimal interface satisfied by both the pool and the
+// transaction: it lets insertRefresh use the same SQL both inside and
+// outside a transaction.
+type execer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-func (s *PostgresTokenStore) refreshEkle(ctx context.Context, c calistirici, k *RefreshKayit, familyID, jeton string) error {
+func (s *PostgresTokenStore) insertRefresh(ctx context.Context, c execer, r *RefreshRecord, familyID, token string) error {
 	_, err := c.Exec(ctx,
 		`INSERT INTO refresh_tokens
 		   (id, family_id, user_id, client_id, token_hash, scopes, audience, amr, auth_time, expires_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		uuid.NewString(), familyID, k.UserID, k.ClientID, jetonOzet(jeton),
-		k.Scopes, k.Audience, k.AMR, k.AuthTime, k.ExpiresAt)
+		uuid.NewString(), familyID, r.UserID, r.ClientID, hashToken(token),
+		r.Scopes, r.Audience, r.AMR, r.AuthTime, r.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("refresh jetonu yazilamadi: %w", err)
 	}
 	return nil
 }
 
-// RefreshDondur, sunulan jetonu tuketip ayni aileye yeni bir jeton ekler.
-// Tek islemde kosar ve satiri kilitler.
-func (s *PostgresTokenStore) RefreshDondur(ctx context.Context, sunulan string, yeni *RefreshKayit) (string, error) {
-	islem, err := s.havuz.Begin(ctx)
+// RotateRefresh consumes the presented token and adds a new token to the
+// same family. It runs in a single transaction and locks the row.
+func (s *PostgresTokenStore) RotateRefresh(ctx context.Context, presented string, fresh *RefreshRecord) (string, error) {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("islem baslatilamadi: %w", err)
 	}
-	defer func() { _ = islem.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	var (
 		id, familyID     string
@@ -206,119 +210,121 @@ func (s *PostgresTokenStore) RefreshDondur(ctx context.Context, sunulan string, 
 		usedAt           *time.Time
 		revokedAt        *time.Time
 	)
-	// FOR UPDATE: ayni jetonla gelen iki istek yarisirsa ikincisi
-	// birincinin used_at yazmasini gormeli, yoksa yeniden kullanim
-	// tespiti sessizce kacar.
-	err = islem.QueryRow(ctx,
+	// FOR UPDATE: if two requests arrive with the same token and race, the
+	// second must see the first one's used_at write, otherwise reuse
+	// detection silently slips through.
+	err = tx.QueryRow(ctx,
 		`SELECT id, family_id, user_id, client_id, expires_at, used_at, revoked_at
 		   FROM refresh_tokens WHERE token_hash = $1 FOR UPDATE`,
-		jetonOzet(sunulan)).Scan(&id, &familyID, &userID, &clientID, &expiresAt, &usedAt, &revokedAt)
+		hashToken(presented)).Scan(&id, &familyID, &userID, &clientID, &expiresAt, &usedAt, &revokedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrJetonYok
+		return "", ErrTokenNotFound
 	}
 	if err != nil {
 		return "", fmt.Errorf("jeton okunamadi: %w", err)
 	}
-	// Sira onemli: iptal edilmis jeton zaten olu oldugu icin (aile bir
-	// kez iptal edildikten sonra) yeniden kullanim alarmi tekrar
-	// calmasin; yeniden kullanim kontrolu ondan sonra gelir.
+	// Order matters: a revoked token is already dead (once the family has
+	// been revoked), so the reuse alarm must not fire again; the reuse
+	// check comes after it.
 	if revokedAt != nil {
-		return "", ErrJetonYok
+		return "", ErrTokenNotFound
 	}
 	if usedAt != nil {
-		// Yeniden kullanim: ailenin tamamini oldur ve ayri bir hata don.
-		if _, err := islem.Exec(ctx,
+		// Reuse: kill the whole family and return a distinct error.
+		if _, err := tx.Exec(ctx,
 			`UPDATE refresh_tokens SET revoked_at = now()
 			  WHERE family_id = $1 AND revoked_at IS NULL`, familyID); err != nil {
 			return "", fmt.Errorf("aile iptal edilemedi: %w", err)
 		}
-		if err := islem.Commit(ctx); err != nil {
-			// Commit hatasi yeniden kullanim bilgisini YUTMAMALI: cagiran
-			// errors.Is ile bunun bir hirsizlik alarmi oldugunu gormeli.
-			return "", fmt.Errorf("%w (iptal commit edilemedi: %v)", ErrJetonTekrar, err)
+		if err := tx.Commit(ctx); err != nil {
+			// A commit error must NOT swallow the reuse information: the
+			// caller must see through errors.Is that this is a theft alarm.
+			return "", fmt.Errorf("%w (iptal commit edilemedi: %v)", ErrTokenReused, err)
 		}
-		return "", ErrJetonTekrar
+		return "", ErrTokenReused
 	}
-	// Sahiplik: cagiran katmanda bir hata olursa ayni aileye baska bir
-	// kullanicinin (veya baska istemcinin) kaydi eklenmesin. Ucuz savunma,
-	// uyusmazlikta jeton hic yokmus gibi davranilir.
-	if userID != yeni.UserID || clientID != yeni.ClientID {
-		return "", ErrJetonYok
+	// Ownership: if the calling layer has a bug, another user's (or
+	// another client's) record must not be added to the same family. A
+	// cheap defense: on a mismatch the token is treated as if it did not
+	// exist.
+	if userID != fresh.UserID || clientID != fresh.ClientID {
+		return "", ErrTokenNotFound
 	}
 	if time.Now().UTC().After(expiresAt) {
-		return "", ErrJetonYok
+		return "", ErrTokenNotFound
 	}
 
-	jeton, err := jetonUret()
+	token, err := generateToken()
 	if err != nil {
 		return "", err
 	}
-	if _, err := islem.Exec(ctx,
+	if _, err := tx.Exec(ctx,
 		`UPDATE refresh_tokens SET used_at = now() WHERE id = $1`, id); err != nil {
 		return "", fmt.Errorf("jeton tuketilemedi: %w", err)
 	}
-	// Yeni kayit AYNI family_id ile eklenir: zincirin izi korunur ki
-	// sonradan bir yeniden kullanim gorulurse tum zincir iptal edilebilsin.
-	if err := s.refreshEkle(ctx, islem, yeni, familyID, jeton); err != nil {
+	// The new record is added with the SAME family_id: the trace of the chain
+	// is preserved so that if a reuse is seen later the whole chain can be
+	// revoked.
+	if err := s.insertRefresh(ctx, tx, fresh, familyID, token); err != nil {
 		return "", err
 	}
-	if err := islem.Commit(ctx); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return "", fmt.Errorf("rotasyon commit edilemedi: %w", err)
 	}
-	return jeton, nil
+	return token, nil
 }
 
-// RefreshOku, sunulan jetonu dogrular. Karar sirasi RefreshDondur ile
-// BIREBIR aynidir:
+// GetRefresh validates the presented token. The decision order is EXACTLY
+// the same as RotateRefresh:
 //
-//	kayit yok      -> ErrJetonYok
-//	revoked_at     -> ErrJetonYok (aile zaten olu, alarm tekrar calmasin)
-//	used_at        -> ErrJetonTekrar (YENIDEN KULLANIM)
-//	suresi gecmis  -> ErrJetonYok
+//	no record      -> ErrTokenNotFound
+//	revoked_at     -> ErrTokenNotFound (family already dead, do not fire the alarm again)
+//	used_at        -> ErrTokenReused (REUSE)
+//	expired        -> ErrTokenNotFound
 //
-// ErrJetonTekrar'i ayirmak zorunludur: kutuphane refresh akisinda ONCE
-// TokenRequestByRefreshToken'i cagirir ve hata donerse akisi ABORT eder
-// (bkz. op.RefreshTokenExchange), yani RefreshDondur'a HIC ulasmaz. Bu
-// ayrim olmazsa yeniden kullanim uretimde hic tespit edilemez ve aile
-// iptali hic calismaz. Cagirana hangisi oldugunu ISTEMCIYE sizdirmak
-// serbest degildir: depo ayirir, Depo katmani istemciye iki durumda da
-// ayni hatayi doner.
-func (s *PostgresTokenStore) RefreshOku(ctx context.Context, sunulan string) (*RefreshKayit, error) {
-	var k RefreshKayit
-	err := s.havuz.QueryRow(ctx,
+// Separating ErrTokenReused is mandatory: in the refresh flow the library
+// calls TokenRequestByRefreshToken FIRST and ABORTS the flow if it returns
+// an error (see op.RefreshTokenExchange), so it NEVER reaches
+// RotateRefresh. Without this distinction reuse can never be detected in
+// production and family revocation never runs. Leaking to the CLIENT which
+// of the two it was is not allowed: the token store distinguishes them, and
+// the Storage layer returns the same error to the client in both cases.
+func (s *PostgresTokenStore) GetRefresh(ctx context.Context, presented string) (*RefreshRecord, error) {
+	var r RefreshRecord
+	err := s.pool.QueryRow(ctx,
 		`SELECT id, family_id, user_id, client_id, token_hash, scopes, audience, amr,
 		        auth_time, expires_at, used_at, revoked_at
 		   FROM refresh_tokens WHERE token_hash = $1`,
-		jetonOzet(sunulan)).Scan(
-		&k.ID, &k.FamilyID, &k.UserID, &k.ClientID, &k.TokenHash, &k.Scopes, &k.Audience,
-		&k.AMR, &k.AuthTime, &k.ExpiresAt, &k.UsedAt, &k.RevokedAt)
+		hashToken(presented)).Scan(
+		&r.ID, &r.FamilyID, &r.UserID, &r.ClientID, &r.TokenHash, &r.Scopes, &r.Audience,
+		&r.AMR, &r.AuthTime, &r.ExpiresAt, &r.UsedAt, &r.RevokedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrJetonYok
+		return nil, ErrTokenNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("jeton okunamadi: %w", err)
 	}
-	if k.RevokedAt != nil {
-		return nil, ErrJetonYok
+	if r.RevokedAt != nil {
+		return nil, ErrTokenNotFound
 	}
-	if k.UsedAt != nil {
-		return nil, ErrJetonTekrar
+	if r.UsedAt != nil {
+		return nil, ErrTokenReused
 	}
-	if time.Now().UTC().After(k.ExpiresAt) {
-		return nil, ErrJetonYok
+	if time.Now().UTC().After(r.ExpiresAt) {
+		return nil, ErrTokenNotFound
 	}
-	return &k, nil
+	return &r, nil
 }
 
-// RefreshAileID, ham jetondan aile kimligini bulur; gecerlilik
-// filtrelemesi yapmaz (bkz. TokenStore arayuzundeki yorum).
-func (s *PostgresTokenStore) RefreshAileID(ctx context.Context, sunulan string) (string, error) {
+// RefreshFamilyID finds the family ID from the raw token; it does not
+// filter for validity (see the comment on the TokenStore interface).
+func (s *PostgresTokenStore) RefreshFamilyID(ctx context.Context, presented string) (string, error) {
 	var familyID string
-	err := s.havuz.QueryRow(ctx,
+	err := s.pool.QueryRow(ctx,
 		`SELECT family_id FROM refresh_tokens WHERE token_hash = $1`,
-		jetonOzet(sunulan)).Scan(&familyID)
+		hashToken(presented)).Scan(&familyID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrJetonYok
+		return "", ErrTokenNotFound
 	}
 	if err != nil {
 		return "", fmt.Errorf("aile kimligi okunamadi: %w", err)
@@ -326,36 +332,36 @@ func (s *PostgresTokenStore) RefreshAileID(ctx context.Context, sunulan string) 
 	return familyID, nil
 }
 
-// RefreshIDileOku, ID ILE arar (jetonun kendisiyle DEGIL). op kutuphanesi
-// RevokeToken'i cagirmadan once GetRefreshTokenInfo'yu cagirir ve donen
-// tokenID'yi (ham jeton degil) RevokeToken'a gecirir (bkz. pkg/op/
-// token_revocation.go). Bu yuzden /revoke akisinda refresh jetonlari ID
-// ile bulunmak ZORUNDA; RefreshOku (hash ile arama) burada ISE YARAMAZ.
-// Gecerlilik filtrelemesi YAPILMAZ (used/revoked/expired de donulur):
-// iptal etmek istedigimiz kaydin FamilyID'sine ulasmak icin kaydin var
-// olmasi yeterli, zaten iptal edilmis bir kaydi tekrar iptal etmek
-// zararsizdir (AileIptal idempotenttir).
-func (s *PostgresTokenStore) RefreshIDileOku(ctx context.Context, id string) (*RefreshKayit, error) {
-	var k RefreshKayit
-	err := s.havuz.QueryRow(ctx,
+// GetRefreshByID looks up BY ID (NOT by the token itself). Before calling
+// RevokeToken the op library calls GetRefreshTokenInfo and passes the
+// returned tokenID (not the raw token) to RevokeToken (see pkg/op/
+// token_revocation.go). So in the /revoke flow refresh tokens MUST be
+// found by ID; GetRefresh (lookup by hash) is NO USE here. NO validity
+// filtering is done (used/revoked/expired are returned too): to reach the
+// FamilyID of the record we want to revoke it is enough for the record to
+// exist, and revoking an already revoked record again is harmless
+// (RevokeFamily is idempotent).
+func (s *PostgresTokenStore) GetRefreshByID(ctx context.Context, id string) (*RefreshRecord, error) {
+	var r RefreshRecord
+	err := s.pool.QueryRow(ctx,
 		`SELECT id, family_id, user_id, client_id, token_hash, scopes, audience, amr,
 		        auth_time, expires_at, used_at, revoked_at
 		   FROM refresh_tokens WHERE id = $1`,
 		id).Scan(
-		&k.ID, &k.FamilyID, &k.UserID, &k.ClientID, &k.TokenHash, &k.Scopes, &k.Audience,
-		&k.AMR, &k.AuthTime, &k.ExpiresAt, &k.UsedAt, &k.RevokedAt)
+		&r.ID, &r.FamilyID, &r.UserID, &r.ClientID, &r.TokenHash, &r.Scopes, &r.Audience,
+		&r.AMR, &r.AuthTime, &r.ExpiresAt, &r.UsedAt, &r.RevokedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrJetonYok
+		return nil, ErrTokenNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("jeton okunamadi: %w", err)
 	}
-	return &k, nil
+	return &r, nil
 }
 
-// AileIptal, bir ailenin tum yasayan jetonlarini iptal eder.
-func (s *PostgresTokenStore) AileIptal(ctx context.Context, familyID string) error {
-	if _, err := s.havuz.Exec(ctx,
+// RevokeFamily revokes all live tokens of a family.
+func (s *PostgresTokenStore) RevokeFamily(ctx context.Context, familyID string) error {
+	if _, err := s.pool.Exec(ctx,
 		`UPDATE refresh_tokens SET revoked_at = now()
 		  WHERE family_id = $1 AND revoked_at IS NULL`, familyID); err != nil {
 		return fmt.Errorf("aile iptal edilemedi: %w", err)
@@ -363,10 +369,10 @@ func (s *PostgresTokenStore) AileIptal(ctx context.Context, familyID string) err
 	return nil
 }
 
-// KullaniciIptal, bir kullanicinin o istemcideki tum refresh jetonlarini
-// iptal eder. Cikis bunu kullanir; baska kullanicinin jetonuna dokunmaz.
-func (s *PostgresTokenStore) KullaniciIptal(ctx context.Context, userID, clientID string) error {
-	if _, err := s.havuz.Exec(ctx,
+// RevokeUser revokes all refresh tokens of a user at that client. Logout
+// uses it; it does not touch another user's tokens.
+func (s *PostgresTokenStore) RevokeUser(ctx context.Context, userID, clientID string) error {
+	if _, err := s.pool.Exec(ctx,
 		`UPDATE refresh_tokens SET revoked_at = now()
 		  WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL`,
 		userID, clientID); err != nil {
@@ -375,8 +381,9 @@ func (s *PostgresTokenStore) KullaniciIptal(ctx context.Context, userID, clientI
 	return nil
 }
 
-// Iki uygulama da arayuzden sapmasin: biri degisirse derleme kirilir.
+// Neither implementation may drift from the interface: if one changes,
+// the build breaks.
 var (
 	_ TokenStore = (*PostgresTokenStore)(nil)
-	_ TokenStore = (*SahteTokenStore)(nil)
+	_ TokenStore = (*FakeTokenStore)(nil)
 )

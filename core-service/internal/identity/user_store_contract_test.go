@@ -23,7 +23,7 @@ func testPostgresUserStore(t *testing.T) *PostgresUserStore {
 	}
 	ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
 	defer iptal()
-	havuz, err := Baglan(ctx, dsn)
+	havuz, err := Connect(ctx, dsn)
 	if err != nil {
 		t.Skip("yerel Postgres yok, atlaniyor")
 	}
@@ -49,11 +49,11 @@ func sozlesmeHata(err error) string {
 	switch {
 	case err == nil:
 		return ""
-	case errors.Is(err, ErrKullaniciYok):
+	case errors.Is(err, ErrUserNotFound):
 		return "kullanici-yok"
-	case errors.Is(err, ErrEpostaKullanimda):
+	case errors.Is(err, ErrEmailInUse):
 		return "eposta-kullanimda"
-	case errors.Is(err, ErrSifreKisa):
+	case errors.Is(err, ErrPasswordTooShort):
 		return "sifre-kisa"
 	default:
 		return "diger: " + err.Error()
@@ -158,7 +158,7 @@ func TestUserStoreSozlesmesi(t *testing.T) {
 				if err != nil {
 					return sonuc(nil, err)
 				}
-				return sozlesmeSonuc{hata: sozlesmeHata(d.Sil(ctx, k.ID))}
+				return sozlesmeSonuc{hata: sozlesmeHata(d.Delete(ctx, k.ID))}
 			},
 			beklenen: sozlesmeSonuc{},
 		},
@@ -172,7 +172,7 @@ func TestUserStoreSozlesmesi(t *testing.T) {
 		{
 			ad: "Sil olmayan kullanici icin ErrKullaniciYok",
 			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
-				return sozlesmeSonuc{hata: sozlesmeHata(d.Sil(ctx, yokID))}
+				return sozlesmeSonuc{hata: sozlesmeHata(d.Delete(ctx, yokID))}
 			},
 			beklenen: sozlesmeSonuc{hata: "kullanici-yok"},
 		},
@@ -188,7 +188,7 @@ func TestUserStoreSozlesmesi(t *testing.T) {
 		}
 	}
 
-	t.Run("sahte", func(t *testing.T) { kos(t, NewSahteUserStore()) })
+	t.Run("sahte", func(t *testing.T) { kos(t, NewFakeUserStore()) })
 	t.Run("postgres", func(t *testing.T) { kos(t, testPostgresUserStore(t)) })
 
 	// Create'in dondurdugu ID ile ByID gercekten bulunabilmeli. Bunu
@@ -207,7 +207,7 @@ func TestUserStoreSozlesmesi(t *testing.T) {
 			t.Errorf("ByID = %+v, beklenen %+v", bulunan, k)
 		}
 	}
-	t.Run("sahte-byid", func(t *testing.T) { idKos(t, NewSahteUserStore()) })
+	t.Run("sahte-byid", func(t *testing.T) { idKos(t, NewFakeUserStore()) })
 	t.Run("postgres-byid", func(t *testing.T) { idKos(t, testPostgresUserStore(t)) })
 }
 
@@ -218,7 +218,7 @@ func TestUserStoreSozlesmesi(t *testing.T) {
 // gerekir. Aksi halde cagiran donen *User'i mutasyona ugratinca depo
 // bozulur ve testler gecerken uretim sasar.
 func TestSahteUserStoreDahiliIsaretciVermez(t *testing.T) {
-	depo := NewSahteUserStore()
+	depo := NewFakeUserStore()
 	ctx := context.Background()
 	k, err := depo.Create(ctx, "kopya@ornek.com", "Ad Soyad", "gecerliSifre12")
 	if err != nil {
@@ -277,7 +277,7 @@ func TestEpostaNormalize(t *testing.T) {
 		" Ad.Soyad@y.com ": "Ad.Soyad@y.com",
 	}
 	for girdi, beklenen := range durumlar {
-		if got := epostaNormalize(girdi); got != beklenen {
+		if got := normalizeEmail(girdi); got != beklenen {
 			t.Errorf("epostaNormalize(%q) = %q, beklenen %q", girdi, got, beklenen)
 		}
 	}

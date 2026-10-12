@@ -303,7 +303,7 @@ func TestAMRRefreshYenilemesindeKorunur(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAccessAndRefreshTokens: %v", err)
 	}
-	kayit, err := d.jetonlar.RefreshOku(ctx, refreshToken)
+	kayit, err := d.tokens.GetRefresh(ctx, refreshToken)
 	if err != nil {
 		t.Fatalf("RefreshOku: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestAMRRefreshYenilemesindeKorunur(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAccessAndRefreshTokens (rotasyon): %v", err)
 	}
-	yeniKayit, err := d.jetonlar.RefreshOku(ctx, yeniRefreshToken)
+	yeniKayit, err := d.tokens.GetRefresh(ctx, yeniRefreshToken)
 	if err != nil {
 		t.Fatalf("RefreshOku (yeni): %v", err)
 	}

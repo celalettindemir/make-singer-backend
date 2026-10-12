@@ -521,16 +521,16 @@ func (s *Sayfalar) girisPost(w http.ResponseWriter, r *http.Request) {
 	// Eskiden kayit tarafi trim ediyor, giris tarafi ham form degerini
 	// geciyordu; bosluklu e-postayla kayit olan kullanici AYNI girdiyle
 	// giris yapamiyordu (bkz. kullanici_depo.go epostaNormalize notu).
-	eposta := epostaNormalize(r.FormValue("eposta"))
+	eposta := normalizeEmail(r.FormValue("eposta"))
 	sifre := r.FormValue("sifre")
 
 	kullanici, err := s.kullanici.ByEmail(r.Context(), eposta)
-	if err != nil && !errors.Is(err, ErrKullaniciYok) {
+	if err != nil && !errors.Is(err, ErrUserNotFound) {
 		// E-posta PII'dir ve burada loglanmaz; hatanin kendisi zaten
 		// teshis icin yeterli.
 		log.Printf("giris: kullanici okunamadi: %v", err)
 	}
-	if !kullanici.SifreDogru(sifre) {
+	if !kullanici.PasswordMatches(sifre) {
 		// Kasitli olarak hesabin var olup olmadigini AYIRT ETMIYORUZ:
 		// AYNI e-posta icin "hesap yok" ve "sifre yanlis" durumlari
 		// birebir ayni govdeyi/durum kodunu doner (bkz.
@@ -618,17 +618,17 @@ func (s *Sayfalar) kayitPost(w http.ResponseWriter, r *http.Request) {
 	}
 	csrf := r.FormValue(csrfAlan)
 	// Giris ile AYNI normalizasyon (bkz. girisPost'taki not).
-	eposta := epostaNormalize(r.FormValue("eposta"))
+	eposta := normalizeEmail(r.FormValue("eposta"))
 	ad := r.FormValue("ad")
 	sifre := r.FormValue("sifre")
 
 	kullanici, err := s.kullanici.Create(r.Context(), eposta, ad, sifre)
 	if err != nil {
 		switch {
-		case errors.Is(err, ErrEpostaKullanimda):
+		case errors.Is(err, ErrEmailInUse):
 			s.kayitRender(w, http.StatusConflict, id, csrf, eposta, ad, hataEpostaKullanimda)
-		case errors.Is(err, ErrSifreKisa):
-			s.kayitRender(w, http.StatusBadRequest, id, csrf, eposta, ad, ErrSifreKisa.Error())
+		case errors.Is(err, ErrPasswordTooShort):
+			s.kayitRender(w, http.StatusBadRequest, id, csrf, eposta, ad, ErrPasswordTooShort.Error())
 		default:
 			// E-posta PII'dir ve burada loglanmaz; hatanin kendisi zaten
 			// teshis icin yeterli.

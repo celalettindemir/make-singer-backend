@@ -401,7 +401,7 @@ func (h *HizLimit) ipAnahtar(ad string, r *http.Request) string {
 // epostaNormalize notu). Sahte depo ayni kalibi zaten uyguluyor
 // (kullanici_depo_sahte.go sahteEpostaAnahtar).
 func epostaSayacAnahtari(eposta string) string {
-	return strings.ToLower(epostaNormalize(eposta))
+	return strings.ToLower(normalizeEmail(eposta))
 }
 
 // epostaAnahtar, e-postanin HMAC-SHA256 ozetinden anahtar uretir.

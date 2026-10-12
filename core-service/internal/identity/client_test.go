@@ -27,14 +27,14 @@ func testAuthCfg() *config.AuthConfig {
 }
 
 func TestMobilIstemciArayuzuKarsilar(t *testing.T) {
-	var _ op.Client = NewMobilIstemci(testAuthCfg())
+	var _ op.Client = NewMobileClient(testAuthCfg())
 }
 
 // Public client: secret tasimaz, bu yuzden kimlik dogrulama yontemi
 // "none" olmali. "basic" secilirse kutuphane secret bekler ve token
 // istegi reddedilir.
 func TestMobilIstemciPublicVeNative(t *testing.T) {
-	c := NewMobilIstemci(testAuthCfg())
+	c := NewMobileClient(testAuthCfg())
 	if c.AuthMethod() != oidc.AuthMethodNone {
 		t.Errorf("AuthMethod = %v, beklenen none", c.AuthMethod())
 	}
@@ -49,7 +49,7 @@ func TestMobilIstemciPublicVeNative(t *testing.T) {
 // Yalnizca authorization code akisi. Implicit veya token response type
 // public client'ta jetonu adres cubuguna dusurur.
 func TestMobilIstemciYalnizcaKodAkisi(t *testing.T) {
-	c := NewMobilIstemci(testAuthCfg())
+	c := NewMobileClient(testAuthCfg())
 	tipler := c.ResponseTypes()
 	if len(tipler) != 1 || tipler[0] != oidc.ResponseTypeCode {
 		t.Errorf("ResponseTypes = %v, beklenen [code]", tipler)
@@ -69,7 +69,7 @@ func TestMobilIstemciYalnizcaKodAkisi(t *testing.T) {
 }
 
 func TestMobilIstemciRedirectleri(t *testing.T) {
-	c := NewMobilIstemci(testAuthCfg())
+	c := NewMobileClient(testAuthCfg())
 	if len(c.RedirectURIs()) != 2 {
 		t.Errorf("RedirectURIs = %v", c.RedirectURIs())
 	}
@@ -78,13 +78,13 @@ func TestMobilIstemciRedirectleri(t *testing.T) {
 // DevMode acik kalirsa kutuphane redirect URI dogrulamasini gevsetir;
 // uretimde bu, jetonlari saldirganin adresine yollamak demektir.
 func TestMobilIstemciDevModeKapali(t *testing.T) {
-	if NewMobilIstemci(testAuthCfg()).DevMode() {
+	if NewMobileClient(testAuthCfg()).DevMode() {
 		t.Error("DevMode acik")
 	}
 }
 
 func TestMobilIstemciIzinliScopelar(t *testing.T) {
-	c := NewMobilIstemci(testAuthCfg())
+	c := NewMobileClient(testAuthCfg())
 	for _, s := range []string{oidc.ScopeOpenID, oidc.ScopeProfile, oidc.ScopeEmail, oidc.ScopeOfflineAccess} {
 		if !c.IsScopeAllowed(s) {
 			t.Errorf("%q scope'u reddedildi", s)

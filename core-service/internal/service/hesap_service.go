@@ -32,7 +32,7 @@ const gecikmeliTemizlik = time.Hour
 // KimlikSilici, kimlik saglayicisinin hesap silme yetenegi
 // (*kimlik.Sunucu uygular).
 type KimlikSilici interface {
-	HesapSil(ctx context.Context, userID string) error
+	DeleteAccount(ctx context.Context, userID string) error
 }
 
 // Kuyruk, *asynq.Client'in burada kullanilan yuzu.
@@ -74,8 +74,8 @@ func (s *HesapService) Sil(ctx context.Context, userID string) error {
 	if _, err := client.UserPrefixes(userID); err != nil {
 		return ErrHesapYok
 	}
-	if err := s.kimlik.HesapSil(ctx, userID); err != nil {
-		if errors.Is(err, identity.ErrKullaniciYok) {
+	if err := s.kimlik.DeleteAccount(ctx, userID); err != nil {
+		if errors.Is(err, identity.ErrUserNotFound) {
 			return ErrHesapYok
 		}
 		return fmt.Errorf("hesap silinemedi: %w", err)
