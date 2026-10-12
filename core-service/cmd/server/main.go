@@ -27,6 +27,7 @@ import (
 	"github.com/makeasinger/api/internal/kimlik"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/service"
+	"github.com/makeasinger/api/internal/sosyal"
 	ws "github.com/makeasinger/api/internal/websocket"
 	"github.com/makeasinger/api/internal/worker"
 )
@@ -93,6 +94,19 @@ func main() {
 		_ = kimlikSunucu.Kapat(kapatCtx)
 	}()
 
+	// Kesfet (sosyal): kimlikle ayni veritabani, ama kendi havuzu, kendi
+	// semasi (sosyal) ve kendi migration tablosu. Kimlik gibi FATAL:
+	// sosyal tablolari olmayan bir pod her /api/social isteginde 500 doner.
+	sosyalHavuz, err := kimlik.Baglan(ctx, cfg.Auth.DBURL)
+	if err != nil {
+		log.Fatalf("Sosyal veritabanina baglanilamadi: %v", err)
+	}
+	defer sosyalHavuz.Close()
+	if err := sosyal.Migrate(ctx, sosyalHavuz); err != nil {
+		log.Fatalf("Sosyal migration basarisiz: %v", err)
+	}
+	sosyalDepo := sosyal.NewPostgresDepo(sosyalHavuz)
+
 	// Initialize Asynq client
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{
 		Addr:     cfg.Redis.Addr,
@@ -150,8 +164,18 @@ func main() {
 	}
 
 	// Hesap silme: kullanici kaydi kendi OP'mizde tutulur.
-	hesapService := service.NewHesapService(kimlikSunucu, silici, redisClient, asynqClient, nil)
+	hesapService := service.NewHesapService(kimlikSunucu, silici, redisClient, asynqClient, sosyalDepo)
 	hesapHandler := handler.NewHesapHandler(hesapService)
+
+	sosyalHandler := handler.NewSosyalHandler(sosyal.NewServis(sosyalDepo, asynqClient, storage, &cfg.R2))
+
+	// kopyalayici: arayuz degiskeni; r2Client nil iken dogrudan atamak
+	// tipli nil tuzagini kurar (bkz. storage).
+	var kopyalayici client.Kopyalayici
+	if r2Client != nil {
+		kopyalayici = r2Client
+	}
+	sosyalWorker := worker.NewSosyalWorker(sosyalDepo, kopyalayici, audioClient, silici, hesapisaret.NewRedisDenetci(redisClient))
 
 	// Initialize handlers
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
@@ -190,7 +214,7 @@ func main() {
 	}))
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "*",
-		AllowMethods: "GET,POST,PUT,DELETE,OPTIONS",
+		AllowMethods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
 		AllowHeaders: "Origin,Content-Type,Accept,Authorization",
 	}))
 
@@ -275,6 +299,10 @@ func main() {
 
 	api.Delete("/account", hesapHandler.Sil)
 
+	// Kesfet (sosyal) uclari. Yayin limiti yalnizca POST /yayinlar'dadir.
+	sosyalHandler.Rotalar(api.Group("/social"),
+		rateLimiter.Limit("sosyal-yayin", cfg.RateLimit.SosyalYayinPerHour, time.Hour))
+
 	// WebSocket routes
 	app.Use("/ws", func(c *fiber.Ctx) error {
 		if websocket.IsWebSocketUpgrade(c) {
@@ -290,7 +318,7 @@ func main() {
 	}))
 
 	// Start Asynq worker server
-	go startWorkerServer(cfg, redisClient, renderService, masterService, sunoClient, audioClient, storage, hub, hesapService)
+	go startWorkerServer(cfg, redisClient, renderService, masterService, sunoClient, audioClient, storage, hub, hesapService, sosyalWorker)
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
@@ -322,6 +350,7 @@ func startWorkerServer(
 	r2Client client.StorageClient,
 	hub *ws.Hub,
 	hesapService *service.HesapService,
+	sosyalWorker *worker.SosyalWorker,
 ) {
 	asynqLogLevel := asynq.InfoLevel
 	if strings.EqualFold(cfg.Server.LogLevel, "debug") {
@@ -343,6 +372,7 @@ func startWorkerServer(
 			Queues: map[string]int{
 				"render": 6,
 				"master": 4,
+				"sosyal": 2,
 				"bakim":  1,
 			},
 			LogLevel: asynqLogLevel,
@@ -360,6 +390,8 @@ func startWorkerServer(
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeMaster, masterWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeHesapTemizle, worker.NewHesapWorker(hesapService).ProcessTask)
+	mux.HandleFunc(sosyal.TaskTypeHazirla, sosyalWorker.Hazirla)
+	mux.HandleFunc(sosyal.TaskTypeDosyaSil, sosyalWorker.DosyaSil)
 
 	if err := srv.Run(mux); err != nil {
 		log.Printf("Asynq worker error: %v", err)
