@@ -75,6 +75,8 @@ type sahteDepo struct {
 	sonYorumLimiti  int
 
 	sikayetler []YeniSikayet
+
+	stemListeleri map[string][]StemKaydi
 }
 
 func yeniSahteDepo() *sahteDepo {
@@ -452,4 +454,15 @@ func (d *sahteDepo) SikayetEkle(_ context.Context, s YeniSikayet) error {
 	}
 	d.sikayetler = append(d.sikayetler, s)
 	return nil
+}
+
+func (d *sahteDepo) Coverlar(_ context.Context, kaynakID, izleyiciID string, imlec *ZamanImleci, limit int) ([]YayinOzeti, error) {
+	return d.zamanListesi(akisCagrisi{tur: "cover", izleyici: izleyiciID, sahip: kaynakID, zaman: imlec, limit: limit})
+}
+
+func (d *sahteDepo) StemListesi(_ context.Context, yayinID string) ([]StemKaydi, error) {
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	return d.stemListeleri[yayinID], nil
 }

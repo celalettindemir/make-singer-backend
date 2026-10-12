@@ -97,7 +97,7 @@ func TestSosyal_YorumLimitiYalnizcaYazmada(t *testing.T) {
 		yorumSayfa:  &sosyal.Sayfa[sosyal.Yorum]{Ogeler: []sosyal.Yorum{}},
 		yayinYaniti: &sosyal.YayinYaniti{},
 	}
-	app := sosyalUygulamasiLimitli(s, sosyalKullanici, SosyalLimitleri{Yayin: gecir, Yorum: yavasla})
+	app := sosyalUygulamasiLimitli(s, sosyalKullanici, SosyalLimitleri{Yayin: gecir, Yorum: yavasla, Cover: gecir})
 	durum, govde := sosyalIstek(t, app, http.MethodPost, "/api/social/yayinlar/abc/yorumlar", `{"metin":"x","zamanMs":null}`)
 	if durum != http.StatusTooManyRequests || hataKodu(govde) != "yavasla" {
 		t.Fatalf("POST yorum: durum=%d govde=%v", durum, govde)

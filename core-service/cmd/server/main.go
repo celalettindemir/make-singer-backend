@@ -167,14 +167,14 @@ func main() {
 	hesapService := service.NewHesapService(kimlikSunucu, silici, redisClient, asynqClient, sosyalDepo)
 	hesapHandler := handler.NewHesapHandler(hesapService)
 
-	sosyalHandler := handler.NewSosyalHandler(sosyal.NewServis(sosyalDepo, asynqClient, storage, &cfg.R2))
-
 	// kopyalayici: arayuz degiskeni; r2Client nil iken dogrudan atamak
 	// tipli nil tuzagini kurar (bkz. storage).
 	var kopyalayici client.Kopyalayici
 	if r2Client != nil {
 		kopyalayici = r2Client
 	}
+	sosyalHandler := handler.NewSosyalHandler(
+		sosyal.NewServis(sosyalDepo, asynqClient, storage, &cfg.R2).KopyalayiciAyarla(kopyalayici))
 	sosyalWorker := worker.NewSosyalWorker(sosyalDepo, kopyalayici, audioClient, silici, hesapisaret.NewRedisDenetci(redisClient))
 
 	// Initialize handlers
@@ -305,6 +305,7 @@ func main() {
 		Yayin: rateLimiter.Limit("sosyal-yayin", cfg.RateLimit.SosyalYayinPerHour, time.Hour),
 		Yorum: rateLimiter.LimitKod("sosyal-yorum", cfg.RateLimit.SosyalYorumPerMin, time.Minute,
 			"yavasla", "Biraz yavasla"),
+		Cover: rateLimiter.Limit("sosyal-cover", cfg.RateLimit.SosyalCoverPerHour, time.Hour),
 	})
 
 	// WebSocket routes

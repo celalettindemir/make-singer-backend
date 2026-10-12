@@ -56,7 +56,7 @@ func TestSosyal_YayinOlusturHizSiniri(t *testing.T) {
 	grup := app.Group("/api/social", kullaniciOlarak(sosyalKullanici))
 	NewSosyalHandler(&sahteSosyal{}).Rotalar(grup, SosyalLimitleri{Yayin: func(c *fiber.Ctx) error {
 		return c.Status(http.StatusTooManyRequests).JSON(fiber.Map{"error": fiber.Map{"code": "RATE_LIMITED", "message": "x"}})
-	}, Yorum: gecir})
+	}, Yorum: gecir, Cover: gecir})
 	if durum, _ := sosyalIstek(t, app, http.MethodPost, "/api/social/yayinlar", `{}`); durum != http.StatusTooManyRequests {
 		t.Fatalf("yayin limiti POST /yayinlar'a uygulanmali: %d", durum)
 	}

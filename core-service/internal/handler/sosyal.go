@@ -39,6 +39,9 @@ type SosyalServisi interface {
 	YorumSil(ctx context.Context, kullaniciID, yorumID string) error
 
 	Sikayet(ctx context.Context, kullaniciID string, g sosyal.SikayetGirdisi) error
+
+	Coverlar(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error)
+	CoverBaslat(ctx context.Context, kullaniciID, yayinID string) (*sosyal.CoverBaslangici, error)
 }
 
 var _ SosyalServisi = (*sosyal.Servis)(nil)
@@ -57,6 +60,7 @@ func NewSosyalHandler(servis SosyalServisi) *SosyalHandler {
 type SosyalLimitleri struct {
 	Yayin fiber.Handler // POST /yayinlar (saatlik)
 	Yorum fiber.Handler // POST /yayinlar/:id/yorumlar (dakikalik, 429 yavasla)
+	Cover fiber.Handler // POST /yayinlar/:id/cover-baslat (saatlik)
 }
 
 // Rotalar, uclari verilen gruba baglar; limitler yalnizca ilgili uclara
@@ -88,6 +92,9 @@ func (h *SosyalHandler) Rotalar(r fiber.Router, l SosyalLimitleri) {
 	r.Delete("/yorumlar/:id", h.YorumSil)
 
 	r.Post("/sikayetler", h.Sikayet)
+
+	r.Get("/yayinlar/:id/coverlar", h.Coverlar)
+	r.Post("/yayinlar/:id/cover-baslat", l.Cover, h.CoverBaslat)
 }
 
 // sosyalHatalari, servis hatalarinin sozlesmedeki durum ve kodlaridir.

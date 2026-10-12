@@ -23,6 +23,10 @@ type Servis struct {
 	depolama client.StorageClient // nil: R2 yok, imzasiz adres uretilir
 	r2       *config.R2Config
 	simdi    func() time.Time
+
+	// kopyalayici, cover-baslat'in stem kopyalayicisi (KopyalayiciAyarla);
+	// nil: R2 yok, kopya atlanir.
+	kopyalayici client.Kopyalayici
 }
 
 // NewServis kurar. depolama nil olabilir (R2 yapilandirilmamis); main

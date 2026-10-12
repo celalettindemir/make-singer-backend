@@ -32,6 +32,7 @@ type sahteSosyal struct {
 	oneriler    []sosyal.ProfilOzeti
 	yorum       *sosyal.Yorum
 	yorumSayfa  *sosyal.Sayfa[sosyal.Yorum]
+	cover       *sosyal.CoverBaslangici
 
 	sonKullanici string
 	sonAd        string
@@ -149,12 +150,22 @@ func (s *sahteSosyal) Sikayet(_ context.Context, k string, g sosyal.SikayetGirdi
 	return s.hata
 }
 
+func (s *sahteSosyal) Coverlar(_ context.Context, k, id, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error) {
+	s.sonKullanici, s.sonYayin, s.sonImlec, s.sonLimit = k, id, imlec, limit
+	return s.sayfa, s.hata
+}
+
+func (s *sahteSosyal) CoverBaslat(_ context.Context, k, id string) (*sosyal.CoverBaslangici, error) {
+	s.sonKullanici, s.sonYayin = k, id
+	return s.cover, s.hata
+}
+
 func gecir(c *fiber.Ctx) error { return c.Next() }
 
 // sosyalUygulamasi, /api/social grubunu sahte servisle ve gecirgen
 // limitlerle kurar.
 func sosyalUygulamasi(s *sahteSosyal, userID string) *fiber.App {
-	return sosyalUygulamasiLimitli(s, userID, SosyalLimitleri{Yayin: gecir, Yorum: gecir})
+	return sosyalUygulamasiLimitli(s, userID, SosyalLimitleri{Yayin: gecir, Yorum: gecir, Cover: gecir})
 }
 
 // sosyalUygulamasiLimitli, verilen limitlerle kurar.
