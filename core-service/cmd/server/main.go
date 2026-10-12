@@ -258,6 +258,15 @@ func main() {
 	// Swagger UI
 	app.Get("/swagger/*", fiberSwagger.HandlerDefault)
 
+	// Kesfet herkese acik onizleme (oturumsuz, spec §4.8). /api auth
+	// grubundan ONCE kaydedilir: Fiber rotalari kayit sirasiyla eslestirir
+	// ve bu uc zinciri surdurmez, yani auth ve silinmis-kullanici kapisi
+	// hic calismaz. Sinir istemci IP'si basinadir (X-Real-Ip); web
+	// sunucusu X-Web-Anahtari ile ortak ve daha yuksek sinira gecer.
+	sosyalHandler.PublicRotalar(app.Group("/api/public"),
+		rateLimiter.LimitIP("public", cfg.RateLimit.PublicPerMin, time.Minute,
+			cfg.Sosyal.WebAnahtari, cfg.RateLimit.PublicWebPerMin))
+
 	// API routes
 	api := app.Group("/api", apiAuthMiddleware, middleware.SilinmisKullaniciEngeli(hesapisaret.NewRedisDenetci(redisClient)))
 

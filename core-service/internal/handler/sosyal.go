@@ -42,6 +42,8 @@ type SosyalServisi interface {
 
 	Coverlar(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error)
 	CoverBaslat(ctx context.Context, kullaniciID, yayinID string) (*sosyal.CoverBaslangici, error)
+
+	Onizleme(ctx context.Context, slug string) (*sosyal.Onizleme, error)
 }
 
 var _ SosyalServisi = (*sosyal.Servis)(nil)

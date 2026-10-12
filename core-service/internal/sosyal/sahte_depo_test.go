@@ -77,6 +77,8 @@ type sahteDepo struct {
 	sikayetler []YeniSikayet
 
 	stemListeleri map[string][]StemKaydi
+
+	onizlemeler map[string]*OnizlemeKaydi // slug -> kayit
 }
 
 func yeniSahteDepo() *sahteDepo {
@@ -465,4 +467,16 @@ func (d *sahteDepo) StemListesi(_ context.Context, yayinID string) ([]StemKaydi,
 		return nil, d.hata
 	}
 	return d.stemListeleri[yayinID], nil
+}
+
+func (d *sahteDepo) OnizlemeGetir(_ context.Context, slug string) (*OnizlemeKaydi, error) {
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	k, ok := d.onizlemeler[slug]
+	if !ok {
+		return nil, ErrBulunamadi
+	}
+	c := *k
+	return &c, nil
 }

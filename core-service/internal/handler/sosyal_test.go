@@ -33,6 +33,7 @@ type sahteSosyal struct {
 	yorum       *sosyal.Yorum
 	yorumSayfa  *sosyal.Sayfa[sosyal.Yorum]
 	cover       *sosyal.CoverBaslangici
+	onizleme    *sosyal.Onizleme
 
 	sonKullanici string
 	sonAd        string
@@ -158,6 +159,11 @@ func (s *sahteSosyal) Coverlar(_ context.Context, k, id, imlec string, limit int
 func (s *sahteSosyal) CoverBaslat(_ context.Context, k, id string) (*sosyal.CoverBaslangici, error) {
 	s.sonKullanici, s.sonYayin = k, id
 	return s.cover, s.hata
+}
+
+func (s *sahteSosyal) Onizleme(_ context.Context, slug string) (*sosyal.Onizleme, error) {
+	s.sonYayin = slug
+	return s.onizleme, s.hata
 }
 
 func gecir(c *fiber.Ctx) error { return c.Next() }

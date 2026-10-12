@@ -37,6 +37,7 @@ type Depo interface {
 	YorumDeposu
 	SikayetDeposu
 	CoverDeposu
+	OnizlemeDeposu
 }
 
 // PostgresDepo, Depo'nun Postgres uygulamasidir. Kimlikler cagri
