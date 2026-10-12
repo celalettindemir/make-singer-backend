@@ -53,6 +53,11 @@ func Migrate(ctx context.Context, havuz *pgxpool.Pool) error {
 	defer func() {
 		if _, err := baglanti.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationKilitAnahtari); err != nil {
 			log.Printf("sosyal migration kilidi birakilamadi: %v", err)
+			// Oturum kilidi baglantiyla yasar: baglanti kapatilir ki havuz
+			// onu dusurup kilit serbest kalsin (Release kapali baglantiyi atar).
+			if cerr := baglanti.Conn().Close(context.Background()); cerr != nil {
+				log.Printf("sosyal migration baglantisi kapatilamadi: %v", cerr)
+			}
 		}
 	}()
 

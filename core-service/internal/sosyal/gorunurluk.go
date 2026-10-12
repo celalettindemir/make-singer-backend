@@ -36,7 +36,7 @@ func gorebilir(g GorunurlukGirdisi, detay bool) bool {
 	if g.Silindi {
 		return false
 	}
-	if g.SahipID == g.IzleyiciID {
+	if g.IzleyiciID != "" && g.SahipID == g.IzleyiciID {
 		return true
 	}
 	if g.Durum != DurumYayinda {

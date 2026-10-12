@@ -77,6 +77,28 @@ func TestServis_AkisSeninIcinReferansSabit(t *testing.T) {
 	}
 }
 
+// Gelecekteki bir referans zamani simdiye kirpilir; istemci puanlamayi
+// kaydiramaz ve sonraki imlec kirpilmis zamani tasir.
+func TestServis_AkisSeninIcinGelecekReferansKirpilir(t *testing.T) {
+	d := yeniSahteDepo()
+	d.akisOgeleri = ozetler(3)
+	s, _ := testServisi(d)
+	an := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	s.simdi = func() time.Time { return an }
+	gelecek := imlecKodla(PuanImleci{P: 5, ID: d.akisOgeleri[0].ID, N: an.Add(24 * time.Hour).UnixMilli()})
+	sayfa, err := s.Akis(context.Background(), kullaniciA, SekmeSeninIcin, *gelecek, 2)
+	if err != nil {
+		t.Fatalf("gelecek imlec: %v", err)
+	}
+	if !d.sonAkis.referans.Equal(an) {
+		t.Fatalf("referans simdiye kirpilmali: %v", d.sonAkis.referans)
+	}
+	sonraki, err := puanImleciCoz(*sayfa.SonrakiImlec)
+	if err != nil || sonraki.N != an.UnixMilli() {
+		t.Fatalf("sonraki imlec kirpilmis zamani tasimali: %+v, %v", sonraki, err)
+	}
+}
+
 func TestServis_AkisHatalari(t *testing.T) {
 	s, _ := testServisi(yeniSahteDepo())
 	ctx := context.Background()

@@ -56,3 +56,11 @@ func TestGorunurluk_SilinmisiKimseGormez(t *testing.T) {
 		}
 	}
 }
+
+// Bos izleyici kimligi, sahip kimligi de bos olsa sahip sayilmaz.
+func TestGorunurluk_BosIzleyiciSahipSayilmaz(t *testing.T) {
+	g := GorunurlukGirdisi{SahipID: "", IzleyiciID: "", Gorunurluk: GorunurlukHerkes, Durum: DurumHazirlaniyor}
+	if DetayGorebilir(g) || ListedeGorebilir(g) {
+		t.Fatal("bos izleyici hazirlanan yayini gormemeli")
+	}
+}

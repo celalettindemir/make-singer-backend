@@ -66,9 +66,14 @@ func (s *Servis) seninIcin(ctx context.Context, id, hamImlec string, limit int) 
 	if err != nil {
 		return nil, err
 	}
-	referans := s.simdi().Truncate(time.Millisecond)
+	simdi := s.simdi().Truncate(time.Millisecond)
+	referans := simdi
 	if imlec != nil {
 		referans = time.UnixMilli(imlec.N)
+	}
+	// Gelecekteki bir referans puanlamayi kaydirmasin diye simdiye kirpilir.
+	if referans.After(simdi) {
+		referans = simdi
 	}
 	ogeler, err := s.depo.AkisSeninIcin(ctx, id, referans, imlec, limit)
 	if err != nil {
