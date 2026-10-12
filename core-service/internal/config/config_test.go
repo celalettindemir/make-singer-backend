@@ -190,7 +190,7 @@ func findFederationClient(list []FederationClient, name string) (FederationClien
 
 // When both providers are fully configured, both must be in the list and
 // their fields (including Apple's three) must be carried over INTACT: the
-// token exchange in Task 4 generates Apple's client_secret from exactly
+// token exchange (identity.Upstream.ExchangeCode) builds Apple's client_secret from exactly
 // these three fields.
 func TestLoad_FederationBothFullyConfigured(t *testing.T) {
 	clearFederationEnv()
