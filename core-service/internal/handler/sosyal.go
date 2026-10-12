@@ -26,6 +26,10 @@ type SosyalServisi interface {
 	YayinSil(ctx context.Context, kullaniciID, yayinID string) error
 	TekrarDene(ctx context.Context, kullaniciID, yayinID string) (*sosyal.YayinYaniti, error)
 	Dosyalar(ctx context.Context, kullaniciID, yayinID string) (*sosyal.YayinDosyalari, error)
+
+	Akis(ctx context.Context, kullaniciID, sekme, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error)
+	ProfilYayinlari(ctx context.Context, izleyiciID, ad, tur, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error)
+	Begeni(ctx context.Context, kullaniciID, yayinID string, begen bool) (*sosyal.BegeniDurumu, error)
 }
 
 var _ SosyalServisi = (*sosyal.Servis)(nil)
@@ -46,6 +50,8 @@ func (h *SosyalHandler) Rotalar(r fiber.Router, yayinLimiti fiber.Handler) {
 	r.Put("/profil/ben", h.ProfilKaydet)
 	r.Get("/profil/kullanici-adi/uygun", h.AdUygun)
 	r.Get("/profiller/:ad", h.Profil)
+	r.Get("/profiller/:ad/yayinlar", h.ProfilYayinlari)
+	r.Get("/akis", h.Akis)
 
 	r.Post("/yayinlar", yayinLimiti, h.YayinOlustur)
 	r.Get("/yayinlar/:id", h.Yayin)
@@ -54,6 +60,8 @@ func (h *SosyalHandler) Rotalar(r fiber.Router, yayinLimiti fiber.Handler) {
 	r.Post("/yayinlar/:id/tekrar-dene", h.TekrarDene)
 	r.Post("/yayinlar/:id/dosyalar", h.Dosyalar)
 	r.Get("/s/:slug", h.Slug)
+	r.Put("/yayinlar/:id/begeni", h.Begen)
+	r.Delete("/yayinlar/:id/begeni", h.BegeniyiKaldir)
 }
 
 // sosyalHatalari, servis hatalarinin sozlesmedeki durum ve kodlaridir.

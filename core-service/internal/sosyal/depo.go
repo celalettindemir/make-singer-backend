@@ -31,6 +31,8 @@ type Depo interface {
 	ProfilDeposu
 	YayinDeposu
 	HazirlikDeposu
+	AkisDeposu
+	BegeniDeposu
 }
 
 // PostgresDepo, Depo'nun Postgres uygulamasidir. Kimlikler cagri

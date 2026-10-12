@@ -26,6 +26,8 @@ type sahteSosyal struct {
 	yayinYaniti *sosyal.YayinYaniti
 	detay       *sosyal.YayinDetayi
 	dosyalar    *sosyal.YayinDosyalari
+	sayfa       *sosyal.Sayfa[sosyal.YayinOzeti]
+	begeni      *sosyal.BegeniDurumu
 
 	sonKullanici string
 	sonAd        string
@@ -33,6 +35,11 @@ type sahteSosyal struct {
 	sonYayin     string
 	sonIstek     sosyal.YayinIstegi
 	sonYama      sosyal.YayinYamasi
+	sonSekme     string
+	sonTur       string
+	sonImlec     string
+	sonLimit     int
+	sonBegen     bool
 }
 
 func (s *sahteSosyal) ProfilBen(_ context.Context, k string) (*sosyal.Profil, error) {
@@ -88,6 +95,21 @@ func (s *sahteSosyal) TekrarDene(_ context.Context, k, id string) (*sosyal.Yayin
 func (s *sahteSosyal) Dosyalar(_ context.Context, k, id string) (*sosyal.YayinDosyalari, error) {
 	s.sonKullanici, s.sonYayin = k, id
 	return s.dosyalar, s.hata
+}
+
+func (s *sahteSosyal) Akis(_ context.Context, k, sekme, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error) {
+	s.sonKullanici, s.sonSekme, s.sonImlec, s.sonLimit = k, sekme, imlec, limit
+	return s.sayfa, s.hata
+}
+
+func (s *sahteSosyal) ProfilYayinlari(_ context.Context, k, ad, tur, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error) {
+	s.sonKullanici, s.sonAd, s.sonTur, s.sonImlec, s.sonLimit = k, ad, tur, imlec, limit
+	return s.sayfa, s.hata
+}
+
+func (s *sahteSosyal) Begeni(_ context.Context, k, id string, begen bool) (*sosyal.BegeniDurumu, error) {
+	s.sonKullanici, s.sonYayin, s.sonBegen = k, id, begen
+	return s.begeni, s.hata
 }
 
 // sosyalUygulamasi, /api/social grubunu sahte servisle kurar.

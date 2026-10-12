@@ -3,6 +3,7 @@ package sosyal
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
@@ -21,12 +22,13 @@ type Servis struct {
 	kuyruk   Kuyruk
 	depolama client.StorageClient // nil: R2 yok, imzasiz adres uretilir
 	r2       *config.R2Config
+	simdi    func() time.Time
 }
 
 // NewServis kurar. depolama nil olabilir (R2 yapilandirilmamis); main
 // tipli nil tuzagina dusmemek icin yalnizca gercek istemciyi gecirir.
 func NewServis(depo Depo, kuyruk Kuyruk, depolama client.StorageClient, r2 *config.R2Config) *Servis {
-	return &Servis{depo: depo, kuyruk: kuyruk, depolama: depolama, r2: r2}
+	return &Servis{depo: depo, kuyruk: kuyruk, depolama: depolama, r2: r2, simdi: time.Now}
 }
 
 // kullaniciCoz, istegi yapanin kimligini dogrular. Auth middleware her

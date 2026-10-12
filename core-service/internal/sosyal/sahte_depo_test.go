@@ -55,6 +55,9 @@ type sahteDepo struct {
 	hazirliklar map[string]*HazirlikKaydi
 	yayinlanan  map[string]HazirlikSonucu
 	hataYapilan []string
+
+	akisOgeleri []YayinOzeti
+	sonAkis     akisCagrisi
 }
 
 func yeniSahteDepo() *sahteDepo {
@@ -259,4 +262,77 @@ func (d *sahteDepo) HataYap(_ context.Context, id string) error {
 		k.Durum = DurumHata
 	}
 	return d.hata
+}
+
+// akisCagrisi, sahte akis yontemlerine son gelen girdilerdir.
+type akisCagrisi struct {
+	tur      string
+	izleyici string
+	sahip    string
+	coverlar bool
+	zaman    *ZamanImleci
+	puan     *PuanImleci
+	referans time.Time
+	limit    int
+}
+
+func (d *sahteDepo) zamanListesi(c akisCagrisi) ([]YayinOzeti, error) {
+	d.sonAkis = c
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	n := len(d.akisOgeleri)
+	if n > c.limit+1 {
+		n = c.limit + 1
+	}
+	return d.akisOgeleri[:n], nil
+}
+
+func (d *sahteDepo) ProfilYayinlari(_ context.Context, sahipID, izleyiciID string, coverlar bool, imlec *ZamanImleci, limit int) ([]YayinOzeti, error) {
+	return d.zamanListesi(akisCagrisi{tur: "profil", izleyici: izleyiciID, sahip: sahipID, coverlar: coverlar, zaman: imlec, limit: limit})
+}
+
+func (d *sahteDepo) AkisYeni(_ context.Context, izleyiciID string, imlec *ZamanImleci, limit int) ([]YayinOzeti, error) {
+	return d.zamanListesi(akisCagrisi{tur: "yeni", izleyici: izleyiciID, zaman: imlec, limit: limit})
+}
+
+func (d *sahteDepo) AkisTakip(_ context.Context, izleyiciID string, imlec *ZamanImleci, limit int) ([]YayinOzeti, error) {
+	return d.zamanListesi(akisCagrisi{tur: "takip", izleyici: izleyiciID, zaman: imlec, limit: limit})
+}
+
+func (d *sahteDepo) AkisSeninIcin(_ context.Context, izleyiciID string, referans time.Time, imlec *PuanImleci, limit int) ([]PuanliOzet, error) {
+	d.sonAkis = akisCagrisi{tur: "senin-icin", izleyici: izleyiciID, puan: imlec, referans: referans, limit: limit}
+	if d.hata != nil {
+		return nil, d.hata
+	}
+	var ogeler []PuanliOzet
+	for i, o := range d.akisOgeleri {
+		if i > limit {
+			break
+		}
+		ogeler = append(ogeler, PuanliOzet{YayinOzeti: o, Puan: float64(100 - i)})
+	}
+	return ogeler, nil
+}
+
+func (d *sahteDepo) Begen(_ context.Context, kullaniciID, yayinID string) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	if k, ok := d.yayinlar[yayinID]; ok && !k.BegendimMi {
+		k.BegendimMi = true
+		k.BegeniSayisi++
+	}
+	return nil
+}
+
+func (d *sahteDepo) BegeniyiKaldir(_ context.Context, kullaniciID, yayinID string) error {
+	if d.hata != nil {
+		return d.hata
+	}
+	if k, ok := d.yayinlar[yayinID]; ok && k.BegendimMi {
+		k.BegendimMi = false
+		k.BegeniSayisi--
+	}
+	return nil
 }
