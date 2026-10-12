@@ -62,14 +62,15 @@ func TestServis_AkisSeninIcinReferansSabit(t *testing.T) {
 	if err != nil || len(sayfa.Ogeler) != 2 || sayfa.SonrakiImlec == nil {
 		t.Fatalf("ilk sayfa = %+v, %v", sayfa, err)
 	}
-	if !d.sonAkis.referans.Equal(an) || d.sonAkis.puan != nil {
-		t.Fatalf("ilk sayfa referansi simdi olmali: %+v", d.sonAkis)
+	ref := an.Add(referansPayi)
+	if !d.sonAkis.referans.Equal(ref) || d.sonAkis.puan != nil {
+		t.Fatalf("ilk sayfa referansi simdi arti pay olmali: %+v", d.sonAkis)
 	}
 	s.simdi = func() time.Time { return an.Add(time.Hour) }
 	if _, err := s.Akis(ctx, kullaniciA, SekmeSeninIcin, *sayfa.SonrakiImlec, 2); err != nil {
 		t.Fatalf("ikinci sayfa: %v", err)
 	}
-	if !d.sonAkis.referans.Equal(an) {
+	if !d.sonAkis.referans.Equal(ref) {
 		t.Fatalf("sonraki sayfa ayni referansi kullanmali: %v", d.sonAkis.referans)
 	}
 	if d.sonAkis.puan == nil || d.sonAkis.puan.P != 99 || d.sonAkis.puan.ID != d.akisOgeleri[1].ID {
@@ -77,7 +78,7 @@ func TestServis_AkisSeninIcinReferansSabit(t *testing.T) {
 	}
 }
 
-// Gelecekteki bir referans zamani simdiye kirpilir; istemci puanlamayi
+// Gelecekteki bir referans zamani simdi arti paya kirpilir; istemci puanlamayi
 // kaydiramaz ve sonraki imlec kirpilmis zamani tasir.
 func TestServis_AkisSeninIcinGelecekReferansKirpilir(t *testing.T) {
 	d := yeniSahteDepo()
@@ -90,11 +91,12 @@ func TestServis_AkisSeninIcinGelecekReferansKirpilir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gelecek imlec: %v", err)
 	}
-	if !d.sonAkis.referans.Equal(an) {
-		t.Fatalf("referans simdiye kirpilmali: %v", d.sonAkis.referans)
+	ref := an.Add(referansPayi)
+	if !d.sonAkis.referans.Equal(ref) {
+		t.Fatalf("referans simdi arti paya kirpilmali: %v", d.sonAkis.referans)
 	}
 	sonraki, err := puanImleciCoz(*sayfa.SonrakiImlec)
-	if err != nil || sonraki.N != an.UnixMilli() {
+	if err != nil || sonraki.N != ref.UnixMilli() {
 		t.Fatalf("sonraki imlec kirpilmis zamani tasimali: %+v, %v", sonraki, err)
 	}
 }
