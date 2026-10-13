@@ -465,7 +465,16 @@ func Load() (*Config, error) {
 	// An env var set to the empty string must DISABLE the Cloudflare
 	// header, but viper treats an empty env var as unset (and would fall
 	// back to the default list), so it is read directly.
+	// config.yaml may also write the ranges as a YAML list; GetString would
+	// turn that into "" and silently disable the header, so join it.
 	rawRanges := viper.GetString("ratelimit.cloudflare_ranges")
+	if list, ok := viper.Get("ratelimit.cloudflare_ranges").([]any); ok {
+		parts := make([]string, 0, len(list))
+		for _, item := range list {
+			parts = append(parts, fmt.Sprint(item))
+		}
+		rawRanges = strings.Join(parts, ",")
+	}
 	if v, ok := os.LookupEnv("RATELIMIT_CLOUDFLARE_RANGES"); ok {
 		rawRanges = v
 	}

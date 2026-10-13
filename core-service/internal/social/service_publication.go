@@ -31,8 +31,13 @@ const (
 	// QueueSocial is the asynq queue of the prepare tasks.
 	QueueSocial = "sosyal"
 
-	prepareMaxRetry     = 3
-	prepareRetention    = 24 * time.Hour
+	prepareMaxRetry  = 3
+	prepareRetention = 24 * time.Hour
+	// prepareTimeout bounds one attempt. With prepareMaxRetry it keeps the
+	// worst-case total runtime (4 attempts plus backoff) well under the
+	// stale sweep threshold (social.stale_preparation_after, 1h by default),
+	// so the sweep never fails a job that is still running.
+	prepareTimeout      = 10 * time.Minute
 	deleteFilesDelay    = 24 * time.Hour
 	deleteFilesMaxRetry = 10
 	slugAttempts        = 5
@@ -53,6 +58,7 @@ func (s *Service) enqueuePrepare(pubID string) error {
 		asynq.Queue(QueueSocial),
 		asynq.MaxRetry(prepareMaxRetry),
 		asynq.Retention(prepareRetention),
+		asynq.Timeout(prepareTimeout),
 	)
 	return err
 }

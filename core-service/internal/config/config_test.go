@@ -2,10 +2,12 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/makeasinger/api/internal/clientip"
+	"github.com/spf13/viper"
 )
 
 func TestLoad_R2TwoBuckets(t *testing.T) {
@@ -471,5 +473,26 @@ func TestLoad_SocialStaleSweep(t *testing.T) {
 	}
 	if cfg.Social.StalePreparationAfter != 90*time.Minute || cfg.Social.StaleSweepInterval != 0 {
 		t.Errorf("env values = %v / %v", cfg.Social.StalePreparationAfter, cfg.Social.StaleSweepInterval)
+	}
+}
+
+func TestLoad_CloudflareRangesYAMLList(t *testing.T) {
+	os.Unsetenv("RATELIMIT_CLOUDFLARE_RANGES")
+	dir := t.TempDir()
+	yaml := "ratelimit:\n  cloudflare_ranges:\n    - 10.0.0.0/8\n    - 2001:db8::/32\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	// The file's values stay in viper's global state after the test.
+	t.Cleanup(viper.Reset)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if len(cfg.RateLimit.Cloudflare) != 2 || len(cfg.Auth.Cloudflare) != 2 {
+		t.Errorf("YAML list ranges: rate limit %d, auth %d; want 2",
+			len(cfg.RateLimit.Cloudflare), len(cfg.Auth.Cloudflare))
 	}
 }
