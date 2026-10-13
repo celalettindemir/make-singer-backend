@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
@@ -91,7 +92,7 @@ func TestSocialHandler_DeleteComment(t *testing.T) {
 // The comment limit applies only to POST on the comments route.
 func TestSocialHandler_CommentLimitOnlyOnPost(t *testing.T) {
 	slowDown := func(c *fiber.Ctx) error {
-		return response.Error(c, fiber.StatusTooManyRequests, "yavasla", "Biraz yavasla", nil)
+		return response.Error(c, fiber.StatusTooManyRequests, "yavasla", i18n.KeySlowDown, nil)
 	}
 	s := &fakeSocialService{
 		commentPage: &social.Page[social.Comment]{Items: []social.Comment{}},

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/pkg/response"
 	"github.com/redis/go-redis/v9"
 )
@@ -31,8 +32,8 @@ func (rl *RateLimiter) Limit(keyPrefix string, maxRequests int, window time.Dura
 // LimitWithCode is the form of Limit that, on overflow, returns 429 with
 // the given code instead of the generic RATE_LIMITED. It is for endpoints
 // whose contract asks for its own code (e.g. Discover comments: 429
-// "yavasla").
-func (rl *RateLimiter) LimitWithCode(keyPrefix string, maxRequests int, window time.Duration, code, message string) fiber.Handler {
+// "yavasla"). message is rendered in the request's language.
+func (rl *RateLimiter) LimitWithCode(keyPrefix string, maxRequests int, window time.Duration, code string, message i18n.Key) fiber.Handler {
 	return rl.perUser(keyPrefix, maxRequests, window, func(c *fiber.Ctx) error {
 		return response.Error(c, fiber.StatusTooManyRequests, code, message, nil)
 	})
@@ -45,7 +46,7 @@ func (rl *RateLimiter) perUser(keyPrefix string, maxRequests int, window time.Du
 			// The auth middleware guarantees userId; an empty value is a
 			// bug. The rate limit used to be SKIPPED here (return
 			// c.Next()), which meant a quota bypass.
-			return response.Unauthorized(c, "Kimlik dogrulanamadi")
+			return response.Unauthorized(c, i18n.KeyUnauthenticated)
 		}
 		return rl.hit(c, fmt.Sprintf("ratelimit:%s:%s", keyPrefix, userID), maxRequests, window, overflow)
 	}
@@ -136,13 +137,13 @@ func (rl *RateLimiter) hit(c *fiber.Ctx, key string, maxRequests int, window tim
 		// carry a secret).
 		c.Set("Retry-After", "5")
 		return response.Error(c, fiber.StatusServiceUnavailable,
-			response.CodeServiceError, "Rate limit denetlenemedi", nil)
+			response.CodeServiceError, i18n.KeyRateLimitUnavailable, nil)
 	}
 	count, err := incr.Result()
 	if err != nil {
 		c.Set("Retry-After", "5")
 		return response.Error(c, fiber.StatusServiceUnavailable,
-			response.CodeServiceError, "Rate limit denetlenemedi", nil)
+			response.CodeServiceError, i18n.KeyRateLimitUnavailable, nil)
 	}
 
 	if count > int64(maxRequests) {

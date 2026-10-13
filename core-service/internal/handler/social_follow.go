@@ -2,6 +2,7 @@ package handler
 
 import (
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/pkg/response"
 )
 
@@ -18,7 +19,7 @@ func (h *SocialHandler) Unfollow(c *fiber.Ctx) error {
 func (h *SocialHandler) setFollow(c *fiber.Ctx, follow bool) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	followStatus, err := h.service.SetFollow(c.Context(), userID, c.Params("ad"), follow)
 	if err != nil {
@@ -31,7 +32,7 @@ func (h *SocialHandler) setFollow(c *fiber.Ctx, follow bool) error {
 func (h *SocialHandler) Suggestions(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	suggestions, err := h.service.Suggestions(c.Context(), userID)
 	if err != nil {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -24,12 +25,14 @@ import (
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/handler"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/identity"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/internal/social"
 	ws "github.com/makeasinger/api/internal/websocket"
 	"github.com/makeasinger/api/internal/worker"
+	"github.com/makeasinger/api/pkg/response"
 )
 
 // @title          Make-Singer API
@@ -314,7 +317,7 @@ func main() {
 	socialHandler.Routes(api.Group("/social"), handler.SocialLimits{
 		Publication: rateLimiter.Limit("sosyal-yayin", cfg.RateLimit.SocialPublicationPerHour, time.Hour),
 		Comment: rateLimiter.LimitWithCode("sosyal-yorum", cfg.RateLimit.SocialCommentPerMin, time.Minute,
-			"yavasla", "Biraz yavasla"),
+			"yavasla", i18n.KeySlowDown),
 		Cover: rateLimiter.Limit("sosyal-cover", cfg.RateLimit.SocialCoverPerHour, time.Hour),
 	})
 
@@ -413,19 +416,29 @@ func startWorkerServer(
 	}
 }
 
+// customErrorHandler answers errors that reach Fiber (unknown routes,
+// oversized bodies, panics caught by recover) in the shared error shape
+// with code SERVICE_ERROR and a localized message chosen by status.
 func customErrorHandler(c *fiber.Ctx, err error) error {
 	code := fiber.StatusInternalServerError
-	message := "Internal Server Error"
+	msg := i18n.KeyInternal
 
-	if e, ok := err.(*fiber.Error); ok {
+	var e *fiber.Error
+	if errors.As(err, &e) {
 		code = e.Code
-		message = e.Message
+		switch code {
+		case fiber.StatusNotFound:
+			msg = i18n.KeyRouteNotFound
+		case fiber.StatusMethodNotAllowed:
+			msg = i18n.KeyMethodNotAllowed
+		case fiber.StatusRequestEntityTooLarge:
+			msg = i18n.KeyBodyTooLarge
+		case fiber.StatusUpgradeRequired:
+			msg = i18n.KeyUpgradeRequired
+		default:
+			msg = i18n.KeyRequestFailed
+		}
 	}
 
-	return c.Status(code).JSON(fiber.Map{
-		"error": fiber.Map{
-			"code":    "SERVICE_ERROR",
-			"message": message,
-		},
-	})
+	return response.Error(c, code, response.CodeServiceError, msg, nil)
 }

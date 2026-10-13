@@ -2,6 +2,7 @@ package social
 
 import (
 	"context"
+	"github.com/makeasinger/api/internal/i18n"
 	"time"
 )
 
@@ -56,7 +57,7 @@ func (s *Service) Feed(ctx context.Context, userID, tab, rawCursor string, limit
 	case TabForYou:
 		return s.forYou(ctx, id, rawCursor, limit)
 	}
-	return nil, validationError("sekme senin-icin, takip ya da yeni olmali")
+	return nil, invalid(i18n.KeyFeedTabInvalid)
 }
 
 // referenceSkew is the allowance for the difference between the application and database clocks.
@@ -112,7 +113,7 @@ func (s *Service) ProfilePublications(ctx context.Context, viewerID, username, k
 	case "coverlar":
 		covers = true
 	default:
-		return nil, validationError("tur sarkilar ya da coverlar olmali")
+		return nil, invalid(i18n.KeyProfileFeedTypeInvalid)
 	}
 	cursor, err := decodeTimeCursor(rawCursor)
 	if err != nil {

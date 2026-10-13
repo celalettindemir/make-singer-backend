@@ -2,6 +2,7 @@ package social
 
 import (
 	"context"
+	"github.com/makeasinger/api/internal/i18n"
 	"strings"
 	"unicode/utf8"
 
@@ -52,17 +53,17 @@ func (s *Service) Report(ctx context.Context, userID string, input ReportInput) 
 		return err
 	}
 	if input.TargetType != TargetPublication && input.TargetType != TargetComment {
-		return validationError("hedefTuru yayin ya da yorum olmali")
+		return invalid(i18n.KeyReportTargetInvalid)
 	}
 	if !reportReasons[input.Reason] {
-		return validationError("neden spam, taciz, telif, uygunsuz ya da diger olmali")
+		return invalid(i18n.KeyReportReasonInvalid)
 	}
 	description := strings.TrimSpace(input.Description)
 	if utf8.RuneCountInString(description) > maxReportDescriptionLen {
-		return validationError("aciklama en cok 300 karakter olabilir")
+		return invalid(i18n.KeyDescriptionLength)
 	}
 	if containsNUL(description) {
-		return validationError("aciklama gecersiz karakter iceriyor")
+		return invalid(i18n.KeyDescriptionInvalidChars)
 	}
 	targetID, ok := parseID(input.TargetID)
 	if !ok {

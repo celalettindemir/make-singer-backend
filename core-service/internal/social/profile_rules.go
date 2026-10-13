@@ -1,6 +1,7 @@
 package social
 
 import (
+	"github.com/makeasinger/api/internal/i18n"
 	"hash/fnv"
 	"regexp"
 	"strconv"
@@ -66,13 +67,13 @@ func normalizeProfileInput(input ProfileInput) (ProfileInput, error) {
 	input.DisplayName = strings.TrimSpace(input.DisplayName)
 	input.Bio = strings.TrimSpace(input.Bio)
 	if containsNUL(input.DisplayName, input.Bio) {
-		return input, validationError("gorunenAd ve bio NUL karakteri iceremez")
+		return input, invalid(i18n.KeyProfileTextNUL)
 	}
 	if n := utf8.RuneCountInString(input.DisplayName); n < 1 || n > maxDisplayNameLen {
-		return input, validationError("gorunenAd 1-40 karakter olmali")
+		return input, invalid(i18n.KeyDisplayNameLength)
 	}
 	if utf8.RuneCountInString(input.Bio) > maxBioLen {
-		return input, validationError("bio en cok 160 karakter olabilir")
+		return input, invalid(i18n.KeyBioLength)
 	}
 	return input, nil
 }

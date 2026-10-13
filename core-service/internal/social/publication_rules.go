@@ -1,6 +1,7 @@
 package social
 
 import (
+	"github.com/makeasinger/api/internal/i18n"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -56,29 +57,29 @@ func normalizePublicationRequest(req *PublicationRequest) error {
 	req.Description = strings.TrimSpace(req.Description)
 	switch {
 	case containsNUL(req.Title, req.Description, req.Genre, req.MusicalKey.Tonic, req.MusicalKey.Mode, req.MasterURL):
-		return validationError("metin alanlari NUL karakteri iceremez")
+		return invalid(i18n.KeyTextFieldsNUL)
 	case !runeCountInRange(req.Title, 1, maxTitleLen):
-		return validationError("baslik 1-80 karakter olmali")
+		return invalid(i18n.KeyTitleLength)
 	case !runeCountInRange(req.Description, 0, maxDescriptionLen):
-		return validationError("aciklama en cok 300 karakter olabilir")
+		return invalid(i18n.KeyDescriptionLength)
 	case !ValidVisibility(req.Visibility):
-		return validationError("gorunurluk herkes, takipciler ya da link olmali")
+		return invalid(i18n.KeyVisibilityInvalid)
 	case req.MusicalKey.Mode != "major" && req.MusicalKey.Mode != "minor":
-		return validationError("ton.mod major ya da minor olmali")
+		return invalid(i18n.KeyScaleModeInvalid)
 	case !runeCountInRange(req.MusicalKey.Tonic, 1, maxTonicLen):
-		return validationError("ton.tonik bos olamaz")
+		return invalid(i18n.KeyTonicEmpty)
 	case !runeCountInRange(req.Genre, 1, maxGenreLen):
-		return validationError("tur 1-40 karakter olmali")
+		return invalid(i18n.KeyGenreLength)
 	case req.DurationSec <= 0:
-		return validationError("sureSn sifirdan buyuk olmali")
+		return invalid(i18n.KeyDurationPositive)
 	case req.BPM < minBPM || req.BPM > maxBPM:
-		return validationError("bpm 20-300 araliginda olmali")
+		return invalid(i18n.KeyBPMRange)
 	case req.MasterURL == "":
-		return validationError("masterUrl zorunlu")
+		return invalid(i18n.KeyMasterURLRequired)
 	case len(req.Structure) > maxStructureItems:
-		return validationError("yapi cok uzun")
+		return invalid(i18n.KeyStructureTooLong)
 	case len(req.Lyrics.Sections) > maxLyricsSections:
-		return validationError("sozler cok uzun")
+		return invalid(i18n.KeyLyricsTooLong)
 	}
 	if req.Structure == nil {
 		req.Structure = []StructureItem{}
@@ -86,7 +87,7 @@ func normalizePublicationRequest(req *PublicationRequest) error {
 	for _, item := range req.Structure {
 		if item.Bars < 0 || containsNUL(item.ID, item.Type) ||
 			!runeCountInRange(item.ID, 1, maxItemFieldLen) || !runeCountInRange(item.Type, 0, maxItemFieldLen) {
-			return validationError("yapi ogesi gecersiz")
+			return invalid(i18n.KeyStructureItemInvalid)
 		}
 	}
 	if req.Lyrics.Sections == nil {
@@ -97,15 +98,15 @@ func normalizePublicationRequest(req *PublicationRequest) error {
 		section := &req.Lyrics.Sections[i]
 		totalLines += len(section.Lines)
 		if len(section.Lines) > maxSectionLines || totalLines > maxTotalLines {
-			return validationError("sozler cok uzun")
+			return invalid(i18n.KeyLyricsTooLong)
 		}
 		if containsNUL(section.SectionID, section.Type) || !runeCountInRange(section.SectionID, 0, maxItemFieldLen) ||
 			!runeCountInRange(section.Type, 0, maxItemFieldLen) {
-			return validationError("soz bolumu gecersiz")
+			return invalid(i18n.KeyLyricsSectionInvalid)
 		}
 		for _, line := range section.Lines {
 			if containsNUL(line) || !runeCountInRange(line, 0, maxLineLen) {
-				return validationError("soz satiri gecersiz")
+				return invalid(i18n.KeyLyricsLineInvalid)
 			}
 		}
 		if section.Lines == nil {
@@ -128,23 +129,23 @@ func normalizePublicationRequest(req *PublicationRequest) error {
 		return nil
 	}
 	if len(req.Stems) == 0 {
-		return validationError("altyapi acikken en az bir stem gerekli")
+		return invalid(i18n.KeyStemRequired)
 	}
 	if len(req.Stems) > maxStems {
-		return validationError("cok fazla stem")
+		return invalid(i18n.KeyTooManyStems)
 	}
 	seen := make(map[string]bool, len(req.Stems))
 	for _, stem := range req.Stems {
 		if !stemIDPattern.MatchString(stem.ID) {
-			return validationError("stem id gecersiz")
+			return invalid(i18n.KeyStemIDInvalid)
 		}
 		if seen[stem.ID] {
-			return validationError("stem id tekrar ediyor")
+			return invalid(i18n.KeyStemIDDuplicate)
 		}
 		seen[stem.ID] = true
 		if stem.URL == "" || stem.Duration <= 0 || !runeCountInRange(stem.Instrument, 1, maxInstrumentLen) ||
 			containsNUL(stem.URL, stem.Instrument) {
-			return validationError("stem alanlari gecersiz")
+			return invalid(i18n.KeyStemFieldsInvalid)
 		}
 	}
 	return nil
@@ -155,15 +156,15 @@ func normalizePatch(patch *PublicationPatch) error {
 	if patch.Description != nil {
 		text := strings.TrimSpace(*patch.Description)
 		if !runeCountInRange(text, 0, maxDescriptionLen) {
-			return validationError("aciklama en cok 300 karakter olabilir")
+			return invalid(i18n.KeyDescriptionLength)
 		}
 		if containsNUL(text) {
-			return validationError("aciklama NUL karakteri iceremez")
+			return invalid(i18n.KeyDescriptionNUL)
 		}
 		patch.Description = &text
 	}
 	if patch.Visibility != nil && !ValidVisibility(*patch.Visibility) {
-		return validationError("gorunurluk herkes, takipciler ya da link olmali")
+		return invalid(i18n.KeyVisibilityInvalid)
 	}
 	return nil
 }

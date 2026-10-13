@@ -2,6 +2,7 @@ package handler
 
 import (
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
@@ -11,7 +12,7 @@ import (
 func (h *SocialHandler) CreatePublication(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	var req social.PublicationRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -28,7 +29,7 @@ func (h *SocialHandler) CreatePublication(c *fiber.Ctx) error {
 func (h *SocialHandler) Publication(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	publication, err := h.service.Publication(c.Context(), userID, c.Params("id"))
 	if err != nil {
@@ -41,7 +42,7 @@ func (h *SocialHandler) Publication(c *fiber.Ctx) error {
 func (h *SocialHandler) PublicationBySlug(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	publication, err := h.service.PublicationBySlug(c.Context(), userID, c.Params("slug"))
 	if err != nil {
@@ -54,7 +55,7 @@ func (h *SocialHandler) PublicationBySlug(c *fiber.Ctx) error {
 func (h *SocialHandler) UpdatePublication(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	var patch social.PublicationPatch
 	if err := c.BodyParser(&patch); err != nil {
@@ -71,7 +72,7 @@ func (h *SocialHandler) UpdatePublication(c *fiber.Ctx) error {
 func (h *SocialHandler) DeletePublication(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	if err := h.service.DeletePublication(c.Context(), userID, c.Params("id")); err != nil {
 		return socialError(c, err)
@@ -83,7 +84,7 @@ func (h *SocialHandler) DeletePublication(c *fiber.Ctx) error {
 func (h *SocialHandler) Retry(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	publication, err := h.service.Retry(c.Context(), userID, c.Params("id"))
 	if err != nil {
@@ -96,7 +97,7 @@ func (h *SocialHandler) Retry(c *fiber.Ctx) error {
 func (h *SocialHandler) Files(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	files, err := h.service.Files(c.Context(), userID, c.Params("id"))
 	if err != nil {

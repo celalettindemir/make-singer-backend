@@ -3,6 +3,7 @@ package social
 import (
 	"encoding/base64"
 	"encoding/json"
+	"github.com/makeasinger/api/internal/i18n"
 	"math"
 	"strconv"
 	"time"
@@ -57,7 +58,7 @@ func encodeCursor(v any) *string {
 func decodeCursor(raw string, v any) error {
 	b, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil || json.Unmarshal(b, v) != nil {
-		return validationError("imlec gecersiz")
+		return invalid(i18n.KeyCursorInvalid)
 	}
 	return nil
 }
@@ -73,7 +74,7 @@ func decodeTimeCursor(raw string) (*TimeCursor, error) {
 	}
 	id, ok := parseID(cur.ID)
 	if !ok || cur.T.IsZero() {
-		return nil, validationError("imlec gecersiz")
+		return nil, invalid(i18n.KeyCursorInvalid)
 	}
 	cur.ID = id
 	return &cur, nil
@@ -90,7 +91,7 @@ func decodeScoreCursor(raw string) (*ScoreCursor, error) {
 	}
 	id, ok := parseID(cur.ID)
 	if !ok || cur.RefMs <= 0 {
-		return nil, validationError("imlec gecersiz")
+		return nil, invalid(i18n.KeyCursorInvalid)
 	}
 	cur.ID = id
 	return &cur, nil
@@ -122,7 +123,7 @@ func decodeCommentCursor(raw string) (*CommentCursor, error) {
 	valid := ok && !cur.T.IsZero() &&
 		((cur.Group == 0 && cur.TimeMs != nil && *cur.TimeMs >= 0 && *cur.TimeMs <= math.MaxInt32) || (cur.Group == 1 && cur.TimeMs == nil))
 	if !valid {
-		return nil, validationError("imlec gecersiz")
+		return nil, invalid(i18n.KeyCursorInvalid)
 	}
 	cur.ID = id
 	return &cur, nil

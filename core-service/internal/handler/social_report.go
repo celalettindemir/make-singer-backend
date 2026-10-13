@@ -2,6 +2,7 @@ package handler
 
 import (
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
@@ -11,7 +12,7 @@ import (
 func (h *SocialHandler) Report(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	var input social.ReportInput
 	if err := c.BodyParser(&input); err != nil {

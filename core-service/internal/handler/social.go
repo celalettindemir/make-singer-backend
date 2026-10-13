@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
@@ -106,43 +107,50 @@ func (h *SocialHandler) Routes(r fiber.Router, l SocialLimits) {
 // socialErrors maps service errors to the status and code of the contract.
 // Order matters: the first match wins.
 var socialErrors = []struct {
-	err    error
-	status int
-	code   string
+	err     error
+	status  int
+	code    string
+	message i18n.Key
 }{
-	{social.ErrNotFound, fiber.StatusNotFound, "bulunamadi"},
-	{social.ErrNoProfile, fiber.StatusConflict, "profil_yok"},
-	{social.ErrInvalidUsername, fiber.StatusUnprocessableEntity, "gecersiz_kullanici_adi"},
-	{social.ErrUsernameTaken, fiber.StatusConflict, "kullanici_adi_alinmis"},
-	{social.ErrValidation, fiber.StatusUnprocessableEntity, "dogrulama"},
-	{social.ErrOwnership, fiber.StatusForbidden, "sahiplik"},
-	{social.ErrSourceNotFound, fiber.StatusNotFound, "kaynak_bulunamadi"},
-	{social.ErrBackingDisabled, fiber.StatusForbidden, "altyapi_kapali"},
-	{social.ErrNoStems, fiber.StatusUnprocessableEntity, "stem_yok"},
-	{social.ErrInvalidStatus, fiber.StatusConflict, "durum"},
-	{social.ErrSelfFollow, fiber.StatusUnprocessableEntity, "kendini_takip"},
-	{social.ErrCommentsDisabled, fiber.StatusForbidden, "yorum_kapali"},
-	{social.ErrForbidden, fiber.StatusForbidden, "yetki"},
+	{social.ErrNotFound, fiber.StatusNotFound, "bulunamadi", i18n.KeySocialNotFound},
+	{social.ErrNoProfile, fiber.StatusConflict, "profil_yok", i18n.KeySocialProfileMissing},
+	{social.ErrInvalidUsername, fiber.StatusUnprocessableEntity, "gecersiz_kullanici_adi", i18n.KeySocialUsernameInvalid},
+	{social.ErrUsernameTaken, fiber.StatusConflict, "kullanici_adi_alinmis", i18n.KeySocialUsernameTaken},
+	{social.ErrValidation, fiber.StatusUnprocessableEntity, "dogrulama", i18n.KeySocialValidation},
+	{social.ErrOwnership, fiber.StatusForbidden, "sahiplik", i18n.KeySocialOwnership},
+	{social.ErrSourceNotFound, fiber.StatusNotFound, "kaynak_bulunamadi", i18n.KeySocialSourceNotFound},
+	{social.ErrBackingDisabled, fiber.StatusForbidden, "altyapi_kapali", i18n.KeySocialBackingClosed},
+	{social.ErrNoStems, fiber.StatusUnprocessableEntity, "stem_yok", i18n.KeySocialNoStems},
+	{social.ErrInvalidStatus, fiber.StatusConflict, "durum", i18n.KeySocialBadStatus},
+	{social.ErrSelfFollow, fiber.StatusUnprocessableEntity, "kendini_takip", i18n.KeySocialSelfFollow},
+	{social.ErrCommentsDisabled, fiber.StatusForbidden, "yorum_kapali", i18n.KeySocialCommentsDisabled},
+	{social.ErrForbidden, fiber.StatusForbidden, "yetki", i18n.KeySocialForbidden},
 }
 
 // socialError turns a service error into the contract body:
-// {"error":{"code","message"}}. An unrecognized error becomes 500
-// sunucu_hatasi and its detail is only written to the log.
+// {"error":{"code","message"}}. A field-level validation error carries its
+// own message; the others take the message from the table. An
+// unrecognized error becomes 500 sunucu_hatasi and its detail is only
+// written to the log.
 func socialError(c *fiber.Ctx, err error) error {
 	if errors.Is(err, social.ErrInvalidIdentity) {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
+	}
+	var v *social.ValidationError
+	if errors.As(err, &v) {
+		return response.Error(c, fiber.StatusUnprocessableEntity, "dogrulama", v.Key, nil, v.Args...)
 	}
 	for _, e := range socialErrors {
 		if errors.Is(err, e.err) {
-			return response.Error(c, e.status, e.code, err.Error(), nil)
+			return response.Error(c, e.status, e.code, e.message, nil)
 		}
 	}
 	log.Printf("sosyal: %s %s: %v", c.Method(), c.Route().Path, err)
-	return response.Error(c, fiber.StatusInternalServerError, "sunucu_hatasi", "Islem tamamlanamadi", nil)
+	return response.Error(c, fiber.StatusInternalServerError, "sunucu_hatasi", i18n.KeyInternal, nil)
 }
 
 // badBodyError answers an unparseable JSON body: on the social endpoints a
 // validation error is 422 dogrulama, not 400.
 func badBodyError(c *fiber.Ctx) error {
-	return response.Error(c, fiber.StatusUnprocessableEntity, "dogrulama", "Gecersiz istek govdesi", nil)
+	return response.Error(c, fiber.StatusUnprocessableEntity, "dogrulama", i18n.KeyInvalidBody, nil)
 }

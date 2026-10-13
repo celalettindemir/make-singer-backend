@@ -2,6 +2,7 @@ package handler
 
 import (
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
@@ -11,7 +12,7 @@ import (
 func (h *SocialHandler) Covers(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	page, err := h.service.Covers(c.Context(), userID, c.Params("id"), c.Query("imlec"), social.PageSize(c.Query("limit")))
 	if err != nil {
@@ -25,7 +26,7 @@ func (h *SocialHandler) Covers(c *fiber.Ctx) error {
 func (h *SocialHandler) StartCover(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	start, err := h.service.StartCover(c.Context(), userID, c.Params("id"))
 	if err != nil {

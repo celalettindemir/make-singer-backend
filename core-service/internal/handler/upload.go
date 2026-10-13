@@ -6,6 +6,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/pkg/response"
 )
@@ -44,18 +45,18 @@ func NewUploadHandler(svc *service.UploadService, v *validator.Validate) *Upload
 func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 
 	// Get form values
 	projectID := c.FormValue("projectId")
 	if projectID == "" {
-		return response.ValidationError(c, "projectId is required", nil)
+		return response.ValidationError(c, i18n.KeyProjectIDRequired, nil)
 	}
 
 	sectionID := c.FormValue("sectionId")
 	if sectionID == "" {
-		return response.ValidationError(c, "sectionId is required", nil)
+		return response.ValidationError(c, i18n.KeySectionIDRequired, nil)
 	}
 
 	takeName := c.FormValue("takeName")
@@ -63,12 +64,12 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 	// Get file
 	file, err := c.FormFile("file")
 	if err != nil {
-		return response.ValidationError(c, "File is required", nil)
+		return response.ValidationError(c, i18n.KeyFileRequired, nil)
 	}
 
 	// Validate file size
 	if file.Size > maxUploadSize {
-		return response.ValidationError(c, "File size exceeds 50MB limit", map[string]interface{}{
+		return response.ValidationError(c, i18n.KeyFileTooLarge, map[string]interface{}{
 			"maxSize":  maxUploadSize,
 			"fileSize": file.Size,
 		})
@@ -89,7 +90,7 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 	}
 
 	if !validTypes[contentType] {
-		return response.ValidationError(c, "Invalid file type. Supported: WAV, M4A, MP3, AAC", map[string]interface{}{
+		return response.ValidationError(c, i18n.KeyFileTypeInvalid, map[string]interface{}{
 			"contentType": contentType,
 		})
 	}
@@ -97,7 +98,7 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 	// Open file
 	f, err := file.Open()
 	if err != nil {
-		return response.ServiceError(c, "Failed to open file")
+		return response.ServiceError(c, i18n.KeyFileOpenFailed)
 	}
 	defer f.Close()
 
@@ -105,9 +106,9 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 	result, err := h.service.UploadVocal(c.Context(), userID, projectID, sectionID, takeName, f, file.Size)
 	if err != nil {
 		if errors.Is(err, client.ErrInvalidSegment) {
-			return response.ValidationError(c, "Invalid projectId or sectionId", nil)
+			return response.ValidationError(c, i18n.KeyUploadIDsInvalid, nil)
 		}
-		return response.ServiceError(c, err.Error())
+		return internalError(c, err)
 	}
 
 	return response.Created(c, result)
@@ -130,20 +131,20 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 func (h *UploadHandler) DeleteVocal(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	takeID := c.Params("takeId")
 	projectID := c.Query("projectId")
 	sectionID := c.Query("sectionId")
 	if takeID == "" || projectID == "" || sectionID == "" {
-		return response.ValidationError(c, "takeId, projectId and sectionId are required", nil)
+		return response.ValidationError(c, i18n.KeyVocalIDsRequired, nil)
 	}
 
 	if err := h.service.DeleteVocal(c.Context(), userID, projectID, sectionID, takeID); err != nil {
 		if errors.Is(err, client.ErrInvalidSegment) {
-			return response.ValidationError(c, "Invalid takeId, projectId or sectionId", nil)
+			return response.ValidationError(c, i18n.KeyVocalIDsInvalid, nil)
 		}
-		return response.ServiceError(c, err.Error())
+		return internalError(c, err)
 	}
 
 	return response.NoContent(c)

@@ -2,13 +2,15 @@ package social
 
 import (
 	"errors"
-	"fmt"
+
+	"github.com/makeasinger/api/internal/i18n"
 )
 
 // Service errors. The HTTP layer maps them to the lowercase codes of the
 // contract (handler/social.go): ErrNotFound -> 404 bulunamadi,
 // ErrNoProfile -> 404 or 409 profil_yok (depending on the endpoint), and so
-// on. The messages may reach the user; they carry no values (URLs, keys).
+// on. The client-facing message comes from the localized i18n key in that
+// mapping; these texts only reach logs. They carry no values (URLs, keys).
 var (
 	ErrNotFound         = errors.New("bulunamadi")
 	ErrNoProfile        = errors.New("profil henuz olusturulmamis")
@@ -26,7 +28,21 @@ var (
 	ErrForbidden        = errors.New("bu islem icin yetkin yok")
 )
 
-// validationError wraps ErrValidation with a field-specific description.
-func validationError(message string) error {
-	return fmt.Errorf("%w: %s", ErrValidation, message)
+// ValidationError is a field-level validation failure. errors.Is matches
+// it against ErrValidation (422 dogrulama); the HTTP layer renders Key
+// with Args in the request's language.
+type ValidationError struct {
+	Key  i18n.Key
+	Args []any
+}
+
+func (e *ValidationError) Error() string {
+	return ErrValidation.Error() + ": " + i18n.Message(i18n.TR, e.Key, e.Args...)
+}
+
+func (e *ValidationError) Unwrap() error { return ErrValidation }
+
+// invalid returns a *ValidationError for key.
+func invalid(key i18n.Key, args ...any) error {
+	return &ValidationError{Key: key, Args: args}
 }

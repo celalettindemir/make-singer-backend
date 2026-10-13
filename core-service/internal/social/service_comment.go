@@ -2,6 +2,7 @@ package social
 
 import (
 	"context"
+	"github.com/makeasinger/api/internal/i18n"
 	"math"
 	"strings"
 	"unicode/utf8"
@@ -61,18 +62,18 @@ func (s *Service) PostComment(ctx context.Context, userID, pubID string, input C
 	}
 	text := strings.TrimSpace(input.Text)
 	if containsNUL(text) {
-		return nil, validationError("metin NUL karakteri iceremez")
+		return nil, invalid(i18n.KeyCommentTextNUL)
 	}
 	if n := utf8.RuneCountInString(text); n < 1 || n > maxCommentLen {
-		return nil, validationError("metin 1-500 karakter olmali")
+		return nil, invalid(i18n.KeyCommentTextLength)
 	}
 	if input.TimeMs != nil && *input.TimeMs < 0 {
-		return nil, validationError("zamanMs negatif olamaz")
+		return nil, invalid(i18n.KeyCommentTimeNegative)
 	}
 	// The time_ms column is an integer; sureSn has no upper bound, so the
 	// duration check alone does not prevent an INSERT overflow (500).
 	if input.TimeMs != nil && *input.TimeMs > math.MaxInt32 {
-		return nil, validationError("zamanMs cok buyuk")
+		return nil, invalid(i18n.KeyCommentTimeTooLarge)
 	}
 	rec, err := s.visiblePublication(ctx, id, pubID)
 	if err != nil {
@@ -85,7 +86,7 @@ func (s *Service) PostComment(ctx context.Context, userID, pubID string, input C
 		return nil, err
 	}
 	if input.TimeMs != nil && *input.TimeMs > rec.DurationSec*1000 {
-		return nil, validationError("zamanMs sarkinin suresini asiyor")
+		return nil, invalid(i18n.KeyCommentTimeBeyondDuration)
 	}
 	inserted, err := s.store.InsertComment(ctx, CommentInsert{
 		ID: uuid.NewString(), PublicationID: rec.ID, AuthorID: id, Text: text, TimeMs: input.TimeMs,

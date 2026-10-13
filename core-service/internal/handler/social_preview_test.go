@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
@@ -17,7 +18,7 @@ func newPublicApp(s *fakeSocialService, ipLimiter fiber.Handler) *fiber.App {
 	app := fiber.New()
 	h := NewSocialHandler(s)
 	h.PublicRoutes(app.Group("/api/public"), ipLimiter)
-	api := app.Group("/api", func(c *fiber.Ctx) error { return response.Unauthorized(c, "auth") })
+	api := app.Group("/api", func(c *fiber.Ctx) error { return response.Unauthorized(c, i18n.KeyUnauthenticated) })
 	h.Routes(api.Group("/social"), SocialLimits{Publication: passThrough, Comment: passThrough, Cover: passThrough})
 	return app
 }

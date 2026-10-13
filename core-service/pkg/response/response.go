@@ -1,6 +1,9 @@
 package response
 
-import "github.com/gofiber/fiber/v2"
+import (
+	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
+)
 
 // Error codes
 const (
@@ -24,42 +27,63 @@ type ErrorDetail struct {
 	Details interface{} `json:"details,omitempty"`
 }
 
-func Error(c *fiber.Ctx, status int, code, message string, details interface{}) error {
+// langKey is the c.Locals key holding the request's i18n.Lang.
+type langKey struct{}
+
+// Lang returns the message language of the request, parsed once from
+// Accept-Language and cached in c.Locals.
+func Lang(c *fiber.Ctx) i18n.Lang {
+	if l, ok := c.Locals(langKey{}).(i18n.Lang); ok {
+		return l
+	}
+	l := i18n.FromAcceptLanguage(c.Get(fiber.HeaderAcceptLanguage))
+	c.Locals(langKey{}, l)
+	return l
+}
+
+// Error writes {"error":{"code","message","details"}}. code is never
+// localized; message is msg rendered in the request's language (args
+// fill its verbs). Content-Language names that language and
+// Vary: Accept-Language keeps caches from mixing languages.
+func Error(c *fiber.Ctx, status int, code string, msg i18n.Key, details interface{}, args ...any) error {
+	lang := Lang(c)
+	c.Set(fiber.HeaderContentLanguage, string(lang))
+	c.Vary(fiber.HeaderAcceptLanguage)
 	return c.Status(status).JSON(ErrorResponse{
 		Error: ErrorDetail{
 			Code:    code,
-			Message: message,
+			Message: i18n.Message(lang, msg, args...),
 			Details: details,
 		},
 	})
 }
 
-func ValidationError(c *fiber.Ctx, message string, details interface{}) error {
-	return Error(c, fiber.StatusBadRequest, CodeValidationError, message, details)
+func ValidationError(c *fiber.Ctx, msg i18n.Key, details interface{}) error {
+	return Error(c, fiber.StatusBadRequest, CodeValidationError, msg, details)
 }
 
-func Unauthorized(c *fiber.Ctx, message string) error {
-	return Error(c, fiber.StatusUnauthorized, CodeUnauthorized, message, nil)
+func Unauthorized(c *fiber.Ctx, msg i18n.Key) error {
+	return Error(c, fiber.StatusUnauthorized, CodeUnauthorized, msg, nil)
 }
 
-func Forbidden(c *fiber.Ctx, message string) error {
-	return Error(c, fiber.StatusForbidden, CodeForbidden, message, nil)
+func Forbidden(c *fiber.Ctx, msg i18n.Key) error {
+	return Error(c, fiber.StatusForbidden, CodeForbidden, msg, nil)
 }
 
-func NotFound(c *fiber.Ctx, message string) error {
-	return Error(c, fiber.StatusNotFound, CodeNotFound, message, nil)
+func NotFound(c *fiber.Ctx, msg i18n.Key) error {
+	return Error(c, fiber.StatusNotFound, CodeNotFound, msg, nil)
 }
 
 func RateLimited(c *fiber.Ctx) error {
-	return Error(c, fiber.StatusTooManyRequests, CodeRateLimited, "Rate limit exceeded", nil)
+	return Error(c, fiber.StatusTooManyRequests, CodeRateLimited, i18n.KeyRateLimited, nil)
 }
 
-func ServiceError(c *fiber.Ctx, message string) error {
-	return Error(c, fiber.StatusInternalServerError, CodeServiceError, message, nil)
+func ServiceError(c *fiber.Ctx, msg i18n.Key) error {
+	return Error(c, fiber.StatusInternalServerError, CodeServiceError, msg, nil)
 }
 
-func AIError(c *fiber.Ctx, message string) error {
-	return Error(c, fiber.StatusBadGateway, CodeAIError, message, nil)
+func AIError(c *fiber.Ctx, msg i18n.Key) error {
+	return Error(c, fiber.StatusBadGateway, CodeAIError, msg, nil)
 }
 
 func OK(c *fiber.Ctx, data interface{}) error {

@@ -3,6 +3,7 @@ package middleware
 import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/makeasinger/api/internal/deletionmark"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/pkg/response"
 )
 
@@ -15,16 +16,16 @@ func DeletedUserGate(checker deletionmark.Checker) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		userID := GetUserID(c)
 		if userID == "" {
-			return response.Unauthorized(c, "Kimlik dogrulanamadi")
+			return response.Unauthorized(c, i18n.KeyUnauthenticated)
 		}
 		deleted, err := checker.IsDeleted(c.Context(), userID)
 		if err != nil {
 			c.Set("Retry-After", "5")
 			return response.Error(c, fiber.StatusServiceUnavailable,
-				response.CodeServiceError, "Hesap durumu denetlenemedi", nil)
+				response.CodeServiceError, i18n.KeyAccountStatusUnavailable, nil)
 		}
 		if deleted {
-			return response.Unauthorized(c, "Hesap silindi")
+			return response.Unauthorized(c, i18n.KeyAccountDeleted)
 		}
 		return c.Next()
 	}

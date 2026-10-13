@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/pkg/response"
 )
@@ -29,13 +30,13 @@ func NewAccountHandler(svc *service.AccountService) *AccountHandler {
 func (h *AccountHandler) Delete(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	if err := h.service.Delete(c.Context(), userID); err != nil {
 		if errors.Is(err, service.ErrAccountNotFound) {
-			return response.NotFound(c, "Hesap bulunamadi")
+			return response.NotFound(c, i18n.KeyAccountNotFound)
 		}
-		return response.ServiceError(c, "Hesap silinemedi")
+		return response.ServiceError(c, i18n.KeyAccountDeleteFailed)
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }

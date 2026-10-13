@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -149,7 +150,7 @@ func TestLiveLimitWithCode_429WithCustomCode(t *testing.T) {
 	app.Get("/uc", func(c *fiber.Ctx) error {
 		c.Locals("userId", "kullanici-yorum")
 		return c.Next()
-	}, NewRateLimiter(rdb).LimitWithCode("yorum", 1, time.Minute, "yavasla", "Biraz yavasla"),
+	}, NewRateLimiter(rdb).LimitWithCode("yorum", 1, time.Minute, "yavasla", i18n.KeySlowDown),
 		func(c *fiber.Ctx) error { return c.SendString("tamam") })
 
 	if status, _ := ipRequest(t, app, nil); status != fiber.StatusOK {
@@ -166,7 +167,7 @@ func TestLiveLimitWithCode_429WithCustomCode(t *testing.T) {
 func TestLimitWithCode_UnauthenticatedIs401(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 50 * time.Millisecond})
 	app := fiber.New()
-	app.Get("/uc", NewRateLimiter(rdb).LimitWithCode("yorum", 1, time.Minute, "yavasla", "x"),
+	app.Get("/uc", NewRateLimiter(rdb).LimitWithCode("yorum", 1, time.Minute, "yavasla", i18n.KeySlowDown),
 		func(c *fiber.Ctx) error { return c.SendString("tamam") })
 	if status, _ := ipRequest(t, app, nil); status != fiber.StatusUnauthorized {
 		t.Fatalf("durum = %d, beklenen 401", status)

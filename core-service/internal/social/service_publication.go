@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/makeasinger/api/internal/i18n"
 	"log"
 	"time"
 
@@ -61,9 +62,9 @@ func (s *Service) resolveKey(raw, userID, field string) (string, error) {
 	case errors.Is(err, client.ErrKeyNotOwned):
 		return "", ErrOwnership
 	case err != nil:
-		return "", validationError(field + " gecersiz dosya adresi")
+		return "", invalid(i18n.KeyFieldFileURLInvalid, field)
 	case client.IsPublicKey(key):
-		return "", validationError(field + " ozel bir dosya olmali")
+		return "", invalid(i18n.KeyFieldFileNotPrivate, field)
 	}
 	return key, nil
 }

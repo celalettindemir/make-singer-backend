@@ -2,6 +2,7 @@ package handler
 
 import (
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
@@ -10,7 +11,7 @@ import (
 func (h *SocialHandler) Comments(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	page, err := h.service.Comments(c.Context(), userID, c.Params("id"), c.Query("imlec"), social.PageSize(c.Query("limit")))
 	if err != nil {
@@ -24,7 +25,7 @@ func (h *SocialHandler) Comments(c *fiber.Ctx) error {
 func (h *SocialHandler) PostComment(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	var input social.CommentInput
 	if err := c.BodyParser(&input); err != nil {
@@ -41,7 +42,7 @@ func (h *SocialHandler) PostComment(c *fiber.Ctx) error {
 func (h *SocialHandler) DeleteComment(c *fiber.Ctx) error {
 	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 	if err := h.service.DeleteComment(c.Context(), userID, c.Params("id")); err != nil {
 		return socialError(c, err)

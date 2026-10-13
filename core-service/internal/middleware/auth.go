@@ -8,6 +8,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/pkg/response"
 )
 
@@ -134,12 +135,12 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		authHeader := c.Get("Authorization")
 		if authHeader == "" {
-			return response.Unauthorized(c, "Missing authorization header")
+			return response.Unauthorized(c, i18n.KeyAuthHeaderMissing)
 		}
 
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			return response.Unauthorized(c, "Invalid authorization header format")
+			return response.Unauthorized(c, i18n.KeyAuthHeaderInvalid)
 		}
 
 		tokenString := parts[1]
@@ -148,12 +149,12 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 		// zero-value AuthMiddleware) the request is rejected: there is no
 		// other verification path to fall back to.
 		if m.op == nil {
-			return response.Unauthorized(c, "Invalid or expired token")
+			return response.Unauthorized(c, i18n.KeyTokenInvalid)
 		}
 		sub, email, name, err := m.op.verify(tokenString)
 		if err != nil {
 			// The error text may carry token content; it is not logged.
-			return response.Unauthorized(c, "Invalid or expired token")
+			return response.Unauthorized(c, i18n.KeyTokenInvalid)
 		}
 		c.Locals("userId", sub)
 		c.Locals("email", email)
