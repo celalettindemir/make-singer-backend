@@ -10,7 +10,7 @@ type UploadVocalResponse struct {
 	SampleRate int       `json:"sampleRate"`
 	Channels   int       `json:"channels"`
 	CreatedAt  time.Time `json:"createdAt"`
-	// ExpiresAt: fileUrl presigned ve SURELI. Istemci bu adresi onbellege
-	// alip sonra kirik link gostermesin.
+	// ExpiresAt: fileUrl is presigned and EXPIRING. The client must not cache
+	// this URL and later show a broken link.
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }

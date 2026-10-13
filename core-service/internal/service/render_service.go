@@ -36,18 +36,18 @@ func NewRenderService(redisClient *redis.Client, asynqClient *asynq.Client, r2Cl
 	}
 }
 
-// BuildResult, saklanan kayittan istemci yanitini uretir: her stem'in
-// adresi ve son kullanma ani HER CAGRIDA yeniden uretilir, kayitta
-// imzali URL tutulmaz.
+// BuildResult produces the client response from the stored record: each
+// stem's URL and expiry are regenerated ON EVERY CALL; the record holds no
+// signed URL.
 func (s *RenderService) BuildResult(ctx context.Context, record *model.RenderResultRecord) (*model.RenderResultResponse, error) {
 	stems := make([]model.StemResult, 0, len(record.Stems))
 	for _, st := range record.Stems {
 		if st.FileKey == "" {
-			return nil, fmt.Errorf("stem kaydinda nesne anahtari yok: %s", st.ID)
+			return nil, fmt.Errorf("the stem record has no object key: %s", st.ID)
 		}
 		fileURL, expiresAt, err := client.ResolveURL(ctx, s.r2Client, s.r2Cfg, st.FileKey)
 		if err != nil {
-			return nil, fmt.Errorf("stem URL uretilemedi: %w", err)
+			return nil, fmt.Errorf("could not generate the stem URL: %w", err)
 		}
 		stems = append(stems, model.StemResult{
 			ID:           st.ID,
@@ -72,8 +72,8 @@ func (s *RenderService) BuildResult(ctx context.Context, record *model.RenderRes
 
 // StartRender queues a new render job
 func (s *RenderService) StartRender(ctx context.Context, userID string, req *model.RenderStartRequest) (*model.RenderStartResponse, error) {
-	// Stem ayari is kaydindan ONCE dogrulanir: tutarsiz istek is yaratmaz.
-	stemModu, odak, err := req.StemAyarlari()
+	// The stem settings are validated BEFORE the job record: an inconsistent request creates no job.
+	stemMode, focus, err := req.StemSettings()
 	if err != nil {
 		return nil, err
 	}
@@ -97,8 +97,8 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 		ProjectID:       req.ProjectID,
 		Brief:           req.Brief,
 		Arrangement:     req.Arrangement,
-		StemMode:        stemModu,
-		FocusInstrument: odak,
+		StemMode:        stemMode,
+		FocusInstrument: focus,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -139,7 +139,7 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 
 // GetStatus returns the current status of a render job
 func (s *RenderService) GetStatus(ctx context.Context, userID, jobID string) (*model.RenderStatusResponse, error) {
-	job, err := sahipliJobOku(ctx, s.redis, userID, jobID)
+	job, err := readOwnedJob(ctx, s.redis, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -159,13 +159,13 @@ func (s *RenderService) GetStatus(ctx context.Context, userID, jobID string) (*m
 
 // GetResult returns the result of a completed render job
 func (s *RenderService) GetResult(ctx context.Context, userID, jobID string) (*model.RenderResultResponse, error) {
-	job, err := sahipliJobOku(ctx, s.redis, userID, jobID)
+	job, err := readOwnedJob(ctx, s.redis, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
 
 	if job.Status != model.JobStatusSucceeded {
-		return nil, fmt.Errorf("job not completed")
+		return nil, ErrJobNotCompleted
 	}
 
 	var record model.RenderResultRecord
@@ -178,13 +178,13 @@ func (s *RenderService) GetResult(ctx context.Context, userID, jobID string) (*m
 
 // CancelRender cancels a render job
 func (s *RenderService) CancelRender(ctx context.Context, userID, jobID string) (*model.RenderCancelResponse, error) {
-	job, err := sahipliJobOku(ctx, s.redis, userID, jobID)
+	job, err := readOwnedJob(ctx, s.redis, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
 
 	if job.Status == model.JobStatusSucceeded || job.Status == model.JobStatusFailed {
-		return nil, fmt.Errorf("job already completed")
+		return nil, ErrJobAlreadyCompleted
 	}
 
 	job.Status = model.JobStatusCanceled
@@ -260,11 +260,11 @@ func (s *RenderService) FailJob(ctx context.Context, jobID string, errMsg string
 // Helper methods
 
 func (s *RenderService) saveJob(ctx context.Context, job *model.Job) error {
-	return jobYaz(ctx, s.redis, job)
+	return writeJob(ctx, s.redis, job)
 }
 
 func (s *RenderService) getJob(ctx context.Context, jobID string) (*model.Job, error) {
-	return jobOku(ctx, s.redis, jobID)
+	return readJob(ctx, s.redis, jobID)
 }
 
 func newRenderTask(jobID string, payload []byte) (*asynq.Task, error) {

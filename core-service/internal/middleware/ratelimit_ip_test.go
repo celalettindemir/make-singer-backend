@@ -9,172 +9,173 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/redis/go-redis/v9"
 )
 
-const testWebAnahtari = "web-anahtari-en-az-otuz-iki-karakter-uzun"
+const testWebKey = "web-anahtari-en-az-otuz-iki-karakter-uzun"
 
-// ipUygulamasi, kimliksiz bir uca LimitIP baglar.
-func ipUygulamasi(rdb *redis.Client, ipBasina int, webAnahtari string, webMax int) *fiber.App {
+// ipApp attaches LimitIP to an unauthenticated endpoint.
+func ipApp(rdb *redis.Client, perIP int, webKey string, webMax int) *fiber.App {
 	app := fiber.New()
-	app.Get("/uc", NewRateLimiter(rdb).LimitIP("onizleme", ipBasina, time.Minute, webAnahtari, webMax),
+	app.Get("/uc", NewRateLimiter(rdb).LimitIP("onizleme", perIP, time.Minute, webKey, webMax),
 		func(c *fiber.Ctx) error { return c.SendString("tamam") })
 	return app
 }
 
-// ipIstek, istegi verilen basliklarla atar; durumu ve hata kodunu doner.
-func ipIstek(t *testing.T, app *fiber.App, basliklar map[string]string) (int, string) {
+// ipRequest sends the request with the given headers; returns the status and the error code.
+func ipRequest(t *testing.T, app *fiber.App, headers map[string]string) (int, string) {
 	t.Helper()
-	istek := httptest.NewRequest("GET", "/uc", nil)
-	for k, v := range basliklar {
-		istek.Header.Set(k, v)
+	req := httptest.NewRequest("GET", "/uc", nil)
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
-	y, err := app.Test(istek, -1)
+	resp, err := app.Test(req, -1)
 	if err != nil {
 		t.Fatalf("Test: %v", err)
 	}
-	ham, _ := io.ReadAll(y.Body)
-	var govde struct {
+	raw, _ := io.ReadAll(resp.Body)
+	var body struct {
 		Error struct {
 			Code string `json:"code"`
 		} `json:"error"`
 	}
-	_ = json.Unmarshal(ham, &govde)
-	return y.StatusCode, govde.Error.Code
+	_ = json.Unmarshal(raw, &body)
+	return resp.StatusCode, body.Error.Code
 }
 
-func TestLimitIP_RedisYoksaFailClosed(t *testing.T) {
+func TestLimitIP_FailsClosedWithoutRedis(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 50 * time.Millisecond})
-	durum, _ := ipIstek(t, ipUygulamasi(rdb, 5, "", 0), nil)
-	if durum != fiber.StatusServiceUnavailable {
-		t.Fatalf("durum = %d, beklenen 503 (kimliksiz uc 401 vermemeli, Redis yoksa gecirmemeli)", durum)
+	status, _ := ipRequest(t, ipApp(rdb, 5, "", 0), nil)
+	if status != fiber.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (an unauthenticated endpoint must not give 401 and must not pass when Redis is down)", status)
 	}
 }
 
-func TestCanliLimitIP_IPBasinaSayar(t *testing.T) {
-	rdb := canliRedis(t)
+func TestLiveLimitIP_CountsPerIP(t *testing.T) {
+	rdb := liveRedis(t)
 	ctx := context.Background()
-	app := ipUygulamasi(rdb, 2, "", 0)
+	app := ipApp(rdb, 2, "", 0)
 	a := map[string]string{"X-Real-Ip": "203.0.113.5"}
 
 	for i := 1; i <= 2; i++ {
-		if durum, _ := ipIstek(t, app, a); durum != fiber.StatusOK {
-			t.Fatalf("istek %d: durum = %d, beklenen 200", i, durum)
+		if status, _ := ipRequest(t, app, a); status != fiber.StatusOK {
+			t.Fatalf("request %d: status = %d, want 200", i, status)
 		}
 	}
-	if durum, kod := ipIstek(t, app, a); durum != fiber.StatusTooManyRequests || kod != "RATE_LIMITED" {
-		t.Fatalf("3. istek: durum = %d kod = %q, beklenen 429 RATE_LIMITED", durum, kod)
+	if status, code := ipRequest(t, app, a); status != fiber.StatusTooManyRequests || code != "RATE_LIMITED" {
+		t.Fatalf("3rd request: status = %d code = %q, want 429 RATE_LIMITED", status, code)
 	}
-	if durum, _ := ipIstek(t, app, map[string]string{"X-Real-Ip": "203.0.113.6"}); durum != fiber.StatusOK {
-		t.Fatalf("baska IP etkilenmemeli: durum = %d", durum)
+	if status, _ := ipRequest(t, app, map[string]string{"X-Real-Ip": "203.0.113.6"}); status != fiber.StatusOK {
+		t.Fatalf("another IP must not be affected: status = %d", status)
 	}
 	if n, err := rdb.Get(ctx, "ratelimit:onizleme:ip:203.0.113.5").Int(); err != nil || n != 3 {
-		t.Fatalf("IP anahtari = %d (hata %v), beklenen 3", n, err)
+		t.Fatalf("IP key = %d (err %v), want 3", n, err)
 	}
 	if ttl, err := rdb.TTL(ctx, "ratelimit:onizleme:ip:203.0.113.5").Result(); err != nil || ttl <= 0 || ttl > time.Minute {
-		t.Fatalf("TTL = %v (hata %v)", ttl, err)
+		t.Fatalf("TTL = %v (err %v)", ttl, err)
 	}
 }
 
-func TestCanliLimitIP_GecersizBaslikBaglantiAdresineDuser(t *testing.T) {
-	rdb := canliRedis(t)
+func TestLiveLimitIP_InvalidHeaderFallsBackToConnIP(t *testing.T) {
+	rdb := liveRedis(t)
 	ctx := context.Background()
-	app := ipUygulamasi(rdb, 5, "", 0)
-	if durum, _ := ipIstek(t, app, map[string]string{"X-Real-Ip": "1.2.3.4:80 kotu"}); durum != fiber.StatusOK {
-		t.Fatalf("durum = %d", durum)
+	app := ipApp(rdb, 5, "", 0)
+	if status, _ := ipRequest(t, app, map[string]string{"X-Real-Ip": "1.2.3.4:80 kotu"}); status != fiber.StatusOK {
+		t.Fatalf("status = %d", status)
 	}
-	if durum, _ := ipIstek(t, app, nil); durum != fiber.StatusOK {
-		t.Fatalf("durum = %d", durum)
+	if status, _ := ipRequest(t, app, nil); status != fiber.StatusOK {
+		t.Fatalf("status = %d", status)
 	}
-	// app.Test'in baglanti adresi 0.0.0.0'dir; iki istek de onda sayilir.
+	// app.Test's connection address is 0.0.0.0; both requests are counted on it.
 	if n, err := rdb.Get(ctx, "ratelimit:onizleme:ip:0.0.0.0").Int(); err != nil || n != 2 {
-		t.Fatalf("baglanti adresi anahtari = %d (hata %v), beklenen 2", n, err)
+		t.Fatalf("connection address key = %d (err %v), want 2", n, err)
 	}
-	if anahtarlar, _ := rdb.Keys(ctx, "ratelimit:onizleme:ip:1.2.3.4*").Result(); len(anahtarlar) != 0 {
-		t.Fatalf("gecersiz baslik anahtar olmamali: %v", anahtarlar)
+	if keys, _ := rdb.Keys(ctx, "ratelimit:onizleme:ip:1.2.3.4*").Result(); len(keys) != 0 {
+		t.Fatalf("an invalid header must not produce a key: %v", keys)
 	}
 }
 
-func TestCanliLimitIP_WebAnahtariOrtakSinir(t *testing.T) {
-	rdb := canliRedis(t)
+func TestLiveLimitIP_WebKeySharedLimit(t *testing.T) {
+	rdb := liveRedis(t)
 	ctx := context.Background()
-	app := ipUygulamasi(rdb, 1, testWebAnahtari, 3)
+	app := ipApp(rdb, 1, testWebKey, 3)
 
-	// Dogru anahtar: IP'den bagimsiz, ortak "web" sayacinda 3 hak.
+	// Correct key: independent of the IP, 3 allowances on the shared "web" counter.
 	for i, ip := range []string{"198.51.100.1", "198.51.100.2", "198.51.100.1"} {
-		durum, _ := ipIstek(t, app, map[string]string{"X-Real-Ip": ip, WebAnahtariBasligi: testWebAnahtari})
-		if durum != fiber.StatusOK {
-			t.Fatalf("web istegi %d: durum = %d, beklenen 200", i+1, durum)
+		status, _ := ipRequest(t, app, map[string]string{"X-Real-Ip": ip, WebKeyHeader: testWebKey})
+		if status != fiber.StatusOK {
+			t.Fatalf("web request %d: status = %d, want 200", i+1, status)
 		}
 	}
-	if durum, _ := ipIstek(t, app, map[string]string{"X-Real-Ip": "198.51.100.3", WebAnahtariBasligi: testWebAnahtari}); durum != fiber.StatusTooManyRequests {
-		t.Fatalf("web siniri asilinca 429 beklenir: %d", durum)
+	if status, _ := ipRequest(t, app, map[string]string{"X-Real-Ip": "198.51.100.3", WebKeyHeader: testWebKey}); status != fiber.StatusTooManyRequests {
+		t.Fatalf("429 is expected once the web limit is exceeded: %d", status)
 	}
 	if n, err := rdb.Get(ctx, "ratelimit:onizleme:web").Int(); err != nil || n != 4 {
-		t.Fatalf("web anahtari = %d (hata %v), beklenen 4", n, err)
+		t.Fatalf("web key = %d (err %v), want 4", n, err)
 	}
-	if anahtarlar, _ := rdb.Keys(ctx, "ratelimit:onizleme:ip:*").Result(); len(anahtarlar) != 0 {
-		t.Fatalf("dogru web anahtari IP sayacina dokunmamali: %v", anahtarlar)
+	if keys, _ := rdb.Keys(ctx, "ratelimit:onizleme:ip:*").Result(); len(keys) != 0 {
+		t.Fatalf("a correct web key must not touch the IP counter: %v", keys)
 	}
 
-	// Yanlis anahtar: olagan IP siniri (1).
-	yanlis := map[string]string{"X-Real-Ip": "198.51.100.9", WebAnahtariBasligi: testWebAnahtari + "x"}
-	if durum, _ := ipIstek(t, app, yanlis); durum != fiber.StatusOK {
-		t.Fatalf("yanlis anahtar ilk istek: %d", durum)
+	// Wrong key: the normal IP limit (1).
+	wrong := map[string]string{"X-Real-Ip": "198.51.100.9", WebKeyHeader: testWebKey + "x"}
+	if status, _ := ipRequest(t, app, wrong); status != fiber.StatusOK {
+		t.Fatalf("wrong key first request: %d", status)
 	}
-	if durum, _ := ipIstek(t, app, yanlis); durum != fiber.StatusTooManyRequests {
-		t.Fatalf("yanlis anahtar IP sinirina takilmali: %d", durum)
+	if status, _ := ipRequest(t, app, wrong); status != fiber.StatusTooManyRequests {
+		t.Fatalf("a wrong key must hit the IP limit: %d", status)
 	}
 }
 
-func TestCanliLimitIP_BosYapilandirmaWebYolunuKapatir(t *testing.T) {
-	rdb := canliRedis(t)
-	app := ipUygulamasi(rdb, 1, "", 100)
-	// Yapilandirma bosken bos baslik da, herhangi bir baslik da IP sinirindadir.
-	for _, anahtar := range []string{"", "herhangi"} {
-		b := map[string]string{"X-Real-Ip": "192.0.2.10", WebAnahtariBasligi: anahtar}
-		_, _ = ipIstek(t, app, b)
+func TestLiveLimitIP_EmptyConfigDisablesWebPath(t *testing.T) {
+	rdb := liveRedis(t)
+	app := ipApp(rdb, 1, "", 100)
+	// With an empty configuration, both an empty header and any header fall under the IP limit.
+	for _, key := range []string{"", "herhangi"} {
+		b := map[string]string{"X-Real-Ip": "192.0.2.10", WebKeyHeader: key}
+		_, _ = ipRequest(t, app, b)
 	}
-	if durum, _ := ipIstek(t, app, map[string]string{"X-Real-Ip": "192.0.2.10", WebAnahtariBasligi: ""}); durum != fiber.StatusTooManyRequests {
-		t.Fatalf("durum = %d, beklenen 429", durum)
+	if status, _ := ipRequest(t, app, map[string]string{"X-Real-Ip": "192.0.2.10", WebKeyHeader: ""}); status != fiber.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", status)
 	}
 	if n, _ := rdb.Exists(context.Background(), "ratelimit:onizleme:web").Result(); n != 0 {
-		t.Fatal("web anahtari bosken web sayaci olusmamali")
+		t.Fatal("no web counter may be created when the web key is empty")
 	}
 }
 
-func TestCanliLimitKod_OzelKodla429(t *testing.T) {
-	rdb := canliRedis(t)
+func TestLiveLimitWithCode_429WithCustomCode(t *testing.T) {
+	rdb := liveRedis(t)
 	app := fiber.New()
 	app.Get("/uc", func(c *fiber.Ctx) error {
 		c.Locals("userId", "kullanici-yorum")
 		return c.Next()
-	}, NewRateLimiter(rdb).LimitKod("yorum", 1, time.Minute, "yavasla", "Biraz yavasla"),
+	}, NewRateLimiter(rdb).LimitWithCode("yorum", 1, time.Minute, "yavasla", i18n.KeySlowDown),
 		func(c *fiber.Ctx) error { return c.SendString("tamam") })
 
-	if durum, _ := ipIstek(t, app, nil); durum != fiber.StatusOK {
-		t.Fatalf("ilk istek: %d", durum)
+	if status, _ := ipRequest(t, app, nil); status != fiber.StatusOK {
+		t.Fatalf("first request: %d", status)
 	}
-	if durum, kod := ipIstek(t, app, nil); durum != fiber.StatusTooManyRequests || kod != "yavasla" {
-		t.Fatalf("durum = %d kod = %q, beklenen 429 yavasla", durum, kod)
+	if status, code := ipRequest(t, app, nil); status != fiber.StatusTooManyRequests || code != "yavasla" {
+		t.Fatalf("status = %d code = %q, want 429 yavasla", status, code)
 	}
 	if n, err := rdb.Get(context.Background(), "ratelimit:yorum:kullanici-yorum").Int(); err != nil || n != 2 {
-		t.Fatalf("kullanici anahtari = %d (hata %v)", n, err)
+		t.Fatalf("user key = %d (err %v)", n, err)
 	}
 }
 
-func TestLimitKod_KimliksizIstek401(t *testing.T) {
+func TestLimitWithCode_UnauthenticatedIs401(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 50 * time.Millisecond})
 	app := fiber.New()
-	app.Get("/uc", NewRateLimiter(rdb).LimitKod("yorum", 1, time.Minute, "yavasla", "x"),
+	app.Get("/uc", NewRateLimiter(rdb).LimitWithCode("yorum", 1, time.Minute, "yavasla", i18n.KeySlowDown),
 		func(c *fiber.Ctx) error { return c.SendString("tamam") })
-	if durum, _ := ipIstek(t, app, nil); durum != fiber.StatusUnauthorized {
-		t.Fatalf("durum = %d, beklenen 401", durum)
+	if status, _ := ipRequest(t, app, nil); status != fiber.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", status)
 	}
 }
 
-func TestIPAnahtari_IPv6Ust64VeIPv4Esleme(t *testing.T) {
-	durumlar := map[string]string{
+func TestIPKey_IPv6Upper64AndIPv4Mapped(t *testing.T) {
+	cases := map[string]string{
 		"203.0.113.5":                    "203.0.113.5",
 		"::ffff:203.0.113.5":             "203.0.113.5",
 		"2001:db8:1:2:aaaa:bbbb:cccc:dd": "2001:db8:1:2::",
@@ -182,43 +183,43 @@ func TestIPAnahtari_IPv6Ust64VeIPv4Esleme(t *testing.T) {
 		"2001:db8:1:3::1":                "2001:db8:1:3::",
 		"gecersiz":                       "gecersiz",
 	}
-	for ham, beklenen := range durumlar {
-		if got := ipAnahtari(ham); got != beklenen {
-			t.Errorf("ipAnahtari(%q) = %q, beklenen %q", ham, got, beklenen)
+	for raw, want := range cases {
+		if got := ipKey(raw); got != want {
+			t.Errorf("ipKey(%q) = %q, want %q", raw, got, want)
 		}
 	}
 }
 
-// Ayni /64'teki iki IPv6 adresi ayni sayaci paylasir; komsu /64 ayridir.
-func TestCanliLimitIP_IPv6Ayni64OrtakSayac(t *testing.T) {
-	rdb := canliRedis(t)
-	app := ipUygulamasi(rdb, 2, "", 0)
+// Two IPv6 addresses in the same /64 share the same counter; a neighbouring /64 is separate.
+func TestLiveLimitIP_IPv6Same64SharesCounter(t *testing.T) {
+	rdb := liveRedis(t)
+	app := ipApp(rdb, 2, "", 0)
 	for i, ip := range []string{"2001:db8:1:2::1", "2001:db8:1:2:ffff::9"} {
-		if durum, _ := ipIstek(t, app, map[string]string{"X-Real-Ip": ip}); durum != fiber.StatusOK {
-			t.Fatalf("istek %d: durum = %d", i+1, durum)
+		if status, _ := ipRequest(t, app, map[string]string{"X-Real-Ip": ip}); status != fiber.StatusOK {
+			t.Fatalf("request %d: status = %d", i+1, status)
 		}
 	}
-	if durum, _ := ipIstek(t, app, map[string]string{"X-Real-Ip": "2001:db8:1:2::abcd"}); durum != fiber.StatusTooManyRequests {
-		t.Fatalf("ayni /64'te 3. istek 429 olmali: %d", durum)
+	if status, _ := ipRequest(t, app, map[string]string{"X-Real-Ip": "2001:db8:1:2::abcd"}); status != fiber.StatusTooManyRequests {
+		t.Fatalf("the 3rd request in the same /64 must be 429: %d", status)
 	}
-	if durum, _ := ipIstek(t, app, map[string]string{"X-Real-Ip": "2001:db8:1:3::1"}); durum != fiber.StatusOK {
-		t.Fatalf("komsu /64 etkilenmemeli: %d", durum)
+	if status, _ := ipRequest(t, app, map[string]string{"X-Real-Ip": "2001:db8:1:3::1"}); status != fiber.StatusOK {
+		t.Fatalf("a neighboring /64 must not be affected: %d", status)
 	}
 	if n, err := rdb.Get(context.Background(), "ratelimit:onizleme:ip:2001:db8:1:2::").Int(); err != nil || n != 3 {
-		t.Fatalf("/64 anahtari = %d (hata %v), beklenen 3", n, err)
+		t.Fatalf("/64 key = %d (err %v), want 3", n, err)
 	}
 }
 
-// IPv4-eslemeli IPv6 adresi IPv4 bicimiyle ayni sayactadir.
-func TestCanliLimitIP_IPv4EslemeliAyniSayac(t *testing.T) {
-	rdb := canliRedis(t)
-	app := ipUygulamasi(rdb, 5, "", 0)
+// An IPv4-mapped IPv6 address is on the same counter as its IPv4 form.
+func TestLiveLimitIP_IPv4MappedSharesCounter(t *testing.T) {
+	rdb := liveRedis(t)
+	app := ipApp(rdb, 5, "", 0)
 	for _, ip := range []string{"203.0.113.7", "::ffff:203.0.113.7"} {
-		if durum, _ := ipIstek(t, app, map[string]string{"X-Real-Ip": ip}); durum != fiber.StatusOK {
-			t.Fatalf("%s: durum = %d", ip, durum)
+		if status, _ := ipRequest(t, app, map[string]string{"X-Real-Ip": ip}); status != fiber.StatusOK {
+			t.Fatalf("%s: status = %d", ip, status)
 		}
 	}
 	if n, err := rdb.Get(context.Background(), "ratelimit:onizleme:ip:203.0.113.7").Int(); err != nil || n != 2 {
-		t.Fatalf("IPv4 anahtari = %d (hata %v), beklenen 2", n, err)
+		t.Fatalf("IPv4 key = %d (err %v), want 2", n, err)
 	}
 }

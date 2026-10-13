@@ -13,7 +13,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
-	"github.com/makeasinger/api/internal/hesapisaret"
+	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/internal/websocket"
@@ -22,25 +22,25 @@ import (
 
 // MasterWorker processes mastering jobs
 type MasterWorker struct {
-	redis         *redis.Client
-	audioClient   client.AudioProcessor
-	r2Client      client.StorageClient
-	masterService *service.MasterService
-	hub           *websocket.Hub
-	r2Cfg         *config.R2Config
-	hesap         hesapisaret.Denetci // nil: denetim yok
+	redis           *redis.Client
+	audioClient     client.AudioProcessor
+	r2Client        client.StorageClient
+	masterService   *service.MasterService
+	hub             *websocket.Hub
+	r2Cfg           *config.R2Config
+	deletionChecker deletionmark.Checker // nil: no check
 }
 
 // NewMasterWorker creates a new master worker
-func NewMasterWorker(redisClient *redis.Client, audioClient client.AudioProcessor, r2Client client.StorageClient, masterService *service.MasterService, hub *websocket.Hub, r2Cfg *config.R2Config, hesap hesapisaret.Denetci) *MasterWorker {
+func NewMasterWorker(redisClient *redis.Client, audioClient client.AudioProcessor, r2Client client.StorageClient, masterService *service.MasterService, hub *websocket.Hub, r2Cfg *config.R2Config, deletionChecker deletionmark.Checker) *MasterWorker {
 	return &MasterWorker{
-		redis:         redisClient,
-		audioClient:   audioClient,
-		r2Client:      r2Client,
-		masterService: masterService,
-		hub:           hub,
-		r2Cfg:         r2Cfg,
-		hesap:         hesap,
+		redis:           redisClient,
+		audioClient:     audioClient,
+		r2Client:        r2Client,
+		masterService:   masterService,
+		hub:             hub,
+		r2Cfg:           r2Cfg,
+		deletionChecker: deletionChecker,
 	}
 }
 
@@ -84,18 +84,20 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	// Step 3: Build vocal takes if present
 	vocalTakes, err := w.buildVocalTakes(payload)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Vokal URL cozulemedi: %v", err))
-		return fmt.Errorf("vokal URL cozulemedi: %w: %w", err, asynq.SkipRetry)
+		log.Printf("Job %s: could not resolve the vocal URL: %v", jobID, err)
+		w.failJob(ctx, jobID, "Could not resolve the vocal URL")
+		return fmt.Errorf("could not resolve the vocal URL: %w: %w", err, asynq.SkipRetry)
 	}
 
-	// Step 3b: Stem URL'lerini anahtara cevir. Istemciden gelen her URL
-	// KeyFromURL ile anahtara donusturulur.
+	// Step 3b: Convert stem URLs to keys. Every URL coming from the client
+	// is converted to a key with KeyFromURL.
 	stemKeys := make([]string, 0, len(payload.StemURLs))
 	for _, u := range payload.StemURLs {
-		k, err := client.SahipliAnahtarCoz(u, payload.OwnerID, w.r2Cfg)
+		k, err := client.ResolveOwnedKey(u, payload.OwnerID, w.r2Cfg)
 		if err != nil {
-			w.failJob(ctx, jobID, fmt.Sprintf("Stem URL cozulemedi: %v", err))
-			return fmt.Errorf("stem URL cozulemedi: %w: %w", err, asynq.SkipRetry)
+			log.Printf("Job %s: could not resolve the stem URL: %v", jobID, err)
+			w.failJob(ctx, jobID, "Could not resolve the stem URL")
+			return fmt.Errorf("could not resolve the stem URL: %w: %w", err, asynq.SkipRetry)
 		}
 		stemKeys = append(stemKeys, k)
 	}
@@ -103,21 +105,23 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	// Step 4: Call audio service for mastering
 	w.updateJobStatus(ctx, jobID, model.JobStatusRunning, 20, "Starting mastering process...")
 
-	outputKey, err := client.KullaniciAnahtari("masters", payload.OwnerID, payload.ProjectID, uuid.New().String()+".wav")
+	outputKey, err := client.UserKey("masters", payload.OwnerID, payload.ProjectID, uuid.New().String()+".wav")
 	if err != nil {
-		w.failJob(ctx, jobID, "Gecersiz is sahibi veya proje")
-		return fmt.Errorf("master anahtari: %w: %w", err, asynq.SkipRetry)
+		w.failJob(ctx, jobID, "Invalid job owner or project")
+		return fmt.Errorf("master key: %w: %w", err, asynq.SkipRetry)
 	}
 
-	// Ses servisi ciktiyi R2'ye kendisi yazar; Master cagrisi bu isin R2
-	// yuklemesidir. Silinmis hesap icin dosya yazilmaz. Master ucretli
-	// degildir: denetim hatasi tekrar denenebilir.
-	if err := sahipYazabilir(ctx, w.hesap, payload.OwnerID); err != nil {
-		w.failJob(ctx, jobID, err.Error())
-		if errors.Is(err, errSahipSilindi) {
-			return fmt.Errorf("master yazilmadi: %w: %w", err, asynq.SkipRetry)
+	// The audio service writes the output to R2 itself; the Master call is
+	// this job's R2 upload. No file is written for a deleted account. Master
+	// is not a paid step: a check error can be retried.
+	if err := ownerCanWrite(ctx, w.deletionChecker, payload.OwnerID); err != nil {
+		log.Printf("Job %s: owner check failed: %v", jobID, err)
+		if errors.Is(err, errOwnerDeleted) {
+			w.failJob(ctx, jobID, errOwnerDeleted.Error())
+			return fmt.Errorf("master was not written: %w: %w", err, asynq.SkipRetry)
 		}
-		return fmt.Errorf("master yazilmadi: %w", err)
+		w.failJob(ctx, jobID, "Could not check the account status")
+		return fmt.Errorf("master was not written: %w", err)
 	}
 
 	masterReq := &client.MasterRequest{
@@ -133,16 +137,17 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 
 	masterResp, err := w.audioClient.Master(ctx, masterReq)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Mastering failed: %v", err))
+		log.Printf("Job %s: mastering failed: %v", jobID, err)
+		w.failJob(ctx, jobID, "Mastering failed")
 		return err
 	}
 
 	w.updateJobStatus(ctx, jobID, model.JobStatusRunning, 80, "Applying limiter...")
 	w.updateJobStatus(ctx, jobID, model.JobStatusRunning, 95, "Finalizing...")
 
-	// Step 6: Generate result. Kayda ANAHTAR yazilir, imzali URL degil:
-	// is kaydi 24 saat yasiyor, imza 1 saat. Adres okuma aninda
-	// (GetResult) ve burada yayin icin taze uretilir.
+	// Step 6: Generate result. The record stores the KEY, not a signed URL:
+	// the job record lives 24 hours, the signature 1 hour. The URL is
+	// generated fresh at read time (GetResult) and here for publishing.
 	record := &model.MasterResultRecord{
 		FileKey:  outputKey,
 		Duration: masterResp.Duration,
@@ -153,8 +158,9 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 
 	fileURL, expiresAt, err := client.ResolveURL(ctx, w.r2Client, w.r2Cfg, outputKey)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Master URL uretilemedi: %v", err))
-		return fmt.Errorf("master URL uretilemedi: %w", err)
+		log.Printf("Job %s: could not generate the master URL: %v", jobID, err)
+		w.failJob(ctx, jobID, "Could not generate the master URL")
+		return fmt.Errorf("could not generate the master URL: %w", err)
 	}
 
 	// Complete the job
@@ -198,13 +204,14 @@ func (w *MasterWorker) processWithMock(ctx context.Context, jobID string, payloa
 
 	record, err := w.generateMockRecord(payload)
 	if err != nil {
-		w.failJob(ctx, jobID, "Gecersiz is sahibi veya proje")
-		return fmt.Errorf("mock kayit: %w: %w", err, asynq.SkipRetry)
+		w.failJob(ctx, jobID, "Invalid job owner or project")
+		return fmt.Errorf("mock record: %w: %w", err, asynq.SkipRetry)
 	}
 	fileURL, expiresAt, err := client.ResolveURL(ctx, w.r2Client, w.r2Cfg, record.FileKey)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Master URL uretilemedi: %v", err))
-		return fmt.Errorf("master URL uretilemedi: %w", err)
+		log.Printf("Job %s: could not generate the master URL: %v", jobID, err)
+		w.failJob(ctx, jobID, "Could not generate the master URL")
+		return fmt.Errorf("could not generate the master URL: %w", err)
 	}
 
 	w.completeJob(ctx, jobID, record)
@@ -259,9 +266,9 @@ func (w *MasterWorker) buildVocalTakes(payload *model.MasterJobPayload) ([]clien
 	var takes []client.VocalTakeInput
 
 	for _, take := range payload.VocalTakes {
-		k, err := client.SahipliAnahtarCoz(take.FileURL, payload.OwnerID, w.r2Cfg)
+		k, err := client.ResolveOwnedKey(take.FileURL, payload.OwnerID, w.r2Cfg)
 		if err != nil {
-			return nil, fmt.Errorf("vokal URL cozulemedi: %w", err)
+			return nil, fmt.Errorf("could not resolve the vocal URL: %w", err)
 		}
 		takes = append(takes, client.VocalTakeInput{
 			Key:    k,
@@ -348,12 +355,12 @@ func (w *MasterWorker) saveJob(ctx context.Context, job *model.Job) {
 	w.redis.Set(ctx, fmt.Sprintf("job:%s", job.ID), data, 24*time.Hour)
 }
 
-// generateMockRecord, mock/dev yolunda saklanacak kaydi uretir. Gercek
-// yolla ayni sekilde ANAHTAR tutar; adres ResolveURL ile uretildigi icin
-// mock ciktisi da KeyFromURL ile cozulebilir (eski sabit
-// "cdn.makeasinger.com" adresi cozulemiyordu).
+// generateMockRecord builds the record stored on the mock/dev path. Like
+// the real path it holds the KEY; since the URL is built with ResolveURL,
+// the mock output can also be resolved with KeyFromURL (the old fixed
+// "cdn.makeasinger.com" URL could not be resolved).
 func (w *MasterWorker) generateMockRecord(payload *model.MasterJobPayload) (*model.MasterResultRecord, error) {
-	key, err := client.KullaniciAnahtari("masters", payload.OwnerID, payload.ProjectID, uuid.New().String()+".wav")
+	key, err := client.UserKey("masters", payload.OwnerID, payload.ProjectID, uuid.New().String()+".wav")
 	if err != nil {
 		return nil, err
 	}

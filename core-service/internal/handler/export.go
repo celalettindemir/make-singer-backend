@@ -6,6 +6,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/pkg/response"
@@ -39,29 +40,29 @@ func NewExportHandler(svc *service.ExportService, v *validator.Validate) *Export
 // @Security     BearerAuth
 // @Router       /api/export/mp3 [post]
 func (h *ExportHandler) MP3(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 
 	var req model.ExportMP3Request
 	if err := c.BodyParser(&req); err != nil {
-		return response.ValidationError(c, "Invalid request body", nil)
+		return response.ValidationError(c, i18n.KeyInvalidBody, nil)
 	}
 
 	if err := h.validator.Struct(&req); err != nil {
-		return response.ValidationError(c, "Validation failed", formatValidationErrors(err))
+		return response.ValidationError(c, i18n.KeyValidationFailed, formatValidationErrors(err))
 	}
 
 	result, err := h.service.ExportMP3(c.Context(), userID, &req)
 	if err != nil {
-		if errors.Is(err, client.ErrYabanciAnahtar) {
-			return response.NotFound(c, "File not found")
+		if errors.Is(err, client.ErrKeyNotOwned) {
+			return response.NotFound(c, i18n.KeyFileNotFound)
 		}
-		if errors.Is(err, client.ErrGecersizURL) {
-			return response.ValidationError(c, "Gecersiz dosya URL'si", nil)
+		if errors.Is(err, client.ErrInvalidURL) {
+			return response.ValidationError(c, i18n.KeyInvalidFileURL, nil)
 		}
-		return response.ServiceError(c, err.Error())
+		return internalError(c, err)
 	}
 
 	return response.OK(c, result)
@@ -83,29 +84,29 @@ func (h *ExportHandler) MP3(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/export/wav [post]
 func (h *ExportHandler) WAV(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 
 	var req model.ExportWAVRequest
 	if err := c.BodyParser(&req); err != nil {
-		return response.ValidationError(c, "Invalid request body", nil)
+		return response.ValidationError(c, i18n.KeyInvalidBody, nil)
 	}
 
 	if err := h.validator.Struct(&req); err != nil {
-		return response.ValidationError(c, "Validation failed", formatValidationErrors(err))
+		return response.ValidationError(c, i18n.KeyValidationFailed, formatValidationErrors(err))
 	}
 
 	result, err := h.service.ExportWAV(c.Context(), userID, &req)
 	if err != nil {
-		if errors.Is(err, client.ErrYabanciAnahtar) {
-			return response.NotFound(c, "File not found")
+		if errors.Is(err, client.ErrKeyNotOwned) {
+			return response.NotFound(c, i18n.KeyFileNotFound)
 		}
-		if errors.Is(err, client.ErrGecersizURL) {
-			return response.ValidationError(c, "Gecersiz dosya URL'si", nil)
+		if errors.Is(err, client.ErrInvalidURL) {
+			return response.ValidationError(c, i18n.KeyInvalidFileURL, nil)
 		}
-		return response.ServiceError(c, err.Error())
+		return internalError(c, err)
 	}
 
 	return response.OK(c, result)
@@ -127,29 +128,29 @@ func (h *ExportHandler) WAV(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/export/stems [post]
 func (h *ExportHandler) Stems(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 
 	var req model.ExportStemsRequest
 	if err := c.BodyParser(&req); err != nil {
-		return response.ValidationError(c, "Invalid request body", nil)
+		return response.ValidationError(c, i18n.KeyInvalidBody, nil)
 	}
 
 	if err := h.validator.Struct(&req); err != nil {
-		return response.ValidationError(c, "Validation failed", formatValidationErrors(err))
+		return response.ValidationError(c, i18n.KeyValidationFailed, formatValidationErrors(err))
 	}
 
 	result, err := h.service.ExportStems(c.Context(), userID, &req)
 	if err != nil {
-		if errors.Is(err, client.ErrYabanciAnahtar) {
-			return response.NotFound(c, "File not found")
+		if errors.Is(err, client.ErrKeyNotOwned) {
+			return response.NotFound(c, i18n.KeyFileNotFound)
 		}
-		if errors.Is(err, client.ErrGecersizURL) {
-			return response.ValidationError(c, "Gecersiz dosya URL'si", nil)
+		if errors.Is(err, client.ErrInvalidURL) {
+			return response.ValidationError(c, i18n.KeyInvalidFileURL, nil)
 		}
-		return response.ServiceError(c, err.Error())
+		return internalError(c, err)
 	}
 
 	return response.OK(c, result)

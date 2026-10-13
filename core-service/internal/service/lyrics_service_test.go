@@ -13,17 +13,17 @@ import (
 	"github.com/makeasinger/api/internal/model"
 )
 
-// lyricsSahteGroq, gelen istekleri biriktirip verilen icerigi donen sahte Groq.
-func lyricsSahteGroq(t *testing.T, icerik string, istekler *[]map[string]any) *client.GroqClient {
+// fakeLyricsGroq is a fake Groq that collects the incoming requests and returns the given content.
+func fakeLyricsGroq(t *testing.T, content string, requests *[]map[string]any) *client.GroqClient {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var govde map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&govde)
-		*istekler = append(*istekler, govde)
-		yanit, _ := json.Marshal(map[string]any{
-			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": icerik}}},
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		*requests = append(*requests, body)
+		response, _ := json.Marshal(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": content}}},
 		})
-		_, _ = w.Write(yanit)
+		_, _ = w.Write(response)
 	}))
 	t.Cleanup(srv.Close)
 	return client.NewGroqClient(&config.GroqConfig{
@@ -32,20 +32,20 @@ func lyricsSahteGroq(t *testing.T, icerik string, istekler *[]map[string]any) *c
 	})
 }
 
-func systemMesaji(t *testing.T, govde map[string]any) string {
+func systemMessage(t *testing.T, body map[string]any) string {
 	t.Helper()
-	msgs, _ := govde["messages"].([]any)
+	msgs, _ := body["messages"].([]any)
 	if len(msgs) == 0 {
-		t.Fatal("istekte mesaj yok")
+		t.Fatal("no messages in the request")
 	}
 	m, _ := msgs[0].(map[string]any)
 	s, _ := m["content"].(string)
 	return s
 }
 
-func TestRewrite_IstenenDilinSystemPromptunuKullanir(t *testing.T) {
-	var istekler []map[string]any
-	s := NewLyricsService(lyricsSahteGroq(t, `{"lines":["bir","iki"]}`, &istekler))
+func TestLyricsService_RewriteUsesRequestedLanguagePrompt(t *testing.T) {
+	var requests []map[string]any
+	s := NewLyricsService(fakeLyricsGroq(t, `{"lines":["bir","iki"]}`, &requests))
 
 	res, err := s.Rewrite(context.Background(), &model.LyricsRewriteRequest{
 		CurrentLyrics: "bir\niki", Genre: model.Genre("pop"), SectionType: model.SectionChorus,
@@ -55,33 +55,33 @@ func TestRewrite_IstenenDilinSystemPromptunuKullanir(t *testing.T) {
 		t.Fatalf("Rewrite: %v", err)
 	}
 	if len(res.Lines) != 2 {
-		t.Errorf("satirlar = %v", res.Lines)
+		t.Errorf("lines = %v", res.Lines)
 	}
-	if sys := systemMesaji(t, istekler[0]); !strings.Contains(sys, "Turkish") {
-		t.Errorf("system prompt Turkce olmali, geldi: %q", sys)
+	if sys := systemMessage(t, requests[0]); !strings.Contains(sys, "Turkish") {
+		t.Errorf("the system prompt must be Turkish, got: %q", sys)
 	}
-	if istekler[0]["temperature"] != 0.6 {
-		t.Errorf("rewrite sicakligi = %v, 0.6 bekleniyordu", istekler[0]["temperature"])
+	if requests[0]["temperature"] != 0.6 {
+		t.Errorf("rewrite temperature = %v, want 0.6", requests[0]["temperature"])
 	}
 }
 
-func TestRewrite_DilVerilmezseIngilizce(t *testing.T) {
-	var istekler []map[string]any
-	s := NewLyricsService(lyricsSahteGroq(t, `{"lines":["a"]}`, &istekler))
+func TestLyricsService_RewriteDefaultsToEnglish(t *testing.T) {
+	var requests []map[string]any
+	s := NewLyricsService(fakeLyricsGroq(t, `{"lines":["a"]}`, &requests))
 
 	if _, err := s.Rewrite(context.Background(), &model.LyricsRewriteRequest{
 		CurrentLyrics: "a", Genre: model.Genre("pop"), SectionType: model.SectionVerse, Vibes: []string{"x"},
 	}); err != nil {
 		t.Fatalf("Rewrite: %v", err)
 	}
-	if sys := systemMesaji(t, istekler[0]); !strings.Contains(sys, "English") {
-		t.Errorf("varsayilan dil Ingilizce olmali, geldi: %q", sys)
+	if sys := systemMessage(t, requests[0]); !strings.Contains(sys, "English") {
+		t.Errorf("the default language must be English, got: %q", sys)
 	}
 }
 
-func TestGenerate_UretimSicakliginiKullanir(t *testing.T) {
-	var istekler []map[string]any
-	s := NewLyricsService(lyricsSahteGroq(t, `{"drafts":[["a","b"],["c","d"]]}`, &istekler))
+func TestLyricsService_GenerateUsesGenerateTemperature(t *testing.T) {
+	var requests []map[string]any
+	s := NewLyricsService(fakeLyricsGroq(t, `{"drafts":[["a","b"],["c","d"]]}`, &requests))
 
 	res, err := s.Generate(context.Background(), &model.LyricsGenerateRequest{
 		Genre: model.Genre("pop"), SectionType: model.SectionVerse, Vibes: []string{"x"}, Language: model.LanguageTR,
@@ -90,9 +90,9 @@ func TestGenerate_UretimSicakliginiKullanir(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 	if len(res.Drafts) != 2 {
-		t.Errorf("taslaklar = %v", res.Drafts)
+		t.Errorf("drafts = %v", res.Drafts)
 	}
-	if istekler[0]["temperature"] != 0.8 {
-		t.Errorf("uretim sicakligi = %v, 0.8 bekleniyordu", istekler[0]["temperature"])
+	if requests[0]["temperature"] != 0.8 {
+		t.Errorf("generation temperature = %v, want 0.8", requests[0]["temperature"])
 	}
 }

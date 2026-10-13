@@ -8,125 +8,126 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/pkg/response"
 )
 
-// AuthMiddleware, /api/* isteklerini kendi OP'umuzun RS256 access
-// token'i ile dogrular. Baska bir dogrulama yolu yoktur.
+// AuthMiddleware authenticates /api/* requests with the RS256 access
+// token issued by our own OP. There is no other verification path.
 type AuthMiddleware struct {
-	op *opDogrulayici
+	op *opVerifier
 }
 
-// opDogrulayici, kendi OP'umuzun urettigi RS256 access token'ini
-// dogrular. Acik anahtar surec icinden gelir; kendi JWKS ucumuza ag
-// uzerinden gitmek servisi kendi baslangicina bagimli kilardi
-// (yumurta-tavuk: API kendi OP'sinin ayakta olmasini beklerdi).
-type opDogrulayici struct {
-	issuer string
-	acik   *rsa.PublicKey
-	// istemci: "aud" claim'i bu client ID'yi icermek ZORUNDA. Bos
-	// birakilamaz; bkz. kurulumHatasi.
-	istemci string
-	// kurulumHatasi doluysa hicbir jeton kabul edilmez. Eksik
-	// yapilandirma sessizce "denetim kapali" moduna DUSMEMELI: iki
-	// ayri constructor'in yan yana durdugu onceki tasarimda yanlis
-	// cagri yeri secimi aud denetimini sessizce dusurebiliyordu ve
-	// hicbir test kirilmiyordu.
-	kurulumHatasi error
+// opVerifier verifies the RS256 access token issued by our own OP. The
+// public key comes from inside the process; fetching our own JWKS endpoint
+// over the network would make the service depend on its own startup
+// (chicken and egg: the API would wait for its own OP to be up).
+type opVerifier struct {
+	issuer    string
+	publicKey *rsa.PublicKey
+	// clientID: the "aud" claim MUST contain this client ID. It cannot be
+	// left empty; see setupErr.
+	clientID string
+	// When setupErr is set, no token is accepted. Missing configuration
+	// must NOT silently fall into a "checks disabled" mode: in the earlier
+	// design with two constructors side by side, picking the wrong call
+	// site could silently drop the aud check without breaking any test.
+	setupErr error
 }
 
-// NewOPAuthMiddleware, kendi OP'umuzun access token'ini dogrulayan
-// middleware'i kurar. Access token'lar bizim client'a hedefli oldugu
-// icin "aud" denetimi zorunludur: istemci (client ID) bos birakilamaz.
-// Bos/eksik yapilandirmada dogrulayici sessizce gevsemez, HER istegi
-// reddeder (imza *AuthMiddleware donduruyor, hata donduremiyor; guvenli
-// varsayilan "kapali" olmak).
-func NewOPAuthMiddleware(issuer, istemci string, acik *rsa.PublicKey) *AuthMiddleware {
-	d := &opDogrulayici{issuer: issuer, istemci: istemci, acik: acik}
+// NewOPAuthMiddleware builds the middleware that verifies access tokens
+// issued by our own OP. Access tokens are targeted at our client, so the
+// "aud" check is mandatory: clientID must not be empty. With an empty or
+// missing configuration the verifier does not silently relax; it rejects
+// EVERY request (the signature returns *AuthMiddleware and cannot return
+// an error, so the safe default is "closed").
+func NewOPAuthMiddleware(issuer, clientID string, publicKey *rsa.PublicKey) *AuthMiddleware {
+	d := &opVerifier{issuer: issuer, clientID: clientID, publicKey: publicKey}
 	switch {
 	case issuer == "":
-		d.kurulumHatasi = fmt.Errorf("OP auth yapilandirmasi eksik: issuer bos")
-	case istemci == "":
-		d.kurulumHatasi = fmt.Errorf("OP auth yapilandirmasi eksik: istemci (client ID) bos")
-	case acik == nil:
-		d.kurulumHatasi = fmt.Errorf("OP auth yapilandirmasi eksik: acik anahtar nil")
+		d.setupErr = fmt.Errorf("OP auth configuration incomplete: issuer is empty")
+	case clientID == "":
+		d.setupErr = fmt.Errorf("OP auth configuration incomplete: client ID is empty")
+	case publicKey == nil:
+		d.setupErr = fmt.Errorf("OP auth configuration incomplete: public key is nil")
 	}
-	if d.kurulumHatasi != nil {
-		// Hata metni sir tasimaz (yalnizca hangi alanin bos oldugunu
-		// soyler), bu yuzden loglanabilir ve loglanmasi gerekir.
-		log.Printf("Hata: %v — tum /api/* istekleri reddedilecek", d.kurulumHatasi)
+	if d.setupErr != nil {
+		// The error text carries no secret (it only says which field is
+		// empty), so it can be logged and should be.
+		log.Printf("Error: %v — all /api/* requests will be rejected", d.setupErr)
 	}
 	return &AuthMiddleware{op: d}
 }
 
-// dogrula, jetonu dogrular ve (sub, email, name) dondurur.
-func (d *opDogrulayici) dogrula(jetonMetni string) (string, string, string, error) {
-	if d.kurulumHatasi != nil {
-		return "", "", "", d.kurulumHatasi
+// verify validates the token and returns (sub, email, name).
+func (d *opVerifier) verify(tokenString string) (string, string, string, error) {
+	if d.setupErr != nil {
+		return "", "", "", d.setupErr
 	}
-	ek := jwt.MapClaims{}
-	secenekler := []jwt.ParserOption{
-		// Imza algoritmasi ACIKCA kisitlanir: aksi halde "alg: none"
-		// veya HMAC'e dusurme saldirisi mumkun olur.
+	claims := jwt.MapClaims{}
+	options := []jwt.ParserOption{
+		// The signing algorithm is restricted EXPLICITLY: otherwise an
+		// "alg: none" or HMAC downgrade attack would be possible.
 		jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Alg()}),
 		jwt.WithIssuer(d.issuer),
 		jwt.WithExpirationRequired(),
-		// iat varsa gelecekte olmamali (nbf zaten her zaman denetlenir).
+		// iat, when present, must not be in the future (nbf is always
+		// checked anyway).
 		jwt.WithIssuedAt(),
-		// "aud" bizim client ID'mizi icermek zorunda: baska bir istemci
-		// icin uretilmis jeton API'mize girmemeli. Kosulsuz uygulanir.
-		jwt.WithAudience(d.istemci),
+		// "aud" must contain our client ID: a token minted for another
+		// client must not get into our API. Applied unconditionally.
+		jwt.WithAudience(d.clientID),
 	}
-	jeton, err := jwt.ParseWithClaims(jetonMetni, ek,
+	token, err := jwt.ParseWithClaims(tokenString, claims,
 		func(t *jwt.Token) (any, error) {
-			// Kutuphanenin alg'i jetondan okumasina guvenmeyip beklenen
-			// yontemi burada da zorluyoruz (iki kath savunma).
+			// Do not rely on the library reading alg from the token; enforce
+			// the expected method here as well (two layers of defense).
 			if t.Method.Alg() != jwt.SigningMethodRS256.Alg() {
-				return nil, fmt.Errorf("beklenmeyen imza yontemi: %v", t.Header["alg"])
+				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 			}
-			// Savunma derinligi: nil anahtar crypto/rsa icinde PANIGE
-			// yol acar. kurulumHatasi sayesinde buraya nil ile
-			// gelinmemesi gerekir, yine de kontrol ediyoruz.
-			if d.acik == nil {
-				return nil, fmt.Errorf("acik anahtar nil")
+			// Defense in depth: a nil key leads to a PANIC inside crypto/rsa.
+			// Thanks to setupErr we should never get here with nil, but we
+			// check anyway.
+			if d.publicKey == nil {
+				return nil, fmt.Errorf("public key is nil")
 			}
-			return d.acik, nil
-		}, secenekler...)
+			return d.publicKey, nil
+		}, options...)
 	if err != nil {
 		return "", "", "", err
 	}
-	if !jeton.Valid {
-		return "", "", "", fmt.Errorf("jeton gecersiz")
+	if !token.Valid {
+		return "", "", "", fmt.Errorf("token is invalid")
 	}
-	// Jetonun KULLANIM TURU denetlenir: id_token bir access token
-	// DEGILDIR ve API erisimi vermemeli. Ikisi de ayni anahtarla,
-	// ayni iss ve aud ile imzalandigi icin yukaridaki denetimlerin
-	// hicbiri ikisini ayirt etmez. Ayirt edici claim'ler
-	// (zitadel/oidc v3.51.8, pkg/oidc/token.go):
-	//   access token: jti VAR, azp/at_hash YOK   (NewAccessTokenClaims)
-	//   id_token    : azp VAR (+at_hash), jti YOK (NewIDTokenClaims)
-	// Somut etki: id_token omru 1 saat, access token 15 dakika; ayrica
-	// id_token istemcide daha gevsek tasinir (cache, analytics, crash
-	// log) ve OP tarafinda kaydi tutulmaz.
-	if jti, _ := ek["jti"].(string); strings.TrimSpace(jti) == "" {
-		return "", "", "", fmt.Errorf("jti claim'i yok: access token degil")
+	// The token's USAGE TYPE is checked: an id_token is NOT an access
+	// token and must not grant API access. Both are signed with the same
+	// key and the same iss and aud, so none of the checks above tells them
+	// apart. The distinguishing claims (zitadel/oidc v3.51.8,
+	// pkg/oidc/token.go):
+	//   access token: jti PRESENT, azp/at_hash ABSENT   (NewAccessTokenClaims)
+	//   id_token    : azp PRESENT (+at_hash), jti ABSENT (NewIDTokenClaims)
+	// Concrete impact: an id_token lives 1 hour, an access token 15
+	// minutes; also the id_token is handled more loosely on the client
+	// (cache, analytics, crash logs) and is not recorded on the OP side.
+	if jti, _ := claims["jti"].(string); strings.TrimSpace(jti) == "" {
+		return "", "", "", fmt.Errorf("jti claim missing: not an access token")
 	}
-	if _, varmi := ek["azp"]; varmi {
-		return "", "", "", fmt.Errorf("azp claim'i var: id_token access token olarak kullanilamaz")
+	if _, present := claims["azp"]; present {
+		return "", "", "", fmt.Errorf("azp claim present: an id_token cannot be used as an access token")
 	}
-	if _, varmi := ek["at_hash"]; varmi {
-		return "", "", "", fmt.Errorf("at_hash claim'i var: id_token access token olarak kullanilamaz")
+	if _, present := claims["at_hash"]; present {
+		return "", "", "", fmt.Errorf("at_hash claim present: an id_token cannot be used as an access token")
 	}
 
-	sub, _ := ek["sub"].(string)
-	// Yalnizca "" degil, bosluktan olusan sub da reddedilir: aksi halde
-	// userId "   " olur ve rate limit anahtari anlamsizlasir.
+	sub, _ := claims["sub"].(string)
+	// Not only "" but also a whitespace-only sub is rejected: otherwise
+	// userId would be "   " and the rate limit key would become meaningless.
 	if strings.TrimSpace(sub) == "" {
-		return "", "", "", fmt.Errorf("sub claim'i bos")
+		return "", "", "", fmt.Errorf("sub claim is empty")
 	}
-	eposta, _ := ek["email"].(string)
-	ad, _ := ek["name"].(string)
-	return sub, eposta, ad, nil
+	email, _ := claims["email"].(string)
+	name, _ := claims["name"].(string)
+	return sub, email, name, nil
 }
 
 // Authenticate validates JWT token from Authorization header
@@ -134,30 +135,30 @@ func (m *AuthMiddleware) Authenticate() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		authHeader := c.Get("Authorization")
 		if authHeader == "" {
-			return response.Unauthorized(c, "Missing authorization header")
+			return response.Unauthorized(c, i18n.KeyAuthHeaderMissing)
 		}
 
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			return response.Unauthorized(c, "Invalid authorization header format")
+			return response.Unauthorized(c, i18n.KeyAuthHeaderInvalid)
 		}
 
 		tokenString := parts[1]
 
-		// Tek yol kendi OP'umuzdur. op nil ise (yalnizca sifir degerli
-		// AuthMiddleware ile mumkun) istek reddedilir: geriye dusulecek
-		// baska bir dogrulama yolu yok.
+		// Our own OP is the only path. If op is nil (possible only with a
+		// zero-value AuthMiddleware) the request is rejected: there is no
+		// other verification path to fall back to.
 		if m.op == nil {
-			return response.Unauthorized(c, "Invalid or expired token")
+			return response.Unauthorized(c, i18n.KeyTokenInvalid)
 		}
-		sub, eposta, ad, err := m.op.dogrula(tokenString)
+		sub, email, name, err := m.op.verify(tokenString)
 		if err != nil {
-			// Hata metni jeton icerigi tasiyabilir; loglanmaz.
-			return response.Unauthorized(c, "Invalid or expired token")
+			// The error text may carry token content; it is not logged.
+			return response.Unauthorized(c, i18n.KeyTokenInvalid)
 		}
 		c.Locals("userId", sub)
-		c.Locals("email", eposta)
-		c.Locals("name", ad)
+		c.Locals("email", email)
+		c.Locals("name", name)
 		return c.Next()
 	}
 }

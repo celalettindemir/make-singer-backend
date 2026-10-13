@@ -45,13 +45,13 @@ type WSError struct {
 	Message string `json:"message"`
 }
 
-// WSTicketRequest, bir isin WebSocket yayinina baglanmak icin bilet ister.
+// WSTicketRequest asks for a ticket to connect to a job's WebSocket stream.
 type WSTicketRequest struct {
 	JobID string `json:"jobId" validate:"required,uuid"`
 }
 
-// WSTicketResponse: bilet tek kullanimliktir ve ExpiresAt'e kadar gecerlidir.
-// Istemci onu GET /ws/jobs/{jobId}?ticket=<bilet> ile kullanir.
+// WSTicketResponse: the ticket is single-use and valid until ExpiresAt.
+// The client uses it with GET /ws/jobs/{jobId}?ticket=<ticket>.
 type WSTicketResponse struct {
 	Ticket    string    `json:"ticket"`
 	ExpiresAt time.Time `json:"expiresAt"`

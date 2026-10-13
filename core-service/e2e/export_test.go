@@ -106,7 +106,7 @@ func TestExportStems_Success(t *testing.T) {
 	ta := setupApp(t)
 
 	projectID := uuid.New().String()
-	stemURL := func(ad string) string { return e2eURL(t, "stems", testUserID, projectID, ad) }
+	stemURL := func(name string) string { return e2eURL(t, "stems", testUserID, projectID, name) }
 	body := fmt.Sprintf(`{
 		"projectId": "%s",
 		"stemUrls": [

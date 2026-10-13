@@ -9,10 +9,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// sinirliUygulama, verilen locals kurulumuyla rate limit'li bir uc kurar.
-func sinirliUygulama(redisAdres string, userID string) *fiber.App {
+// limitedApp builds a rate-limited endpoint with the given locals setup.
+func limitedApp(redisAddr string, userID string) *fiber.App {
 	rl := NewRateLimiter(redis.NewClient(&redis.Options{
-		Addr:        redisAdres,
+		Addr:        redisAddr,
 		DialTimeout: 200 * time.Millisecond,
 	}))
 	app := fiber.New()
@@ -27,28 +27,28 @@ func sinirliUygulama(redisAdres string, userID string) *fiber.App {
 	return app
 }
 
-func sinirDurum(t *testing.T, app *fiber.App) int {
+func limitStatus(t *testing.T, app *fiber.App) int {
 	t.Helper()
-	y, err := app.Test(httptest.NewRequest("GET", "/uc", nil), -1)
+	resp, err := app.Test(httptest.NewRequest("GET", "/uc", nil), -1)
 	if err != nil {
 		t.Fatalf("Test: %v", err)
 	}
-	return y.StatusCode
+	return resp.StatusCode
 }
 
-// userId bos iken eskiden rate limit ATLANIYORDU (fail-open). Artik 401.
-func TestUserIDBossaRateLimitFailClosed(t *testing.T) {
-	// 127.0.0.1:1 kasten kapali: Redis'e hic gidilmemesi gerekir.
-	if durum := sinirDurum(t, sinirliUygulama("127.0.0.1:1", "")); durum != fiber.StatusUnauthorized {
-		t.Errorf("durum = %d, beklenen 401", durum)
+// While userId was empty the rate limit used to be SKIPPED (fail-open). Now it is 401.
+func TestLimit_FailsClosedWithoutUserID(t *testing.T) {
+	// 127.0.0.1:1 is deliberately closed: Redis must never be contacted.
+	if status := limitStatus(t, limitedApp("127.0.0.1:1", "")); status != fiber.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
-// Redis erisilemezse sayac artirilamaz, yani kota bilinemez: istek
-// serbest gecirilmez, 503 donulur.
-func TestRedisHatasindaFailClosed(t *testing.T) {
-	// Ag gerekmez: 127.0.0.1:1 baglanti reddi verir.
-	if durum := sinirDurum(t, sinirliUygulama("127.0.0.1:1", "kullanici-1")); durum != fiber.StatusServiceUnavailable {
-		t.Errorf("durum = %d, beklenen 503", durum)
+// If Redis is unreachable the counter cannot be incremented, so the quota
+// is unknown: the request is not let through, 503 is returned.
+func TestLimit_FailsClosedOnRedisError(t *testing.T) {
+	// No network needed: 127.0.0.1:1 gives a connection refusal.
+	if status := limitStatus(t, limitedApp("127.0.0.1:1", "kullanici-1")); status != fiber.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", status)
 	}
 }

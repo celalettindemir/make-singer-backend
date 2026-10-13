@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/pkg/response"
 	"github.com/redis/go-redis/v9"
 )
@@ -25,82 +26,84 @@ func NewRateLimiter(redisClient *redis.Client) *RateLimiter {
 
 // Limit creates a rate limiting middleware
 func (rl *RateLimiter) Limit(keyPrefix string, maxRequests int, window time.Duration) fiber.Handler {
-	return rl.kullaniciBasina(keyPrefix, maxRequests, window, response.RateLimited)
+	return rl.perUser(keyPrefix, maxRequests, window, response.RateLimited)
 }
 
-// LimitKod, Limit'in asimda genel RATE_LIMITED yerine verilen kodla 429
-// donen bicimidir. Sozlesmesi kendi kodunu isteyen uclar icindir (orn.
-// Kesfet yorumlari: 429 yavasla).
-func (rl *RateLimiter) LimitKod(keyPrefix string, maxRequests int, window time.Duration, kod, mesaj string) fiber.Handler {
-	return rl.kullaniciBasina(keyPrefix, maxRequests, window, func(c *fiber.Ctx) error {
-		return response.Error(c, fiber.StatusTooManyRequests, kod, mesaj, nil)
+// LimitWithCode is the form of Limit that, on overflow, returns 429 with
+// the given code instead of the generic RATE_LIMITED. It is for endpoints
+// whose contract asks for its own code (e.g. Discover comments: 429
+// "yavasla"). message is rendered in the request's language.
+func (rl *RateLimiter) LimitWithCode(keyPrefix string, maxRequests int, window time.Duration, code string, message i18n.Key) fiber.Handler {
+	return rl.perUser(keyPrefix, maxRequests, window, func(c *fiber.Ctx) error {
+		return response.Error(c, fiber.StatusTooManyRequests, code, message, nil)
 	})
 }
 
-func (rl *RateLimiter) kullaniciBasina(keyPrefix string, maxRequests int, window time.Duration, asim fiber.Handler) fiber.Handler {
+func (rl *RateLimiter) perUser(keyPrefix string, maxRequests int, window time.Duration, overflow fiber.Handler) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		userID := GetUserID(c)
 		if userID == "" {
-			// Auth middleware userId'yi garanti eder; bos gelmesi bir
-			// hatadir. Eskiden burada rate limit ATLANIYORDU (return
-			// c.Next()), bu da kota bypass'i demekti.
-			return response.Unauthorized(c, "Kimlik dogrulanamadi")
+			// The auth middleware guarantees userId; an empty value is a
+			// bug. The rate limit used to be SKIPPED here (return
+			// c.Next()), which meant a quota bypass.
+			return response.Unauthorized(c, i18n.KeyUnauthenticated)
 		}
-		return rl.say(c, fmt.Sprintf("ratelimit:%s:%s", keyPrefix, userID), maxRequests, window, asim)
+		return rl.hit(c, fmt.Sprintf("ratelimit:%s:%s", keyPrefix, userID), maxRequests, window, overflow)
 	}
 }
 
-// WebAnahtariBasligi, guvenilen web sunucusunun (make-singer-frontend)
-// IP basina siniri atlamak icin gonderdigi basliktir. Web sunucusu tum
-// ziyaretcilerin isteklerini TEK IP'den yapar; bu baslik olmadan o IP
-// dakikada birkac ziyaretciden sonra 429 alirdi.
-const WebAnahtariBasligi = "X-Web-Anahtari"
+// WebKeyHeader is the header the trusted web server (make-singer-frontend)
+// sends to bypass the per-IP limit. The web server makes all visitors'
+// requests from ONE IP; without this header that IP would get 429 after
+// a few visitors per minute.
+const WebKeyHeader = "X-Web-Anahtari"
 
-// LimitIP, kimliksiz uclar icin istemci IP'si basina sabit pencereli
-// sinirdir; anahtar ratelimit:<onek>:ip:<ip>. webAnahtari doluysa ve
-// istek X-Web-Anahtari basligiyla ayni degeri tasiyorsa istek IP yerine
-// ortak ratelimit:<onek>:web anahtarinda webMax ile sayilir. Yanlis ya da
-// bos anahtar 401 degil, olagan IP siniridir. Karsilastirma sabit
-// zamanlidir (once SHA-256, boy da sizmaz). webAnahtari bossa web yolu
-// tamamen kapalidir.
-func (rl *RateLimiter) LimitIP(keyPrefix string, maxRequests int, window time.Duration, webAnahtari string, webMax int) fiber.Handler {
-	webOzeti := sha256.Sum256([]byte(webAnahtari))
+// LimitIP is a fixed-window limit per client IP for unauthenticated
+// endpoints; the key is ratelimit:<prefix>:ip:<ip>. If webKey is set and
+// the request carries the same value in the X-Web-Anahtari header, the
+// request is counted against webMax under the shared
+// ratelimit:<prefix>:web key instead of the IP. A wrong or empty key is
+// not a 401, it just gets the normal IP limit. The comparison is
+// constant-time (SHA-256 first, so the length does not leak either). If
+// webKey is empty the web path is completely disabled.
+func (rl *RateLimiter) LimitIP(keyPrefix string, maxRequests int, window time.Duration, webKey string, webMax int) fiber.Handler {
+	webDigest := sha256.Sum256([]byte(webKey))
 	return func(c *fiber.Ctx) error {
-		if webAnahtari != "" {
-			if gelen := c.Get(WebAnahtariBasligi); gelen != "" {
-				gelenOzet := sha256.Sum256([]byte(gelen))
-				if subtle.ConstantTimeCompare(gelenOzet[:], webOzeti[:]) == 1 {
-					return rl.say(c, fmt.Sprintf("ratelimit:%s:web", keyPrefix), webMax, window, response.RateLimited)
+		if webKey != "" {
+			if provided := c.Get(WebKeyHeader); provided != "" {
+				providedDigest := sha256.Sum256([]byte(provided))
+				if subtle.ConstantTimeCompare(providedDigest[:], webDigest[:]) == 1 {
+					return rl.hit(c, fmt.Sprintf("ratelimit:%s:web", keyPrefix), webMax, window, response.RateLimited)
 				}
 			}
 		}
-		return rl.say(c, fmt.Sprintf("ratelimit:%s:ip:%s", keyPrefix, istemciIP(c)), maxRequests, window, response.RateLimited)
+		return rl.hit(c, fmt.Sprintf("ratelimit:%s:ip:%s", keyPrefix, clientIP(c)), maxRequests, window, response.RateLimited)
 	}
 }
 
-// istemciIP, Traefik'in yazdigi X-Real-Ip basligini (anahtar bicimi
-// ipAnahtari'ndadir: IPv6 /64 basina) kullanir; Traefik
-// istemcinin gonderdigi X-Real-Ip'yi (guvenilmeyen kaynaktan) siler ve
-// kendi gordugu adresi yazar. Baslik yoksa ya da gecerli bir IP degilse
-// baglantinin adresi (c.IP()) kullanilir. Fiber'in genel ProxyHeader
-// ayari BILEREK degistirilmez: diger uclar kullanici basina sayar.
-// Not: API Traefik'i atlayarak dogrudan erisilebilir olursa bu baslik
-// uydurulabilir; bu yuzden API portu disari acilmamalidir.
-func istemciIP(c *fiber.Ctx) string {
-	if ham := strings.TrimSpace(c.Get("X-Real-Ip")); net.ParseIP(ham) != nil {
-		return ipAnahtari(ham)
+// clientIP uses the X-Real-Ip header written by Traefik (the key format
+// is in ipKey: per IPv6 /64); Traefik deletes the X-Real-Ip sent by the
+// client (an untrusted source) and writes the address it saw itself. If
+// the header is missing or is not a valid IP, the connection address
+// (c.IP()) is used. Fiber's global ProxyHeader setting is deliberately
+// NOT changed: other endpoints count per user.
+// Note: if the API becomes directly reachable, bypassing Traefik, this
+// header can be forged; so the API port must not be exposed.
+func clientIP(c *fiber.Ctx) string {
+	if raw := strings.TrimSpace(c.Get("X-Real-Ip")); net.ParseIP(raw) != nil {
+		return ipKey(raw)
 	}
-	return ipAnahtari(c.IP())
+	return ipKey(c.IP())
 }
 
-// ipAnahtari, sayac anahtarindaki IP bicimidir. IPv4 (IPv4-eslemeli IPv6
-// dahil) duz IPv4 bicimindedir; IPv6 /64 onekine indirgenir, cunku tek
-// bir istemci olagan bir /64 icinde kaynak adresini serbestce
-// degistirebilir. Ayristirilamayan deger oldugu gibi doner.
-func ipAnahtari(ham string) string {
-	ip := net.ParseIP(ham)
+// ipKey is the IP form used in the counter key. IPv4 (including
+// IPv4-mapped IPv6) is in plain IPv4 form; IPv6 is reduced to its /64
+// prefix, because a single client can freely change its source address
+// within an ordinary /64. A value that cannot be parsed is returned as is.
+func ipKey(raw string) string {
+	ip := net.ParseIP(raw)
 	if ip == nil {
-		return ham
+		return raw
 	}
 	if v4 := ip.To4(); v4 != nil {
 		return v4.String()
@@ -108,64 +111,66 @@ func ipAnahtari(ham string) string {
 	return ip.Mask(net.CIDRMask(64, 128)).String()
 }
 
-// say, key sayacini pencere icinde artirir; maxRequests asilinca asim
-// yanitini doner, aksi halde zinciri surdurur.
-func (rl *RateLimiter) say(c *fiber.Ctx, key string, maxRequests int, window time.Duration, asim fiber.Handler) error {
+// hit increments the key's counter within the window; once maxRequests is
+// exceeded it returns the overflow response, otherwise it continues the
+// chain.
+func (rl *RateLimiter) hit(c *fiber.Ctx, key string, maxRequests int, window time.Duration, overflow fiber.Handler) error {
 	ctx := context.Background()
 
-	// Sayaci artirma ve TTL atama TEK islemde (MULTI/EXEC) yapilir.
-	// Eskiden Incr basarili olup Expire hata verdiginde hata
-	// yutuluyordu: anahtar TTL'siz kaliyor, sonraki her istekte
-	// count > maxRequests oluyor ve TTL -1 dondugu icin
-	// Retry-After: -1 ile kullanici KALICI kilitleniyordu.
-	// SET key 0 EX window NX + INCR sirasi, anahtari yalnizca yokken
-	// olusturur ve TTL'i olusturma aninda kenetler.
-	boru := rl.redis.TxPipeline()
-	boru.SetArgs(ctx, key, 0, redis.SetArgs{Mode: "NX", TTL: window})
-	artir := boru.Incr(ctx, key)
-	// redis.Nil = SET NX uygulanmadi (anahtar zaten vardi); bu
-	// normal akistir, hata degil.
-	if _, err := boru.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
-		// Fail-closed: sayaci artiramadiysak kotanin asilip
-		// asilmadigini BILEMEYIZ. Eskiden istek serbest gecirilirdi;
-		// bu, Redis'i dusurebilen birine sinirsiz kota veriyordu.
-		// Hata metni loglanmaz (baglanti dizgesi sir tasiyabilir).
+	// Incrementing the counter and setting the TTL happen in ONE
+	// operation (MULTI/EXEC). Previously, when Incr succeeded but Expire
+	// failed, the error was swallowed: the key stayed without a TTL,
+	// every later request had count > maxRequests, and since TTL returned
+	// -1 the user was locked out PERMANENTLY with Retry-After: -1.
+	// The sequence SET key 0 EX window NX + INCR creates the key only when
+	// it does not exist and pins the TTL at creation time.
+	pipe := rl.redis.TxPipeline()
+	pipe.SetArgs(ctx, key, 0, redis.SetArgs{Mode: "NX", TTL: window})
+	incr := pipe.Incr(ctx, key)
+	// redis.Nil = SET NX was not applied (the key already existed); this
+	// is the normal flow, not an error.
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		// Fail-closed: if we could not increment the counter we CANNOT
+		// KNOW whether the quota was exceeded. Requests used to be let
+		// through; that gave unlimited quota to anyone able to take Redis
+		// down. The error text is not logged (the connection string may
+		// carry a secret).
 		c.Set("Retry-After", "5")
 		return response.Error(c, fiber.StatusServiceUnavailable,
-			response.CodeServiceError, "Rate limit denetlenemedi", nil)
+			response.CodeServiceError, i18n.KeyRateLimitUnavailable, nil)
 	}
-	count, err := artir.Result()
+	count, err := incr.Result()
 	if err != nil {
 		c.Set("Retry-After", "5")
 		return response.Error(c, fiber.StatusServiceUnavailable,
-			response.CodeServiceError, "Rate limit denetlenemedi", nil)
+			response.CodeServiceError, i18n.KeyRateLimitUnavailable, nil)
 	}
 
 	if count > int64(maxRequests) {
-		// Retry-After en az 1 saniye: TTL okunamazsa veya anahtar
-		// bir sekilde TTL'siz kaldiysa (-1) negatif/sifir deger
-		// donmemeli.
-		bekle := window
+		// Retry-After is at least 1 second: if the TTL cannot be read or
+		// the key somehow stayed without a TTL (-1), a negative or zero
+		// value must not be returned.
+		wait := window
 		ttl, ttlErr := rl.redis.TTL(ctx, key).Result()
 		switch {
 		case ttlErr == nil && ttl > 0:
-			bekle = ttl
+			wait = ttl
 		case ttlErr == nil && ttl < 0:
-			// MIRAS ANAHTAR IYILESTIRMESI: TTL -1 demek anahtarin
-			// suresi yok. Yeni kod boyle bir anahtar URETEMEZ
-			// (MULTI/EXEC atomik), ama eski kodun uretimde biraktigi
-			// anahtarlar olabilir: SET NX uygulanmadigi icin TTL -1
-			// kalir, sayac sonsuza buyur ve kullanici KALICI kilitli
-			// kalir — tek cikis manuel DEL. Burada pencereyi geri
-			// veriyoruz ki anahtar kendiliginden sifirlansin.
+			// LEGACY KEY HEALING: TTL -1 means the key has no expiry. The
+			// new code CANNOT produce such a key (MULTI/EXEC is atomic), but
+			// the old code may have left some in production: since SET NX
+			// was not applied the TTL stays -1, the counter grows forever
+			// and the user stays PERMANENTLY locked out; the only way out
+			// is a manual DEL. Here we give the window back so the key
+			// resets on its own.
 			rl.redis.Expire(ctx, key, window)
 		}
-		saniye := int(bekle.Seconds())
-		if saniye < 1 {
-			saniye = 1
+		seconds := int(wait.Seconds())
+		if seconds < 1 {
+			seconds = 1
 		}
-		c.Set("Retry-After", fmt.Sprintf("%d", saniye))
-		return asim(c)
+		c.Set("Retry-After", fmt.Sprintf("%d", seconds))
+		return overflow(c)
 	}
 
 	// Add rate limit headers
@@ -200,13 +205,13 @@ func (rl *RateLimiter) UploadLimit(maxPerHour int) fiber.Handler {
 	return rl.Limit("upload", maxPerHour, time.Hour)
 }
 
-// WSTicketLimit, WebSocket bileti ucu icin dakikalik limit.
+// WSTicketLimit is the per-minute limit for the WebSocket ticket endpoint.
 func (rl *RateLimiter) WSTicketLimit(maxPerMin int) fiber.Handler {
 	return rl.Limit("wsticket", maxPerMin, time.Minute)
 }
 
-// SignLimit, URL imzalama ucu icin dakikalik limit. Tek istek en fazla
-// 50 anahtar imzalar; sayac istek basinadir.
+// SignLimit is the per-minute limit for the URL signing endpoint. A single
+// request signs at most 50 keys; the counter is per request.
 func (rl *RateLimiter) SignLimit(maxPerMin int) fiber.Handler {
 	return rl.Limit("sign", maxPerMin, time.Minute)
 }

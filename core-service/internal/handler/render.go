@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/pkg/response"
@@ -37,26 +38,26 @@ func NewRenderHandler(svc *service.RenderService, v *validator.Validate) *Render
 // @Security     BearerAuth
 // @Router       /api/render/start [post]
 func (h *RenderHandler) Start(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 
 	var req model.RenderStartRequest
 	if err := c.BodyParser(&req); err != nil {
-		return response.ValidationError(c, "Invalid request body", nil)
+		return response.ValidationError(c, i18n.KeyInvalidBody, nil)
 	}
 
 	if err := h.validator.Struct(&req); err != nil {
-		return response.ValidationError(c, "Validation failed", formatValidationErrors(err))
+		return response.ValidationError(c, i18n.KeyValidationFailed, formatValidationErrors(err))
 	}
 
 	result, err := h.service.StartRender(c.Context(), userID, &req)
 	if err != nil {
-		if errors.Is(err, model.ErrGecersizStemAyari) {
-			return response.ValidationError(c, err.Error(), nil)
+		if errors.Is(err, model.ErrInvalidStemSettings) {
+			return response.ValidationError(c, i18n.KeyStemSettingsInvalid, nil)
 		}
-		return response.ServiceError(c, err.Error())
+		return internalError(c, err)
 	}
 
 	return response.Accepted(c, result)
@@ -76,22 +77,22 @@ func (h *RenderHandler) Start(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/render/status/{jobId} [get]
 func (h *RenderHandler) Status(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 
 	jobID := c.Params("jobId")
 	if jobID == "" {
-		return response.ValidationError(c, "Job ID is required", nil)
+		return response.ValidationError(c, i18n.KeyJobIDRequired, nil)
 	}
 
 	result, err := h.service.GetStatus(c.Context(), userID, jobID)
 	if err != nil {
 		if errors.Is(err, service.ErrJobNotFound) {
-			return response.NotFound(c, "Job not found")
+			return response.NotFound(c, i18n.KeyJobNotFound)
 		}
-		return response.ServiceError(c, err.Error())
+		return internalError(c, err)
 	}
 
 	return response.OK(c, result)
@@ -111,25 +112,25 @@ func (h *RenderHandler) Status(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/render/result/{jobId} [get]
 func (h *RenderHandler) Result(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 
 	jobID := c.Params("jobId")
 	if jobID == "" {
-		return response.ValidationError(c, "Job ID is required", nil)
+		return response.ValidationError(c, i18n.KeyJobIDRequired, nil)
 	}
 
 	result, err := h.service.GetResult(c.Context(), userID, jobID)
 	if err != nil {
 		if errors.Is(err, service.ErrJobNotFound) {
-			return response.NotFound(c, "Job not found")
+			return response.NotFound(c, i18n.KeyJobNotFound)
 		}
-		if err.Error() == "job not completed" {
-			return response.ValidationError(c, "Job not completed yet", nil)
+		if errors.Is(err, service.ErrJobNotCompleted) {
+			return response.ValidationError(c, i18n.KeyJobNotCompleted, nil)
 		}
-		return response.ServiceError(c, err.Error())
+		return internalError(c, err)
 	}
 
 	return response.OK(c, result)
@@ -149,25 +150,25 @@ func (h *RenderHandler) Result(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/render/cancel/{jobId} [post]
 func (h *RenderHandler) Cancel(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
-		return response.Unauthorized(c, "Kimlik dogrulanamadi")
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
 
 	jobID := c.Params("jobId")
 	if jobID == "" {
-		return response.ValidationError(c, "Job ID is required", nil)
+		return response.ValidationError(c, i18n.KeyJobIDRequired, nil)
 	}
 
 	result, err := h.service.CancelRender(c.Context(), userID, jobID)
 	if err != nil {
 		if errors.Is(err, service.ErrJobNotFound) {
-			return response.NotFound(c, "Job not found")
+			return response.NotFound(c, i18n.KeyJobNotFound)
 		}
-		if err.Error() == "job already completed" {
-			return response.ValidationError(c, "Job already completed", nil)
+		if errors.Is(err, service.ErrJobAlreadyCompleted) {
+			return response.ValidationError(c, i18n.KeyJobAlreadyCompleted, nil)
 		}
-		return response.ServiceError(c, err.Error())
+		return internalError(c, err)
 	}
 
 	return response.OK(c, result)

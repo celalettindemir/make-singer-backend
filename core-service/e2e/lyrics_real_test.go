@@ -48,7 +48,7 @@ func setupLyricsRealApp(t *testing.T) *fiber.App {
 	lyricsService := service.NewLyricsService(groqClient)
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
 
-	authMiddleware := middleware.NewOPAuthMiddleware(testIssuer, testClientID, &testAnahtar.PublicKey)
+	authMiddleware := middleware.NewOPAuthMiddleware(testIssuer, testClientID, &testKey.PublicKey)
 	rateLimiter := middleware.NewRateLimiter(redisClient)
 
 	app := fiber.New(fiber.Config{BodyLimit: 50 * 1024 * 1024})

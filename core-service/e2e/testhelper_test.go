@@ -29,8 +29,8 @@ const (
 	testClientID = "e2e-istemci"
 )
 
-// testAnahtar: e2e jetonlarini imzalayan RSA anahtari, paket basina bir kez.
-var testAnahtar = func() *rsa.PrivateKey {
+// testKey is the RSA key that signs the e2e tokens, created once per package.
+var testKey = func() *rsa.PrivateKey {
 	a, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		panic(err)
@@ -38,7 +38,7 @@ var testAnahtar = func() *rsa.PrivateKey {
 	return a
 }()
 
-// e2eR2Cfg, KeyFromURL'in tanidigi konaklari uretecek sahte R2 yapilandirmasi.
+// e2eR2Cfg is a fake R2 configuration that produces the hosts KeyFromURL recognizes.
 func e2eR2Cfg() *config.R2Config {
 	return &config.R2Config{
 		AccountID:     "hesap123",
@@ -48,12 +48,12 @@ func e2eR2Cfg() *config.R2Config {
 	}
 }
 
-// e2eURL, sahip onekli anahtardan KeyFromURL ile cozulebilen URL uretir.
-func e2eURL(t *testing.T, tur, userID string, parcalar ...string) string {
+// e2eURL builds a URL that KeyFromURL can resolve back to an owner-prefixed key.
+func e2eURL(t *testing.T, kind, userID string, parts ...string) string {
 	t.Helper()
-	key, err := client.KullaniciAnahtari(tur, userID, parcalar...)
+	key, err := client.UserKey(kind, userID, parts...)
 	if err != nil {
-		t.Fatalf("anahtar: %v", err)
+		t.Fatalf("key: %v", err)
 	}
 	return client.UnsignedURL(key, e2eR2Cfg())
 }
@@ -103,8 +103,8 @@ func setupApp(t *testing.T) *testApp {
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
 
-	// Auth middleware — kendi OP'umuzun RS256 access token'i
-	authMiddleware := middleware.NewOPAuthMiddleware(testIssuer, testClientID, &testAnahtar.PublicKey)
+	// Auth middleware: our own OP's RS256 access token
+	authMiddleware := middleware.NewOPAuthMiddleware(testIssuer, testClientID, &testKey.PublicKey)
 	rateLimiter := middleware.NewRateLimiter(redisClient)
 
 	// Fiber app
@@ -161,13 +161,13 @@ func setupApp(t *testing.T) *testApp {
 	return &testApp{app: app}
 }
 
-// generateToken, test istekleri icin OP bicimli bir RS256 access token uretir.
+// generateToken produces an OP-style RS256 access token for test requests.
 func generateToken(t *testing.T) string {
 	t.Helper()
 	return generateTokenFor(t, testUserID)
 }
 
-// generateTokenFor, verilen sub icin OP bicimli bir RS256 access token uretir.
+// generateTokenFor produces an OP-style RS256 access token for the given sub.
 func generateTokenFor(t *testing.T, sub string) string {
 	t.Helper()
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
@@ -178,7 +178,7 @@ func generateTokenFor(t *testing.T, sub string) string {
 		"email": "test@example.com",
 		"exp":   time.Now().Add(time.Hour).Unix(),
 	})
-	signed, err := token.SignedString(testAnahtar)
+	signed, err := token.SignedString(testKey)
 	if err != nil {
 		t.Fatalf("failed to generate test token: %v", err)
 	}

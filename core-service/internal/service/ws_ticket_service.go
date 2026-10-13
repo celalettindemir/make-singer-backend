@@ -13,21 +13,21 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// wsBiletTTL: bilet alma ile baglanma arasi icin yeterli, sizarsa kisa.
-const wsBiletTTL = 30 * time.Second
+// wsTicketTTL: long enough between getting a ticket and connecting, short if it leaks.
+const wsTicketTTL = 30 * time.Second
 
-// ErrBiletGecersiz: bilet yok, suresi dolmus, kullanilmis ya da baska bir
-// ise ait. Durumlar bilerek ayirt edilmez.
-var ErrBiletGecersiz = errors.New("websocket bileti gecersiz")
+// ErrInvalidTicket: the ticket does not exist, has expired, was already used
+// or belongs to another job. The cases are deliberately not told apart.
+var ErrInvalidTicket = errors.New("invalid websocket ticket")
 
-// biletDeseni: 32 bayt base64url (dolgusuz) = 43 karakter. Bicimsiz girdi
-// Redis'e hic gitmez.
-var biletDeseni = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+// ticketPattern: 32 bytes of unpadded base64url = 43 characters. Malformed
+// input never reaches Redis.
+var ticketPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
-// WSTicketService, WebSocket baglantisi icin tek kullanimlik bilet uretir.
-// React Native'in WebSocket'i iOS'ta ozel baslik gonderemiyor; access
-// token'i sorgu dizesine koymak onu loglara tasirdi. Bilet 30 saniyelik ve
-// tek kullanimlik oldugu icin sorgu dizesinde durabilir.
+// WSTicketService issues single-use tickets for WebSocket connections.
+// React Native's WebSocket cannot send custom headers on iOS; putting the
+// access token in the query string would carry it into logs. The ticket
+// lives 30 seconds and is single-use, so it can safely sit in the query string.
 type WSTicketService struct {
 	redis *redis.Client
 }
@@ -36,40 +36,40 @@ func NewWSTicketService(rdb *redis.Client) *WSTicketService {
 	return &WSTicketService{redis: rdb}
 }
 
-func biletAnahtari(bilet string) string { return "wsbilet:" + bilet }
+func ticketKey(ticket string) string { return "wsbilet:" + ticket }
 
-// Issue, isin sahibine bilet verir. Sahiplik burada denetlenir; bilet o
-// ise baglidir.
+// Issue gives the job's owner a ticket. Ownership is checked here; the ticket
+// is bound to that job.
 func (s *WSTicketService) Issue(ctx context.Context, userID, jobID string) (*model.WSTicketResponse, error) {
-	if _, err := sahipliJobOku(ctx, s.redis, userID, jobID); err != nil {
+	if _, err := readOwnedJob(ctx, s.redis, userID, jobID); err != nil {
 		return nil, err
 	}
-	ham := make([]byte, 32)
-	if _, err := rand.Read(ham); err != nil {
-		return nil, fmt.Errorf("bilet uretilemedi: %w", err)
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return nil, fmt.Errorf("could not generate the ticket: %w", err)
 	}
-	bilet := base64.RawURLEncoding.EncodeToString(ham)
-	if err := s.redis.Set(ctx, biletAnahtari(bilet), jobID, wsBiletTTL).Err(); err != nil {
-		return nil, fmt.Errorf("bilet kaydedilemedi: %w", err)
+	ticket := base64.RawURLEncoding.EncodeToString(raw)
+	if err := s.redis.Set(ctx, ticketKey(ticket), jobID, wsTicketTTL).Err(); err != nil {
+		return nil, fmt.Errorf("could not save the ticket: %w", err)
 	}
-	return &model.WSTicketResponse{Ticket: bilet, ExpiresAt: time.Now().Add(wsBiletTTL)}, nil
+	return &model.WSTicketResponse{Ticket: ticket, ExpiresAt: time.Now().Add(wsTicketTTL)}, nil
 }
 
-// Redeem, bileti tuketir. GETDEL atomiktir: ayni bilet iki baglantida
-// kullanilamaz. Yanlis ise sunulan bilet de tuketilir.
-func (s *WSTicketService) Redeem(ctx context.Context, bilet, jobID string) error {
-	if !biletDeseni.MatchString(bilet) {
-		return ErrBiletGecersiz
+// Redeem consumes the ticket. GETDEL is atomic: the same ticket cannot be
+// used on two connections. A ticket presented for the wrong job is consumed too.
+func (s *WSTicketService) Redeem(ctx context.Context, ticket, jobID string) error {
+	if !ticketPattern.MatchString(ticket) {
+		return ErrInvalidTicket
 	}
-	isID, err := s.redis.GetDel(ctx, biletAnahtari(bilet)).Result()
+	boundJobID, err := s.redis.GetDel(ctx, ticketKey(ticket)).Result()
 	if errors.Is(err, redis.Nil) {
-		return ErrBiletGecersiz
+		return ErrInvalidTicket
 	}
 	if err != nil {
-		return fmt.Errorf("bilet okunamadi: %w", err)
+		return fmt.Errorf("could not read the ticket: %w", err)
 	}
-	if isID != jobID {
-		return ErrBiletGecersiz
+	if boundJobID != jobID {
+		return ErrInvalidTicket
 	}
 	return nil
 }

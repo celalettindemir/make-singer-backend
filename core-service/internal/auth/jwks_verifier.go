@@ -11,24 +11,24 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// EsnekBool, JSON'da hem true/false hem "true"/"false" olarak gelebilen bir
-// bool'dur. Apple email_verified'i bazi akislarda STRING gonderir; bool'a
-// cozumlemeye calisan kod orada sessizce hata verir ve giris kirilir.
-type EsnekBool bool
+// FlexibleBool is a bool that may arrive in JSON as either true/false or
+// "true"/"false". In some flows Apple sends email_verified as a STRING; code
+// that only tries to decode it as a bool fails there and sign-in breaks.
+type FlexibleBool bool
 
-// UnmarshalJSON, once normal bool olarak dener; basarisiz olursa string
-// "true"/"false" kabul eder. Baska bir deger (sayi, "belki" gibi bozuk bir
-// string) ACIKCA hata verir -- sessizce false'a dusmek, bozuk bir
-// email_verified degerinin dogrulanmis sayilmasi riskini tasir.
-func (e *EsnekBool) UnmarshalJSON(b []byte) error {
-	var bl bool
-	if err := json.Unmarshal(b, &bl); err == nil {
-		*e = EsnekBool(bl)
+// UnmarshalJSON first tries a plain bool; if that fails it accepts the string
+// "true"/"false". Any other value (a number, or a malformed string such as
+// "maybe") is an EXPLICIT error: silently falling back to false would risk a
+// malformed email_verified value being treated as verified.
+func (e *FlexibleBool) UnmarshalJSON(b []byte) error {
+	var parsed bool
+	if err := json.Unmarshal(b, &parsed); err == nil {
+		*e = FlexibleBool(parsed)
 		return nil
 	}
 	var s string
 	if err := json.Unmarshal(b, &s); err != nil {
-		return fmt.Errorf("email_verified ne bool ne string")
+		return fmt.Errorf("email_verified is neither bool nor string")
 	}
 	switch s {
 	case "true":
@@ -36,98 +36,99 @@ func (e *EsnekBool) UnmarshalJSON(b []byte) error {
 	case "false":
 		*e = false
 	default:
-		return fmt.Errorf("email_verified beklenmeyen string")
+		return fmt.Errorf("email_verified has an unexpected string value")
 	}
 	return nil
 }
 
-// Claims, yukari akis saglayicilarinin (Apple, Google) id_token
-// claim'leridir; Nonce alani bu yuzden burada tasinir.
+// Claims holds the id_token claims of upstream providers (Apple, Google);
+// that is why the Nonce field is carried here.
 type Claims struct {
-	UserID            string    `json:"sub"`
-	Email             string    `json:"email,omitempty"`
-	EmailVerified     EsnekBool `json:"email_verified,omitempty"`
-	Name              string    `json:"name,omitempty"`
-	PreferredUsername string    `json:"preferred_username,omitempty"`
-	Roles             []string  `json:"roles,omitempty"`
-	// Nonce, yukari akis saglayicisinin id_token'inda donen nonce'tur.
-	// Sadece YukariAkisDogrulayici.DogrulaNonce tarafindan kontrol edilir.
+	UserID            string       `json:"sub"`
+	Email             string       `json:"email,omitempty"`
+	EmailVerified     FlexibleBool `json:"email_verified,omitempty"`
+	Name              string       `json:"name,omitempty"`
+	PreferredUsername string       `json:"preferred_username,omitempty"`
+	Roles             []string     `json:"roles,omitempty"`
+	// Nonce is the nonce returned in the upstream provider's id_token.
+	// Only UpstreamVerifier.VerifyWithNonce checks it.
 	Nonce string `json:"nonce,omitempty"`
 	jwt.RegisteredClaims
 }
 
-// YukariAkisDogrulayici, bir YUKARI AKIS saglayicisinin (Apple, Google)
-// id_token'larini dogrular. Federasyon geri cagirma (callback) akisinda
-// kullanilir: kullanici Apple/Google'da yetkilendirdikten sonra elde edilen
-// id_token, burada iss/aud/alg ve nonce acisindan dogrulanir.
-type YukariAkisDogrulayici struct {
+// UpstreamVerifier verifies the id_tokens of an UPSTREAM provider (Apple,
+// Google). It is used in the federation callback flow: the id_token obtained
+// after the user authorizes at Apple/Google is checked here for iss, aud, alg
+// and nonce.
+type UpstreamVerifier struct {
 	jwks     keyfunc.Keyfunc
 	issuer   string
 	audience string
 }
 
-// NewYukariAkisDogrulayici, bir YUKARI AKIS saglayicisinin (Apple, Google)
-// id_token'larini dogrulayan bir dogrulayici kurar. jwksURL cagiran
-// tarafindan verilir: Apple ve Google'in jwks_uri'si sabittir, her giriste
-// discovery cekmek gereksiz bir ag turu ve bir hata kaynagidir.
+// NewUpstreamVerifier builds a verifier for the id_tokens of an UPSTREAM
+// provider (Apple, Google). The caller supplies jwksURL: the jwks_uri of Apple
+// and Google is fixed, so fetching discovery on every sign-in would be an
+// unnecessary network round trip and a source of failures.
 //
-// ctx, keyfunc.NewDefaultCtx'e OLDUGU GIBI iletilir ve CAGIRANIN omru
-// kadar yasamalidir. Burada 30 saniyelik bir
-// timeout ctx'i kurup "defer cancel()" ile hemen iptal etmek YANLISTIR --
-// ama ONEMLI: bunun bedeli, ilk okumada tahmin edilenden daha dar.
+// ctx is passed to keyfunc.NewDefaultCtx AS IS and must live as long as the
+// CALLER. Building a 30-second timeout ctx here and cancelling it at once with
+// "defer cancel()" is WRONG -- but IMPORTANT: the cost of that is narrower
+// than a first reading suggests.
 //
-// ctx SADECE saatlik periyodik arka plan yenilemesinin yasam suresidir
-// (bkz. jwkset@v0.5.17 http.go:89 dogrudan: "NewDefaultHTTPClientCtx is
-// the same as NewDefaultHTTPClient, but with a context that can end the
-// refresh goroutine."; storage.go:278-295 bu goroutine'in options.Ctx'in
-// Done()'ina gore CIKTIGINI gosterir). Rotasyonun kendisi -- yeni bir kid
-// gorulmesi -- BU CTX'E BAGLI DEGILDIR: jwkset'in varsayilan davranisi
-// (http.go:83, "3. Refresh remote HTTP resources if a key with an
-// unknown key ID is trying to be read, with a rate limit of 5 minutes.")
-// bilinmeyen kid'i ANINDA, ctx'ten bagimsiz bir ic context ile yeniden
-// ceker. (TestAnahtarRotasyonuTakipEdilir bunu olcer -- ve ctx iptal
-// edilmis olsa bile gecer; bkz. o testin yanindaki not.)
+// ctx ONLY bounds the lifetime of the hourly periodic background refresh (see
+// jwkset@v0.5.17 http.go:89 directly: "NewDefaultHTTPClientCtx is the same as
+// NewDefaultHTTPClient, but with a context that can end the refresh
+// goroutine."; storage.go:278-295 shows that this goroutine EXITS on
+// options.Ctx's Done()). Rotation itself -- seeing a new kid -- DOES NOT
+// DEPEND ON THIS CTX: jwkset's default behaviour (http.go:83, "3. Refresh
+// remote HTTP resources if a key with an unknown key ID is trying to be read,
+// with a rate limit of 5 minutes.") re-fetches an unknown kid IMMEDIATELY,
+// with an internal context that is independent of ctx.
+// (TestUpstreamVerifier_FollowsKeyRotation measures this -- and it passes even
+// when ctx is cancelled; see the note next to that test.)
 //
-// ctx iptal edilirse/olu kalirsa gercek bedel budur:
+// If ctx is cancelled or left dead, this is the real cost:
 //
-//	(a) saglayicinin ARTIK YAYINLAMADIGI (orn. ele gecirildigi icin geri
-//	    cekilen) bir anahtar, surec yeniden baslamadan bellekte sonsuza
-//	    kadar GECERLI SAYILIR -- hic bir zaman silinmez;
-//	(b) saatlik proaktif yenileme olu oldugundan, 5 dakikalik pencere
-//	    icinde arka arkaya IKI YENI kid gelirse ikincisi dogrulanamaz
-//	    (ayni rate limiter, tazelenmeden ikinci bir anlik yenilemeye izin
-//	    vermez).
+//	(a) a key that the provider NO LONGER PUBLISHES (e.g. withdrawn because
+//	    it was compromised) stays VALID in memory forever, until the process
+//	    restarts -- it is never removed;
+//	(b) because the hourly proactive refresh is dead, if TWO NEW kids arrive
+//	    back to back within the 5-minute window the second cannot be verified
+//	    (the same rate limiter does not allow a second immediate refresh
+//	    before it has been replenished).
 //
-// Ikisi de ciddi ama "rotasyon aninda butun girisler kirilir" kadar
-// dramatik degil; bu metodun ctx'i cagiranin verdigi gibi tutmasi yeterli,
-// ayrica bir yapilandirma/clock enjeksiyonu GEREKMEZ.
-func NewYukariAkisDogrulayici(ctx context.Context, jwksURL, issuer, audience string) (*YukariAkisDogrulayici, error) {
+// Both are serious but not as dramatic as "all sign-ins break at rotation
+// time"; it is enough for this method to keep ctx as the caller gave it, and
+// no configuration or clock injection is NEEDED.
+func NewUpstreamVerifier(ctx context.Context, jwksURL, issuer, audience string) (*UpstreamVerifier, error) {
 	if jwksURL == "" || issuer == "" || audience == "" {
-		return nil, fmt.Errorf("jwksURL, issuer ve audience zorunlu")
+		return nil, fmt.Errorf("jwksURL, issuer and audience are required")
 	}
 	jwks, err := keyfunc.NewDefaultCtx(ctx, []string{jwksURL})
 	if err != nil {
-		return nil, fmt.Errorf("JWKS kurulamadi: %w", err)
+		return nil, fmt.Errorf("could not set up JWKS: %w", err)
 	}
-	return &YukariAkisDogrulayici{jwks: jwks, issuer: issuer, audience: audience}, nil
+	return &UpstreamVerifier{jwks: jwks, issuer: issuer, audience: audience}, nil
 }
 
-// DogrulaNonce, id_token'i dogrular ve nonce'un BEKLENEN degerle birebir
-// ayni oldugunu da zorunlu kilar.
+// VerifyWithNonce verifies the id_token and also requires the nonce to match
+// the EXPECTED value exactly.
 //
-// Nonce olmadan: saldirgan kendi Google/Apple yetkilendirmesinden aldigi
-// gecerli bir id_token'i kurbanin yarim kalmis akisina enjekte eder ve
-// kurbanin tarayicisinda saldirganin hesabina giris olur. Imza, iss ve aud
-// bu tokende de DOGRUDUR; onu reddeden tek sey nonce'tur. Karsilastirma
-// sabit zamanlidir: zamanlama farkina bakarak nonce'u parca parca tahmin
-// etmeye calisan bir saldirgana bilgi sizdirmamak icin.
-func (v *YukariAkisDogrulayici) DogrulaNonce(tokenString, nonce string) (*Claims, error) {
+// Without the nonce: an attacker injects a valid id_token obtained from their
+// own Google/Apple authorization into the victim's half-finished flow, and the
+// victim's browser ends up signed in to the attacker's account. The signature,
+// iss and aud are CORRECT for this token too; the nonce is the only thing that
+// rejects it. The comparison is constant-time so that it leaks nothing to an
+// attacker who tries to guess the nonce piece by piece from timing
+// differences.
+func (v *UpstreamVerifier) VerifyWithNonce(tokenString, nonce string) (*Claims, error) {
 	if nonce == "" {
-		return nil, fmt.Errorf("nonce bos olamaz")
+		return nil, fmt.Errorf("nonce must not be empty")
 	}
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, v.jwks.Keyfunc,
-		// Alg ACIKCA sabitlenir: korumanin kutuphanenin anahtar tipi
-		// kontrolune dayanmasi onu her yukseltmede kirilabilir kilar.
+		// The alg is pinned EXPLICITLY: relying on the library's key-type
+		// check for protection would make it breakable on every upgrade.
 		jwt.WithValidMethods([]string{"RS256"}),
 		jwt.WithIssuer(v.issuer),
 		jwt.WithAudience(v.audience),
@@ -135,27 +136,27 @@ func (v *YukariAkisDogrulayici) DogrulaNonce(tokenString, nonce string) (*Claims
 		jwt.WithIssuedAt(),
 	)
 	if err != nil {
-		// Hata metnine tokenString veya ham claim degerleri KATILMAZ:
-		// id_token loglara sizmamali.
-		return nil, fmt.Errorf("id_token dogrulanamadi: %w", err)
+		// The error text does NOT include tokenString or raw claim values:
+		// the id_token must not leak into logs.
+		return nil, fmt.Errorf("id_token could not be verified: %w", err)
 	}
 	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {
-		return nil, fmt.Errorf("id_token claim'leri gecersiz")
+		return nil, fmt.Errorf("id_token claims are invalid")
 	}
 	if subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(nonce)) != 1 {
-		return nil, fmt.Errorf("nonce eslesmedi")
+		return nil, fmt.Errorf("nonce mismatch")
 	}
 	if strings.TrimSpace(claims.UserID) == "" {
-		return nil, fmt.Errorf("sub bos")
+		return nil, fmt.Errorf("sub is empty")
 	}
 	return claims, nil
 }
 
-// Close, dogrulayicinin kaynaklarini serbest birakir.
-func (v *YukariAkisDogrulayici) Close() error {
-	// keyfunc.Keyfunc kaynaklari ctx'in iptaliyle serbest kalir; burada
-	// ek bir temizlik gerekmez. Metod, cagiran tarafta tutarli bir
-	// "kapat" aliskanligi saglamak icin tutulur.
+// Close releases the verifier's resources.
+func (v *UpstreamVerifier) Close() error {
+	// keyfunc.Keyfunc resources are released when ctx is cancelled, so no
+	// extra cleanup is needed here. The method is kept so that callers can
+	// follow a consistent "close" habit.
 	return nil
 }

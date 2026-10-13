@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestMasterRequest_AnahtarAlanlariJSON(t *testing.T) {
+func TestMasterRequest_KeyFieldsJSON(t *testing.T) {
 	req := MasterRequest{
 		StemKeys:   []string{"stems/p1/s1.wav"},
 		Profile:    "clean",
@@ -18,44 +18,44 @@ func TestMasterRequest_AnahtarAlanlariJSON(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	var cikti map[string]interface{}
-	if err := json.Unmarshal(b, &cikti); err != nil {
+	var out map[string]interface{}
+	if err := json.Unmarshal(b, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if _, var_ := cikti["stem_keys"]; !var_ {
-		t.Errorf("stem_keys alani yok: %s", b)
+	if _, present := out["stem_keys"]; !present {
+		t.Errorf("stem_keys field missing: %s", b)
 	}
-	if _, yok := cikti["stem_urls"]; yok {
-		t.Errorf("stem_urls alani hala duruyor: %s", b)
+	if _, absent := out["stem_urls"]; absent {
+		t.Errorf("stem_urls field is still present: %s", b)
 	}
 
-	takes := cikti["vocal_takes"].([]interface{})
-	ilk := takes[0].(map[string]interface{})
-	if _, var_ := ilk["key"]; !var_ {
-		t.Errorf("vocal_takes[].key alani yok: %s", b)
+	takes := out["vocal_takes"].([]interface{})
+	first := takes[0].(map[string]interface{})
+	if _, present := first["key"]; !present {
+		t.Errorf("vocal_takes[].key field missing: %s", b)
 	}
 }
 
-// TestMixChannel_AdresAlaniYok: mix kanali hicbir adres alani
-// tasimamali. Python tarafi da stem_url'u artik reddediyor (extra
-// forbid), iki taraf birlikte degisti.
-func TestMixChannel_AdresAlaniYok(t *testing.T) {
+// TestMixChannel_HasNoURLField: the mix channel must not carry any URL field.
+// The Python side now rejects stem_url too (extra forbid); both sides changed
+// together.
+func TestMixChannel_HasNoURLField(t *testing.T) {
 	b, err := json.Marshal(MixChannel{Volume: 0.5, Pan: 0.1, Mute: true})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	var cikti map[string]interface{}
-	if err := json.Unmarshal(b, &cikti); err != nil {
+	var out map[string]interface{}
+	if err := json.Unmarshal(b, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for _, alan := range []string{"stem_url", "stem_urls", "url"} {
-		if _, yok := cikti[alan]; yok {
-			t.Errorf("%s alani hala duruyor: %s", alan, b)
+	for _, field := range []string{"stem_url", "stem_urls", "url"} {
+		if _, absent := out[field]; absent {
+			t.Errorf("%s field is still present: %s", field, b)
 		}
 	}
-	if cikti["volume"] != 0.5 {
-		t.Errorf("volume = %v", cikti["volume"])
+	if out["volume"] != 0.5 {
+		t.Errorf("volume = %v", out["volume"])
 	}
 }
 
@@ -67,15 +67,15 @@ func TestEncodeRequest_InputKeyJSON(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	var cikti map[string]interface{}
-	if err := json.Unmarshal(b, &cikti); err != nil {
+	var out map[string]interface{}
+	if err := json.Unmarshal(b, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if cikti["input_key"] != "masters/p1/m1.wav" {
-		t.Errorf("input_key = %v", cikti["input_key"])
+	if out["input_key"] != "masters/p1/m1.wav" {
+		t.Errorf("input_key = %v", out["input_key"])
 	}
-	if _, yok := cikti["input_url"]; yok {
-		t.Errorf("input_url alani hala duruyor: %s", b)
+	if _, absent := out["input_url"]; absent {
+		t.Errorf("input_url field is still present: %s", b)
 	}
 }
 
@@ -85,11 +85,11 @@ func TestZipFileEntry_KeyJSON(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	var cikti map[string]interface{}
-	if err := json.Unmarshal(b, &cikti); err != nil {
+	var out map[string]interface{}
+	if err := json.Unmarshal(b, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if cikti["key"] != "stems/p1/s1.wav" {
-		t.Errorf("key = %v", cikti["key"])
+	if out["key"] != "stems/p1/s1.wav" {
+		t.Errorf("key = %v", out["key"])
 	}
 }

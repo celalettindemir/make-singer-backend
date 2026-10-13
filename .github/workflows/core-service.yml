@@ -47,8 +47,8 @@ jobs:
     defaults:
       run:
         working-directory: ./core-service
-    # Redis is REQUIRED for the OP (kimlik) tests: every test that goes
-    # through muxKur -- the C1 account-takeover attack tests, all PKCE
+    # Redis is REQUIRED for the OP (identity) tests: every test that goes
+    # through buildMux -- the C1 account-takeover attack tests, all PKCE
     # /authorize tests, the discovery tests and the rate-limit mux test --
     # calls testRedis(t) and t.Skip()s without it. Without this service
     # those ~29 tests silently SKIPped in CI, which is why the test suite
@@ -64,19 +64,20 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      # Postgres de ZORUNLU: depo sozlesme testleri
-      # (TestUserStoreSozlesmesi/postgres, TestFedereDepoSozlesmesi/postgres,
-      # TestJetonDepoPostgres, TestMigrate) Postgres yoksa t.Skip eder --
-      # yani Faz 1'den beri CI'da HIC kosmadilar ve sahte depolarin
-      # Postgres ile ayni davrandigi iddiasi CI'da hic sinanmadi.
+      # Postgres is REQUIRED too: the store contract tests
+      # (TestUserStore_Contract/postgres, TestFederatedStore_Contract/postgres,
+      # TestPostgresTokenStore_* and TestMigrate_*) t.Skip without Postgres --
+      # so since Phase 1 they never ran in CI, and the claim that the fake
+      # stores behave like Postgres was never tested in CI.
       #
-      # PORT 55432 ve sifre KASITLI olarak testlerdeki varsayilan DSN ile
-      # AYNI: "postgres://postgres:kimlik-test-yerel@localhost:55432/postgres".
-      # KIMLIK_TEST_DB_URL ortam degiskeni BILEREK AYARLANMIYOR -- bir env
-      # degiskeni eklemek, degisken yanlis yazildiginda testin SESSIZCE
-      # atlanmasi demektir ve tam o hata sinifi (sessiz SKIP) Faz 1'de
-      # gercek bir guvenlik hatasini sakladi. Yerelde ve CI'da AYNI DSN,
-      # "yerelde kosuyor ama CI'da atliyor" sinifini bastan imkansiz kilar.
+      # The PORT 55432 and the password are DELIBERATELY the same as the
+      # default DSN in the tests:
+      # "postgres://postgres:kimlik-test-yerel@localhost:55432/postgres".
+      # The KIMLIK_TEST_DB_URL environment variable is DELIBERATELY NOT SET --
+      # adding an env variable means a misspelled variable makes the test
+      # SILENTLY skip, and exactly that class of bug (a silent SKIP) hid a
+      # real security bug in Phase 1. The SAME DSN locally and in CI rules out
+      # the "runs locally but skips in CI" class from the start.
       postgres:
         image: postgres:16-alpine
         env:
@@ -106,7 +107,7 @@ jobs:
         run: go vet ./...
 
       - name: Unit testler
-        run: go test ./internal/...
+        run: go test ./internal/... ./pkg/... ./tools/...
 
   docker:
     name: Docker Build & Push

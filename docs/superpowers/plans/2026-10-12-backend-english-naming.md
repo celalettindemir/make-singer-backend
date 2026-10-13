@@ -1264,6 +1264,125 @@ Expected:
 ```
 ok  	github.com/makeasinger/api/tools/wirecheck	0.5s
 === RUN   TestWireSnapshot
+--- PASS: TestWireSnapshot
+=== RUN   TestDiffCountsDuplicates
+--- PASS: TestDiffCountsDuplicates
+=== RUN   TestFileLinesRules
+--- PASS: TestFileLinesRules
+PASS
+    2141 tools/wirecheck/testdata/wire.txt
+SAME
+  10 FILE
+  57 ROUTE
+1622 STR
+ 452 TAG
+```
+
+Spot-check the snapshot: `grep '^ROUTE' tools/wirecheck/testdata/wire.txt` must list every route in `cmd/server/main.go` and in `handler/sosyal.go`'s `Rotalar` (for example `ROUTE	GET /profil/ben`, `ROUTE	GROUP /api/public`). `grep '^FILE'` must list the 10 assets.
+
+- [ ] **Step 4: Prove the guard catches a wire change, then revert**
+
+```bash
+sed -i '' 's/json:"message"/json:"msg"/' pkg/response/response.go
+go test -count=1 ./tools/wirecheck
+git checkout pkg/response/response.go
+go test -count=1 ./tools/wirecheck
+```
+
+Expected: the first run FAILs with the diff below, and the second run passes.
+
+```
+--- FAIL: TestWireSnapshot
+    wirecheck_test.go:55: wire contract changed (--- testdata/wire.txt +++ current code)
+        -TAG	json:"message"
+        +TAG	json:"msg"
+        If this change is intended, run: go test ./tools/wirecheck -update
+FAIL
+ok  	github.com/makeasinger/api/tools/wirecheck
+```
+
+Also check that an unlisted asset is caught:
+
+```bash
+cp internal/sosyal/migrations/001_sosyal.sql internal/sosyal/migrations/002_x.sql
+go test -count=1 ./tools/wirecheck   # FAIL: ... 002_x.sql matches internal/*/migrations/*.sql but is not in the assets table
+rm internal/sosyal/migrations/002_x.sql
+```
+
+- [ ] **Step 5: Prove that a pure rename does not change the snapshot, then revert**
+
+This renames an exported sentinel, an exported type, and the `hesapisaret` package itself. For the package, gopls rewrites every import but cannot move the directory (`getFile: ... is a directory`), so `git mv` finishes the move.
+
+```bash
+~/go/bin/gopls rename -w internal/sosyal/hatalar.go:13:2 ErrNotFound
+~/go/bin/gopls rename -w internal/handler/sosyal.go:52:6 SocialHandler
+~/go/bin/gopls rename -w internal/hesapisaret/isaret.go:4:9 deletionmark   # prints the "is a directory" error; imports are already rewritten
+git mv internal/hesapisaret internal/deletionmark
+go build ./... && go vet ./...
+go test -count=1 ./tools/wirecheck ./internal/handler ./internal/middleware ./internal/sosyal
+git diff HEAD --stat | tail -1
+git reset -q --hard HEAD        # tools/ is untracked here and survives; if already committed, use the same command
+```
+
+Expected: every package passes (`ok`), and the stat shows `58 files changed, 175 insertions(+), 175 deletions(-)`. The snapshot is unchanged, even though import paths, identifiers and a directory changed.
+
+- [ ] **Step 6: Run the guard in CI**
+
+In `.github/workflows/core-service.yml` (repository root):
+
+```diff
+diff --git a/.github/workflows/core-service.yml b/.github/workflows/core-service.yml
+index 9397241..2a472b6 100644
+--- a/.github/workflows/core-service.yml
++++ b/.github/workflows/core-service.yml
+@@ -106,7 +106,7 @@ jobs:
+         run: go vet ./...
+ 
+       - name: Unit testler
+-        run: go test ./internal/...
++        run: go test ./internal/... ./pkg/... ./tools/...
+ 
+   docker:
+     name: Docker Build & Push
+```
+
+- [ ] **Step 7: Lint, vet and test**
+
+```bash
+gofmt -l tools
+go vet ./tools/...
+~/go/bin/golangci-lint run ./...
+go test ./internal/... ./pkg/... ./tools/...
+```
+
+Expected:
+- `gofmt` and `vet` print nothing.
+- Lint prints `0 issues.`
+- Every package prints `ok`. `pkg/response` prints `[no test files]`.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add .github/workflows/core-service.yml core-service/tools
+git commit -F - <<'EOF'
+Kablo sozlesmesi bekcisi: tools/wirecheck
+
+Struct etiketleri, string literaller (log, panic ve fonksiyon ici hata
+metinleri haric), rota kayitlari ve gomulu varliklarin SHA-256 ozetleri
+yol ve tanimlayici icermeyen sirali bir anlik goruntude toplanir.
+Isim degistirme gorevleri bu goruntuyu degistirmemelidir; kasitli
+degisiklik -update ile kaydedilir ve diff olarak incelenir.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01WvFWY9DZTfjxSjx1PuHcSN
+EOF
+```
+
+**Note for every rename task:** finish each task with `go test -count=1 ./tools/wirecheck`.
+- A pure identifier or file rename must stay green.
+- A package-directory rename edits only the `assets` table paths (and `assetGlobs` if `sablonlar/` moves).
+- Do not translate the error texts listed in Ruling A7.
+
 
 ---
 

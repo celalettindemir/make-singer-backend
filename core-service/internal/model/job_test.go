@@ -2,18 +2,18 @@ package model
 
 import "testing"
 
-func TestJob_SahibiMi(t *testing.T) {
+func TestJob_IsOwnedBy(t *testing.T) {
 	j := &Job{OwnerID: "kullanici-a"}
-	if !j.SahibiMi("kullanici-a") {
-		t.Error("sahibi kendi isini gormeli")
+	if !j.IsOwnedBy("kullanici-a") {
+		t.Error("the owner must see their own job")
 	}
-	if j.SahibiMi("kullanici-b") {
-		t.Error("baska kullanici isi gormemeli")
+	if j.IsOwnedBy("kullanici-b") {
+		t.Error("another user must not see the job")
 	}
-	if j.SahibiMi("") {
-		t.Error("bos kullanici hicbir isi gormemeli")
+	if j.IsOwnedBy("") {
+		t.Error("an empty user must not see any job")
 	}
-	if (&Job{}).SahibiMi("") {
-		t.Error("sahipsiz kayit bos kullaniciya da acilmamali")
+	if (&Job{}).IsOwnedBy("") {
+		t.Error("an ownerless record must not be open to an empty user either")
 	}
 }

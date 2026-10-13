@@ -64,10 +64,11 @@ type MasterStatusResponse struct {
 	CurrentStep string    `json:"currentStep,omitempty"`
 }
 
-// MasterResultRecord, is kaydinda (Redis, 24 saat) saklanan master
-// sonucudur. Imzali URL SAKLANMAZ; yalnizca nesne anahtari tutulur ve
-// adres her okumada yeniden uretilir. Aksi halde 1 saatlik imza 24
-// saatlik kaydin icinde donar ve olu link + gecmis expiresAt doner.
+// MasterResultRecord is the master result stored in the job record (Redis,
+// 24 hours). The signed URL is NOT stored; only the object key is kept and
+// the URL is regenerated on every read. Otherwise the 1-hour signature would
+// freeze inside the 24-hour record and return a dead link and a past
+// expiresAt.
 type MasterResultRecord struct {
 	FileKey  string        `json:"fileKey"`
 	Duration float64       `json:"duration"`
@@ -76,7 +77,7 @@ type MasterResultRecord struct {
 	LUFS     int           `json:"lufs"`
 }
 
-// Response, kayit uzerine taze bir adres ve son kullanma ani giydirir.
+// Response dresses the record with a fresh URL and an expiry time.
 func (r *MasterResultRecord) Response(fileURL string, expiresAt time.Time) *MasterResultResponse {
 	return &MasterResultResponse{
 		FileURL:   fileURL,

@@ -1,0 +1,28 @@
+package social
+
+import "testing"
+
+func TestDestKeys(t *testing.T) {
+	id := "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
+	if got, err := MasterDestKey(id, "masters/u/p/m1.wav"); err != nil || got != "sosyal/"+id+"/master.wav" {
+		t.Fatalf("master = %q, %v", got, err)
+	}
+	if got, err := MasterDestKey(id, "masters/u/p/m1"); err != nil || got != "sosyal/"+id+"/master" {
+		t.Fatalf("master without extension = %q, %v", got, err)
+	}
+	if got, err := StemDestKey(id, "drums", "stems/u/p/drums.mp3"); err != nil || got != "sosyal/"+id+"/stems/drums.mp3" {
+		t.Fatalf("stem = %q, %v", got, err)
+	}
+	if got, err := PreviewDestKey(id); err != nil || got != "sosyal/"+id+"/onizleme.mp3" {
+		t.Fatalf("preview = %q, %v", got, err)
+	}
+	if _, err := StemDestKey(id, "a.b", "stems/u/p/x.mp3"); err == nil {
+		t.Fatal("a stem id with dots must be rejected")
+	}
+	if _, err := StemDestKey(id, "../x", "stems/u/p/x.mp3"); err == nil {
+		t.Fatal("a traversing stem id must be rejected")
+	}
+	if got := extension("stems/u/p/x.WAV"); got != "" {
+		t.Fatalf("an uppercase extension does not match the segment pattern, must be empty: %q", got)
+	}
+}

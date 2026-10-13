@@ -13,75 +13,75 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
-	"github.com/makeasinger/api/internal/hesapisaret"
+	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/model"
 )
 
-type sahteSuno struct {
-	uretHata, bekleHata, bolHata error
-	track                        *client.Track
-	stems                        []client.Stem
-	uretimIstegi                 *client.GenerateMusicRequest
-	uretimSayisi                 int
-	stemBekleHata                error
-	bolArgs                      [2]string
-	bolSayisi                    int
+type fakeSuno struct {
+	generateErr, waitErr, splitErr error
+	track                          *client.Track
+	stems                          []client.Stem
+	generateReq                    *client.GenerateMusicRequest
+	generateCalls                  int
+	stemWaitErr                    error
+	splitArgs                      [2]string
+	splitCalls                     int
 
-	// focus modu
-	ayirArgs       [3]string
-	ayirSayisi     int
-	ayirHata       error
-	ayrik          *client.IsolatedStem
-	ayrikBekleHata error
-}
-
-func (s *sahteSuno) GenerateMusic(_ context.Context, r *client.GenerateMusicRequest) (string, error) {
-	s.uretimSayisi++
-	s.uretimIstegi = r
-	return "t1", s.uretHata
-}
-func (s *sahteSuno) WaitMusic(context.Context, string, time.Duration, time.Duration) (*client.Track, error) {
-	return s.track, s.bekleHata
-}
-func (s *sahteSuno) SplitStems(_ context.Context, taskID, audioID string) (string, error) {
-	s.bolSayisi++
-	s.bolArgs = [2]string{taskID, audioID}
-	return "s1", s.bolHata
-}
-func (s *sahteSuno) WaitStems(context.Context, string, time.Duration, time.Duration) ([]client.Stem, error) {
-	return s.stems, s.stemBekleHata
-}
-func (s *sahteSuno) IsolateStem(_ context.Context, taskID, audioID, stemName string) (string, error) {
-	s.ayirSayisi++
-	s.ayirArgs = [3]string{taskID, audioID, stemName}
-	return "i1", s.ayirHata
-}
-func (s *sahteSuno) WaitIsolated(context.Context, string, time.Duration, time.Duration) (*client.IsolatedStem, error) {
-	return s.ayrik, s.ayrikBekleHata
-}
-func (s *sahteSuno) IsConfigured() bool { return true }
-
-type yukleme struct {
-	key, tip string
-	veri     []byte
+	// focus mode
+	isolateArgs     [3]string
+	isolateCalls    int
+	isolateErr      error
+	isolated        *client.IsolatedStem
+	isolatedWaitErr error
 }
 
-type sahteDepo struct{ yuklemeler []yukleme }
+func (s *fakeSuno) GenerateMusic(_ context.Context, r *client.GenerateMusicRequest) (string, error) {
+	s.generateCalls++
+	s.generateReq = r
+	return "t1", s.generateErr
+}
+func (s *fakeSuno) WaitMusic(context.Context, string, time.Duration, time.Duration) (*client.Track, error) {
+	return s.track, s.waitErr
+}
+func (s *fakeSuno) SplitStems(_ context.Context, taskID, audioID string) (string, error) {
+	s.splitCalls++
+	s.splitArgs = [2]string{taskID, audioID}
+	return "s1", s.splitErr
+}
+func (s *fakeSuno) WaitStems(context.Context, string, time.Duration, time.Duration) ([]client.Stem, error) {
+	return s.stems, s.stemWaitErr
+}
+func (s *fakeSuno) IsolateStem(_ context.Context, taskID, audioID, stemName string) (string, error) {
+	s.isolateCalls++
+	s.isolateArgs = [3]string{taskID, audioID, stemName}
+	return "i1", s.isolateErr
+}
+func (s *fakeSuno) WaitIsolated(context.Context, string, time.Duration, time.Duration) (*client.IsolatedStem, error) {
+	return s.isolated, s.isolatedWaitErr
+}
+func (s *fakeSuno) IsConfigured() bool { return true }
 
-func (d *sahteDepo) Upload(_ context.Context, key string, body io.Reader, tip string) (string, time.Time, error) {
+type uploadCall struct {
+	key, contentType string
+	data             []byte
+}
+
+type fakeStorage struct{ uploads []uploadCall }
+
+func (d *fakeStorage) Upload(_ context.Context, key string, body io.Reader, contentType string) (string, time.Time, error) {
 	b, _ := io.ReadAll(body)
-	d.yuklemeler = append(d.yuklemeler, yukleme{key, tip, b})
+	d.uploads = append(d.uploads, uploadCall{key, contentType, b})
 	return "https://depo.test/" + key, time.Time{}, nil
 }
-func (d *sahteDepo) Delete(context.Context, string) error { return nil }
-func (d *sahteDepo) GetSignedURL(context.Context, string, time.Duration) (string, error) {
+func (d *fakeStorage) Delete(context.Context, string) error { return nil }
+func (d *fakeStorage) GetSignedURL(context.Context, string, time.Duration) (string, error) {
 	return "", nil
 }
-func (d *sahteDepo) URLFor(context.Context, string) (string, time.Time, error) {
+func (d *fakeStorage) URLFor(context.Context, string) (string, time.Time, error) {
 	return "", time.Time{}, nil
 }
 
-func sesSunucusu(t *testing.T) *httptest.Server {
+func audioServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/yok.mp3" {
@@ -98,109 +98,109 @@ func testPayload() *model.RenderJobPayload {
 	return &model.RenderJobPayload{OwnerID: "kullanici-a", ProjectID: "p1", StemMode: model.StemModeStems, Brief: model.Brief{Genre: model.Genre("pop"), Vibes: []string{"x"}}}
 }
 
-func testWorker(s *sahteSuno, d client.StorageClient) *RenderWorker {
-	return denetciliWorker(s, d, nil)
+func testWorker(s *fakeSuno, d client.StorageClient) *RenderWorker {
+	return workerWithChecker(s, d, nil)
 }
 
-func denetciliWorker(s *sahteSuno, d client.StorageClient, h hesapisaret.Denetci) *RenderWorker {
+func workerWithChecker(s *fakeSuno, d client.StorageClient, h deletionmark.Checker) *RenderWorker {
 	w := NewRenderWorker(nil, s, d, nil, h)
-	w.pollAraligi = time.Millisecond
+	w.pollInterval = time.Millisecond
 	return w
 }
 
-func hic(int, string) {}
+func noProgress(int, string) {}
 
-func TestSunoIleUret_MutluYol(t *testing.T) {
-	srv := sesSunucusu(t)
-	s := &sahteSuno{
+func TestRenderWorker_SunoHappyPath(t *testing.T) {
+	srv := audioServer(t)
+	s := &fakeSuno{
 		track: &client.Track{ID: "a1", AudioURL: srv.URL + "/tam.mp3", Duration: 180},
 		stems: []client.Stem{
 			{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"},
 			{Instrument: model.InstrumentPiano, URL: srv.URL + "/piyano.mp3"},
 		},
 	}
-	d := &sahteDepo{}
+	d := &fakeStorage{}
 
-	res, err := testWorker(s, d).sunoIleUret(context.Background(), testPayload(), hic)
+	res, err := testWorker(s, d).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if err != nil {
-		t.Fatalf("sunoIleUret: %v", err)
+		t.Fatalf("generateWithSuno: %v", err)
 	}
-	if !s.uretimIstegi.Instrumental || !strings.HasPrefix(s.uretimIstegi.Style, "pop, instrumental") {
-		t.Errorf("uretim istegi = %+v", s.uretimIstegi)
+	if !s.generateReq.Instrumental || !strings.HasPrefix(s.generateReq.Style, "pop, instrumental") {
+		t.Errorf("generation request = %+v", s.generateReq)
 	}
-	if s.bolArgs != [2]string{"t1", "a1"} {
-		t.Errorf("SplitStems argumanlari = %v", s.bolArgs)
+	if s.splitArgs != [2]string{"t1", "a1"} {
+		t.Errorf("SplitStems arguments = %v", s.splitArgs)
 	}
 	if res.Duration != 180 || len(res.Stems) != 2 {
-		t.Fatalf("sonuc = %+v", res)
+		t.Fatalf("result = %+v", res)
 	}
-	if len(d.yuklemeler) != 2 {
-		t.Fatalf("yukleme sayisi = %d, 2 bekleniyordu", len(d.yuklemeler))
+	if len(d.uploads) != 2 {
+		t.Fatalf("upload count = %d, want 2", len(d.uploads))
 	}
-	for i, y := range d.yuklemeler {
+	for i, y := range d.uploads {
 		st := res.Stems[i]
 		if y.key != st.FileKey || !strings.HasPrefix(y.key, "stems/kullanici-a/p1/") || !strings.HasSuffix(y.key, ".mp3") {
-			t.Errorf("anahtar = %q, kayit %q", y.key, st.FileKey)
+			t.Errorf("key = %q, record %q", y.key, st.FileKey)
 		}
-		if y.tip != "audio/mpeg" {
-			t.Errorf("icerik tipi = %q", y.tip)
+		if y.contentType != "audio/mpeg" {
+			t.Errorf("content type = %q", y.contentType)
 		}
 		if st.Duration != 180 {
-			t.Errorf("stem suresi = %v", st.Duration)
+			t.Errorf("stem duration = %v", st.Duration)
 		}
 	}
-	if !bytes.Equal(d.yuklemeler[0].veri, []byte("ses:/davul.mp3")) || res.Stems[1].Instrument != model.InstrumentPiano {
-		t.Errorf("yuklenen icerik/enstruman yanlis: %q, %v", d.yuklemeler[0].veri, res.Stems[1].Instrument)
+	if !bytes.Equal(d.uploads[0].data, []byte("ses:/davul.mp3")) || res.Stems[1].Instrument != model.InstrumentPiano {
+		t.Errorf("uploaded content/instrument is wrong: %q, %v", d.uploads[0].data, res.Stems[1].Instrument)
 	}
 }
 
-func TestSunoIleUret_UretimReddiTekrarDenenebilir(t *testing.T) {
-	s := &sahteSuno{uretHata: errors.New("kredi yok")}
-	_, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), testPayload(), hic)
+func TestRenderWorker_SunoGenerateRejectionIsRetryable(t *testing.T) {
+	s := &fakeSuno{generateErr: errors.New("no credits")}
+	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if err == nil || errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("ucret oncesi hata tekrar denenebilir olmali, geldi: %v", err)
+		t.Fatalf("an error before the charge must be retryable, got: %v", err)
 	}
 }
 
-func TestSunoIleUret_UcretliAdimSonrasiTekrarYok(t *testing.T) {
-	srv := sesSunucusu(t)
-	durumlar := map[string]*sahteSuno{
-		"bekleme hatasi":      {bekleHata: errors.New("zaman asimi")},
-		"bolme hatasi":        {track: &client.Track{ID: "a1"}, bolHata: errors.New("reddedildi")},
-		"stem bekleme hatasi": {track: &client.Track{ID: "a1"}, stemBekleHata: errors.New("zaman asimi")},
-		"stem yok":            {track: &client.Track{ID: "a1"}},
-		"indirme 404": {track: &client.Track{ID: "a1"}, stems: []client.Stem{
+func TestRenderWorker_SunoNoRetryAfterPaidStep(t *testing.T) {
+	srv := audioServer(t)
+	cases := map[string]*fakeSuno{
+		"wait error":      {waitErr: errors.New("timed out")},
+		"split error":     {track: &client.Track{ID: "a1"}, splitErr: errors.New("rejected")},
+		"stem wait error": {track: &client.Track{ID: "a1"}, stemWaitErr: errors.New("timed out")},
+		"no stem":         {track: &client.Track{ID: "a1"}},
+		"download 404": {track: &client.Track{ID: "a1"}, stems: []client.Stem{
 			{Instrument: model.InstrumentDrums, URL: srv.URL + "/yok.mp3"},
 		}},
 	}
-	for ad, s := range durumlar {
-		t.Run(ad, func(t *testing.T) {
-			d := &sahteDepo{}
-			_, err := testWorker(s, d).sunoIleUret(context.Background(), testPayload(), hic)
+	for name, s := range cases {
+		t.Run(name, func(t *testing.T) {
+			d := &fakeStorage{}
+			_, err := testWorker(s, d).generateWithSuno(context.Background(), testPayload(), noProgress)
 			if !errors.Is(err, asynq.SkipRetry) {
-				t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+				t.Fatalf("want SkipRetry, got: %v", err)
 			}
-			if len(d.yuklemeler) != 0 {
-				t.Errorf("basarisiz iste yukleme olmamali: %d", len(d.yuklemeler))
+			if len(d.uploads) != 0 {
+				t.Errorf("there must be no upload for a failed job: %d", len(d.uploads))
 			}
 		})
 	}
 }
 
-func TestSunoIleUret_DepoYoksaSunoCagrilmaz(t *testing.T) {
-	s := &sahteSuno{}
-	_, err := testWorker(s, nil).sunoIleUret(context.Background(), testPayload(), hic)
+func TestRenderWorker_SunoNotCalledWithoutStorage(t *testing.T) {
+	s := &fakeSuno{}
+	_, err := testWorker(s, nil).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
-	if s.uretimSayisi != 0 {
-		t.Errorf("depo yokken Suno %d kez cagrildi", s.uretimSayisi)
+	if s.generateCalls != 0 {
+		t.Errorf("Suno was called %d times without a store", s.generateCalls)
 	}
 }
 
-func TestSunoIleUret_SureYoksaTahmin(t *testing.T) {
-	srv := sesSunucusu(t)
-	s := &sahteSuno{
+func TestRenderWorker_SunoEstimatesMissingDuration(t *testing.T) {
+	srv := audioServer(t)
+	s := &fakeSuno{
 		track: &client.Track{ID: "a1", Duration: 0},
 		stems: []client.Stem{{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"}},
 	}
@@ -209,283 +209,283 @@ func TestSunoIleUret_SureYoksaTahmin(t *testing.T) {
 	p.Brief.BPM.Value = &bpm
 	p.Brief.Structure = []model.SongSection{{ID: "s1", Type: "verse", Bars: 8}}
 
-	res, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
+	res, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
 	if err != nil {
-		t.Fatalf("sunoIleUret: %v", err)
+		t.Fatalf("generateWithSuno: %v", err)
 	}
 	if res.Duration != 16 || len(res.Stems) != 1 || res.Stems[0].Duration != 16 {
-		t.Fatalf("sure = %v, stem = %+v; 16 bekleniyordu", res.Duration, res.Stems)
+		t.Fatalf("duration = %v, stem = %+v; want 16", res.Duration, res.Stems)
 	}
 }
 
-func TestSunoIleUret_SahipsizIsteSunoCagrilmaz(t *testing.T) {
-	s := &sahteSuno{}
+func TestRenderWorker_SunoNotCalledForOwnerlessJob(t *testing.T) {
+	s := &fakeSuno{}
 	p := testPayload()
 	p.OwnerID = ""
-	_, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
+	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
-	if s.uretimSayisi != 0 {
-		t.Errorf("sahipsiz iste Suno %d kez cagrildi", s.uretimSayisi)
+	if s.generateCalls != 0 {
+		t.Errorf("Suno was called %d times for a job without an owner", s.generateCalls)
 	}
 }
 
-// panikleyenDepo, yuklemede panic eder (ornegin tipli nil bir R2 istemcisi).
-type panikleyenDepo struct{ sahteDepo }
+// panickingStorage panics on upload (for example a typed-nil R2 client).
+type panickingStorage struct{ fakeStorage }
 
-func (d *panikleyenDepo) Upload(context.Context, string, io.Reader, string) (string, time.Time, error) {
-	panic("nil R2 istemcisi")
+func (d *panickingStorage) Upload(context.Context, string, io.Reader, string) (string, time.Time, error) {
+	panic("nil R2 client")
 }
 
-// TestSunoIleUret_UcretSonrasiPanicTekrarDenenmez: asynq panic'i yakalayip
-// isi TEKRAR DENER; bu da Suno'yu yeniden ucretlendirir (canli testte 12
-// kredi boyle bosa gitti). Ucretli adimdan sonraki panic SkipRetry olmali.
-func TestSunoIleUret_UcretSonrasiPanicTekrarDenenmez(t *testing.T) {
-	srv := sesSunucusu(t)
-	s := &sahteSuno{
+// TestRenderWorker_SunoPanicAfterChargeNotRetried: asynq catches a panic and
+// RETRIES the job, which charges Suno again (12 credits were wasted this way
+// in the live test). A panic after the paid step must be SkipRetry.
+func TestRenderWorker_SunoPanicAfterChargeNotRetried(t *testing.T) {
+	srv := audioServer(t)
+	s := &fakeSuno{
 		track: &client.Track{ID: "a1", Duration: 30},
 		stems: []client.Stem{{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"}},
 	}
-	_, err := testWorker(s, &panikleyenDepo{}).sunoIleUret(context.Background(), testPayload(), hic)
+	_, err := testWorker(s, &panickingStorage{}).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
 }
 
-func TestSunoIleUret_MixModuAyirmaYapmaz(t *testing.T) {
-	srv := sesSunucusu(t)
-	s := &sahteSuno{track: &client.Track{ID: "a1", AudioURL: srv.URL + "/tam.mp3", Duration: 120}}
-	d := &sahteDepo{}
+func TestRenderWorker_SunoMixModeDoesNotSplit(t *testing.T) {
+	srv := audioServer(t)
+	s := &fakeSuno{track: &client.Track{ID: "a1", AudioURL: srv.URL + "/tam.mp3", Duration: 120}}
+	d := &fakeStorage{}
 	p := testPayload()
 	p.StemMode = model.StemModeMix
 
-	res, err := testWorker(s, d).sunoIleUret(context.Background(), p, hic)
+	res, err := testWorker(s, d).generateWithSuno(context.Background(), p, noProgress)
 	if err != nil {
-		t.Fatalf("sunoIleUret: %v", err)
+		t.Fatalf("generateWithSuno: %v", err)
 	}
-	if s.bolSayisi != 0 || s.ayirSayisi != 0 {
-		t.Errorf("mix modunda ayirma cagrildi: split=%d advanced=%d", s.bolSayisi, s.ayirSayisi)
+	if s.splitCalls != 0 || s.isolateCalls != 0 {
+		t.Errorf("separation was called in mix mode: split=%d advanced=%d", s.splitCalls, s.isolateCalls)
 	}
 	if res.StemMode != model.StemModeMix || len(res.Stems) != 1 || res.Stems[0].Instrument != model.InstrumentMix {
-		t.Fatalf("sonuc = %+v", res)
+		t.Fatalf("result = %+v", res)
 	}
-	if len(d.yuklemeler) != 1 || !bytes.Equal(d.yuklemeler[0].veri, []byte("ses:/tam.mp3")) || d.yuklemeler[0].tip != "audio/mpeg" {
-		t.Errorf("yukleme = %+v", d.yuklemeler)
+	if len(d.uploads) != 1 || !bytes.Equal(d.uploads[0].data, []byte("ses:/tam.mp3")) || d.uploads[0].contentType != "audio/mpeg" {
+		t.Errorf("upload = %+v", d.uploads)
 	}
-	if !strings.HasPrefix(d.yuklemeler[0].key, "stems/kullanici-a/p1/") {
-		t.Errorf("anahtar = %q", d.yuklemeler[0].key)
+	if !strings.HasPrefix(d.uploads[0].key, "stems/kullanici-a/p1/") {
+		t.Errorf("key = %q", d.uploads[0].key)
 	}
 }
 
-func TestSunoIleUret_BosModMixGibi(t *testing.T) {
-	srv := sesSunucusu(t)
-	s := &sahteSuno{track: &client.Track{ID: "a1", AudioURL: srv.URL + "/tam.mp3", Duration: 120}}
+func TestRenderWorker_SunoEmptyModeActsAsMix(t *testing.T) {
+	srv := audioServer(t)
+	s := &fakeSuno{track: &client.Track{ID: "a1", AudioURL: srv.URL + "/tam.mp3", Duration: 120}}
 	p := testPayload()
 	p.StemMode = ""
-	res, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
+	res, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
 	if err != nil {
-		t.Fatalf("sunoIleUret: %v", err)
+		t.Fatalf("generateWithSuno: %v", err)
 	}
-	if s.bolSayisi != 0 || res.StemMode != model.StemModeMix {
-		t.Errorf("bos mod mix gibi islenmeli: split=%d mod=%q", s.bolSayisi, res.StemMode)
+	if s.splitCalls != 0 || res.StemMode != model.StemModeMix {
+		t.Errorf("an empty mode must be handled like mix: split=%d mode=%q", s.splitCalls, res.StemMode)
 	}
 }
 
-func TestSunoIleUret_MixModuParcaAdresiYoksaTekrarYok(t *testing.T) {
-	s := &sahteSuno{track: &client.Track{ID: "a1", Duration: 120}}
+func TestRenderWorker_SunoMixModeMissingTrackURLNoRetry(t *testing.T) {
+	s := &fakeSuno{track: &client.Track{ID: "a1", Duration: 120}}
 	p := testPayload()
 	p.StemMode = model.StemModeMix
-	_, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
+	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
 }
 
-func TestSunoIleUret_FocusModuIkiStem(t *testing.T) {
-	srv := sesSunucusu(t)
-	s := &sahteSuno{
-		track: &client.Track{ID: "a1", Duration: 141},
-		ayrik: &client.IsolatedStem{ExtractURL: srv.URL + "/davul.mp3", RemoveURL: srv.URL + "/kalan.mp3", Duration: 141},
+func TestRenderWorker_SunoFocusModeTwoStems(t *testing.T) {
+	srv := audioServer(t)
+	s := &fakeSuno{
+		track:    &client.Track{ID: "a1", Duration: 141},
+		isolated: &client.IsolatedStem{ExtractURL: srv.URL + "/davul.mp3", RemoveURL: srv.URL + "/kalan.mp3", Duration: 141},
 	}
-	d := &sahteDepo{}
+	d := &fakeStorage{}
 	p := testPayload()
 	p.StemMode = model.StemModeFocus
-	davul := model.InstrumentDrums
-	p.FocusInstrument = &davul
+	drums := model.InstrumentDrums
+	p.FocusInstrument = &drums
 
-	res, err := testWorker(s, d).sunoIleUret(context.Background(), p, hic)
+	res, err := testWorker(s, d).generateWithSuno(context.Background(), p, noProgress)
 	if err != nil {
-		t.Fatalf("sunoIleUret: %v", err)
+		t.Fatalf("generateWithSuno: %v", err)
 	}
-	if s.ayirArgs != [3]string{"t1", "a1", "Drum Kit"} || s.bolSayisi != 0 {
-		t.Errorf("ayirma argumanlari = %v, split=%d", s.ayirArgs, s.bolSayisi)
+	if s.isolateArgs != [3]string{"t1", "a1", "Drum Kit"} || s.splitCalls != 0 {
+		t.Errorf("separation arguments = %v, split=%d", s.isolateArgs, s.splitCalls)
 	}
 	if res.StemMode != model.StemModeFocus || len(res.Stems) != 2 {
-		t.Fatalf("sonuc = %+v", res)
+		t.Fatalf("result = %+v", res)
 	}
 	if res.Stems[0].Instrument != model.InstrumentDrums || res.Stems[1].Instrument != model.InstrumentRest {
-		t.Errorf("enstrumanlar = %v, %v", res.Stems[0].Instrument, res.Stems[1].Instrument)
+		t.Errorf("instruments = %v, %v", res.Stems[0].Instrument, res.Stems[1].Instrument)
 	}
-	if len(d.yuklemeler) != 2 || !bytes.Equal(d.yuklemeler[0].veri, []byte("ses:/davul.mp3")) ||
-		!bytes.Equal(d.yuklemeler[1].veri, []byte("ses:/kalan.mp3")) {
-		t.Errorf("yuklemeler = %+v", d.yuklemeler)
+	if len(d.uploads) != 2 || !bytes.Equal(d.uploads[0].data, []byte("ses:/davul.mp3")) ||
+		!bytes.Equal(d.uploads[1].data, []byte("ses:/kalan.mp3")) {
+		t.Errorf("uploads = %+v", d.uploads)
 	}
 }
 
-func TestSunoIleUret_FocusAyirmaHatasiSkipRetry(t *testing.T) {
-	s := &sahteSuno{
-		track:    &client.Track{ID: "a1", Duration: 141},
-		ayirHata: errors.New("ayirma reddedildi"),
+func TestRenderWorker_SunoFocusIsolateErrorSkipsRetry(t *testing.T) {
+	s := &fakeSuno{
+		track:      &client.Track{ID: "a1", Duration: 141},
+		isolateErr: errors.New("separation rejected"),
 	}
 	p := testPayload()
 	p.StemMode = model.StemModeFocus
-	davul := model.InstrumentDrums
-	p.FocusInstrument = &davul
-	_, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
+	drums := model.InstrumentDrums
+	p.FocusInstrument = &drums
+	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
 }
 
-func TestSunoIleUret_FocusEnstrumaniEslenmiyorsaSunoCagrilmaz(t *testing.T) {
-	s := &sahteSuno{}
+func TestRenderWorker_SunoFocusUnmappedInstrumentNotCalled(t *testing.T) {
+	s := &fakeSuno{}
 	p := testPayload()
 	p.StemMode = model.StemModeFocus
 	p.FocusInstrument = nil
-	_, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
-	if !errors.Is(err, asynq.SkipRetry) || s.uretimSayisi != 0 {
-		t.Fatalf("ucret oncesi SkipRetry ve sifir uretim bekleniyordu: err=%v uretim=%d", err, s.uretimSayisi)
+	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
+	if !errors.Is(err, asynq.SkipRetry) || s.generateCalls != 0 {
+		t.Fatalf("want SkipRetry and zero generations before the charge: err=%v generations=%d", err, s.generateCalls)
 	}
 }
 
-func TestSunoIleUret_FocusAyirmaHatasiTekrarYok(t *testing.T) {
-	s := &sahteSuno{track: &client.Track{ID: "a1"}, ayrikBekleHata: errors.New("katalog eslesmesi")}
+func TestRenderWorker_SunoFocusIsolateWaitErrorNoRetry(t *testing.T) {
+	s := &fakeSuno{track: &client.Track{ID: "a1"}, isolatedWaitErr: errors.New("catalog match")}
 	p := testPayload()
 	p.StemMode = model.StemModeFocus
-	davul := model.InstrumentDrums
-	p.FocusInstrument = &davul
-	_, err := testWorker(s, &sahteDepo{}).sunoIleUret(context.Background(), p, hic)
+	drums := model.InstrumentDrums
+	p.FocusInstrument = &drums
+	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
 }
 
-// sahteDenetci, n. denetimde (0'dan) ne donecegini fonksiyonla belirler;
-// boylece hesabin isin ortasinda silinmesi taklit edilir.
-type sahteDenetci struct {
-	yanit   func(n int) (bool, error)
-	sorulan []string
+// fakeChecker decides with a function what the n-th check (from 0) returns,
+// which simulates the account being deleted in the middle of the job.
+type fakeChecker struct {
+	answer func(n int) (bool, error)
+	asked  []string
 }
 
-func (d *sahteDenetci) Silinmis(_ context.Context, userID string) (bool, error) {
-	n := len(d.sorulan)
-	d.sorulan = append(d.sorulan, userID)
-	return d.yanit(n)
+func (d *fakeChecker) IsDeleted(_ context.Context, userID string) (bool, error) {
+	n := len(d.asked)
+	d.asked = append(d.asked, userID)
+	return d.answer(n)
 }
 
-func hepSilinmis(int) (bool, error) { return true, nil }
+func alwaysDeleted(int) (bool, error) { return true, nil }
 
-func TestSunoIleUret_SilinmisSahipIcinSunoCagrilmaz(t *testing.T) {
-	s := &sahteSuno{}
-	h := &sahteDenetci{yanit: hepSilinmis}
-	d := &sahteDepo{}
-	_, err := denetciliWorker(s, d, h).sunoIleUret(context.Background(), testPayload(), hic)
+func TestRenderWorker_SunoNotCalledForDeletedOwner(t *testing.T) {
+	s := &fakeSuno{}
+	h := &fakeChecker{answer: alwaysDeleted}
+	d := &fakeStorage{}
+	_, err := workerWithChecker(s, d, h).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
-	if s.uretimSayisi != 0 || len(d.yuklemeler) != 0 {
-		t.Fatalf("silinmis sahip icin uretim=%d yukleme=%d", s.uretimSayisi, len(d.yuklemeler))
+	if s.generateCalls != 0 || len(d.uploads) != 0 {
+		t.Fatalf("generations=%d uploads=%d for a deleted owner", s.generateCalls, len(d.uploads))
 	}
-	if len(h.sorulan) == 0 || h.sorulan[0] != "kullanici-a" {
-		t.Fatalf("is sahibi denetlenmedi: %v", h.sorulan)
+	if len(h.asked) == 0 || h.asked[0] != "kullanici-a" {
+		t.Fatalf("the job owner was not checked: %v", h.asked)
 	}
 }
 
-func TestSunoIleUret_DenetimHatasindaUcretOncesiTekrarDenenir(t *testing.T) {
-	s := &sahteSuno{}
-	h := &sahteDenetci{yanit: func(int) (bool, error) { return false, errors.New("redis kapali") }}
-	_, err := denetciliWorker(s, &sahteDepo{}, h).sunoIleUret(context.Background(), testPayload(), hic)
+func TestRenderWorker_SunoCheckErrorBeforeChargeIsRetryable(t *testing.T) {
+	s := &fakeSuno{}
+	h := &fakeChecker{answer: func(int) (bool, error) { return false, errors.New("redis is down") }}
+	_, err := workerWithChecker(s, &fakeStorage{}, h).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if err == nil || errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("ucret oncesi denetim hatasi tekrar denenebilir olmali, geldi: %v", err)
+		t.Fatalf("a check error before the charge must be retryable, got: %v", err)
 	}
-	if s.uretimSayisi != 0 {
-		t.Fatalf("denetim hatasinda Suno %d kez cagrildi", s.uretimSayisi)
+	if s.generateCalls != 0 {
+		t.Fatalf("Suno was called %d times on a check error", s.generateCalls)
 	}
 }
 
-// Hesap ucretli cagridan sonra silinirse hicbir stem yuklenmez ve
-// asynq isi yeniden ucretlendirmez.
-func TestSunoIleUret_UcretSonrasiSilinenSahipIcinYuklemeYok(t *testing.T) {
-	srv := sesSunucusu(t)
-	durumlar := map[string]func(n int) (bool, error){
-		"silindi": func(n int) (bool, error) { return n > 0, nil },
-		"denetim hatasi": func(n int) (bool, error) {
+// If the account is deleted after the paid call, no stem is uploaded and
+// asynq does not charge the job again.
+func TestRenderWorker_SunoNoUploadForOwnerDeletedAfterCharge(t *testing.T) {
+	srv := audioServer(t)
+	cases := map[string]func(n int) (bool, error){
+		"deleted": func(n int) (bool, error) { return n > 0, nil },
+		"check error": func(n int) (bool, error) {
 			if n > 0 {
-				return false, errors.New("redis kapali")
+				return false, errors.New("redis is down")
 			}
 			return false, nil
 		},
 	}
-	for ad, yanit := range durumlar {
-		t.Run(ad, func(t *testing.T) {
-			s := &sahteSuno{
+	for name, answer := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := &fakeSuno{
 				track: &client.Track{ID: "a1", Duration: 30},
 				stems: []client.Stem{
 					{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"},
 					{Instrument: model.InstrumentPiano, URL: srv.URL + "/piyano.mp3"},
 				},
 			}
-			d := &sahteDepo{}
-			_, err := denetciliWorker(s, d, &sahteDenetci{yanit: yanit}).sunoIleUret(context.Background(), testPayload(), hic)
+			d := &fakeStorage{}
+			_, err := workerWithChecker(s, d, &fakeChecker{answer: answer}).generateWithSuno(context.Background(), testPayload(), noProgress)
 			if !errors.Is(err, asynq.SkipRetry) {
-				t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+				t.Fatalf("want SkipRetry, got: %v", err)
 			}
-			if s.uretimSayisi != 1 || len(d.yuklemeler) != 0 {
-				t.Fatalf("uretim=%d yukleme=%d; 1 ve 0 bekleniyordu", s.uretimSayisi, len(d.yuklemeler))
+			if s.generateCalls != 1 || len(d.uploads) != 0 {
+				t.Fatalf("generations=%d uploads=%d; want 1 and 0", s.generateCalls, len(d.uploads))
 			}
 		})
 	}
 }
 
-// Ikinci stem'den once silinirse ikinci yukleme yapilmaz: denetim her
-// yuklemeden once tekrarlanir.
-func TestSunoIleUret_HerYuklemedenOnceDenetler(t *testing.T) {
-	srv := sesSunucusu(t)
-	s := &sahteSuno{
+// If deleted before the second stem, the second upload is not made: the
+// check is repeated before every upload.
+func TestRenderWorker_SunoChecksBeforeEveryUpload(t *testing.T) {
+	srv := audioServer(t)
+	s := &fakeSuno{
 		track: &client.Track{ID: "a1", Duration: 30},
 		stems: []client.Stem{
 			{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"},
 			{Instrument: model.InstrumentPiano, URL: srv.URL + "/piyano.mp3"},
 		},
 	}
-	d := &sahteDepo{}
-	// 0: ucret oncesi, 1: ilk yukleme oncesi, 2: ikinci yukleme oncesi
-	h := &sahteDenetci{yanit: func(n int) (bool, error) { return n >= 2, nil }}
-	_, err := denetciliWorker(s, d, h).sunoIleUret(context.Background(), testPayload(), hic)
+	d := &fakeStorage{}
+	// 0: before the charge, 1: before the first upload, 2: before the second upload
+	h := &fakeChecker{answer: func(n int) (bool, error) { return n >= 2, nil }}
+	_, err := workerWithChecker(s, d, h).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
-	if len(d.yuklemeler) != 1 {
-		t.Fatalf("yukleme sayisi = %d, 1 bekleniyordu", len(d.yuklemeler))
+	if len(d.uploads) != 1 {
+		t.Fatalf("upload count = %d, want 1", len(d.uploads))
 	}
 }
 
-func TestSunoIleUret_SilinmemisSahipteDenetimHerAdimdaYapilir(t *testing.T) {
-	srv := sesSunucusu(t)
-	s := &sahteSuno{
+func TestRenderWorker_SunoChecksEveryStepForLiveOwner(t *testing.T) {
+	srv := audioServer(t)
+	s := &fakeSuno{
 		track: &client.Track{ID: "a1", Duration: 30},
 		stems: []client.Stem{
 			{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"},
 			{Instrument: model.InstrumentPiano, URL: srv.URL + "/piyano.mp3"},
 		},
 	}
-	d := &sahteDepo{}
-	h := &sahteDenetci{yanit: func(int) (bool, error) { return false, nil }}
-	if _, err := denetciliWorker(s, d, h).sunoIleUret(context.Background(), testPayload(), hic); err != nil {
-		t.Fatalf("sunoIleUret: %v", err)
+	d := &fakeStorage{}
+	h := &fakeChecker{answer: func(int) (bool, error) { return false, nil }}
+	if _, err := workerWithChecker(s, d, h).generateWithSuno(context.Background(), testPayload(), noProgress); err != nil {
+		t.Fatalf("generateWithSuno: %v", err)
 	}
-	if len(d.yuklemeler) != 2 || len(h.sorulan) != 3 {
-		t.Fatalf("yukleme=%d denetim=%d; 2 ve 3 bekleniyordu", len(d.yuklemeler), len(h.sorulan))
+	if len(d.uploads) != 2 || len(h.asked) != 3 {
+		t.Fatalf("uploads=%d checks=%d; want 2 and 3", len(d.uploads), len(h.asked))
 	}
 }

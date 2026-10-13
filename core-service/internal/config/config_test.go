@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestLoad_R2IkiBucket(t *testing.T) {
+func TestLoad_R2TwoBuckets(t *testing.T) {
 	os.Setenv("R2_PUBLIC_BUCKET", "makeasinger-public")
 	os.Setenv("R2_PRIVATE_BUCKET", "makeasinger-private")
 	os.Setenv("R2_PRESIGN_TTL", "1h")
@@ -18,74 +18,74 @@ func TestLoad_R2IkiBucket(t *testing.T) {
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
 	if cfg.R2.PublicBucket != "makeasinger-public" {
-		t.Errorf("PublicBucket = %q, beklenen makeasinger-public", cfg.R2.PublicBucket)
+		t.Errorf("PublicBucket = %q, want makeasinger-public", cfg.R2.PublicBucket)
 	}
 	if cfg.R2.PrivateBucket != "makeasinger-private" {
-		t.Errorf("PrivateBucket = %q, beklenen makeasinger-private", cfg.R2.PrivateBucket)
+		t.Errorf("PrivateBucket = %q, want makeasinger-private", cfg.R2.PrivateBucket)
 	}
 	if cfg.R2.PresignTTL != time.Hour {
-		t.Errorf("PresignTTL = %v, beklenen 1h", cfg.R2.PresignTTL)
+		t.Errorf("PresignTTL = %v, want 1h", cfg.R2.PresignTTL)
 	}
 }
 
-func TestLoad_PresignTTLVarsayilani(t *testing.T) {
+func TestLoad_PresignTTLDefault(t *testing.T) {
 	os.Unsetenv("R2_PRESIGN_TTL")
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
 	if cfg.R2.PresignTTL != time.Hour {
-		t.Errorf("varsayilan PresignTTL = %v, beklenen 1h", cfg.R2.PresignTTL)
+		t.Errorf("default PresignTTL = %v, want 1h", cfg.R2.PresignTTL)
 	}
 }
 
 func TestR2Config_PresignTTLOrDefault(t *testing.T) {
 	var nilCfg *R2Config
 	if got := nilCfg.PresignTTLOrDefault(); got != time.Hour {
-		t.Errorf("nil config icin PresignTTLOrDefault = %v, beklenen 1h", got)
+		t.Errorf("for nil config, PresignTTLOrDefault = %v, want 1h", got)
 	}
 
 	zeroCfg := &R2Config{}
 	if got := zeroCfg.PresignTTLOrDefault(); got != time.Hour {
-		t.Errorf("sifir PresignTTL icin PresignTTLOrDefault = %v, beklenen 1h", got)
+		t.Errorf("for zero PresignTTL, PresignTTLOrDefault = %v, want 1h", got)
 	}
 
 	setCfg := &R2Config{PresignTTL: 2 * time.Hour}
 	if got := setCfg.PresignTTLOrDefault(); got != 2*time.Hour {
-		t.Errorf("PresignTTLOrDefault = %v, beklenen config'teki 2h (sabit 1h'e duselmemeliydi)", got)
+		t.Errorf("PresignTTLOrDefault = %v, want 2h from config (must not fall back to the fixed 1h)", got)
 	}
 }
 
-func TestAuthVarsayilanlari(t *testing.T) {
+func TestLoad_AuthDefaults(t *testing.T) {
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if cfg.Auth.Port != "8001" {
-		t.Errorf("Auth.Port = %q, beklenen %q", cfg.Auth.Port, "8001")
+		t.Errorf("Auth.Port = %q, want %q", cfg.Auth.Port, "8001")
 	}
 	if cfg.Auth.AccessTTL != 15*time.Minute {
-		t.Errorf("Auth.AccessTTL = %v, beklenen 15m", cfg.Auth.AccessTTL)
+		t.Errorf("Auth.AccessTTL = %v, want 15m", cfg.Auth.AccessTTL)
 	}
 	if cfg.Auth.RefreshTTL != 1440*time.Hour {
-		t.Errorf("Auth.RefreshTTL = %v, beklenen 1440h", cfg.Auth.RefreshTTL)
+		t.Errorf("Auth.RefreshTTL = %v, want 1440h", cfg.Auth.RefreshTTL)
 	}
 }
 
-// Bu test bir DAVRANIS BELGESIDIR, bir sozlesme degil: viper'in
-// cozulemeyen bir sure degerinde varsayilana DUSMEDIGINI, sessizce 0s
-// verdigini kayda geciriyor. "15min" ve "60d", dokumanlarin her yerinde
-// gecen "15 dakika"/"60 gun" ifadelerinin dogal ama
-// time.ParseDuration'in ANLAMADIGI yazimlaridir, yani bu gercekci bir
-// yanlis yapilandirma. Sonuclari yikici (AccessTTL=0 => her /api/* 401;
-// RefreshTTL=0 => tum kullanicilar aninda disari atilir), bu yuzden
-// kimlik.Start TTL'leri ACIKCA dogrular ve <= 0 ise HIC BASLAMAZ
-// (bkz. TestGecersizTTLIleBaslamaz).
-func TestLoad_CozulemeyenTTLVarsayilanaDusmezSessizce0Olur(t *testing.T) {
+// This test is a BEHAVIOR DOCUMENT, not a contract: it records that viper
+// does NOT fall back to the default for an unparsable duration value and
+// silently yields 0s. "15min" and "60d" are natural spellings of the
+// "15 minutes"/"60 days" found throughout the docs that
+// time.ParseDuration does NOT understand, so this is a realistic
+// misconfiguration. Its consequences are destructive (AccessTTL=0 => every
+// /api/* returns 401; RefreshTTL=0 => all users are logged out instantly),
+// which is why identity.Start validates the TTLs EXPLICITLY and NEVER
+// STARTS if one is <= 0 (see TestStart_InvalidTTLFails).
+func TestLoad_UnparsableTTLSilentlyBecomesZero(t *testing.T) {
 	os.Setenv("AUTH_ACCESS_TTL", "15min")
 	os.Setenv("AUTH_REFRESH_TTL", "60d")
 	defer func() {
@@ -95,50 +95,50 @@ func TestLoad_CozulemeyenTTLVarsayilanaDusmezSessizce0Olur(t *testing.T) {
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
 	if cfg.Auth.AccessTTL != 0 {
-		t.Errorf("AccessTTL = %v; bu test viper'in 0 verdigini belgeliyor, davranis degistiyse kimlik.Start dogrulamasi gozden gecirilmeli", cfg.Auth.AccessTTL)
+		t.Errorf("AccessTTL = %v; this test documents that viper returns 0, if the behavior changed, review the identity.Start validation", cfg.Auth.AccessTTL)
 	}
 	if cfg.Auth.RefreshTTL != 0 {
-		t.Errorf("RefreshTTL = %v; ayni not", cfg.Auth.RefreshTTL)
+		t.Errorf("RefreshTTL = %v; same note", cfg.Auth.RefreshTTL)
 	}
 }
 
-// Hiz limiti varsayilanlari gercekten yukleniyor mu: 0 kalirsa
-// kimlik.NewHizLimit hata doner ve OP hic baslamaz.
-func TestLoad_HizLimitiVarsayilanlari(t *testing.T) {
-	for _, ad := range []string{
+// Whether the rate-limit defaults are really loaded: if they stay 0,
+// identity.NewRateLimiter returns an error and the OP never starts.
+func TestLoad_RateLimitDefaults(t *testing.T) {
+	for _, name := range []string{
 		"AUTH_LOGIN_IP_PER_MIN", "AUTH_LOGIN_EMAIL_PER_HOUR",
 		"AUTH_SIGNUP_IP_PER_HOUR", "AUTH_TRUSTED_PROXIES",
 	} {
-		os.Unsetenv(ad)
+		os.Unsetenv(name)
 	}
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
 	if cfg.Auth.LoginIPPerMin != 10 {
-		t.Errorf("LoginIPPerMin = %d, beklenen 10", cfg.Auth.LoginIPPerMin)
+		t.Errorf("LoginIPPerMin = %d, want 10", cfg.Auth.LoginIPPerMin)
 	}
 	if cfg.Auth.LoginEmailPerHour != 60 {
-		t.Errorf("LoginEmailPerHour = %d, beklenen 60", cfg.Auth.LoginEmailPerHour)
+		t.Errorf("LoginEmailPerHour = %d, want 60", cfg.Auth.LoginEmailPerHour)
 	}
 	if cfg.Auth.SignupIPPerHour != 5 {
-		t.Errorf("SignupIPPerHour = %d, beklenen 5", cfg.Auth.SignupIPPerHour)
+		t.Errorf("SignupIPPerHour = %d, want 5", cfg.Auth.SignupIPPerHour)
 	}
-	// FAIL-SAFE: varsayilan 0, yani X-Forwarded-For HIC okunmaz. 1
-	// varsayilani, onunde proxy olmayan bir kurulumda uydurma tek
-	// elemanli bir XFF'i guvenilir sayar ve IP limiti tamamen atlanir
-	// (bkz. config.go trusted_proxies notu). Proxy arkasinda deger
-	// ACIKCA verilir; bir sonraki test ezmenin calistigini olcer.
+	// FAIL-SAFE: the default is 0, so X-Forwarded-For is NEVER read. A
+	// default of 1 would trust a forged single-element XFF in a setup with
+	// no proxy in front and the IP limit would be bypassed entirely (see
+	// the trusted_proxies note in config.go). Behind a proxy the value is
+	// given EXPLICITLY; the next test checks that the override works.
 	if cfg.Auth.TrustedProxies != 0 {
-		t.Errorf("TrustedProxies = %d, beklenen 0 (varsayilan fail-safe olmali)", cfg.Auth.TrustedProxies)
+		t.Errorf("TrustedProxies = %d, want 0 (the default must be fail-safe)", cfg.Auth.TrustedProxies)
 	}
 }
 
-// Ortam degiskeni gercekten ezebiliyor mu (yalnizca varsayilan degil).
-func TestLoad_HizLimitiOrtamDegiskeniEzer(t *testing.T) {
+// Whether an environment variable can really override (not just the default).
+func TestLoad_RateLimitEnvOverrides(t *testing.T) {
 	os.Setenv("AUTH_LOGIN_IP_PER_MIN", "3")
 	os.Setenv("AUTH_TRUSTED_PROXIES", "2")
 	defer func() {
@@ -147,239 +147,243 @@ func TestLoad_HizLimitiOrtamDegiskeniEzer(t *testing.T) {
 	}()
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
 	if cfg.Auth.LoginIPPerMin != 3 {
-		t.Errorf("LoginIPPerMin = %d, beklenen 3", cfg.Auth.LoginIPPerMin)
+		t.Errorf("LoginIPPerMin = %d, want 3", cfg.Auth.LoginIPPerMin)
 	}
-	// Varsayilandan FARKLI bir deger: aksi halde bu dal varsayilanla
-	// ayni sonucu olcer ve "ortam degiskeni ezer" iddiasi vacuous olur.
+	// A value DIFFERENT from the default: otherwise this branch would
+	// measure the same result as the default and the "env overrides"
+	// claim would be vacuous.
 	if cfg.Auth.TrustedProxies != 2 {
-		t.Errorf("TrustedProxies = %d, beklenen 2", cfg.Auth.TrustedProxies)
+		t.Errorf("TrustedProxies = %d, want 2", cfg.Auth.TrustedProxies)
 	}
 }
 
-// federasyonEnvTemizle, AUTH_FED_* ortam degiskenlerinin HICBIRINI
-// birakmadan silinmesini saglar. Her federasyon testi bunu hem basta hem
-// defer ile cagirir: aksi halde bir testin birakttigi deger baska bir
-// testi yanlis sebepten gecirir/dusurur (ornegin paralel calisan baska
-// bir paket testi degil ama bu paket icindeki sonraki test).
-func federasyonEnvTemizle() {
-	for _, ad := range []string{
+// clearFederationEnv makes sure NONE of the AUTH_FED_* environment
+// variables is left set. Every federation test calls it both at the start
+// and via defer: otherwise a value left behind by one test makes another
+// test pass or fail for the wrong reason (not a test from another package
+// running in parallel, but the next test in this package).
+func clearFederationEnv() {
+	for _, name := range []string{
 		"AUTH_FED_GOOGLE_CLIENT_ID", "AUTH_FED_GOOGLE_CLIENT_SECRET",
 		"AUTH_FED_APPLE_CLIENT_ID", "AUTH_FED_APPLE_TEAM_ID",
 		"AUTH_FED_APPLE_KEY_ID", "AUTH_FED_APPLE_KEY_P8",
 	} {
-		os.Unsetenv(ad)
+		os.Unsetenv(name)
 	}
 }
 
-// federasyonBul, listede verilen Ad'a sahip girdiyi (varsa) doner. Testler
-// bunu kullanarak "hangi saglayicilar VAR" sorusunu "liste uzunlugu kac"
-// sorusundan ayri test eder; uzunluk-only bir kontrol, fonksiyon yanlis
-// saglayiciyi dondurse de gecerdi.
-func federasyonBul(liste []FederasyonIstemci, ad string) (FederasyonIstemci, bool) {
-	for _, f := range liste {
-		if f.Ad == ad {
+// findFederationClient returns the entry with the given Name in the list
+// (if any). Tests use it to check "which providers EXIST" separately from
+// "what is the list length"; a length-only check would have passed even if
+// the function returned the wrong provider.
+func findFederationClient(list []FederationClient, name string) (FederationClient, bool) {
+	for _, f := range list {
+		if f.Name == name {
 			return f, true
 		}
 	}
-	return FederasyonIstemci{}, false
+	return FederationClient{}, false
 }
 
-// Her iki saglayici da tam yapilandirilmisken ikisi de listede olmali ve
-// alanlari (Apple'in ucu dahil) BOZULMADAN tasinmali: Gorev 4'teki
-// JetonDegis, Apple client_secret'ini tam bu uc alandan uretir.
-func TestLoad_FederasyonIkisiTamYapilandirilinca(t *testing.T) {
-	federasyonEnvTemizle()
+// When both providers are fully configured, both must be in the list and
+// their fields (including Apple's three) must be carried over INTACT: the
+// token exchange (identity.Upstream.ExchangeCode) builds Apple's client_secret from exactly
+// these three fields.
+func TestLoad_FederationBothFullyConfigured(t *testing.T) {
+	clearFederationEnv()
 	os.Setenv("AUTH_FED_GOOGLE_CLIENT_ID", "google-cid")
 	os.Setenv("AUTH_FED_GOOGLE_CLIENT_SECRET", "google-sir")
 	os.Setenv("AUTH_FED_APPLE_CLIENT_ID", "apple-cid")
 	os.Setenv("AUTH_FED_APPLE_TEAM_ID", "team-1")
 	os.Setenv("AUTH_FED_APPLE_KEY_ID", "key-1")
 	os.Setenv("AUTH_FED_APPLE_KEY_P8", "-----BEGIN PRIVATE KEY-----p8-verisi")
-	defer federasyonEnvTemizle()
+	defer clearFederationEnv()
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
-	if len(cfg.Auth.Federasyon) != 2 {
-		t.Fatalf("Federasyon uzunlugu = %d, beklenen 2: %+v", len(cfg.Auth.Federasyon), cfg.Auth.Federasyon)
-	}
-
-	google, ok := federasyonBul(cfg.Auth.Federasyon, "google")
-	if !ok {
-		t.Fatalf("google saglayicisi listede yok: %+v", cfg.Auth.Federasyon)
-	}
-	if google.IstemciID != "google-cid" || google.IstemciSir != "google-sir" {
-		t.Errorf("google = %+v, beklenen IstemciID=google-cid IstemciSir=google-sir", google)
+	if len(cfg.Auth.Federation) != 2 {
+		t.Fatalf("Federation length = %d, want 2: %+v", len(cfg.Auth.Federation), cfg.Auth.Federation)
 	}
 
-	apple, ok := federasyonBul(cfg.Auth.Federasyon, "apple")
+	google, ok := findFederationClient(cfg.Auth.Federation, "google")
 	if !ok {
-		t.Fatalf("apple saglayicisi listede yok: %+v", cfg.Auth.Federasyon)
+		t.Fatalf("google provider missing from the list: %+v", cfg.Auth.Federation)
 	}
-	if apple.IstemciID != "apple-cid" {
-		t.Errorf("apple.IstemciID = %q, beklenen apple-cid", apple.IstemciID)
+	if google.ClientID != "google-cid" || google.ClientSecret != "google-sir" {
+		t.Errorf("google = %+v, want ClientID=google-cid ClientSecret=google-sir", google)
 	}
-	if apple.AppleEkipID != "team-1" || apple.AppleAnahtarID != "key-1" || apple.AppleAnahtarP8 != "-----BEGIN PRIVATE KEY-----p8-verisi" {
-		t.Errorf("apple'in uc alani bozulmus tasindi: %+v", apple)
+
+	apple, ok := findFederationClient(cfg.Auth.Federation, "apple")
+	if !ok {
+		t.Fatalf("apple provider missing from the list: %+v", cfg.Auth.Federation)
+	}
+	if apple.ClientID != "apple-cid" {
+		t.Errorf("apple.ClientID = %q, want apple-cid", apple.ClientID)
+	}
+	if apple.AppleTeamID != "team-1" || apple.AppleKeyID != "key-1" || apple.AppleKeyP8 != "-----BEGIN PRIVATE KEY-----p8-verisi" {
+		t.Errorf("apple's three fields were carried over corrupted: %+v", apple)
 	}
 }
 
-// Google'in client_id'si bossa Google listeye HIC EKLENMEMELI (bos
-// girdiyle degil, yoklukla). Apple tek basina kalmali.
-func TestLoad_FederasyonGoogleBossaEklenmez(t *testing.T) {
-	federasyonEnvTemizle()
+// If Google's client_id is empty, Google must NEVER be added to the list
+// (absence, not an empty entry). Apple must stay on its own.
+func TestLoad_FederationOmitsGoogleWhenEmpty(t *testing.T) {
+	clearFederationEnv()
 	os.Setenv("AUTH_FED_APPLE_CLIENT_ID", "apple-cid")
 	os.Setenv("AUTH_FED_APPLE_TEAM_ID", "team-1")
 	os.Setenv("AUTH_FED_APPLE_KEY_ID", "key-1")
 	os.Setenv("AUTH_FED_APPLE_KEY_P8", "p8-verisi")
-	defer federasyonEnvTemizle()
+	defer clearFederationEnv()
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
-	if _, ok := federasyonBul(cfg.Auth.Federasyon, "google"); ok {
-		t.Errorf("google client_id bossa listede olmamali: %+v", cfg.Auth.Federasyon)
+	if _, ok := findFederationClient(cfg.Auth.Federation, "google"); ok {
+		t.Errorf("google must not be in the list when client_id is empty: %+v", cfg.Auth.Federation)
 	}
-	apple, ok := federasyonBul(cfg.Auth.Federasyon, "apple")
+	apple, ok := findFederationClient(cfg.Auth.Federation, "apple")
 	if !ok {
-		t.Fatalf("apple listede yok: %+v", cfg.Auth.Federasyon)
+		t.Fatalf("apple missing from the list: %+v", cfg.Auth.Federation)
 	}
-	if apple.IstemciID != "apple-cid" {
-		t.Errorf("apple.IstemciID = %q, beklenen apple-cid", apple.IstemciID)
+	if apple.ClientID != "apple-cid" {
+		t.Errorf("apple.ClientID = %q, want apple-cid", apple.ClientID)
 	}
-	if len(cfg.Auth.Federasyon) != 1 {
-		t.Errorf("Federasyon uzunlugu = %d, beklenen 1 (sadece apple)", len(cfg.Auth.Federasyon))
+	if len(cfg.Auth.Federation) != 1 {
+		t.Errorf("Federation length = %d, want 1 (apple only)", len(cfg.Auth.Federation))
 	}
 }
 
-// Apple'in client_id'si bossa Apple listeye HIC EKLENMEMELI, uc alani
-// (team/key/p8) dolu olsa bile. Google tek basina kalmali.
-func TestLoad_FederasyonAppleBossaEklenmez(t *testing.T) {
-	federasyonEnvTemizle()
+// If Apple's client_id is empty, Apple must NEVER be added to the list,
+// even if its three fields (team/key/p8) are filled. Google must stay on
+// its own.
+func TestLoad_FederationOmitsAppleWhenEmpty(t *testing.T) {
+	clearFederationEnv()
 	os.Setenv("AUTH_FED_GOOGLE_CLIENT_ID", "google-cid")
 	os.Setenv("AUTH_FED_GOOGLE_CLIENT_SECRET", "google-sir")
-	// Apple'in client_id'si BILEREK bos; uc alani dolu olsa da Apple
-	// eklenmemeli (client_id eksikse digerleri anlamsiz).
+	// Apple's client_id is DELIBERATELY empty; even with its three fields
+	// filled, Apple must not be added (the others are meaningless without
+	// a client_id).
 	os.Setenv("AUTH_FED_APPLE_TEAM_ID", "team-1")
 	os.Setenv("AUTH_FED_APPLE_KEY_ID", "key-1")
 	os.Setenv("AUTH_FED_APPLE_KEY_P8", "p8-verisi")
-	defer federasyonEnvTemizle()
+	defer clearFederationEnv()
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
-	if _, ok := federasyonBul(cfg.Auth.Federasyon, "apple"); ok {
-		t.Errorf("apple client_id bossa listede olmamali: %+v", cfg.Auth.Federasyon)
+	if _, ok := findFederationClient(cfg.Auth.Federation, "apple"); ok {
+		t.Errorf("apple must not be in the list when client_id is empty: %+v", cfg.Auth.Federation)
 	}
-	google, ok := federasyonBul(cfg.Auth.Federasyon, "google")
+	google, ok := findFederationClient(cfg.Auth.Federation, "google")
 	if !ok {
-		t.Fatalf("google listede yok: %+v", cfg.Auth.Federasyon)
+		t.Fatalf("google missing from the list: %+v", cfg.Auth.Federation)
 	}
-	if google.IstemciID != "google-cid" {
-		t.Errorf("google.IstemciID = %q, beklenen google-cid", google.IstemciID)
+	if google.ClientID != "google-cid" {
+		t.Errorf("google.ClientID = %q, want google-cid", google.ClientID)
 	}
-	if len(cfg.Auth.Federasyon) != 1 {
-		t.Errorf("Federasyon uzunlugu = %d, beklenen 1 (sadece google)", len(cfg.Auth.Federasyon))
+	if len(cfg.Auth.Federation) != 1 {
+		t.Errorf("Federation length = %d, want 1 (google only)", len(cfg.Auth.Federation))
 	}
 }
 
-// Ikisi de bossa liste bos/nil olmali ve hic bir sey panik atmamali.
-func TestLoad_FederasyonIkisiDeBossaBos(t *testing.T) {
-	federasyonEnvTemizle()
-	defer federasyonEnvTemizle()
+// If both are empty the list must be empty/nil and nothing may panic.
+func TestLoad_FederationEmptyWhenNoneConfigured(t *testing.T) {
+	clearFederationEnv()
+	defer clearFederationEnv()
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
-	if len(cfg.Auth.Federasyon) != 0 {
-		t.Errorf("Federasyon uzunlugu = %d, beklenen 0: %+v", len(cfg.Auth.Federasyon), cfg.Auth.Federasyon)
+	if len(cfg.Auth.Federation) != 0 {
+		t.Errorf("Federation length = %d, want 0: %+v", len(cfg.Auth.Federation), cfg.Auth.Federation)
 	}
-	// Erisim panik atmamali (nil dilimde indeksleme yapilmiyor, ama
-	// range ve len guvenle calismali).
-	for _, f := range cfg.Auth.Federasyon {
-		t.Errorf("beklenmeyen girdi: %+v", f)
+	// Access must not panic (a nil slice is not indexed, but range and len
+	// must work safely).
+	for _, f := range cfg.Auth.Federation {
+		t.Errorf("unexpected entry: %+v", f)
 	}
 }
 
-func TestLoad_SunoVarsayilanlari(t *testing.T) {
+func TestLoad_SunoDefaults(t *testing.T) {
 	os.Unsetenv("SUNO_MODEL")
 	os.Unsetenv("SUNO_CALLBACK_URL")
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
 	if cfg.Suno.Model != "V6" {
-		t.Errorf("Suno.Model = %q, beklenen V6", cfg.Suno.Model)
+		t.Errorf("Suno.Model = %q, want V6", cfg.Suno.Model)
 	}
 	if cfg.Suno.CallbackURL == "" {
-		t.Error("Suno.CallbackURL bos; saglayici zorunlu tutuyor")
+		t.Error("Suno.CallbackURL is empty; the provider requires it")
 	}
 }
 
-func TestLoad_SunoModelEnvIleDegisir(t *testing.T) {
+func TestLoad_SunoModelFromEnv(t *testing.T) {
 	os.Setenv("SUNO_MODEL", "V6_MINI")
 	defer os.Unsetenv("SUNO_MODEL")
 
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
 	if cfg.Suno.Model != "V6_MINI" {
-		t.Errorf("Suno.Model = %q, beklenen V6_MINI", cfg.Suno.Model)
+		t.Errorf("Suno.Model = %q, want V6_MINI", cfg.Suno.Model)
 	}
 }
 
-func TestLoad_SosyalYayinLimiti(t *testing.T) {
+func TestLoad_SocialPublicationLimit(t *testing.T) {
 	os.Unsetenv("RATELIMIT_SOSYAL_YAYIN_PER_HOUR")
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
-	if cfg.RateLimit.SosyalYayinPerHour != 30 {
-		t.Errorf("varsayilan SosyalYayinPerHour = %d, beklenen 30", cfg.RateLimit.SosyalYayinPerHour)
+	if cfg.RateLimit.SocialPublicationPerHour != 30 {
+		t.Errorf("default SocialPublicationPerHour = %d, want 30", cfg.RateLimit.SocialPublicationPerHour)
 	}
 
 	t.Setenv("RATELIMIT_SOSYAL_YAYIN_PER_HOUR", "7")
 	cfg, err = Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
-	if cfg.RateLimit.SosyalYayinPerHour != 7 {
-		t.Errorf("SosyalYayinPerHour = %d, ortamdan 7 bekleniyordu", cfg.RateLimit.SosyalYayinPerHour)
+	if cfg.RateLimit.SocialPublicationPerHour != 7 {
+		t.Errorf("SocialPublicationPerHour = %d, want 7 from the environment", cfg.RateLimit.SocialPublicationPerHour)
 	}
 }
 
-func TestLoad_KesfetLimitleriVarsayilan(t *testing.T) {
-	for _, ad := range []string{
+func TestLoad_SocialLimitsDefault(t *testing.T) {
+	for _, name := range []string{
 		"RATELIMIT_SOSYAL_YORUM_PER_MIN", "RATELIMIT_SOSYAL_COVER_PER_HOUR",
 		"RATELIMIT_PUBLIC_PER_MIN", "RATELIMIT_PUBLIC_WEB_PER_MIN",
 		"SOSYAL_WEB_ANAHTARI", "SOSYAL_WEB_ANAHTARI_FILE",
 	} {
-		os.Unsetenv(ad)
+		os.Unsetenv(name)
 	}
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
 	r := cfg.RateLimit
-	if r.SosyalYorumPerMin != 10 || r.SosyalCoverPerHour != 20 || r.PublicPerMin != 30 || r.PublicWebPerMin != 600 {
-		t.Errorf("varsayilanlar = yorum %d, cover %d, public %d, web %d; beklenen 10, 20, 30, 600",
-			r.SosyalYorumPerMin, r.SosyalCoverPerHour, r.PublicPerMin, r.PublicWebPerMin)
+	if r.SocialCommentPerMin != 10 || r.SocialCoverPerHour != 20 || r.PublicPerMin != 30 || r.PublicWebPerMin != 600 {
+		t.Errorf("defaults = comment %d, cover %d, public %d, web %d; want 10, 20, 30, 600",
+			r.SocialCommentPerMin, r.SocialCoverPerHour, r.PublicPerMin, r.PublicWebPerMin)
 	}
-	if cfg.Sosyal.WebAnahtari != "" {
-		t.Errorf("WebAnahtari varsayilani bos olmali: %q", cfg.Sosyal.WebAnahtari)
+	if cfg.Social.WebKey != "" {
+		t.Errorf("WebKey default must be empty: %q", cfg.Social.WebKey)
 	}
 }
 
-func TestLoad_KesfetLimitleriOrtamdan(t *testing.T) {
+func TestLoad_SocialLimitsFromEnv(t *testing.T) {
 	t.Setenv("RATELIMIT_SOSYAL_YORUM_PER_MIN", "3")
 	t.Setenv("RATELIMIT_SOSYAL_COVER_PER_HOUR", "4")
 	t.Setenv("RATELIMIT_PUBLIC_PER_MIN", "5")
@@ -387,31 +391,31 @@ func TestLoad_KesfetLimitleriOrtamdan(t *testing.T) {
 	t.Setenv("SOSYAL_WEB_ANAHTARI", "dogrudan-deger")
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
 	r := cfg.RateLimit
-	if r.SosyalYorumPerMin != 3 || r.SosyalCoverPerHour != 4 || r.PublicPerMin != 5 || r.PublicWebPerMin != 6 {
-		t.Errorf("ortam degerleri okunmadi: %+v", r)
+	if r.SocialCommentPerMin != 3 || r.SocialCoverPerHour != 4 || r.PublicPerMin != 5 || r.PublicWebPerMin != 6 {
+		t.Errorf("environment values were not read: %+v", r)
 	}
-	if cfg.Sosyal.WebAnahtari != "dogrudan-deger" {
-		t.Errorf("WebAnahtari = %q", cfg.Sosyal.WebAnahtari)
+	if cfg.Social.WebKey != "dogrudan-deger" {
+		t.Errorf("WebKey = %q", cfg.Social.WebKey)
 	}
 }
 
-// Docker secret yolu: SOSYAL_WEB_ANAHTARI bos, _FILE dolu.
-func TestLoad_WebAnahtariDosyadan(t *testing.T) {
-	dosya := t.TempDir() + "/web_anahtari"
-	if err := os.WriteFile(dosya, []byte("  dosyadaki-sir\n"), 0o600); err != nil {
+// Docker secret path: SOSYAL_WEB_ANAHTARI is empty, _FILE is set.
+func TestLoad_WebKeyFromFile(t *testing.T) {
+	secretFile := t.TempDir() + "/web_anahtari"
+	if err := os.WriteFile(secretFile, []byte("  dosyadaki-sir\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SOSYAL_WEB_ANAHTARI", "")
-	t.Setenv("SOSYAL_WEB_ANAHTARI_FILE", dosya)
-	// readSecret degeri ortama yazar; t.Setenv'in temizligi geri alir.
+	t.Setenv("SOSYAL_WEB_ANAHTARI_FILE", secretFile)
+	// readSecret writes the value to the environment; t.Setenv's cleanup undoes it.
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("Load hata verdi: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
-	if cfg.Sosyal.WebAnahtari != "dosyadaki-sir" {
-		t.Errorf("WebAnahtari = %q, beklenen dosyadaki-sir (kirpilmis)", cfg.Sosyal.WebAnahtari)
+	if cfg.Social.WebKey != "dosyadaki-sir" {
+		t.Errorf("WebKey = %q, want dosyadaki-sir (trimmed)", cfg.Social.WebKey)
 	}
 }

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hesabini bagla - make-singer</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 24rem; margin: 3rem auto; padding: 0 1rem; color: #222; }
+  h1 { font-size: 1.25rem; }
+  label { display: block; margin-top: 1rem; font-weight: 600; }
+  input { width: 100%; padding: 0.5rem; margin-top: 0.25rem; box-sizing: border-box; font-size: 1rem; }
+  button { margin-top: 1.5rem; padding: 0.6rem 1.2rem; font-size: 1rem; width: 100%; }
+  .hata { color: #b00020; margin-top: 1rem; }
+</style>
+</head>
+<body>
+  <h1>Hesabini bagla</h1>
+  <p>{{.Email}} adresiyle zaten bir hesabin var. Baglamak icin mevcut sifreni gir.</p>
+  {{if .Error}}<p class="hata">{{.Error}}</p>{{end}}
+  <form method="post" action="{{.LinkPath}}">
+    <input type="hidden" name="beklemeID" value="{{.PendingID}}">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label for="sifre">Mevcut sifren</label>
+    <input type="password" id="sifre" name="sifre" required autofocus>
+    <button type="submit">Bagla ve giris yap</button>
+  </form>
+</body>
+</html>

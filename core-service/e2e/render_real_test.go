@@ -87,15 +87,15 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 	groqClient := client.NewGroqClient(&cfg.Groq)
 	sunoClient := client.NewSunoClient(&cfg.Suno)
 
-	// R2 client (optional). Arayuz degiskeni bilerek kullanilir: nil
-	// *R2Client'i dogrudan worker'a vermek "tipli nil" uretir, worker'in
-	// depo kontrolu onu yakalayamaz ve Suno ucreti odendikten sonra
-	// yuklemede panic olur. Anahtar verilmisse kurulum hatasi FATALDIR.
+	// R2 client (optional). An interface variable is used on purpose: passing
+	// a nil *R2Client directly to the worker produces a "typed nil", the
+	// worker's storage check cannot catch it, and it panics on upload after
+	// the Suno fee has been paid. If a key is provided, a setup error is FATAL.
 	var r2Client client.StorageClient
 	if cfg.R2.AccessKeyID != "" && cfg.R2.SecretAccessKey != "" {
 		r2, err := client.NewR2Client(&cfg.R2)
 		if err != nil {
-			t.Fatalf("R2 istemcisi kurulamadi: %v", err)
+			t.Fatalf("could not set up the R2 client: %v", err)
 		}
 		r2Client = r2
 	}
@@ -119,7 +119,7 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
 
 	// Middleware
-	authMiddleware := middleware.NewOPAuthMiddleware(testIssuer, testClientID, &testAnahtar.PublicKey)
+	authMiddleware := middleware.NewOPAuthMiddleware(testIssuer, testClientID, &testKey.PublicKey)
 	rateLimiter := middleware.NewRateLimiter(redisClient)
 
 	// Fiber app
@@ -173,7 +173,7 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 		},
 	)
 
-	// e2e hesap silmez; silinmis isaret denetimi gerekmez.
+	// e2e never deletes accounts; no deleted-mark check is needed.
 	renderWorker := worker.NewRenderWorker(renderService, sunoClient, r2Client, hub, nil)
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
@@ -196,12 +196,12 @@ func TestRenderFullPipeline_RealSuno(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping real Suno API test in short mode")
 	}
-	// Ucretli test: istek stemMode gondermedigi icin varsayilan mix calisir (12 kredi). Yalnizca
-	// acik onayla calisir; -run Render gibi genis bir desen onu kazara
-	// tetiklemesin. Kontrol .env yuklenmeden yapilir: onay dosyada degil,
-	// komut satirinda verilmeli.
+	// Paid test: the request sends no stemMode, so the default mix runs (12 credits).
+	// It runs only with explicit consent, so a broad pattern like -run Render
+	// cannot trigger it by accident. The check happens before .env is loaded:
+	// the consent must be given on the command line, not in the file.
 	if os.Getenv("SUNO_E2E_ONAY") != "1" {
-		t.Skip("ucretli Suno testi atlandi; calistirmak icin SUNO_E2E_ONAY=1")
+		t.Skip("paid Suno test skipped; set SUNO_E2E_ONAY=1 to run it")
 	}
 
 	app, cleanup := setupRealApp(t)

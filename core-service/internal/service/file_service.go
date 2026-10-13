@@ -9,9 +9,9 @@ import (
 	"github.com/makeasinger/api/internal/model"
 )
 
-// FileService, istemcinin sakladigi dosya adreslerini tazeler. Istemci
-// adresi yalnizca nesne referansi olarak tutar; imza 1 saatte doldugu
-// icin calmadan once buradan yeni adres alir.
+// FileService refreshes the file URLs the client has stored. The client keeps
+// a URL only as an object reference; since the signature expires in 1 hour it
+// gets a fresh URL from here before playing.
 type FileService struct {
 	storage client.StorageClient
 	r2Cfg   *config.R2Config
@@ -21,25 +21,26 @@ func NewFileService(storage client.StorageClient, r2Cfg *config.R2Config) *FileS
 	return &FileService{storage: storage, r2Cfg: r2Cfg}
 }
 
-// Sign, adresleri girdiyle ayni sirada tazeler. Once HEPSI cozulup
-// sahiplik denetlenir: tek bir yabanci anahtar varsa hicbir imza
-// uretilmez (kismi yanit, yabanci anahtarin varligini sizdirmaz).
+// Sign refreshes the URLs in the same order as the input. ALL of them are
+// resolved and ownership-checked first: if there is a single foreign key no
+// signature is produced (a partial response would leak the existence of the
+// foreign key).
 func (s *FileService) Sign(ctx context.Context, userID string, urls []string) (*model.FileSignResponse, error) {
-	anahtarlar := make([]string, len(urls))
+	keys := make([]string, len(urls))
 	for i, u := range urls {
-		key, err := client.SahipliAnahtarCoz(u, userID, s.r2Cfg)
+		key, err := client.ResolveOwnedKey(u, userID, s.r2Cfg)
 		if err != nil {
 			return nil, err
 		}
-		anahtarlar[i] = key
+		keys[i] = key
 	}
-	dosyalar := make([]model.SignedFile, len(anahtarlar))
-	for i, key := range anahtarlar {
-		adres, son, err := client.ResolveURL(ctx, s.storage, s.r2Cfg, key)
+	files := make([]model.SignedFile, len(keys))
+	for i, key := range keys {
+		signedURL, expiresAt, err := client.ResolveURL(ctx, s.storage, s.r2Cfg, key)
 		if err != nil {
-			return nil, fmt.Errorf("adres uretilemedi: %w", err)
+			return nil, fmt.Errorf("could not generate the URL: %w", err)
 		}
-		dosyalar[i] = model.SignedFile{URL: adres, ExpiresAt: model.ExpiresPtr(son)}
+		files[i] = model.SignedFile{URL: signedURL, ExpiresAt: model.ExpiresPtr(expiresAt)}
 	}
-	return &model.FileSignResponse{Files: dosyalar}, nil
+	return &model.FileSignResponse{Files: files}, nil
 }
