@@ -16,6 +16,14 @@ import (
 // that the job exists.
 var ErrJobNotFound = errors.New("job not found")
 
+// ErrJobNotCompleted is returned when a result is requested before the job
+// has succeeded. Handlers answer it with 400.
+var ErrJobNotCompleted = errors.New("job not completed")
+
+// ErrJobAlreadyCompleted is returned when a finished job is canceled.
+// Handlers answer it with 400.
+var ErrJobAlreadyCompleted = errors.New("job already completed")
+
 const jobTTL = 24 * time.Hour
 
 func jobKey(jobID string) string { return fmt.Sprintf("job:%s", jobID) }

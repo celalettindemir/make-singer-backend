@@ -169,7 +169,7 @@ func (h *MasterHandler) Result(c *fiber.Ctx) error {
 		if errors.Is(err, service.ErrJobNotFound) {
 			return response.NotFound(c, i18n.KeyJobNotFound)
 		}
-		if err.Error() == "job not completed" {
+		if errors.Is(err, service.ErrJobNotCompleted) {
 			return response.ValidationError(c, i18n.KeyJobNotCompleted, nil)
 		}
 		return internalError(c, err)

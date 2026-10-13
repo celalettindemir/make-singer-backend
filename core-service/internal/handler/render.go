@@ -127,7 +127,7 @@ func (h *RenderHandler) Result(c *fiber.Ctx) error {
 		if errors.Is(err, service.ErrJobNotFound) {
 			return response.NotFound(c, i18n.KeyJobNotFound)
 		}
-		if err.Error() == "job not completed" {
+		if errors.Is(err, service.ErrJobNotCompleted) {
 			return response.ValidationError(c, i18n.KeyJobNotCompleted, nil)
 		}
 		return internalError(c, err)
@@ -165,7 +165,7 @@ func (h *RenderHandler) Cancel(c *fiber.Ctx) error {
 		if errors.Is(err, service.ErrJobNotFound) {
 			return response.NotFound(c, i18n.KeyJobNotFound)
 		}
-		if err.Error() == "job already completed" {
+		if errors.Is(err, service.ErrJobAlreadyCompleted) {
 			return response.ValidationError(c, i18n.KeyJobAlreadyCompleted, nil)
 		}
 		return internalError(c, err)

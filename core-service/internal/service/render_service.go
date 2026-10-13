@@ -165,7 +165,7 @@ func (s *RenderService) GetResult(ctx context.Context, userID, jobID string) (*m
 	}
 
 	if job.Status != model.JobStatusSucceeded {
-		return nil, fmt.Errorf("job not completed")
+		return nil, ErrJobNotCompleted
 	}
 
 	var record model.RenderResultRecord
@@ -184,7 +184,7 @@ func (s *RenderService) CancelRender(ctx context.Context, userID, jobID string) 
 	}
 
 	if job.Status == model.JobStatusSucceeded || job.Status == model.JobStatusFailed {
-		return nil, fmt.Errorf("job already completed")
+		return nil, ErrJobAlreadyCompleted
 	}
 
 	job.Status = model.JobStatusCanceled

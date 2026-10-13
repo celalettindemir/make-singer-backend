@@ -149,7 +149,7 @@ func (s *MasterService) GetResult(ctx context.Context, userID, jobID string) (*m
 	}
 
 	if job.Status != model.JobStatusSucceeded {
-		return nil, fmt.Errorf("job not completed")
+		return nil, ErrJobNotCompleted
 	}
 
 	return s.BuildResult(ctx, job.Result)
