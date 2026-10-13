@@ -187,6 +187,7 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 		LoginEmailPerHour: cfg.LoginEmailPerHour,
 		SignupIPPerHour:   cfg.SignupIPPerHour,
 		TrustedProxies:    cfg.TrustedProxies,
+		Cloudflare:        cfg.Cloudflare,
 	}, cryptoKey[:])
 	if err != nil {
 		cancelFed()

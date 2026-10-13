@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/uuid"
 	"github.com/makeasinger/api/internal/client"
 )
 
@@ -36,6 +35,13 @@ type CoverStart struct {
 func (s *Service) WithCopier(copier client.Copier) *Service {
 	s.copier = copier
 	return s
+}
+
+// CoverFolder is the folder segment that holds a caller's stem copies for one
+// source publication: "cover-{sourcePublicationID}". It passes the user-key
+// segment rule (letters, digits, "-" and "_", at most 64 characters).
+func CoverFolder(sourcePublicationID string) string {
+	return "cover-" + sourcePublicationID
 }
 
 // CoverStemDestKey is the key of a stem copied for a cover:
@@ -100,7 +106,10 @@ func (s *Service) StartCover(ctx context.Context, userID, pubID string) (*CoverS
 		return nil, ErrBackingDisabled
 	}
 
-	folder := uuid.NewString()
+	// One deterministic folder per (caller, source publication): a repeat
+	// start overwrites the same objects. The source stems are immutable after
+	// publish, so the content is identical and no existence check is needed.
+	folder := CoverFolder(rec.ID)
 	stems := make([]CoverStem, 0, len(sourceStems))
 	for _, stem := range sourceStems {
 		dest, err := CoverStemDestKey(id, folder, stem.ID, stem.Key)

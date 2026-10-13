@@ -21,10 +21,16 @@ ratelimit:
   sosyal_cover_per_hour: 20
   public_per_min: 30 # GET /api/public/s/{slug}, per client IP
   public_web_per_min: 600 # same endpoint, shared by all web requests carrying X-Web-Anahtari
+  public_web_visitor_per_min: 30 # per visitor (X-Ziyaretci-Ip) within the web requests, also checked; <=0 disables
+  # Cloudflare edge ranges whose CF-Connecting-IP is trusted for per-IP limits (comma-separated CIDRs).
+  # Unset = the built-in Cloudflare list (clientip.DefaultCloudflareRanges); empty string disables the header.
+  # cloudflare_ranges: ""
 
 # Discover (social)
 sosyal:
   web_anahtari: "" # Set via SOSYAL_WEB_ANAHTARI (or _FILE). Empty = web bypass disabled.
+  stale_preparation_after: 1h # SOCIAL_STALE_PREPARATION_AFTER: preparing longer than this -> failed
+  stale_sweep_interval: 15m # SOCIAL_STALE_SWEEP_INTERVAL: sweep period; <= 0 disables the scheduler
 
 # Groq AI Configuration
 groq:

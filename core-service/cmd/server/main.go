@@ -179,7 +179,8 @@ func main() {
 	}
 	socialHandler := handler.NewSocialHandler(
 		social.NewService(socialStore, asynqClient, storage, &cfg.R2).WithCopier(copier))
-	socialWorker := worker.NewSocialWorker(socialStore, copier, audioClient, prefixDeleter, deletionmark.NewRedisChecker(redisClient))
+	socialWorker := worker.NewSocialWorker(socialStore, copier, audioClient, prefixDeleter, deletionmark.NewRedisChecker(redisClient)).
+		WithStaleSweep(socialStore, cfg.Social.StalePreparationAfter)
 
 	// Initialize handlers
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
@@ -194,7 +195,7 @@ func main() {
 	// key is read in-process; the JWKS endpoint is not fetched over the network.
 	apiAuthMiddleware := middleware.NewOPAuthMiddleware(
 		cfg.Auth.Issuer, cfg.Auth.ClientID, identityServer.APIPublicKey()).Authenticate()
-	rateLimiter := middleware.NewRateLimiter(redisClient)
+	rateLimiter := middleware.NewRateLimiter(redisClient, cfg.RateLimit.Cloudflare)
 
 	// Initialize Fiber app
 	app := fiber.New(fiber.Config{
@@ -269,7 +270,7 @@ func main() {
 	// server shares one, higher limit via X-Web-Anahtari.
 	socialHandler.PublicRoutes(app.Group("/api/public"),
 		rateLimiter.LimitIP("public", cfg.RateLimit.PublicPerMin, time.Minute,
-			cfg.Social.WebKey, cfg.RateLimit.PublicWebPerMin))
+			cfg.Social.WebKey, cfg.RateLimit.PublicWebPerMin, cfg.RateLimit.PublicWebVisitorPerMin))
 
 	// API routes
 	api := app.Group("/api", apiAuthMiddleware, middleware.DeletedUserGate(deletionmark.NewRedisChecker(redisClient)))
@@ -410,10 +411,51 @@ func startWorkerServer(
 	mux.HandleFunc(service.TaskTypeAccountCleanup, worker.NewAccountWorker(accountService).ProcessTask)
 	mux.HandleFunc(social.TaskTypePrepare, socialWorker.Prepare)
 	mux.HandleFunc(social.TaskTypeDeleteFiles, socialWorker.DeleteFiles)
+	mux.HandleFunc(social.TaskTypeSweepStale, socialWorker.SweepStale)
+
+	scheduler, err := startStaleSweepScheduler(cfg)
+	if err != nil {
+		log.Printf("Stale sweep scheduler could not start: %v", err)
+	}
+	if scheduler != nil {
+		defer scheduler.Shutdown()
+	}
 
 	if err := srv.Run(mux); err != nil {
 		log.Printf("Asynq worker error: %v", err)
 	}
+}
+
+// startStaleSweepScheduler starts the periodic sosyal:bayat-tara schedule.
+// Every API replica runs one; Unique keeps them from piling up duplicate
+// jobs (the sweep is idempotent, so an occasional duplicate is harmless).
+// The lock is a little shorter than the interval so a replica's own next tick
+// is never swallowed by its previous one. It returns nil when the interval is
+// <= 0 (disabled).
+func startStaleSweepScheduler(cfg *config.Config) (*asynq.Scheduler, error) {
+	interval := cfg.Social.StaleSweepInterval
+	if interval <= 0 {
+		log.Println("Stale sweep scheduler disabled (social stale_sweep_interval <= 0)")
+		return nil, nil
+	}
+	scheduler := asynq.NewScheduler(asynq.RedisClientOpt{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	}, nil)
+	if _, err := scheduler.Register(
+		"@every "+interval.String(),
+		asynq.NewTask(social.TaskTypeSweepStale, nil),
+		asynq.Queue(social.QueueSocial),
+		asynq.MaxRetry(0),
+		asynq.Unique(interval-interval/10),
+	); err != nil {
+		return nil, err
+	}
+	if err := scheduler.Start(); err != nil {
+		return nil, err
+	}
+	return scheduler, nil
 }
 
 // customErrorHandler answers errors that reach Fiber (unknown routes,

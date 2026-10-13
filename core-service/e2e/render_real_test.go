@@ -120,7 +120,7 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 
 	// Middleware
 	authMiddleware := middleware.NewOPAuthMiddleware(testIssuer, testClientID, &testKey.PublicKey)
-	rateLimiter := middleware.NewRateLimiter(redisClient)
+	rateLimiter := middleware.NewRateLimiter(redisClient, nil)
 
 	// Fiber app
 	app := fiber.New(fiber.Config{BodyLimit: 50 * 1024 * 1024})

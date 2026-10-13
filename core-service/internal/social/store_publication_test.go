@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -375,5 +376,58 @@ func TestPostgresStore_MarkFailedAndRemoveGuards(t *testing.T) {
 	}
 	if _, err := store.GetPublication(ctx, ready, owner); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a publication in preparation must be removed: %v", err)
+	}
+}
+
+func TestPostgresStore_MarkStalePreparations(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
+	ctx := context.Background()
+	owner := uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+
+	oldPreparing := testInsertPublication(t, pool, testPublication{OwnerID: owner, Status: StatusPreparing})
+	freshPreparing := testInsertPublication(t, pool, testPublication{OwnerID: owner, Status: StatusPreparing})
+	oldDeleted := testInsertPublication(t, pool, testPublication{OwnerID: owner, Status: StatusPreparing, Deleted: true})
+	oldPublished := testInsertPublication(t, pool, testPublication{OwnerID: owner, Status: StatusPublished})
+	for _, id := range []string{oldPreparing, oldDeleted, oldPublished} {
+		if _, err := pool.Exec(ctx,
+			`UPDATE sosyal.yayin SET hazirlik_baslangic = now() - interval '2 hours' WHERE id = $1`, id); err != nil {
+			t.Fatalf("backdate: %v", err)
+		}
+	}
+
+	n, err := store.MarkStalePreparations(ctx, time.Hour)
+	if err != nil {
+		t.Fatalf("MarkStalePreparations: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("rows changed = %d, want 1", n)
+	}
+	status := func(id string) string {
+		var s string
+		if err := pool.QueryRow(ctx, `SELECT durum FROM sosyal.yayin WHERE id = $1`, id).Scan(&s); err != nil {
+			t.Fatalf("read status: %v", err)
+		}
+		return s
+	}
+	if got := status(oldPreparing); got != StatusFailed {
+		t.Errorf("old preparing = %q, want failed", got)
+	}
+	if got := status(freshPreparing); got != StatusPreparing {
+		t.Errorf("fresh preparing = %q, want untouched", got)
+	}
+	if got := status(oldDeleted); got != StatusPreparing {
+		t.Errorf("deleted = %q, want untouched", got)
+	}
+	if got := status(oldPublished); got != StatusPublished {
+		t.Errorf("published = %q, want untouched", got)
+	}
+	// The owner can now retry, and the retry restarts the clock.
+	if err := store.ResetForRetry(ctx, oldPreparing, owner); err != nil {
+		t.Fatalf("ResetForRetry after sweep: %v", err)
+	}
+	if n, err := store.MarkStalePreparations(ctx, time.Hour); err != nil || n != 0 {
+		t.Fatalf("second sweep = %d, %v; want 0 (clock restarted by the retry)", n, err)
 	}
 }

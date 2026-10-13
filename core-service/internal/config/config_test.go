@@ -2,8 +2,12 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/makeasinger/api/internal/clientip"
+	"github.com/spf13/viper"
 )
 
 func TestLoad_R2TwoBuckets(t *testing.T) {
@@ -364,7 +368,7 @@ func TestLoad_SocialPublicationLimit(t *testing.T) {
 func TestLoad_SocialLimitsDefault(t *testing.T) {
 	for _, name := range []string{
 		"RATELIMIT_SOSYAL_YORUM_PER_MIN", "RATELIMIT_SOSYAL_COVER_PER_HOUR",
-		"RATELIMIT_PUBLIC_PER_MIN", "RATELIMIT_PUBLIC_WEB_PER_MIN",
+		"RATELIMIT_PUBLIC_PER_MIN", "RATELIMIT_PUBLIC_WEB_PER_MIN", "RATELIMIT_PUBLIC_WEB_VISITOR_PER_MIN",
 		"SOSYAL_WEB_ANAHTARI", "SOSYAL_WEB_ANAHTARI_FILE",
 	} {
 		os.Unsetenv(name)
@@ -378,6 +382,9 @@ func TestLoad_SocialLimitsDefault(t *testing.T) {
 		t.Errorf("defaults = comment %d, cover %d, public %d, web %d; want 10, 20, 30, 600",
 			r.SocialCommentPerMin, r.SocialCoverPerHour, r.PublicPerMin, r.PublicWebPerMin)
 	}
+	if r.PublicWebVisitorPerMin != 30 {
+		t.Errorf("PublicWebVisitorPerMin default = %d, want 30", r.PublicWebVisitorPerMin)
+	}
 	if cfg.Social.WebKey != "" {
 		t.Errorf("WebKey default must be empty: %q", cfg.Social.WebKey)
 	}
@@ -388,13 +395,14 @@ func TestLoad_SocialLimitsFromEnv(t *testing.T) {
 	t.Setenv("RATELIMIT_SOSYAL_COVER_PER_HOUR", "4")
 	t.Setenv("RATELIMIT_PUBLIC_PER_MIN", "5")
 	t.Setenv("RATELIMIT_PUBLIC_WEB_PER_MIN", "6")
+	t.Setenv("RATELIMIT_PUBLIC_WEB_VISITOR_PER_MIN", "7")
 	t.Setenv("SOSYAL_WEB_ANAHTARI", "dogrudan-deger")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
 	r := cfg.RateLimit
-	if r.SocialCommentPerMin != 3 || r.SocialCoverPerHour != 4 || r.PublicPerMin != 5 || r.PublicWebPerMin != 6 {
+	if r.SocialCommentPerMin != 3 || r.SocialCoverPerHour != 4 || r.PublicPerMin != 5 || r.PublicWebPerMin != 6 || r.PublicWebVisitorPerMin != 7 {
 		t.Errorf("environment values were not read: %+v", r)
 	}
 	if cfg.Social.WebKey != "dogrudan-deger" {
@@ -417,5 +425,74 @@ func TestLoad_WebKeyFromFile(t *testing.T) {
 	}
 	if cfg.Social.WebKey != "dosyadaki-sir" {
 		t.Errorf("WebKey = %q, want dosyadaki-sir (trimmed)", cfg.Social.WebKey)
+	}
+}
+
+func TestLoad_CloudflareRanges(t *testing.T) {
+	os.Unsetenv("RATELIMIT_CLOUDFLARE_RANGES")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if len(cfg.RateLimit.Cloudflare) != len(clientip.DefaultCloudflareRanges) || len(cfg.Auth.Cloudflare) != len(cfg.RateLimit.Cloudflare) {
+		t.Errorf("default ranges: rate limit %d, auth %d; want %d",
+			len(cfg.RateLimit.Cloudflare), len(cfg.Auth.Cloudflare), len(clientip.DefaultCloudflareRanges))
+	}
+
+	t.Setenv("RATELIMIT_CLOUDFLARE_RANGES", "10.0.0.0/8, 2001:db8::/32")
+	cfg, err = Load()
+	if err != nil || len(cfg.RateLimit.Cloudflare) != 2 {
+		t.Fatalf("custom ranges: %v, %v; want 2 entries", cfg, err)
+	}
+
+	t.Setenv("RATELIMIT_CLOUDFLARE_RANGES", "")
+	cfg, err = Load()
+	if err != nil || len(cfg.RateLimit.Cloudflare) != 0 {
+		t.Fatalf("empty must disable: %v, %v", cfg, err)
+	}
+
+	t.Setenv("RATELIMIT_CLOUDFLARE_RANGES", "10.0.0.0/8,nonsense")
+	if _, err = Load(); err == nil {
+		t.Fatal("an invalid entry must be a startup error")
+	}
+}
+
+func TestLoad_SocialStaleSweep(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Social.StalePreparationAfter != time.Hour || cfg.Social.StaleSweepInterval != 15*time.Minute {
+		t.Errorf("defaults = %v / %v, want 1h / 15m", cfg.Social.StalePreparationAfter, cfg.Social.StaleSweepInterval)
+	}
+	t.Setenv("SOCIAL_STALE_PREPARATION_AFTER", "90m")
+	t.Setenv("SOCIAL_STALE_SWEEP_INTERVAL", "0s")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Social.StalePreparationAfter != 90*time.Minute || cfg.Social.StaleSweepInterval != 0 {
+		t.Errorf("env values = %v / %v", cfg.Social.StalePreparationAfter, cfg.Social.StaleSweepInterval)
+	}
+}
+
+func TestLoad_CloudflareRangesYAMLList(t *testing.T) {
+	os.Unsetenv("RATELIMIT_CLOUDFLARE_RANGES")
+	dir := t.TempDir()
+	yaml := "ratelimit:\n  cloudflare_ranges:\n    - 10.0.0.0/8\n    - 2001:db8::/32\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	// The file's values stay in viper's global state after the test.
+	t.Cleanup(viper.Reset)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if len(cfg.RateLimit.Cloudflare) != 2 || len(cfg.Auth.Cloudflare) != 2 {
+		t.Errorf("YAML list ranges: rate limit %d, auth %d; want 2",
+			len(cfg.RateLimit.Cloudflare), len(cfg.Auth.Cloudflare))
 	}
 }

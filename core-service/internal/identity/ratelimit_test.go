@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/makeasinger/api/internal/clientip"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -113,7 +114,7 @@ func TestClientIP_ResolvesByTrustedProxyCount(t *testing.T) {
 			for _, line := range d.xffLines {
 				r.Header.Add("X-Forwarded-For", line)
 			}
-			if got := clientIP(r, d.trustedProxies); got != d.want {
+			if got := clientIP(r, d.trustedProxies, nil); got != d.want {
 				t.Errorf("clientIP = %q, want %q", got, d.want)
 			}
 		})
@@ -525,5 +526,38 @@ func TestBuildMux_GetRateLimitActive(t *testing.T) {
 		case i == 3 && resp.StatusCode != http.StatusTooManyRequests:
 			t.Fatalf("GET %d status = %d, want 429 (rate limit)", i, resp.StatusCode)
 		}
+	}
+}
+
+func TestClientIP_Cloudflare(t *testing.T) {
+	cf, err := clientip.ParseCIDRs(clientip.DefaultCloudflareRanges)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		remoteAddr string
+		xff        string
+		proxies    int
+		header     string
+		want       string
+	}{
+		{"CF peer via XFF uses CF-Connecting-IP", "10.0.0.1:1", "9.9.9.9, 162.159.113.105", 1, "198.51.100.7", "198.51.100.7"},
+		{"CF peer via RemoteAddr uses CF-Connecting-IP", "162.159.113.105:443", "", 0, "198.51.100.7", "198.51.100.7"},
+		{"non-CF peer ignores forged CF-Connecting-IP", "10.0.0.1:1", "9.9.9.9, 203.0.113.9", 1, "198.51.100.7", "203.0.113.9"},
+		{"garbage CF-Connecting-IP falls back", "10.0.0.1:1", "162.159.113.105", 1, "zzz", "162.159.113.105"},
+	}
+	for _, d := range tests {
+		t.Run(d.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, pathLogin, nil)
+			r.RemoteAddr = d.remoteAddr
+			if d.xff != "" {
+				r.Header.Set("X-Forwarded-For", d.xff)
+			}
+			r.Header.Set("CF-Connecting-IP", d.header)
+			if got := clientIP(r, d.proxies, cf); got != d.want {
+				t.Errorf("clientIP = %q, want %q", got, d.want)
+			}
+		})
 	}
 }

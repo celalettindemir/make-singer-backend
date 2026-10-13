@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/clientip"
 	"github.com/makeasinger/api/internal/i18n"
 	"github.com/redis/go-redis/v9"
 )
@@ -18,7 +19,7 @@ const testWebKey = "web-anahtari-en-az-otuz-iki-karakter-uzun"
 // ipApp attaches LimitIP to an unauthenticated endpoint.
 func ipApp(rdb *redis.Client, perIP int, webKey string, webMax int) *fiber.App {
 	app := fiber.New()
-	app.Get("/uc", NewRateLimiter(rdb).LimitIP("onizleme", perIP, time.Minute, webKey, webMax),
+	app.Get("/uc", NewRateLimiter(rdb, nil).LimitIP("onizleme", perIP, time.Minute, webKey, webMax, 0),
 		func(c *fiber.Ctx) error { return c.SendString("tamam") })
 	return app
 }
@@ -150,7 +151,7 @@ func TestLiveLimitWithCode_429WithCustomCode(t *testing.T) {
 	app.Get("/uc", func(c *fiber.Ctx) error {
 		c.Locals("userId", "kullanici-yorum")
 		return c.Next()
-	}, NewRateLimiter(rdb).LimitWithCode("yorum", 1, time.Minute, "yavasla", i18n.KeySlowDown),
+	}, NewRateLimiter(rdb, nil).LimitWithCode("yorum", 1, time.Minute, "yavasla", i18n.KeySlowDown),
 		func(c *fiber.Ctx) error { return c.SendString("tamam") })
 
 	if status, _ := ipRequest(t, app, nil); status != fiber.StatusOK {
@@ -167,7 +168,7 @@ func TestLiveLimitWithCode_429WithCustomCode(t *testing.T) {
 func TestLimitWithCode_UnauthenticatedIs401(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 50 * time.Millisecond})
 	app := fiber.New()
-	app.Get("/uc", NewRateLimiter(rdb).LimitWithCode("yorum", 1, time.Minute, "yavasla", i18n.KeySlowDown),
+	app.Get("/uc", NewRateLimiter(rdb, nil).LimitWithCode("yorum", 1, time.Minute, "yavasla", i18n.KeySlowDown),
 		func(c *fiber.Ctx) error { return c.SendString("tamam") })
 	if status, _ := ipRequest(t, app, nil); status != fiber.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", status)
@@ -221,5 +222,150 @@ func TestLiveLimitIP_IPv4MappedSharesCounter(t *testing.T) {
 	}
 	if n, err := rdb.Get(context.Background(), "ratelimit:onizleme:ip:203.0.113.7").Int(); err != nil || n != 2 {
 		t.Fatalf("IPv4 key = %d (err %v), want 2", n, err)
+	}
+}
+
+func cloudflareApp(t *testing.T, rdb *redis.Client) *fiber.App {
+	t.Helper()
+	cf, err := clientip.ParseCIDRs(clientip.DefaultCloudflareRanges)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := fiber.New()
+	app.Get("/uc", NewRateLimiter(rdb, cf).LimitIP("cftest", 100, time.Minute, "", 0, 0),
+		func(c *fiber.Ctx) error { return c.SendString("tamam") })
+	return app
+}
+
+func TestLiveLimitIP_CloudflareHeaderKeysOnVisitor(t *testing.T) {
+	rdb := liveRedis(t)
+	ctx := context.Background()
+	rdb.Del(ctx, "ratelimit:cftest:ip:198.51.100.77", "ratelimit:cftest:ip:162.159.113.105", "ratelimit:cftest:ip:203.0.113.9")
+	t.Cleanup(func() {
+		rdb.Del(ctx, "ratelimit:cftest:ip:198.51.100.77", "ratelimit:cftest:ip:162.159.113.105", "ratelimit:cftest:ip:203.0.113.9")
+	})
+	app := cloudflareApp(t, rdb)
+
+	// Peer in a Cloudflare range: the visitor from CF-Connecting-IP is counted.
+	ipRequest(t, app, map[string]string{"X-Real-Ip": "162.159.113.105", "CF-Connecting-IP": "198.51.100.77"})
+	if n, _ := rdb.Get(ctx, "ratelimit:cftest:ip:198.51.100.77").Int(); n != 1 {
+		t.Errorf("visitor counter = %d, want 1", n)
+	}
+	if rdb.Exists(ctx, "ratelimit:cftest:ip:162.159.113.105").Val() != 0 {
+		t.Error("the Cloudflare edge address must not be counted")
+	}
+
+	// Peer outside Cloudflare: a forged CF-Connecting-IP is ignored.
+	ipRequest(t, app, map[string]string{"X-Real-Ip": "203.0.113.9", "CF-Connecting-IP": "198.51.100.77"})
+	if n, _ := rdb.Get(ctx, "ratelimit:cftest:ip:198.51.100.77").Int(); n != 1 {
+		t.Errorf("forged header was honoured: visitor counter = %d, want 1", n)
+	}
+	if n, _ := rdb.Get(ctx, "ratelimit:cftest:ip:203.0.113.9").Int(); n != 1 {
+		t.Errorf("peer counter = %d, want 1", n)
+	}
+}
+
+// visitorApp attaches LimitIP with a per-visitor web limit.
+func visitorApp(rdb *redis.Client, perIP int, webMax, visitorMax int) *fiber.App {
+	app := fiber.New()
+	app.Get("/uc", NewRateLimiter(rdb, nil).LimitIP("ziyaretci", perIP, time.Minute, testWebKey, webMax, visitorMax),
+		func(c *fiber.Ctx) error { return c.SendString("tamam") })
+	return app
+}
+
+func TestLiveLimitIP_WebKeyWithVisitorHasOwnBucket(t *testing.T) {
+	rdb := liveRedis(t)
+	ctx := context.Background()
+	app := visitorApp(rdb, 1, 100, 2)
+	a := map[string]string{WebKeyHeader: testWebKey, VisitorIPHeader: "203.0.113.50"}
+	b := map[string]string{WebKeyHeader: testWebKey, VisitorIPHeader: "203.0.113.51"}
+	for i := 0; i < 2; i++ {
+		if status, _ := ipRequest(t, app, a); status != fiber.StatusOK {
+			t.Fatalf("visitor A request %d: %d, want 200", i+1, status)
+		}
+	}
+	if status, _ := ipRequest(t, app, a); status != fiber.StatusTooManyRequests {
+		t.Fatalf("visitor A third request: %d, want 429", status)
+	}
+	if status, _ := ipRequest(t, app, b); status != fiber.StatusOK {
+		t.Fatalf("another visitor must still pass: %d", status)
+	}
+	if n, err := rdb.Get(ctx, "ratelimit:ziyaretci:web:ip:203.0.113.50").Int(); err != nil || n != 3 {
+		t.Fatalf("visitor bucket = %d (err %v), want 3", n, err)
+	}
+	// The visitor bucket is checked first, so the rejected request never reached the shared bucket.
+	if n, err := rdb.Get(ctx, "ratelimit:ziyaretci:web").Int(); err != nil || n != 3 {
+		t.Fatalf("shared bucket = %d (err %v), want 3 (2 from A + 1 from B)", n, err)
+	}
+}
+
+func TestLiveLimitIP_WebKeySharedBucketStillApplies(t *testing.T) {
+	rdb := liveRedis(t)
+	app := visitorApp(rdb, 1, 2, 10)
+	for i, ip := range []string{"203.0.113.60", "203.0.113.61"} {
+		h := map[string]string{WebKeyHeader: testWebKey, VisitorIPHeader: ip}
+		if status, _ := ipRequest(t, app, h); status != fiber.StatusOK {
+			t.Fatalf("request %d: %d, want 200", i+1, status)
+		}
+	}
+	h := map[string]string{WebKeyHeader: testWebKey, VisitorIPHeader: "203.0.113.62"}
+	if status, _ := ipRequest(t, app, h); status != fiber.StatusTooManyRequests {
+		t.Fatalf("shared bucket must also limit: %d", status)
+	}
+}
+
+func TestLiveLimitIP_WebKeyWithoutVisitorUsesSharedOnly(t *testing.T) {
+	rdb := liveRedis(t)
+	ctx := context.Background()
+	app := visitorApp(rdb, 1, 3, 1)
+	for _, h := range []map[string]string{
+		{WebKeyHeader: testWebKey},
+		{WebKeyHeader: testWebKey, VisitorIPHeader: "not-an-ip"},
+		{WebKeyHeader: testWebKey, VisitorIPHeader: ""},
+	} {
+		if status, _ := ipRequest(t, app, h); status != fiber.StatusOK {
+			t.Fatalf("headers %v: %d, want 200", h, status)
+		}
+	}
+	if status, _ := ipRequest(t, app, map[string]string{WebKeyHeader: testWebKey}); status != fiber.StatusTooManyRequests {
+		t.Fatalf("shared bucket must trip: %d", status)
+	}
+	if keys, _ := rdb.Keys(ctx, "ratelimit:ziyaretci:web:ip:*").Result(); len(keys) != 0 {
+		t.Fatalf("no visitor bucket expected: %v", keys)
+	}
+}
+
+func TestLiveLimitIP_VisitorBucketDisabledWhenZero(t *testing.T) {
+	rdb := liveRedis(t)
+	ctx := context.Background()
+	app := visitorApp(rdb, 1, 100, 0)
+	h := map[string]string{WebKeyHeader: testWebKey, VisitorIPHeader: "203.0.113.70"}
+	for i := 0; i < 5; i++ {
+		if status, _ := ipRequest(t, app, h); status != fiber.StatusOK {
+			t.Fatalf("request %d: %d, want 200", i+1, status)
+		}
+	}
+	if keys, _ := rdb.Keys(ctx, "ratelimit:ziyaretci:web:ip:*").Result(); len(keys) != 0 {
+		t.Fatalf("disabled visitor bucket must not be written: %v", keys)
+	}
+}
+
+func TestLiveLimitIP_VisitorHeaderIgnoredWithoutKey(t *testing.T) {
+	rdb := liveRedis(t)
+	ctx := context.Background()
+	app := visitorApp(rdb, 1, 100, 100)
+	// Same connection IP, different forged visitor values: all share the per-IP bucket.
+	first := map[string]string{"X-Real-Ip": "198.51.100.80", VisitorIPHeader: "203.0.113.80"}
+	second := map[string]string{"X-Real-Ip": "198.51.100.80", VisitorIPHeader: "203.0.113.81"}
+	if status, _ := ipRequest(t, app, first); status != fiber.StatusOK {
+		t.Fatalf("first: %d", status)
+	}
+	if status, _ := ipRequest(t, app, second); status != fiber.StatusTooManyRequests {
+		t.Fatalf("a forged visitor header must not escape the IP limit: %d", status)
+	}
+	wrong := map[string]string{"X-Real-Ip": "198.51.100.81", VisitorIPHeader: "203.0.113.82", WebKeyHeader: testWebKey + "x"}
+	ipRequest(t, app, wrong)
+	if keys, _ := rdb.Keys(ctx, "ratelimit:ziyaretci:web*").Result(); len(keys) != 0 {
+		t.Fatalf("without a valid key no web bucket may be touched: %v", keys)
 	}
 }

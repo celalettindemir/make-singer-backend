@@ -3,9 +3,11 @@ package social
 import (
 	"context"
 	"errors"
-	"regexp"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/makeasinger/api/internal/client"
 )
 
 // fakeCopier records the copies; when err is set it returns it on every copy.
@@ -57,12 +59,11 @@ func TestService_StartCover(t *testing.T) {
 	if len(copier.copies) != 2 || len(b.Stems) != 2 {
 		t.Fatalf("copies = %v, stems = %+v", copier.copies, b.Stems)
 	}
-	pattern := regexp.MustCompile(`^stems/` + userA + `/([0-9a-f-]{36})/drums\.mp3$`)
-	m := pattern.FindStringSubmatch(copier.copies[0][1])
-	if copier.copies[0][0] != "sosyal/"+pubX+"/stems/drums.mp3" || m == nil {
+	folder := "stems/" + userA + "/cover-" + pubX + "/"
+	if copier.copies[0] != [2]string{"sosyal/" + pubX + "/stems/drums.mp3", folder + "drums.mp3"} {
 		t.Fatalf("first copy = %v", copier.copies[0])
 	}
-	if copier.copies[1][1] != "stems/"+userA+"/"+m[1]+"/bass" {
+	if copier.copies[1][1] != folder+"bass" {
 		t.Fatalf("second copy in the same folder, without extension = %v", copier.copies[1])
 	}
 	stem := b.Stems[0]
@@ -71,12 +72,31 @@ func TestService_StartCover(t *testing.T) {
 		t.Fatalf("stem = %+v", stem)
 	}
 
-	// The second start copies into a new folder.
+	// A repeat start by the same caller overwrites the same keys.
 	if _, err := s.StartCover(context.Background(), userA, pubX); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(copier.copies[2][1], m[1]) {
-		t.Fatalf("every start must get a new folder: %v", copier.copies[2])
+	if len(copier.copies) != 4 || copier.copies[2][1] != copier.copies[0][1] || copier.copies[3][1] != copier.copies[1][1] {
+		t.Fatalf("a repeat start must reuse the same keys: %v", copier.copies)
+	}
+
+	// A different caller gets a different folder under their own prefix.
+	if _, err := s.StartCover(context.Background(), userC, pubX); err != nil {
+		t.Fatal(err)
+	}
+	other := copier.copies[4][1]
+	if other == copier.copies[0][1] || !strings.HasPrefix(other, "stems/"+userC+"/cover-"+pubX+"/") {
+		t.Fatalf("a different caller must get their own folder: %v", other)
+	}
+
+	// A different source publication gets a different folder.
+	store.publications[pubY] = fakePublication(pubY, userB, VisibilityEveryone, StatusPublished)
+	store.stemLists[pubY] = []StemRecord{{ID: "drums", Instrument: "Davul", Duration: 1, Key: "sosyal/" + pubY + "/stems/drums.mp3"}}
+	if _, err := s.StartCover(context.Background(), userA, pubY); err != nil {
+		t.Fatal(err)
+	}
+	if got := copier.copies[6][1]; got == copier.copies[0][1] || !strings.HasPrefix(got, "stems/"+userA+"/cover-"+pubY+"/") {
+		t.Fatalf("a different source must get its own folder: %v", got)
 	}
 }
 
@@ -86,6 +106,30 @@ func TestService_StartCoverSignedURL(t *testing.T) {
 	b, err := s.StartCover(context.Background(), userA, pubX)
 	if err != nil || !strings.HasPrefix(b.Stems[0].FileURL, "https://imzali.example/stems/"+userA+"/") {
 		t.Fatalf("signed URL = %+v, %v", b, err)
+	}
+}
+
+// The returned addresses are ordinary user URLs: /api/files/sign resolves
+// them with ResolveOwnedKey for the caller (and for nobody else), and account
+// deletion's stems/{caller}/ prefix covers them.
+func TestService_StartCoverURLResolvesUnderCallerPrefix(t *testing.T) {
+	s, _ := newTestService(coverStore())
+	b, err := s.StartCover(context.Background(), userA, pubX)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stem := range b.Stems {
+		key, err := client.ResolveOwnedKey(stem.FileURL, userA, testR2())
+		if err != nil || !strings.HasPrefix(key, "stems/"+userA+"/cover-"+pubX+"/") {
+			t.Fatalf("key = %q, %v", key, err)
+		}
+		if _, err := client.ResolveOwnedKey(stem.FileURL, userC, testR2()); !errors.Is(err, client.ErrKeyNotOwned) {
+			t.Fatalf("another user must not own the key: %v", err)
+		}
+	}
+	prefixes, err := client.UserPrefixes(userA)
+	if err != nil || !slices.Contains(prefixes, "stems/"+userA+"/") {
+		t.Fatalf("prefixes = %v, %v", prefixes, err)
 	}
 }
 
