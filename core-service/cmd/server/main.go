@@ -194,7 +194,7 @@ func main() {
 	// key is read in-process; the JWKS endpoint is not fetched over the network.
 	apiAuthMiddleware := middleware.NewOPAuthMiddleware(
 		cfg.Auth.Issuer, cfg.Auth.ClientID, identityServer.APIPublicKey()).Authenticate()
-	rateLimiter := middleware.NewRateLimiter(redisClient)
+	rateLimiter := middleware.NewRateLimiter(redisClient, cfg.RateLimit.Cloudflare)
 
 	// Initialize Fiber app
 	app := fiber.New(fiber.Config{

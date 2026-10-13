@@ -21,6 +21,9 @@ ratelimit:
   sosyal_cover_per_hour: 20
   public_per_min: 30 # GET /api/public/s/{slug}, per client IP
   public_web_per_min: 600 # same endpoint, shared by all web requests carrying X-Web-Anahtari
+  # Cloudflare edge ranges whose CF-Connecting-IP is trusted for per-IP limits (comma-separated CIDRs).
+  # Unset = the built-in Cloudflare list (clientip.DefaultCloudflareRanges); empty string disables the header.
+  # cloudflare_ranges: ""
 
 # Discover (social)
 sosyal:

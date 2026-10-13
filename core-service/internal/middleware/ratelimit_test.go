@@ -14,7 +14,7 @@ func limitedApp(redisAddr string, userID string) *fiber.App {
 	rl := NewRateLimiter(redis.NewClient(&redis.Options{
 		Addr:        redisAddr,
 		DialTimeout: 200 * time.Millisecond,
-	}))
+	}), nil)
 	app := fiber.New()
 	app.Get("/uc", func(c *fiber.Ctx) error {
 		if userID != "" {

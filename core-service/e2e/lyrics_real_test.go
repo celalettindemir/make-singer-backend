@@ -49,7 +49,7 @@ func setupLyricsRealApp(t *testing.T) *fiber.App {
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
 
 	authMiddleware := middleware.NewOPAuthMiddleware(testIssuer, testClientID, &testKey.PublicKey)
-	rateLimiter := middleware.NewRateLimiter(redisClient)
+	rateLimiter := middleware.NewRateLimiter(redisClient, nil)
 
 	app := fiber.New(fiber.Config{BodyLimit: 50 * 1024 * 1024})
 

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/makeasinger/api/internal/clientip"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -82,6 +83,11 @@ type RateLimitConfig struct {
 	// TrustedProxies is the number of TRUSTED reverse proxies a request passes
 	// through before reaching us (Traefik => 1 in this setup). See clientIP.
 	TrustedProxies int
+
+	// Cloudflare lists the Cloudflare edge ranges. When the address chosen by
+	// clientIP is inside them, CF-Connecting-IP is used as the client
+	// address. Empty disables it.
+	Cloudflare clientip.CIDRs
 }
 
 // RateLimiter is the Redis-backed fixed-window rate limit for the OP
@@ -387,7 +393,7 @@ func (h *RateLimiter) retryAfterSeconds(s counter) int {
 }
 
 func (h *RateLimiter) ipKey(name string, r *http.Request) string {
-	return fmt.Sprintf("%s:%s:ip:%s", rateLimitPrefix, name, clientIP(r, h.cfg.TrustedProxies))
+	return fmt.Sprintf("%s:%s:ip:%s", rateLimitPrefix, name, clientIP(r, h.cfg.TrustedProxies, h.cfg.Cloudflare))
 }
 
 // emailCounterInput produces the HMAC input of the rate-limit counter.
@@ -441,12 +447,25 @@ func (h *RateLimiter) emailKey(name, email string) string {
 // If the chosen element is not a valid IP we again fall back to RemoteAddr:
 // a made-up/garbled value must not pollute the Redis key space.
 //
+// BEHIND CLOUDFLARE: the address chosen above is then the Cloudflare edge
+// (Traefik reports its TCP peer), which many visitors share. So the chosen
+// address is passed through clientip.Resolve: only if it is inside the
+// configured Cloudflare ranges is the CF-Connecting-IP header used instead.
+// Traefik does not strip that header, so for any other address it is
+// forgeable and is ignored.
+//
 // LIMIT: for someone who can reach the pod DIRECTLY, BYPASSING Traefik,
 // X-Forwarded-For is entirely under their own control. In this setup the OP
 // listener (8001) is a cluster-internal service and is exposed to the
 // outside only through Traefik; for an attacker with direct access
 // RemoteAddr is their own address anyway, so this is not a regression.
-func clientIP(r *http.Request, trustedProxy int) string {
+func clientIP(r *http.Request, trustedProxy int, cloudflare clientip.CIDRs) string {
+	return clientip.Resolve(peerIP(r, trustedProxy), r.Header.Get("CF-Connecting-IP"), cloudflare)
+}
+
+// peerIP is the address clientIP selects before the Cloudflare step; see the
+// clientIP comment for the X-Forwarded-For rules.
+func peerIP(r *http.Request, trustedProxy int) string {
 	if trustedProxy > 0 {
 		// ALL X-Forwarded-For LINES are joined. Header.Get reads only the FIRST
 		// line; when a client sends two separate XFF lines (HTTP allows this and

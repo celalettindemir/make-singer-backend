@@ -1,10 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/makeasinger/api/internal/clientip"
 	"github.com/spf13/viper"
 )
 
@@ -76,6 +78,10 @@ type RateLimitConfig struct {
 	// PublicWebPerMin is the shared per-minute limit across ALL requests
 	// to the same endpoint that carry X-Web-Anahtari (the web server).
 	PublicWebPerMin int
+	// Cloudflare is the parsed ratelimit.cloudflare_ranges list: the edge
+	// networks whose CF-Connecting-IP header is trusted for per-IP limits
+	// (see internal/clientip). Empty disables the header.
+	Cloudflare clientip.CIDRs
 }
 
 // SocialConfig is the configuration of the Discover (social) feature.
@@ -170,6 +176,10 @@ type AuthConfig struct {
 	// EXPLICITLY to the number of proxies (AUTH_TRUSTED_PROXIES).
 	TrustedProxies int
 
+	// Cloudflare is the same list as RateLimit.Cloudflare, applied to the
+	// OP listener's per-IP limits.
+	Cloudflare clientip.CIDRs
+
 	// Federation lists the upstream providers. If empty, the federation
 	// endpoints are NEVER mounted and no button appears on the login page.
 	Federation []FederationClient
@@ -262,6 +272,7 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("ratelimit.sosyal_cover_per_hour", "RATELIMIT_SOSYAL_COVER_PER_HOUR")
 	_ = viper.BindEnv("ratelimit.public_per_min", "RATELIMIT_PUBLIC_PER_MIN")
 	_ = viper.BindEnv("ratelimit.public_web_per_min", "RATELIMIT_PUBLIC_WEB_PER_MIN")
+	_ = viper.BindEnv("ratelimit.cloudflare_ranges", "RATELIMIT_CLOUDFLARE_RANGES")
 	_ = viper.BindEnv("sosyal.web_anahtari", "SOSYAL_WEB_ANAHTARI")
 
 	// Defaults
@@ -283,6 +294,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("ratelimit.sosyal_cover_per_hour", 20)
 	viper.SetDefault("ratelimit.public_per_min", 30)
 	viper.SetDefault("ratelimit.public_web_per_min", 600)
+	viper.SetDefault("ratelimit.cloudflare_ranges", strings.Join(clientip.DefaultCloudflareRanges, ","))
 
 	// Groq defaults
 	viper.SetDefault("groq.base_url", "https://api.groq.com/openai/v1")
@@ -430,6 +442,26 @@ func Load() (*Config, error) {
 			WebKey: viper.GetString("sosyal.web_anahtari"),
 		},
 	}
+
+	// An env var set to the empty string must DISABLE the Cloudflare
+	// header, but viper treats an empty env var as unset (and would fall
+	// back to the default list), so it is read directly.
+	rawRanges := viper.GetString("ratelimit.cloudflare_ranges")
+	if v, ok := os.LookupEnv("RATELIMIT_CLOUDFLARE_RANGES"); ok {
+		rawRanges = v
+	}
+	var ranges []string
+	for _, r := range strings.Split(rawRanges, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			ranges = append(ranges, r)
+		}
+	}
+	cloudflare, err := clientip.ParseCIDRs(ranges)
+	if err != nil {
+		return nil, fmt.Errorf("ratelimit.cloudflare_ranges: %w", err)
+	}
+	cfg.RateLimit.Cloudflare = cloudflare
+	cfg.Auth.Cloudflare = cloudflare
 
 	return cfg, nil
 }

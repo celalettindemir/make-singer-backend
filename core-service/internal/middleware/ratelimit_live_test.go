@@ -30,7 +30,7 @@ func liveRedis(t *testing.T) *redis.Client {
 
 // liveApp builds a rate-limited endpoint connected to the real Redis.
 func liveApp(rdb *redis.Client, userID, prefix string, maxRequests int, window time.Duration) *fiber.App {
-	rl := NewRateLimiter(rdb)
+	rl := NewRateLimiter(rdb, nil)
 	app := fiber.New()
 	app.Get("/uc", func(c *fiber.Ctx) error {
 		c.Locals("userId", userID)
@@ -206,7 +206,7 @@ func TestLiveLimit_WSTicketAndSign(t *testing.T) {
 			rdb := liveRedis(t)
 			ctx := context.Background()
 			user := "kullanici-" + d.name
-			rl := NewRateLimiter(rdb)
+			rl := NewRateLimiter(rdb, nil)
 			app := fiber.New()
 			app.Get("/uc", func(c *fiber.Ctx) error {
 				c.Locals("userId", user)

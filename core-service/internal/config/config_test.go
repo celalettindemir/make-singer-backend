@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/makeasinger/api/internal/clientip"
 )
 
 func TestLoad_R2TwoBuckets(t *testing.T) {
@@ -417,5 +419,34 @@ func TestLoad_WebKeyFromFile(t *testing.T) {
 	}
 	if cfg.Social.WebKey != "dosyadaki-sir" {
 		t.Errorf("WebKey = %q, want dosyadaki-sir (trimmed)", cfg.Social.WebKey)
+	}
+}
+
+func TestLoad_CloudflareRanges(t *testing.T) {
+	os.Unsetenv("RATELIMIT_CLOUDFLARE_RANGES")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if len(cfg.RateLimit.Cloudflare) != len(clientip.DefaultCloudflareRanges) || len(cfg.Auth.Cloudflare) != len(cfg.RateLimit.Cloudflare) {
+		t.Errorf("default ranges: rate limit %d, auth %d; want %d",
+			len(cfg.RateLimit.Cloudflare), len(cfg.Auth.Cloudflare), len(clientip.DefaultCloudflareRanges))
+	}
+
+	t.Setenv("RATELIMIT_CLOUDFLARE_RANGES", "10.0.0.0/8, 2001:db8::/32")
+	cfg, err = Load()
+	if err != nil || len(cfg.RateLimit.Cloudflare) != 2 {
+		t.Fatalf("custom ranges: %v, %v; want 2 entries", cfg, err)
+	}
+
+	t.Setenv("RATELIMIT_CLOUDFLARE_RANGES", "")
+	cfg, err = Load()
+	if err != nil || len(cfg.RateLimit.Cloudflare) != 0 {
+		t.Fatalf("empty must disable: %v, %v", cfg, err)
+	}
+
+	t.Setenv("RATELIMIT_CLOUDFLARE_RANGES", "10.0.0.0/8,nonsense")
+	if _, err = Load(); err == nil {
+		t.Fatal("an invalid entry must be a startup error")
 	}
 }

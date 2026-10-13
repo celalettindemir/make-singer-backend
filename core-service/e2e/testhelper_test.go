@@ -105,7 +105,7 @@ func setupApp(t *testing.T) *testApp {
 
 	// Auth middleware: our own OP's RS256 access token
 	authMiddleware := middleware.NewOPAuthMiddleware(testIssuer, testClientID, &testKey.PublicKey)
-	rateLimiter := middleware.NewRateLimiter(redisClient)
+	rateLimiter := middleware.NewRateLimiter(redisClient, nil)
 
 	// Fiber app
 	app := fiber.New(fiber.Config{

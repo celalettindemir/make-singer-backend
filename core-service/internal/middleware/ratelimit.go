@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/clientip"
 	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/pkg/response"
 	"github.com/redis/go-redis/v9"
@@ -18,10 +19,13 @@ import (
 
 type RateLimiter struct {
 	redis *redis.Client
+	// cloudflare lists the Cloudflare edge ranges; CF-Connecting-IP is
+	// honoured only when the peer is inside them. Empty disables it.
+	cloudflare clientip.CIDRs
 }
 
-func NewRateLimiter(redisClient *redis.Client) *RateLimiter {
-	return &RateLimiter{redis: redisClient}
+func NewRateLimiter(redisClient *redis.Client, cloudflare clientip.CIDRs) *RateLimiter {
+	return &RateLimiter{redis: redisClient, cloudflare: cloudflare}
 }
 
 // Limit creates a rate limiting middleware
@@ -77,7 +81,7 @@ func (rl *RateLimiter) LimitIP(keyPrefix string, maxRequests int, window time.Du
 				}
 			}
 		}
-		return rl.hit(c, fmt.Sprintf("ratelimit:%s:ip:%s", keyPrefix, clientIP(c)), maxRequests, window, response.RateLimited)
+		return rl.hit(c, fmt.Sprintf("ratelimit:%s:ip:%s", keyPrefix, rl.clientIP(c)), maxRequests, window, response.RateLimited)
 	}
 }
 
@@ -87,13 +91,20 @@ func (rl *RateLimiter) LimitIP(keyPrefix string, maxRequests int, window time.Du
 // the header is missing or is not a valid IP, the connection address
 // (c.IP()) is used. Fiber's global ProxyHeader setting is deliberately
 // NOT changed: other endpoints count per user.
+//
+// Behind Cloudflare that peer is the Cloudflare edge, shared by many
+// visitors, so the result goes through clientip.Resolve: when the peer is
+// inside the configured Cloudflare ranges, the CF-Connecting-IP value is
+// used instead. For any other peer the header is ignored (it is forgeable).
+//
 // Note: if the API becomes directly reachable, bypassing Traefik, this
 // header can be forged; so the API port must not be exposed.
-func clientIP(c *fiber.Ctx) string {
+func (rl *RateLimiter) clientIP(c *fiber.Ctx) string {
+	peer := c.IP()
 	if raw := strings.TrimSpace(c.Get("X-Real-Ip")); net.ParseIP(raw) != nil {
-		return ipKey(raw)
+		peer = raw
 	}
-	return ipKey(c.IP())
+	return ipKey(clientip.Resolve(peer, c.Get("CF-Connecting-IP"), rl.cloudflare))
 }
 
 // ipKey is the IP form used in the counter key. IPv4 (including
