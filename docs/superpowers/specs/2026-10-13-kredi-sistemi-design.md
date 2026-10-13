@@ -25,7 +25,7 @@ mevcut kullanicilara gecis hediyesi (karar: verilmez), acik tema.
 | K1 | Planlar: Free (aylik kredi yok), Plus, Pro. Aylik ve yillik urun. |
 | K2 | Odeme: dogrudan StoreKit 2 / Play Billing; makbuz dogrulama ve sunucu bildirimleri backend'de. RevenueCat yok. |
 | K3 | Abonelik kredisi donem sonunda sifirlanir; hediye kredisi ayri havuzda, kendi son kullanma tarihine kadar kalir. |
-| K4 | Harcama sirasi: once abonelik, sonra hediye (en erken bitecek parti once). |
+| K4 | Harcama sirasi: havuzdan bagimsiz, suresi en erken dolan parti once (esitlikte once olusturulan). Boylece hediye kredisi abonelik varken harcanmadan yanmaz. |
 | K5 | Kampanya yalnizca kampanya baslangicindan sonra kayit olan kullaniciya gider. |
 | K6 | Ayni anda tek aktif kampanya. Yeni kampanya baslatmak aktif olani durdurur. |
 | K7 | Kredi gecerliligi kampanya basina gun sayisi; sure kullanici krediyi aldigi anda baslar. |
@@ -187,8 +187,8 @@ Tutulan (held) kredi partilerden zaten dusulmustur; bakiyede gorunmez.
 `Reserve` tek transaction:
 
 1. `SELECT ... FROM lots WHERE user_id=$1 AND remaining>0 AND expires_at>now()
-   ORDER BY (pool='gift'), expires_at, created_at FOR UPDATE`
-   (abonelik once, sonra en erken biten hediye; K4).
+   ORDER BY expires_at, created_at FOR UPDATE`
+   (havuzdan bagimsiz, en erken biten parti once; K4).
 2. Toplam < maliyet ise `ErrInsufficient{Required, Balance}` (zorlama
    kapaliysa gecer, ama 0 tutar ayrilir ve hareket `reserve` olarak
    `amount=0` ile kaydedilir; golge modun amaci olcmek).
@@ -424,7 +424,7 @@ katmaninda tiplenir (`InsufficientCreditsError`), ekranlar K5'i acar.
 
 ## Test
 
-- `credit` paketi: Reserve sira/oncelik (abonelik → en erken hediye),
+- `credit` paketi: Reserve sira/oncelik (en erken biten parti once, havuzdan bagimsiz),
   yetersiz bakiye, golge mod, Release'in partilere geri yazmasi,
   idempotent Commit/Release, eszamanli iki Reserve (FOR UPDATE), kampanya
   kotasi yarisi (N paralel claim, `used <= quota`), K5 tarih kontrolu,

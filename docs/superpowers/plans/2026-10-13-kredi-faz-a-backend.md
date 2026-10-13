@@ -937,7 +937,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ### Task 3: Ledger store (grant, reserve, commit, release, balance, history)
 
-The core SQL: reservation order subscription → earliest-expiring gift with `FOR UPDATE` (K4), insufficient balance when enforced, amount 0 in shadow mode, idempotency per ref, release back to the allocated lots even if expired, history without commit and zero rows (R3, R6, R7).
+The core SQL: reservation order earliest-expiring lot first, regardless of pool, with `FOR UPDATE` (K4), insufficient balance when enforced, amount 0 in shadow mode, idempotency per ref, release back to the allocated lots even if expired, history without commit and zero rows (R3, R6, R7).
 
 **Files:**
 - Create: `core-service/internal/credit/store_helpers_test.go`
@@ -1045,15 +1045,15 @@ func reserveInput(user, ref string, amount int, enforce bool) ReserveInput {
 	return ReserveInput{Ref: ref, UserID: user, Operation: OpRenderFocus, Amount: amount, Enforce: enforce}
 }
 
-// K4: subscription lots first, then the gift lot that expires first.
-func TestPostgresStore_ReserveSpendsSubscriptionThenEarliestGift(t *testing.T) {
+// K4: the lot that expires first is spent first, whatever its pool.
+func TestPostgresStore_ReserveSpendsEarliestExpiringFirst(t *testing.T) {
 	pool := testPool(t)
 	store := NewPostgresStore(pool)
 	ctx := context.Background()
 	user := newUser()
 	giftLate := testGrant(t, store, user, PoolGift, 10, 30*24*time.Hour)
 	giftSoon := testGrant(t, store, user, PoolGift, 10, 2*24*time.Hour)
-	sub := testGrant(t, store, user, PoolSubscription, 5, 60*24*time.Hour)
+	sub := testGrant(t, store, user, PoolSubscription, 5, 10*24*time.Hour)
 
 	r, err := store.Reserve(ctx, reserveInput(user, "job-1", 12, true))
 	if err != nil {
@@ -1062,11 +1062,11 @@ func TestPostgresStore_ReserveSpendsSubscriptionThenEarliestGift(t *testing.T) {
 	if r.Amount != 12 || r.Status != StatusHeld {
 		t.Fatalf("reservation = %+v", r)
 	}
-	if got := []int{lotRemaining(t, pool, sub.ID), lotRemaining(t, pool, giftSoon.ID), lotRemaining(t, pool, giftLate.ID)}; got[0] != 0 || got[1] != 3 || got[2] != 10 {
-		t.Fatalf("remaining (sub, soon, late) = %v, want [0 3 10]", got)
+	if got := []int{lotRemaining(t, pool, sub.ID), lotRemaining(t, pool, giftSoon.ID), lotRemaining(t, pool, giftLate.ID)}; got[0] != 3 || got[1] != 0 || got[2] != 10 {
+		t.Fatalf("remaining (sub, soon, late) = %v, want [3 0 10]", got)
 	}
 	b, err := store.Balances(ctx, user)
-	if err != nil || b.Subscription != 0 || b.Gift != 13 {
+	if err != nil || b.Subscription != 3 || b.Gift != 10 {
 		t.Fatalf("balances = %+v, %v", b, err)
 	}
 }
@@ -1545,8 +1545,8 @@ import (
 type LedgerStore interface {
 	// Grant adds a lot and its grant entry.
 	Grant(ctx context.Context, in GrantInput) (*Lot, error)
-	// Reserve holds credit for in.Ref from the user's live lots, subscription
-	// lots first, then gift lots by earliest expiry. A ref that already has a
+	// Reserve holds credit for in.Ref from the user's live lots, the lot
+	// that expires first spent first, whatever its pool. A ref that already has a
 	// reservation returns it unchanged (idempotent).
 	Reserve(ctx context.Context, in ReserveInput) (*Reservation, error)
 	// Commit marks a held reservation committed; otherwise a no-op.
@@ -1671,12 +1671,12 @@ func (s *PostgresStore) Reserve(ctx context.Context, in ReserveInput) (*Reservat
 		return nil, err
 	}
 
-	// Subscription first, then the gift lot that expires first (K4). FOR
-	// UPDATE serializes concurrent reservations of the same user.
+	// The lot that expires first is spent first, whatever its pool (K4).
+	// FOR UPDATE serializes concurrent reservations of the same user.
 	rows, err := tx.Query(ctx, `
 		SELECT id::text, remaining FROM kredi.lots
 		 WHERE user_id = $1 AND remaining > 0 AND expires_at > now()
-		 ORDER BY (pool = 'gift'), expires_at, created_at, id
+		 ORDER BY expires_at, created_at, id
 		 FOR UPDATE`, in.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("could not lock the lots: %w", err)
@@ -1821,7 +1821,7 @@ func (s *PostgresStore) History(ctx context.Context, userID string, after *Histo
 - [ ] **Step 4: Run the tests**
 
 Run: `go test -count=1 -v ./internal/credit/ 2>&1 | grep -E '^(---|ok)'`
-Expected (with Postgres): PASS for `TestPostgresStore_ReserveSpendsSubscriptionThenEarliestGift`, `..._ReserveInsufficientWhenEnforced`, `..._ReserveShadowRecordsZero`, `..._ReserveShadowSpendsWhenBalanceSuffices`, `..._ReserveIgnoresExpiredLots`, `..._ReserveIsIdempotentPerRef`, `..._ReleaseRestoresLotsEvenWhenExpired`, `..._CommitIsIdempotentAndFinal`, `..._UnknownRefIsNoop`, `..._ConcurrentReservesNeverOverspend`, `..._HistoryHidesCommitAndZeroRowsAndPages`, plus Task 1's tests; `ok`. Run `go test -count=3 ./internal/credit/` once to make sure the concurrency test is stable.
+Expected (with Postgres): PASS for `TestPostgresStore_ReserveSpendsEarliestExpiringFirst`, `..._ReserveInsufficientWhenEnforced`, `..._ReserveShadowRecordsZero`, `..._ReserveShadowSpendsWhenBalanceSuffices`, `..._ReserveIgnoresExpiredLots`, `..._ReserveIsIdempotentPerRef`, `..._ReleaseRestoresLotsEvenWhenExpired`, `..._CommitIsIdempotentAndFinal`, `..._UnknownRefIsNoop`, `..._ConcurrentReservesNeverOverspend`, `..._HistoryHidesCommitAndZeroRowsAndPages`, plus Task 1's tests; `ok`. Run `go test -count=3 ./internal/credit/` once to make sure the concurrency test is stable.
 
 - [ ] **Step 5: Update the wire snapshot**
 
@@ -6418,7 +6418,7 @@ index 4ef72d7..9e10ec3 100644
 -- **middleware/** — `auth.go` (RS256 access tokens from `internal/identity` — the only auth path), `ratelimit.go` (Redis fixed window per user; limits per user: lyrics/min, render/master/export/upload per hour, `ws/ticket` and `files/sign` per minute, Keşfet publish/cover per hour and comments per minute; `LimitWithCode` answers 429 with a custom code, e.g. `yavasla` for comments; `LimitIP` limits unauthenticated routes per client IP from Traefik's `X-Real-Ip` (falls back to `c.IP()`, Fiber's `ProxyHeader` is not set), replaced by `CF-Connecting-IP` only when that peer address is inside `ratelimit.cloudflare_ranges` (`RATELIMIT_CLOUDFLARE_RANGES`; default = Cloudflare's published ranges in `internal/clientip`; empty disables; invalid entry = startup error), because behind Cloudflare the peer is the shared edge IP and the header is forgeable from any other peer; the OP listener's login/signup limits apply the same rule on the address chosen from `X-Forwarded-For` under `ratelimit:<prefix>:ip:<ip>` (IPv4-mapped addresses as IPv4, IPv6 per /64), and moves requests carrying the configured `X-Web-Anahtari` (constant-time compare) to the shared `ratelimit:<prefix>:web` counter; if such a request also has a parseable `X-Ziyaretci-Ip` (the visitor IP sent by make-singer-frontend, trusted only together with the valid key) it must first fit the per-visitor bucket `ratelimit:<prefix>:web:ip:<ipKey(visitor)>` (`RATELIMIT_PUBLIC_WEB_VISITOR_PER_MIN`, default 30, `<=0` disables) and then the shared one), `deleted_user.go` (`DeletedUserGate`: deleted-user gate on `/api`, 401 for deleted accounts, 503 + `Retry-After: 5` when Redis is unreachable).
 +- **middleware/** — `auth.go` (RS256 access tokens from `internal/identity` — the only auth path), `ratelimit.go` (Redis fixed window per user; limits per user: lyrics/min, render/master/export/upload per hour, `ws/ticket` and `files/sign` per minute, Keşfet publish/cover per hour and comments per minute; `LimitWithCode` answers 429 with a custom code, e.g. `yavasla` for comments; `LimitIP` limits unauthenticated routes per client IP from Traefik's `X-Real-Ip` (falls back to `c.IP()`, Fiber's `ProxyHeader` is not set), replaced by `CF-Connecting-IP` only when that peer address is inside `ratelimit.cloudflare_ranges` (`RATELIMIT_CLOUDFLARE_RANGES`; default = Cloudflare's published ranges in `internal/clientip`; empty disables; invalid entry = startup error), because behind Cloudflare the peer is the shared edge IP and the header is forgeable from any other peer; the OP listener's login/signup limits apply the same rule on the address chosen from `X-Forwarded-For` under `ratelimit:<prefix>:ip:<ip>` (IPv4-mapped addresses as IPv4, IPv6 per /64), and moves requests carrying the configured `X-Web-Anahtari` (constant-time compare) to the shared `ratelimit:<prefix>:web` counter; if such a request also has a parseable `X-Ziyaretci-Ip` (the visitor IP sent by make-singer-frontend, trusted only together with the valid key) it must first fit the per-visitor bucket `ratelimit:<prefix>:web:ip:<ipKey(visitor)>` (`RATELIMIT_PUBLIC_WEB_VISITOR_PER_MIN`, default 30, `<=0` disables) and then the shared one), `deleted_user.go` (`DeletedUserGate`: deleted-user gate on `/api`, 401 for deleted accounts, 503 + `Retry-After: 5` when Redis is unreachable), `admin.go` (`AdminGate`: 403 `yetkisiz` unless the user id is in `ADMIN_USER_IDS`). Credits: `/api/credits` 60/min (`RATELIMIT_CREDITS_PER_MIN`, key `kredi`), `/api/admin` 30/min (`RATELIMIT_ADMIN_PER_MIN`, key `admin`).
  - **social/** — Keşfet (spec: `make-singer-mobile/docs/superpowers/specs/2026-10-11-kesfet-design.md`). Own Postgres pool on `AUTH_DB_URL`, own schema `sosyal` and migration table `sosyal.schema_migrations` (embedded `migrations/*.sql`, advisory lock `0x736F7379616C31`, run at startup, additive only). No FK to the identity `users` table. `Service` holds the rules (username, publish validation, detail visibility via `CanSeeDetail`), `PostgresStore` the SQL (list visibility via `visibilityCondition`; a live test proves the two agree). Errors map to lowercase contract codes in `handler/social.go` (`bulunamadi`, `profil_yok`, `dogrulama`, `sahiplik`, `stem_yok`, `durum`, `kendini_takip`, `yorum_kapali`, `yetki`, `altyapi_kapali`, ...; unmapped errors are 500 `sunucu_hatasi`); social validation failures are 422, not 400. Lists are cursor-paged (`imlec`, `limit` 1-50, `{ogeler, sonrakiImlec}`); comments use a two-group cursor (timed by `zaman_ms` ascending, then untimed by `olusturma` descending). Comments, reports and comment deletion are soft or idempotent as the contract requires (a repeat report is 201 without a new row). `cover-baslat` copies the publication's `stem_listesi` server-side to `stems/{caller}/cover-{sourcePublicationID}/{stemId}.{ext}` (`client.Copier`; one deterministic folder per caller and source, repeat starts overwrite the same objects because source stems are immutable) so `/api/files/sign` can re-sign them. `GET /api/public/s/{slug}` is the only unauthenticated Keşfet route (`SocialHandler.PublicRoutes`, registered before the `/api` auth group): `herkes`/`link` + `yayinda` only, `onizlemeUrl` signed for 1 h, `Cache-Control: no-store`. Migration `002_hazirlik_baslangic.sql` adds `yayin.hazirlik_baslangic` (set on insert by default and by `ResetForRetry`) plus a partial index on `hazirlaniyor` rows; `PostgresStore.MarkStalePreparations` (the `StaleSweeper` interface) moves non-deleted rows stuck in `hazirlaniyor` longer than the threshold to `hata`.
-+- **credit/** — Credit ledger (spec: `docs/superpowers/specs/2026-10-13-kredi-sistemi-design.md`; phase A, no subscriptions yet). Own Postgres pool on `AUTH_DB_URL`, schema `kredi`, migration table `kredi.schema_migrations` (embedded `migrations/*.sql`, advisory lock `0x6B726564693031`, additive only), no FK to `users`. Tables: `lots` (credit slices with `remaining` and `expires_at`; balance = live `SUM(remaining)`), `entries` (immutable ledger), `reservations` (held/committed/released, `allocation` jsonb), `campaigns` (one active via a partial unique index), `campaign_claims`. `Service` implements `credit.Spender` (`Reserve` / `Commit` / `Release`, idempotent per ref; subscription lots first, then the earliest-expiring gift lot, `FOR UPDATE`). `CREDITS_ENFORCE=false` (default) is shadow mode: a short balance reserves 0 and a reservation error is logged, never returned. Prices come from `CREDIT_COST_*` (0 = free, no reservation). `GET /api/credits` lazily claims the active campaign for users created after it started (`UserCreatedAt`, implemented by `identity.Server`) and returns the claim as `welcomeGift` for 7 days. Admin routes sit behind `middleware.AdminGate` (`ADMIN_USER_IDS`, 403 `yetkisiz`, empty list = closed). Lyrics (handler, sync), render start and final master (services, before enqueue) reserve through `credit.Spender`; `credit.FakeSpender` is the shared test fake. Errors: 402 `kredi_yetersiz`, 422 `dogrulama`, 404 `bulunamadi`, 500 `sunucu_hatasi`.
++- **credit/** — Credit ledger (spec: `docs/superpowers/specs/2026-10-13-kredi-sistemi-design.md`; phase A, no subscriptions yet). Own Postgres pool on `AUTH_DB_URL`, schema `kredi`, migration table `kredi.schema_migrations` (embedded `migrations/*.sql`, advisory lock `0x6B726564693031`, additive only), no FK to `users`. Tables: `lots` (credit slices with `remaining` and `expires_at`; balance = live `SUM(remaining)`), `entries` (immutable ledger), `reservations` (held/committed/released, `allocation` jsonb), `campaigns` (one active via a partial unique index), `campaign_claims`. `Service` implements `credit.Spender` (`Reserve` / `Commit` / `Release`, idempotent per ref; earliest-expiring lot first regardless of pool, `FOR UPDATE`). `CREDITS_ENFORCE=false` (default) is shadow mode: a short balance reserves 0 and a reservation error is logged, never returned. Prices come from `CREDIT_COST_*` (0 = free, no reservation). `GET /api/credits` lazily claims the active campaign for users created after it started (`UserCreatedAt`, implemented by `identity.Server`) and returns the claim as `welcomeGift` for 7 days. Admin routes sit behind `middleware.AdminGate` (`ADMIN_USER_IDS`, 403 `yetkisiz`, empty list = closed). Lyrics (handler, sync), render start and final master (services, before enqueue) reserve through `credit.Spender`; `credit.FakeSpender` is the shared test fake. Errors: 402 `kredi_yetersiz`, 422 `dogrulama`, 404 `bulunamadi`, 500 `sunucu_hatasi`.
  - **deletionmark/** — Deleted-account marker shared by middleware, `AccountService` and workers: `Key(userID)` (`kimlik:silindi:<userId>`), `TTL` (24 h), `Checker` interface and `RedisChecker` (EXISTS).
  - **auth/** — `jwks_verifier.go`: token verifiers. `UpstreamVerifier` validates **upstream** (Apple/Google) `id_token`s for the federation flow — RS256 pinned, `iss`/`aud`/`exp` enforced, `nonce` required and compared in constant time.
  - **websocket/** — Hub for broadcasting real-time job progress to clients via `GET /ws/jobs/:jobId?ticket=` (ticket from `POST /api/ws/ticket`).
