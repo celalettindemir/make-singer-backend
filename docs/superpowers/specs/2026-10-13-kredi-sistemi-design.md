@@ -207,8 +207,12 @@ Islem baglantilari:
 | Islem | Reserve | Commit | Release |
 |---|---|---|---|
 | Lyrics generate/rewrite (senkron) | handler, Groq cagrisindan once | basarili yanit | Groq/parse hatasi |
-| Render start | `StartRender`, enqueue'dan once, ref=jobID | worker `CompleteJob` | worker `FailJob`; enqueue hatasi; kuyrukta iken iptal |
-| Master final | `StartFinal`, ref=jobID | worker basari | worker hata; enqueue hatasi |
+| Render start | `StartRender`, enqueue'dan once, ref=jobID | worker basari | worker kalici hatasi (`SkipRetry` ya da son deneme); enqueue hatasi; kuyrukta iken iptal |
+| Master final | `StartFinal`, ref=jobID | worker basari | worker kalici hatasi (`SkipRetry` ya da son deneme); enqueue hatasi |
+
+Not: `FailJob` asynq'in tekrar deneyecegi hatalarda da cagrilir; orada iade
+edilirse basarili bir tekrar ucretsiz olur. Bu yuzden iade yalnizca kalici
+hatada yapilir (Faz A plani R4).
 
 Render iptali: is `queued` iken iptal edilirse `Release`; `processing`
 iken iptal edilirse kredi worker'in sonucuna gore kapanir (Suno ucreti
