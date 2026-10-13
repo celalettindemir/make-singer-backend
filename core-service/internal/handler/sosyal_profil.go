@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
 
@@ -16,7 +16,7 @@ func (h *SosyalHandler) ProfilBen(c *fiber.Ctx) error {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
 	p, err := h.servis.ProfilBen(c.Context(), userID)
-	if errors.Is(err, sosyal.ErrProfilYok) {
+	if errors.Is(err, social.ErrNoProfile) {
 		return response.Error(c, fiber.StatusNotFound, "profil_yok", err.Error(), nil)
 	}
 	if err != nil {
@@ -31,7 +31,7 @@ func (h *SosyalHandler) ProfilKaydet(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	var g sosyal.ProfilGirdisi
+	var g social.ProfilGirdisi
 	if err := c.BodyParser(&g); err != nil {
 		return govdeHatasi(c)
 	}

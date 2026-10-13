@@ -12,7 +12,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/deletionmark"
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 )
 
 const (
@@ -23,7 +23,7 @@ const (
 
 // SosyalWorker, sosyal:hazirla ve sosyal:dosya-sil islerini yapar.
 type SosyalWorker struct {
-	depo        sosyal.HazirlikDeposu
+	depo        social.PreparationStore
 	kopyalayici client.Copier        // nil: R2 yok, kopya atlanir
 	analizci    client.AudioAnalyzer // nil: dalga formu ve onizleme yok
 	silici      client.PrefixDeleter // nil: R2 yok
@@ -33,7 +33,7 @@ type SosyalWorker struct {
 
 // NewSosyalWorker kurar. Arayuz parametreleri nil olabilir; main tipli nil
 // tuzagina dusmemek icin yalnizca gercek istemcileri gecirir.
-func NewSosyalWorker(depo sosyal.HazirlikDeposu, kopyalayici client.Copier, analizci client.AudioAnalyzer,
+func NewSosyalWorker(depo social.PreparationStore, kopyalayici client.Copier, analizci client.AudioAnalyzer,
 	silici client.PrefixDeleter, hesap deletionmark.Checker) *SosyalWorker {
 	return &SosyalWorker{
 		depo: depo, kopyalayici: kopyalayici, analizci: analizci, silici: silici, hesap: hesap,
@@ -50,7 +50,7 @@ func asynqSonDeneme(ctx context.Context) bool {
 }
 
 func gorevYukunuCoz(t *asynq.Task) (string, error) {
-	var yuk sosyal.GorevYuku
+	var yuk social.GorevYuku
 	if err := json.Unmarshal(t.Payload(), &yuk); err != nil {
 		return "", fmt.Errorf("sosyal gorev yuku cozulemedi: %v: %w", err, asynq.SkipRetry)
 	}
@@ -69,14 +69,14 @@ func (w *SosyalWorker) Hazirla(ctx context.Context, t *asynq.Task) error {
 	if err != nil {
 		return err
 	}
-	k, err := w.depo.HazirlikGetir(ctx, id)
-	if errors.Is(err, sosyal.ErrBulunamadi) {
+	k, err := w.depo.GetPreparation(ctx, id)
+	if errors.Is(err, social.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if k.Silindi || k.Durum != sosyal.DurumHazirlaniyor {
+	if k.Silindi || k.Durum != social.DurumHazirlaniyor {
 		return nil
 	}
 	sonuc, err := w.kopyala(ctx, k)
@@ -87,7 +87,7 @@ func (w *SosyalWorker) Hazirla(ctx context.Context, t *asynq.Task) error {
 		return w.basarisiz(ctx, id, err)
 	}
 	w.analizEt(ctx, id, &sonuc)
-	if err := w.depo.Yayinla(ctx, id, sonuc); err != nil {
+	if err := w.depo.Publish(ctx, id, sonuc); err != nil {
 		return w.basarisiz(ctx, id, err)
 	}
 	return nil
@@ -115,7 +115,7 @@ func (w *SosyalWorker) basarisiz(ctx context.Context, id string, err error) erro
 		return err
 	}
 	if errors.Is(err, asynq.SkipRetry) || w.sonDeneme(ctx) {
-		if herr := w.depo.HataYap(context.WithoutCancel(ctx), id); herr != nil {
+		if herr := w.depo.MarkFailed(context.WithoutCancel(ctx), id); herr != nil {
 			log.Printf("Uyari: yayin hata durumuna alinamadi (%s): %v", id, herr)
 		}
 	}
@@ -124,9 +124,9 @@ func (w *SosyalWorker) basarisiz(ctx context.Context, id string, err error) erro
 
 // kopyala, master ve stem kopyalarini kurar ve sonucun anahtar alanlarini
 // doldurur. Ayni hedefe tekrar kopya zararsizdir; is tekrar denenebilir.
-func (w *SosyalWorker) kopyala(ctx context.Context, k *sosyal.HazirlikKaydi) (sosyal.HazirlikSonucu, error) {
-	var sonuc sosyal.HazirlikSonucu
-	master, err := sosyal.MasterHedefi(k.ID, k.Hazirlik.MasterKey)
+func (w *SosyalWorker) kopyala(ctx context.Context, k *social.HazirlikKaydi) (social.HazirlikSonucu, error) {
+	var sonuc social.HazirlikSonucu
+	master, err := social.MasterHedefi(k.ID, k.Hazirlik.MasterKey)
 	if err != nil {
 		return sonuc, fmt.Errorf("master hedefi kurulamadi: %v: %w", err, asynq.SkipRetry)
 	}
@@ -134,16 +134,16 @@ func (w *SosyalWorker) kopyala(ctx context.Context, k *sosyal.HazirlikKaydi) (so
 		return sonuc, fmt.Errorf("master kopyalanamadi: %w", err)
 	}
 	sonuc.MasterAnahtari = master
-	sonuc.StemListesi = make([]sosyal.StemKaydi, 0, len(k.Hazirlik.Stems))
+	sonuc.StemListesi = make([]social.StemKaydi, 0, len(k.Hazirlik.Stems))
 	for _, st := range k.Hazirlik.Stems {
-		hedef, err := sosyal.StemHedefi(k.ID, st.ID, st.Key)
+		hedef, err := social.StemHedefi(k.ID, st.ID, st.Key)
 		if err != nil {
 			return sonuc, fmt.Errorf("stem hedefi kurulamadi: %v: %w", err, asynq.SkipRetry)
 		}
 		if err := w.kopyalaBir(ctx, k.SahipID, st.Key, hedef); err != nil {
 			return sonuc, fmt.Errorf("stem kopyalanamadi: %w", err)
 		}
-		sonuc.StemListesi = append(sonuc.StemListesi, sosyal.StemKaydi{
+		sonuc.StemListesi = append(sonuc.StemListesi, social.StemKaydi{
 			ID: st.ID, Enstruman: st.Enstruman, Sure: st.Sure, Anahtar: hedef,
 		})
 	}
@@ -162,12 +162,12 @@ func (w *SosyalWorker) kopyalaBir(ctx context.Context, sahipID, kaynak, hedef st
 
 // analizEt, dalga formu ve onizlemeyi uretir. Her hata loglanir ve
 // sonuc bos dalga formuyla, onizlemesiz devam eder (spec §4.3).
-func (w *SosyalWorker) analizEt(ctx context.Context, id string, sonuc *sosyal.HazirlikSonucu) {
+func (w *SosyalWorker) analizEt(ctx context.Context, id string, sonuc *social.HazirlikSonucu) {
 	sonuc.DalgaFormu = []float64{}
 	if w.analizci == nil {
 		return
 	}
-	onizleme, err := sosyal.OnizlemeHedefi(id)
+	onizleme, err := social.OnizlemeHedefi(id)
 	if err != nil {
 		log.Printf("Uyari: onizleme hedefi kurulamadi (%s): %v", id, err)
 		return
@@ -206,9 +206,9 @@ func (w *SosyalWorker) DosyaSil(ctx context.Context, t *asynq.Task) error {
 	if err != nil {
 		return fmt.Errorf("sosyal onek kurulamadi: %v: %w", err, asynq.SkipRetry)
 	}
-	k, err := w.depo.HazirlikGetir(ctx, id)
+	k, err := w.depo.GetPreparation(ctx, id)
 	switch {
-	case errors.Is(err, sosyal.ErrBulunamadi):
+	case errors.Is(err, social.ErrNotFound):
 		// Satir yok (hesap silindi): dosyalar yine de temizlenir.
 	case err != nil:
 		return err

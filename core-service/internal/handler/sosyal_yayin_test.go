@@ -6,21 +6,21 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 )
 
-func ornekDetay() *sosyal.YayinDetayi {
-	d := &sosyal.YayinDetayi{Durum: sosyal.DurumYayinda, Gorunurluk: sosyal.GorunurlukHerkes}
+func ornekDetay() *social.YayinDetayi {
+	d := &social.YayinDetayi{Durum: social.DurumYayinda, Gorunurluk: social.GorunurlukHerkes}
 	d.ID, d.Slug, d.Baslik = "y1", "Ab3dEf9h", "Gece"
 	d.DalgaFormu = []float64{}
-	d.Yapi = []sosyal.YapiOgesi{}
-	d.Sozler = sosyal.Sozler{Bolumler: []sosyal.SozBolumu{}}
+	d.Yapi = []social.YapiOgesi{}
+	d.Sozler = social.Sozler{Bolumler: []social.SozBolumu{}}
 	d.Olusturma = time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
 	return d
 }
 
 func TestSosyal_YayinOlustur202(t *testing.T) {
-	s := &sahteSosyal{yayinYaniti: &sosyal.YayinYaniti{ID: "y1", Slug: "Ab3dEf9h", Durum: sosyal.DurumHazirlaniyor}}
+	s := &sahteSosyal{yayinYaniti: &social.YayinYaniti{ID: "y1", Slug: "Ab3dEf9h", Durum: social.DurumHazirlaniyor}}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPost, "/api/social/yayinlar",
 		`{"baslik":"Gece","gorunurluk":"herkes","altyapiAcik":true,"masterUrl":"masters/u/p/m.wav","stemler":[{"id":"d","enstruman":"drums","url":"stems/u/p/d.mp3","sure":12.5}],"bpm":120,"sureSn":184,"ton":{"tonik":"A","mod":"minor"},"kaynakYayinId":null}`)
 	if durum != http.StatusAccepted || govde["durum"] != "hazirlaniyor" || govde["id"] != "y1" || govde["slug"] != "Ab3dEf9h" {
@@ -37,11 +37,11 @@ func TestSosyal_YayinOlusturHataKodlari(t *testing.T) {
 		durum int
 		kod   string
 	}{
-		{sosyal.ErrProfilYok, http.StatusConflict, "profil_yok"},
-		{sosyal.ErrSahiplik, http.StatusForbidden, "sahiplik"},
-		{sosyal.ErrKaynakBulunamadi, http.StatusNotFound, "kaynak_bulunamadi"},
-		{sosyal.ErrAltyapiKapali, http.StatusForbidden, "altyapi_kapali"},
-		{sosyal.ErrDogrulama, http.StatusUnprocessableEntity, "dogrulama"},
+		{social.ErrNoProfile, http.StatusConflict, "profil_yok"},
+		{social.ErrOwnership, http.StatusForbidden, "sahiplik"},
+		{social.ErrSourceNotFound, http.StatusNotFound, "kaynak_bulunamadi"},
+		{social.ErrBackingDisabled, http.StatusForbidden, "altyapi_kapali"},
+		{social.ErrValidation, http.StatusUnprocessableEntity, "dogrulama"},
 	}
 	for _, d := range durumlar {
 		durum, govde := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: d.hata}, sosyalKullanici), http.MethodPost, "/api/social/yayinlar", `{}`)
@@ -100,7 +100,7 @@ func TestSosyal_SlugVeYok404(t *testing.T) {
 	if durum, _ := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodGet, "/api/social/s/Ab3dEf9h", ""); durum != http.StatusOK || s.sonYayin != "Ab3dEf9h" {
 		t.Fatalf("slug durum=%d son=%q", durum, s.sonYayin)
 	}
-	durum, govde := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: sosyal.ErrBulunamadi}, sosyalKullanici), http.MethodGet, "/api/social/s/Ab3dEf9h", "")
+	durum, govde := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: social.ErrNotFound}, sosyalKullanici), http.MethodGet, "/api/social/s/Ab3dEf9h", "")
 	if durum != http.StatusNotFound || hataKodu(govde) != "bulunamadi" {
 		t.Fatalf("durum=%d govde=%v", durum, govde)
 	}
@@ -115,7 +115,7 @@ func TestSosyal_YayinGuncelleYalnizcaGonderilenAlanlar(t *testing.T) {
 	if s.sonYama.Gorunurluk == nil || *s.sonYama.Gorunurluk != "link" || s.sonYama.Aciklama != nil || s.sonYama.AltyapiAcik != nil || s.sonYama.YorumAcik != nil {
 		t.Fatalf("yama = %+v", s.sonYama)
 	}
-	durum, govde := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: sosyal.ErrStemYok}, sosyalKullanici), http.MethodPatch, "/api/social/yayinlar/y1", `{"altyapiAcik":true}`)
+	durum, govde := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: social.ErrNoStems}, sosyalKullanici), http.MethodPatch, "/api/social/yayinlar/y1", `{"altyapiAcik":true}`)
 	if durum != http.StatusUnprocessableEntity || hataKodu(govde) != "stem_yok" {
 		t.Fatalf("stem_yok: durum=%d govde=%v", durum, govde)
 	}
@@ -126,17 +126,17 @@ func TestSosyal_YayinSil204Ve404(t *testing.T) {
 	if durum, _ := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodDelete, "/api/social/yayinlar/y1", ""); durum != http.StatusNoContent || s.sonYayin != "y1" {
 		t.Fatalf("durum=%d", durum)
 	}
-	if durum, _ := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: sosyal.ErrBulunamadi}, sosyalKullanici), http.MethodDelete, "/api/social/yayinlar/y1", ""); durum != http.StatusNotFound {
+	if durum, _ := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: social.ErrNotFound}, sosyalKullanici), http.MethodDelete, "/api/social/yayinlar/y1", ""); durum != http.StatusNotFound {
 		t.Fatalf("durum=%d", durum)
 	}
 }
 
 func TestSosyal_TekrarDene202Ve409(t *testing.T) {
-	s := &sahteSosyal{yayinYaniti: &sosyal.YayinYaniti{ID: "y1", Slug: "Ab3dEf9h", Durum: sosyal.DurumHazirlaniyor}}
+	s := &sahteSosyal{yayinYaniti: &social.YayinYaniti{ID: "y1", Slug: "Ab3dEf9h", Durum: social.DurumHazirlaniyor}}
 	if durum, _ := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPost, "/api/social/yayinlar/y1/tekrar-dene", ""); durum != http.StatusAccepted {
 		t.Fatalf("durum=%d", durum)
 	}
-	durum, govde := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: sosyal.ErrDurum}, sosyalKullanici), http.MethodPost, "/api/social/yayinlar/y1/tekrar-dene", "")
+	durum, govde := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: social.ErrInvalidStatus}, sosyalKullanici), http.MethodPost, "/api/social/yayinlar/y1/tekrar-dene", "")
 	if durum != http.StatusConflict || hataKodu(govde) != "durum" {
 		t.Fatalf("durum=%d govde=%v", durum, govde)
 	}
@@ -144,7 +144,7 @@ func TestSosyal_TekrarDene202Ve409(t *testing.T) {
 
 func TestSosyal_DosyalarMasterURL(t *testing.T) {
 	bitis := time.Date(2026, 10, 12, 11, 0, 0, 0, time.UTC)
-	s := &sahteSosyal{dosyalar: &sosyal.YayinDosyalari{Master: sosyal.DosyaAdresi{URL: "https://imzali/x", ExpiresAt: &bitis}}}
+	s := &sahteSosyal{dosyalar: &social.YayinDosyalari{Master: social.DosyaAdresi{URL: "https://imzali/x", ExpiresAt: &bitis}}}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPost, "/api/social/yayinlar/y1/dosyalar", "")
 	master, _ := govde["master"].(map[string]any)
 	if durum != http.StatusOK || master["url"] != "https://imzali/x" || master["expiresAt"] != "2026-10-12T11:00:00Z" {

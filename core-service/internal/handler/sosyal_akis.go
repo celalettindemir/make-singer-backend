@@ -2,7 +2,7 @@ package handler
 
 import (
 	"github.com/gofiber/fiber/v2"
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
 
@@ -12,7 +12,7 @@ func (h *SosyalHandler) Akis(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	sayfa, err := h.servis.Akis(c.Context(), userID, c.Query("sekme"), c.Query("imlec"), sosyal.SayfaBoyutu(c.Query("limit")))
+	sayfa, err := h.servis.Akis(c.Context(), userID, c.Query("sekme"), c.Query("imlec"), social.SayfaBoyutu(c.Query("limit")))
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -26,7 +26,7 @@ func (h *SosyalHandler) ProfilYayinlari(c *fiber.Ctx) error {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
 	sayfa, err := h.servis.ProfilYayinlari(c.Context(), userID, c.Params("ad"), c.Query("tur"),
-		c.Query("imlec"), sosyal.SayfaBoyutu(c.Query("limit")))
+		c.Query("imlec"), social.SayfaBoyutu(c.Query("limit")))
 	if err != nil {
 		return sosyalHata(c, err)
 	}

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 )
 
 func TestSosyal_Sikayet201Govdesiz(t *testing.T) {
@@ -14,7 +14,7 @@ func TestSosyal_Sikayet201Govdesiz(t *testing.T) {
 	if durum != http.StatusCreated || ham != "" {
 		t.Fatalf("durum=%d govde=%q", durum, ham)
 	}
-	if s.sonSikayet != (sosyal.SikayetGirdisi{HedefTuru: "yorum", HedefID: "c1", Neden: "spam", Aciklama: "x"}) {
+	if s.sonSikayet != (social.SikayetGirdisi{HedefTuru: "yorum", HedefID: "c1", Neden: "spam", Aciklama: "x"}) {
 		t.Fatalf("iletilen = %+v", s.sonSikayet)
 	}
 	// aciklama istege bagli.
@@ -30,7 +30,7 @@ func TestSosyal_SikayetHatalari(t *testing.T) {
 		durum int
 		kod   string
 	}{
-		{sosyal.ErrBulunamadi, http.StatusNotFound, "bulunamadi"},
+		{social.ErrNotFound, http.StatusNotFound, "bulunamadi"},
 		{fmtDogrulama("neden"), http.StatusUnprocessableEntity, "dogrulama"},
 	} {
 		durum, govde := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: d.hata}, sosyalKullanici), http.MethodPost,

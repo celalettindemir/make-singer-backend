@@ -2,7 +2,7 @@ package handler
 
 import (
 	"github.com/gofiber/fiber/v2"
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
 
@@ -13,7 +13,7 @@ func (h *SosyalHandler) Coverlar(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	sayfa, err := h.servis.Coverlar(c.Context(), userID, c.Params("id"), c.Query("imlec"), sosyal.SayfaBoyutu(c.Query("limit")))
+	sayfa, err := h.servis.Coverlar(c.Context(), userID, c.Params("id"), c.Query("imlec"), social.SayfaBoyutu(c.Query("limit")))
 	if err != nil {
 		return sosyalHata(c, err)
 	}

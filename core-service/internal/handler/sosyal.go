@@ -6,7 +6,7 @@ import (
 	"log"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
 
@@ -14,39 +14,39 @@ import (
 // (*sosyal.Servis uygular). Arayuz, handler testlerinin servisi elle
 // yazilmis bir sahteyle degistirebilmesi icindir.
 type SosyalServisi interface {
-	ProfilBen(ctx context.Context, kullaniciID string) (*sosyal.Profil, error)
-	ProfilKaydet(ctx context.Context, kullaniciID string, g sosyal.ProfilGirdisi) (*sosyal.Profil, error)
-	AdUygunMu(ctx context.Context, kullaniciID, ad string) (*sosyal.AdUygunlugu, error)
-	ProfilGoster(ctx context.Context, izleyiciID, ad string) (*sosyal.Profil, error)
+	ProfilBen(ctx context.Context, kullaniciID string) (*social.Profil, error)
+	ProfilKaydet(ctx context.Context, kullaniciID string, g social.ProfilGirdisi) (*social.Profil, error)
+	AdUygunMu(ctx context.Context, kullaniciID, ad string) (*social.AdUygunlugu, error)
+	ProfilGoster(ctx context.Context, izleyiciID, ad string) (*social.Profil, error)
 
-	YayinOlustur(ctx context.Context, kullaniciID string, ist sosyal.YayinIstegi) (*sosyal.YayinYaniti, error)
-	YayinGoster(ctx context.Context, kullaniciID, yayinID string) (*sosyal.YayinDetayi, error)
-	SlugGoster(ctx context.Context, kullaniciID, slug string) (*sosyal.YayinDetayi, error)
-	YayinGuncelle(ctx context.Context, kullaniciID, yayinID string, yama sosyal.YayinYamasi) (*sosyal.YayinDetayi, error)
+	YayinOlustur(ctx context.Context, kullaniciID string, ist social.YayinIstegi) (*social.YayinYaniti, error)
+	YayinGoster(ctx context.Context, kullaniciID, yayinID string) (*social.YayinDetayi, error)
+	SlugGoster(ctx context.Context, kullaniciID, slug string) (*social.YayinDetayi, error)
+	YayinGuncelle(ctx context.Context, kullaniciID, yayinID string, yama social.YayinYamasi) (*social.YayinDetayi, error)
 	YayinSil(ctx context.Context, kullaniciID, yayinID string) error
-	TekrarDene(ctx context.Context, kullaniciID, yayinID string) (*sosyal.YayinYaniti, error)
-	Dosyalar(ctx context.Context, kullaniciID, yayinID string) (*sosyal.YayinDosyalari, error)
+	TekrarDene(ctx context.Context, kullaniciID, yayinID string) (*social.YayinYaniti, error)
+	Dosyalar(ctx context.Context, kullaniciID, yayinID string) (*social.YayinDosyalari, error)
 
-	Akis(ctx context.Context, kullaniciID, sekme, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error)
-	ProfilYayinlari(ctx context.Context, izleyiciID, ad, tur, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error)
-	Begeni(ctx context.Context, kullaniciID, yayinID string, begen bool) (*sosyal.BegeniDurumu, error)
+	Akis(ctx context.Context, kullaniciID, sekme, imlec string, limit int) (*social.Sayfa[social.YayinOzeti], error)
+	ProfilYayinlari(ctx context.Context, izleyiciID, ad, tur, imlec string, limit int) (*social.Sayfa[social.YayinOzeti], error)
+	Begeni(ctx context.Context, kullaniciID, yayinID string, begen bool) (*social.BegeniDurumu, error)
 
-	Takip(ctx context.Context, kullaniciID, ad string, takip bool) (*sosyal.TakipDurumu, error)
-	Oneriler(ctx context.Context, kullaniciID string) ([]sosyal.ProfilOzeti, error)
+	Takip(ctx context.Context, kullaniciID, ad string, takip bool) (*social.TakipDurumu, error)
+	Oneriler(ctx context.Context, kullaniciID string) ([]social.ProfilOzeti, error)
 
-	Yorumlar(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*sosyal.Sayfa[sosyal.Yorum], error)
-	YorumYaz(ctx context.Context, kullaniciID, yayinID string, g sosyal.YorumGirdisi) (*sosyal.Yorum, error)
+	Yorumlar(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*social.Sayfa[social.Yorum], error)
+	YorumYaz(ctx context.Context, kullaniciID, yayinID string, g social.YorumGirdisi) (*social.Yorum, error)
 	YorumSil(ctx context.Context, kullaniciID, yorumID string) error
 
-	Sikayet(ctx context.Context, kullaniciID string, g sosyal.SikayetGirdisi) error
+	Sikayet(ctx context.Context, kullaniciID string, g social.SikayetGirdisi) error
 
-	Coverlar(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*sosyal.Sayfa[sosyal.YayinOzeti], error)
-	CoverBaslat(ctx context.Context, kullaniciID, yayinID string) (*sosyal.CoverBaslangici, error)
+	Coverlar(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*social.Sayfa[social.YayinOzeti], error)
+	CoverBaslat(ctx context.Context, kullaniciID, yayinID string) (*social.CoverBaslangici, error)
 
-	Onizleme(ctx context.Context, slug string) (*sosyal.Onizleme, error)
+	Onizleme(ctx context.Context, slug string) (*social.Onizleme, error)
 }
 
-var _ SosyalServisi = (*sosyal.Servis)(nil)
+var _ SosyalServisi = (*social.Servis)(nil)
 
 // SosyalHandler, /api/social altindaki uclardir.
 type SosyalHandler struct {
@@ -110,26 +110,26 @@ var sosyalHatalari = []struct {
 	durum int
 	kod   string
 }{
-	{sosyal.ErrBulunamadi, fiber.StatusNotFound, "bulunamadi"},
-	{sosyal.ErrProfilYok, fiber.StatusConflict, "profil_yok"},
-	{sosyal.ErrGecersizKullaniciAdi, fiber.StatusUnprocessableEntity, "gecersiz_kullanici_adi"},
-	{sosyal.ErrKullaniciAdiAlinmis, fiber.StatusConflict, "kullanici_adi_alinmis"},
-	{sosyal.ErrDogrulama, fiber.StatusUnprocessableEntity, "dogrulama"},
-	{sosyal.ErrSahiplik, fiber.StatusForbidden, "sahiplik"},
-	{sosyal.ErrKaynakBulunamadi, fiber.StatusNotFound, "kaynak_bulunamadi"},
-	{sosyal.ErrAltyapiKapali, fiber.StatusForbidden, "altyapi_kapali"},
-	{sosyal.ErrStemYok, fiber.StatusUnprocessableEntity, "stem_yok"},
-	{sosyal.ErrDurum, fiber.StatusConflict, "durum"},
-	{sosyal.ErrKendiniTakip, fiber.StatusUnprocessableEntity, "kendini_takip"},
-	{sosyal.ErrYorumKapali, fiber.StatusForbidden, "yorum_kapali"},
-	{sosyal.ErrYetki, fiber.StatusForbidden, "yetki"},
+	{social.ErrNotFound, fiber.StatusNotFound, "bulunamadi"},
+	{social.ErrNoProfile, fiber.StatusConflict, "profil_yok"},
+	{social.ErrInvalidUsername, fiber.StatusUnprocessableEntity, "gecersiz_kullanici_adi"},
+	{social.ErrUsernameTaken, fiber.StatusConflict, "kullanici_adi_alinmis"},
+	{social.ErrValidation, fiber.StatusUnprocessableEntity, "dogrulama"},
+	{social.ErrOwnership, fiber.StatusForbidden, "sahiplik"},
+	{social.ErrSourceNotFound, fiber.StatusNotFound, "kaynak_bulunamadi"},
+	{social.ErrBackingDisabled, fiber.StatusForbidden, "altyapi_kapali"},
+	{social.ErrNoStems, fiber.StatusUnprocessableEntity, "stem_yok"},
+	{social.ErrInvalidStatus, fiber.StatusConflict, "durum"},
+	{social.ErrSelfFollow, fiber.StatusUnprocessableEntity, "kendini_takip"},
+	{social.ErrCommentsDisabled, fiber.StatusForbidden, "yorum_kapali"},
+	{social.ErrForbidden, fiber.StatusForbidden, "yetki"},
 }
 
 // sosyalHata, servis hatasini sozlesme govdesine cevirir:
 // {"error":{"code","message"}}. Taninmayan hata 500 sunucu_hatasi olur
 // ve ayrintisi yalnizca loga yazilir.
 func sosyalHata(c *fiber.Ctx, err error) error {
-	if errors.Is(err, sosyal.ErrKimlik) {
+	if errors.Is(err, social.ErrInvalidIdentity) {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
 	for _, e := range sosyalHatalari {

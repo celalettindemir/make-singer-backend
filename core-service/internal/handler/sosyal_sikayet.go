@@ -2,7 +2,7 @@ package handler
 
 import (
 	"github.com/gofiber/fiber/v2"
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
 
@@ -13,7 +13,7 @@ func (h *SosyalHandler) Sikayet(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	var g sosyal.SikayetGirdisi
+	var g social.SikayetGirdisi
 	if err := c.BodyParser(&g); err != nil {
 		return govdeHatasi(c)
 	}

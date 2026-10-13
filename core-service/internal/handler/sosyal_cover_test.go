@@ -5,15 +5,15 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 )
 
 func TestSosyal_CoverBaslatSozlesme(t *testing.T) {
-	s := &sahteSosyal{cover: &sosyal.CoverBaslangici{
-		Kaynak: sosyal.KaynakOzeti{YayinID: "y1", Baslik: "B", SahipKullaniciAdi: "ali"},
-		Tur:    "pop", Bpm: 120, Ton: sosyal.Ton{Tonik: "A", Mod: "minor"}, SureSn: 180,
-		Yapi: []sosyal.YapiOgesi{}, Sozler: sosyal.Sozler{Bolumler: []sosyal.SozBolumu{}},
-		Stemler: []sosyal.CoverStemi{{ID: "drums", Enstruman: "Davul", FileURL: "https://x/stems/u/k/drums.mp3", Sure: 3}},
+	s := &sahteSosyal{cover: &social.CoverBaslangici{
+		Kaynak: social.KaynakOzeti{YayinID: "y1", Baslik: "B", SahipKullaniciAdi: "ali"},
+		Tur:    "pop", Bpm: 120, Ton: social.Ton{Tonik: "A", Mod: "minor"}, SureSn: 180,
+		Yapi: []social.YapiOgesi{}, Sozler: social.Sozler{Bolumler: []social.SozBolumu{}},
+		Stemler: []social.CoverStemi{{ID: "drums", Enstruman: "Davul", FileURL: "https://x/stems/u/k/drums.mp3", Sure: 3}},
 	}}
 	durum, ham := sosyalHamIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPost, "/api/social/yayinlar/y1/cover-baslat", "")
 	beklenen := `{"kaynak":{"yayinId":"y1","baslik":"B","sahipKullaniciAdi":"ali","silindi":false},"tur":"pop","bpm":120,` +
@@ -30,9 +30,9 @@ func TestSosyal_CoverHataKodlari(t *testing.T) {
 		durum int
 		kod   string
 	}{
-		{sosyal.ErrAltyapiKapali, http.StatusForbidden, "altyapi_kapali"},
-		{sosyal.ErrBulunamadi, http.StatusNotFound, "bulunamadi"},
-		{sosyal.ErrDurum, http.StatusConflict, "durum"},
+		{social.ErrBackingDisabled, http.StatusForbidden, "altyapi_kapali"},
+		{social.ErrNotFound, http.StatusNotFound, "bulunamadi"},
+		{social.ErrInvalidStatus, http.StatusConflict, "durum"},
 	} {
 		durum, govde := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: d.hata}, sosyalKullanici), http.MethodPost,
 			"/api/social/yayinlar/y1/cover-baslat", "")
@@ -44,8 +44,8 @@ func TestSosyal_CoverHataKodlari(t *testing.T) {
 
 func TestSosyal_CoverlarSayfasiVeLimit(t *testing.T) {
 	s := &sahteSosyal{
-		sayfa: &sosyal.Sayfa[sosyal.YayinOzeti]{Ogeler: []sosyal.YayinOzeti{}},
-		cover: &sosyal.CoverBaslangici{},
+		sayfa: &social.Sayfa[social.YayinOzeti]{Ogeler: []social.YayinOzeti{}},
+		cover: &social.CoverBaslangici{},
 	}
 	sinir := func(c *fiber.Ctx) error { return c.SendStatus(http.StatusTooManyRequests) }
 	app := sosyalUygulamasiLimitli(s, sosyalKullanici, SosyalLimitleri{Yayin: gecir, Yorum: gecir, Cover: sinir})

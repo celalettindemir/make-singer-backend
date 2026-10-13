@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
 
@@ -23,8 +23,8 @@ func publicUygulama(s *sahteSosyal, ipLimiti fiber.Handler) *fiber.App {
 }
 
 func TestSosyal_OnizlemeKimliksizVeSozlesme(t *testing.T) {
-	s := &sahteSosyal{onizleme: &sosyal.Onizleme{
-		Baslik: "Sarki", Sahip: sosyal.ProfilOzeti{KullaniciAdi: "ali", GorunenAd: "Ali", AvatarRengi: 5},
+	s := &sahteSosyal{onizleme: &social.Onizleme{
+		Baslik: "Sarki", Sahip: social.ProfilOzeti{KullaniciAdi: "ali", GorunenAd: "Ali", AvatarRengi: 5},
 		SureSn: 180, DalgaFormu: []float64{0.5, 1}, Tur: "pop",
 	}}
 	app := publicUygulama(s, gecir)
@@ -47,7 +47,7 @@ func TestSosyal_OnizlemeKimliksizVeSozlesme(t *testing.T) {
 }
 
 func TestSosyal_Onizleme404JSON(t *testing.T) {
-	durum, govde := sosyalIstek(t, publicUygulama(&sahteSosyal{hata: sosyal.ErrBulunamadi}, gecir),
+	durum, govde := sosyalIstek(t, publicUygulama(&sahteSosyal{hata: social.ErrNotFound}, gecir),
 		http.MethodGet, "/api/public/s/Yok12345", "")
 	if durum != http.StatusNotFound || hataKodu(govde) != "bulunamadi" {
 		t.Fatalf("durum=%d govde=%v", durum, govde)
@@ -56,7 +56,7 @@ func TestSosyal_Onizleme404JSON(t *testing.T) {
 
 func TestSosyal_OnizlemeIPLimitiUygulanir(t *testing.T) {
 	sinir := func(c *fiber.Ctx) error { return response.RateLimited(c) }
-	durum, govde := sosyalIstek(t, publicUygulama(&sahteSosyal{onizleme: &sosyal.Onizleme{}}, sinir),
+	durum, govde := sosyalIstek(t, publicUygulama(&sahteSosyal{onizleme: &social.Onizleme{}}, sinir),
 		http.MethodGet, "/api/public/s/Ab3dEf9h", "")
 	if durum != http.StatusTooManyRequests || hataKodu(govde) != "RATE_LIMITED" {
 		t.Fatalf("durum=%d govde=%v", durum, govde)
@@ -72,8 +72,8 @@ func TestSosyal_OnizlemeNoStoreHerYanitta(t *testing.T) {
 		app      *fiber.App
 		beklenen int
 	}{
-		{"404", publicUygulama(&sahteSosyal{hata: sosyal.ErrBulunamadi}, gecir), http.StatusNotFound},
-		{"429", publicUygulama(&sahteSosyal{onizleme: &sosyal.Onizleme{}}, sinir), http.StatusTooManyRequests},
+		{"404", publicUygulama(&sahteSosyal{hata: social.ErrNotFound}, gecir), http.StatusNotFound},
+		{"429", publicUygulama(&sahteSosyal{onizleme: &social.Onizleme{}}, sinir), http.StatusTooManyRequests},
 	}
 	for _, d := range durumlar {
 		t.Run(d.ad, func(t *testing.T) {

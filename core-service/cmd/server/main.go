@@ -27,7 +27,7 @@ import (
 	"github.com/makeasinger/api/internal/identity"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/service"
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 	ws "github.com/makeasinger/api/internal/websocket"
 	"github.com/makeasinger/api/internal/worker"
 )
@@ -102,10 +102,10 @@ func main() {
 		log.Fatalf("Sosyal veritabanina baglanilamadi: %v", err)
 	}
 	defer sosyalHavuz.Close()
-	if err := sosyal.Migrate(ctx, sosyalHavuz); err != nil {
+	if err := social.Migrate(ctx, sosyalHavuz); err != nil {
 		log.Fatalf("Sosyal migration basarisiz: %v", err)
 	}
-	sosyalDepo := sosyal.NewPostgresDepo(sosyalHavuz)
+	sosyalDepo := social.NewPostgresStore(sosyalHavuz)
 
 	// Initialize Asynq client
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{
@@ -174,7 +174,7 @@ func main() {
 		kopyalayici = r2Client
 	}
 	sosyalHandler := handler.NewSosyalHandler(
-		sosyal.NewServis(sosyalDepo, asynqClient, storage, &cfg.R2).KopyalayiciAyarla(kopyalayici))
+		social.NewServis(sosyalDepo, asynqClient, storage, &cfg.R2).KopyalayiciAyarla(kopyalayici))
 	sosyalWorker := worker.NewSosyalWorker(sosyalDepo, kopyalayici, audioClient, silici, deletionmark.NewRedisChecker(redisClient))
 
 	// Initialize handlers
@@ -404,8 +404,8 @@ func startWorkerServer(
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeMaster, masterWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeHesapTemizle, worker.NewHesapWorker(hesapService).ProcessTask)
-	mux.HandleFunc(sosyal.TaskTypeHazirla, sosyalWorker.Hazirla)
-	mux.HandleFunc(sosyal.TaskTypeDosyaSil, sosyalWorker.DosyaSil)
+	mux.HandleFunc(social.TaskTypeHazirla, sosyalWorker.Hazirla)
+	mux.HandleFunc(social.TaskTypeDosyaSil, sosyalWorker.DosyaSil)
 
 	if err := srv.Run(mux); err != nil {
 		log.Printf("Asynq worker error: %v", err)

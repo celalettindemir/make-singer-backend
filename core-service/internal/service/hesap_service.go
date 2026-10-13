@@ -43,15 +43,15 @@ type Kuyruk interface {
 // SosyalTemizleyici, Kesfet verisinin hesap silmede temizlenen yuzu
 // (*sosyal.PostgresDepo uygular).
 type SosyalTemizleyici interface {
-	// YayinlariListele, yumusak silinmisler dahil tum yayin kimlikleri.
-	YayinlariListele(ctx context.Context, userID string) ([]string, error)
-	// KullaniciIzleriniSil, yayinlar DISINDAKI her seyi (profil, begeni,
+	// ListPublicationIDs, yumusak silinmisler dahil tum yayin kimlikleri.
+	ListPublicationIDs(ctx context.Context, userID string) ([]string, error)
+	// DeleteUserTraces, yayinlar DISINDAKI her seyi (profil, begeni,
 	// yorum, takip, sikayet) tek islemde siler. Okuma yollari profile
 	// baglandigi icin kullanici aninda gorunmez olur.
-	KullaniciIzleriniSil(ctx context.Context, userID string) error
-	// KullaniciVerisiniSil, profil, yayin, begeni, yorum, takip ve
+	DeleteUserTraces(ctx context.Context, userID string) error
+	// DeleteUserData, profil, yayin, begeni, yorum, takip ve
 	// sikayetleri tek islemde siler.
-	KullaniciVerisiniSil(ctx context.Context, userID string) error
+	DeleteUserData(ctx context.Context, userID string) error
 }
 
 type HesapService struct {
@@ -133,10 +133,10 @@ func (s *HesapService) Temizle(ctx context.Context, userID string) error {
 // temizligi tamamlar (idempotent). Iz silme hatasi R2 dongusunu durdurmaz.
 func (s *HesapService) sosyalTemizle(ctx context.Context, userID string) error {
 	var hatalar []error
-	if err := s.sosyal.KullaniciIzleriniSil(ctx, userID); err != nil {
+	if err := s.sosyal.DeleteUserTraces(ctx, userID); err != nil {
 		hatalar = append(hatalar, fmt.Errorf("sosyal izler silinemedi: %w", err))
 	}
-	idler, err := s.sosyal.YayinlariListele(ctx, userID)
+	idler, err := s.sosyal.ListPublicationIDs(ctx, userID)
 	if err != nil {
 		hatalar = append(hatalar, fmt.Errorf("sosyal yayinlar listelenemedi: %w", err))
 		return errors.Join(hatalar...)
@@ -159,7 +159,7 @@ func (s *HesapService) sosyalTemizle(ctx context.Context, userID string) error {
 			return errors.Join(hatalar...)
 		}
 	}
-	if err := s.sosyal.KullaniciVerisiniSil(ctx, userID); err != nil {
+	if err := s.sosyal.DeleteUserData(ctx, userID); err != nil {
 		hatalar = append(hatalar, fmt.Errorf("sosyal veri silinemedi: %w", err))
 	}
 	return errors.Join(hatalar...)

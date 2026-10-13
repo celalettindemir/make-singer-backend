@@ -19,7 +19,7 @@ type sahteSosyalTemizleyici struct {
 	izdekiOnekSayi int
 }
 
-func (s *sahteSosyalTemizleyici) KullaniciIzleriniSil(_ context.Context, userID string) error {
+func (s *sahteSosyalTemizleyici) DeleteUserTraces(_ context.Context, userID string) error {
 	s.izlerSilinen = append(s.izlerSilinen, userID)
 	if s.sil != nil {
 		s.izdekiOnekSayi = len(s.sil.onekler)
@@ -27,11 +27,11 @@ func (s *sahteSosyalTemizleyici) KullaniciIzleriniSil(_ context.Context, userID 
 	return s.izHata
 }
 
-func (s *sahteSosyalTemizleyici) YayinlariListele(context.Context, string) ([]string, error) {
+func (s *sahteSosyalTemizleyici) ListPublicationIDs(context.Context, string) ([]string, error) {
 	return s.idler, s.listeHata
 }
 
-func (s *sahteSosyalTemizleyici) KullaniciVerisiniSil(_ context.Context, userID string) error {
+func (s *sahteSosyalTemizleyici) DeleteUserData(_ context.Context, userID string) error {
 	s.silinen = append(s.silinen, userID)
 	s.idler = nil // yayin satirlari da gider
 	return nil

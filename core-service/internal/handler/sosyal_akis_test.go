@@ -4,12 +4,12 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 )
 
 func TestSosyal_AkisSayfaZarfi(t *testing.T) {
 	imlec := "sonraki"
-	s := &sahteSosyal{sayfa: &sosyal.Sayfa[sosyal.YayinOzeti]{Ogeler: []sosyal.YayinOzeti{}, SonrakiImlec: &imlec}}
+	s := &sahteSosyal{sayfa: &social.Sayfa[social.YayinOzeti]{Ogeler: []social.YayinOzeti{}, SonrakiImlec: &imlec}}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodGet, "/api/social/akis?sekme=yeni&imlec=abc", "")
 	if durum != http.StatusOK || govde["sonrakiImlec"] != "sonraki" {
 		t.Fatalf("durum=%d govde=%v", durum, govde)
@@ -23,7 +23,7 @@ func TestSosyal_AkisSayfaZarfi(t *testing.T) {
 }
 
 func TestSosyal_AkisSonSayfaImlecNull(t *testing.T) {
-	s := &sahteSosyal{sayfa: &sosyal.Sayfa[sosyal.YayinOzeti]{Ogeler: []sosyal.YayinOzeti{}}}
+	s := &sahteSosyal{sayfa: &social.Sayfa[social.YayinOzeti]{Ogeler: []social.YayinOzeti{}}}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodGet, "/api/social/akis?sekme=senin-icin&limit=999", "")
 	if durum != http.StatusOK {
 		t.Fatalf("durum=%d", durum)
@@ -37,14 +37,14 @@ func TestSosyal_AkisSonSayfaImlecNull(t *testing.T) {
 }
 
 func TestSosyal_AkisGecersizSekme422(t *testing.T) {
-	durum, govde := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: sosyal.ErrDogrulama}, sosyalKullanici), http.MethodGet, "/api/social/akis?sekme=x", "")
+	durum, govde := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: social.ErrValidation}, sosyalKullanici), http.MethodGet, "/api/social/akis?sekme=x", "")
 	if durum != http.StatusUnprocessableEntity || hataKodu(govde) != "dogrulama" {
 		t.Fatalf("durum=%d govde=%v", durum, govde)
 	}
 }
 
 func TestSosyal_ProfilYayinlari(t *testing.T) {
-	s := &sahteSosyal{sayfa: &sosyal.Sayfa[sosyal.YayinOzeti]{Ogeler: []sosyal.YayinOzeti{}}}
+	s := &sahteSosyal{sayfa: &social.Sayfa[social.YayinOzeti]{Ogeler: []social.YayinOzeti{}}}
 	durum, _ := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodGet, "/api/social/profiller/veli/yayinlar?tur=coverlar&limit=5", "")
 	if durum != http.StatusOK || s.sonAd != "veli" || s.sonTur != "coverlar" || s.sonLimit != 5 {
 		t.Fatalf("durum=%d ad=%q tur=%q limit=%d", durum, s.sonAd, s.sonTur, s.sonLimit)
@@ -52,17 +52,17 @@ func TestSosyal_ProfilYayinlari(t *testing.T) {
 }
 
 func TestSosyal_BegeniPutVeDelete(t *testing.T) {
-	s := &sahteSosyal{begeni: &sosyal.BegeniDurumu{BegendimMi: true, BegeniSayisi: 3}}
+	s := &sahteSosyal{begeni: &social.BegeniDurumu{BegendimMi: true, BegeniSayisi: 3}}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPut, "/api/social/yayinlar/y1/begeni", "")
 	if durum != http.StatusOK || govde["begendimMi"] != true || govde["begeniSayisi"] != float64(3) || !s.sonBegen || s.sonYayin != "y1" {
 		t.Fatalf("PUT durum=%d govde=%v", durum, govde)
 	}
-	s.begeni = &sosyal.BegeniDurumu{BegeniSayisi: 2}
+	s.begeni = &social.BegeniDurumu{BegeniSayisi: 2}
 	durum, govde = sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodDelete, "/api/social/yayinlar/y1/begeni", "")
 	if durum != http.StatusOK || govde["begendimMi"] != false || s.sonBegen {
 		t.Fatalf("DELETE durum=%d govde=%v", durum, govde)
 	}
-	durum, _ = sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: sosyal.ErrBulunamadi}, sosyalKullanici), http.MethodPut, "/api/social/yayinlar/y1/begeni", "")
+	durum, _ = sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: social.ErrNotFound}, sosyalKullanici), http.MethodPut, "/api/social/yayinlar/y1/begeni", "")
 	if durum != http.StatusNotFound {
 		t.Fatalf("gorulmeyen yayin 404: %d", durum)
 	}

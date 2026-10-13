@@ -10,7 +10,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/deletionmark"
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 )
 
 const (
@@ -19,28 +19,28 @@ const (
 )
 
 type sahteHazirlikDeposu struct {
-	kayit       *sosyal.HazirlikKaydi
+	kayit       *social.HazirlikKaydi
 	okumaHata   error
-	yayinlanan  *sosyal.HazirlikSonucu
+	yayinlanan  *social.HazirlikSonucu
 	hataYapildi bool
 }
 
-func (d *sahteHazirlikDeposu) HazirlikGetir(context.Context, string) (*sosyal.HazirlikKaydi, error) {
+func (d *sahteHazirlikDeposu) GetPreparation(context.Context, string) (*social.HazirlikKaydi, error) {
 	if d.okumaHata != nil {
 		return nil, d.okumaHata
 	}
 	if d.kayit == nil {
-		return nil, sosyal.ErrBulunamadi
+		return nil, social.ErrNotFound
 	}
 	return d.kayit, nil
 }
 
-func (d *sahteHazirlikDeposu) Yayinla(_ context.Context, _ string, s sosyal.HazirlikSonucu) error {
+func (d *sahteHazirlikDeposu) Publish(_ context.Context, _ string, s social.HazirlikSonucu) error {
 	d.yayinlanan = &s
 	return nil
 }
 
-func (d *sahteHazirlikDeposu) HataYap(ctx context.Context, _ string) error {
+func (d *sahteHazirlikDeposu) MarkFailed(ctx context.Context, _ string) error {
 	if err := ctx.Err(); err != nil {
 		return err // gercek havuz da olu baglamda sorgu calistirmaz
 	}
@@ -82,12 +82,12 @@ func tepeler(n int, deger float64) []float64 {
 	return p
 }
 
-func hazirKayit() *sosyal.HazirlikKaydi {
-	return &sosyal.HazirlikKaydi{
-		ID: sYayin, SahipID: sSahip, Durum: sosyal.DurumHazirlaniyor,
-		Hazirlik: sosyal.Hazirlik{
+func hazirKayit() *social.HazirlikKaydi {
+	return &social.HazirlikKaydi{
+		ID: sYayin, SahipID: sSahip, Durum: social.DurumHazirlaniyor,
+		Hazirlik: social.Hazirlik{
 			MasterKey: "masters/" + sSahip + "/p1/m1.wav",
-			Stems: []sosyal.HazirlikStemi{
+			Stems: []social.HazirlikStemi{
 				{ID: "drums", Enstruman: "drums", Sure: 184, Key: "stems/" + sSahip + "/p1/drums.mp3"},
 				{ID: "bass", Enstruman: "bass", Sure: 184, Key: "stems/" + sSahip + "/p1/bass.mp3"},
 			},
@@ -102,7 +102,7 @@ type sosyalKurulum struct {
 	w      *SosyalWorker
 }
 
-func sosyalTestWorker(kayit *sosyal.HazirlikKaydi, denetci deletionmark.Checker) *sosyalKurulum {
+func sosyalTestWorker(kayit *social.HazirlikKaydi, denetci deletionmark.Checker) *sosyalKurulum {
 	k := &sosyalKurulum{
 		depo:   &sahteHazirlikDeposu{kayit: kayit},
 		kopya:  &sahteKopyalayici{},
@@ -113,7 +113,7 @@ func sosyalTestWorker(kayit *sosyal.HazirlikKaydi, denetci deletionmark.Checker)
 }
 
 func hazirlaGorevi() *asynq.Task {
-	return asynq.NewTask(sosyal.TaskTypeHazirla, []byte(`{"yayinId":"`+sYayin+`"}`))
+	return asynq.NewTask(social.TaskTypeHazirla, []byte(`{"yayinId":"`+sYayin+`"}`))
 }
 
 func TestSosyalWorker_KopyalarAnalizEderYayinlar(t *testing.T) {
@@ -141,7 +141,7 @@ func TestSosyalWorker_KopyalarAnalizEderYayinlar(t *testing.T) {
 	if s == nil || s.MasterAnahtari != "sosyal/"+sYayin+"/master.wav" || len(s.DalgaFormu) != 64 || s.OnizlemeAnahtari != "sosyal/"+sYayin+"/onizleme.mp3" {
 		t.Fatalf("sonuc = %+v", s)
 	}
-	if len(s.StemListesi) != 2 || s.StemListesi[1] != (sosyal.StemKaydi{ID: "bass", Enstruman: "bass", Sure: 184, Anahtar: "sosyal/" + sYayin + "/stems/bass.mp3"}) {
+	if len(s.StemListesi) != 2 || s.StemListesi[1] != (social.StemKaydi{ID: "bass", Enstruman: "bass", Sure: 184, Anahtar: "sosyal/" + sYayin + "/stems/bass.mp3"}) {
 		t.Fatalf("stem listesi = %+v", s.StemListesi)
 	}
 	if k.depo.hataYapildi {
@@ -153,8 +153,8 @@ func TestSosyalWorker_YokSilinmisYaDaHazirOlanAtlanir(t *testing.T) {
 	silinmis := hazirKayit()
 	silinmis.Silindi = true
 	yayinda := hazirKayit()
-	yayinda.Durum = sosyal.DurumYayinda
-	for ad, kayit := range map[string]*sosyal.HazirlikKaydi{"yok": nil, "silinmis": silinmis, "yayinda": yayinda} {
+	yayinda.Durum = social.DurumYayinda
+	for ad, kayit := range map[string]*social.HazirlikKaydi{"yok": nil, "silinmis": silinmis, "yayinda": yayinda} {
 		k := sosyalTestWorker(kayit, nil)
 		if err := k.w.Hazirla(context.Background(), hazirlaGorevi()); err != nil {
 			t.Errorf("%s: hata donmemeli: %v", ad, err)
@@ -293,10 +293,10 @@ func TestSosyalWorker_R2VeAnalizYokken(t *testing.T) {
 func TestSosyalWorker_BozukYukTekrarlanmaz(t *testing.T) {
 	k := sosyalTestWorker(hazirKayit(), nil)
 	for _, yuk := range []string{"{", `{"yayinId":"../x"}`} {
-		if err := k.w.Hazirla(context.Background(), asynq.NewTask(sosyal.TaskTypeHazirla, []byte(yuk))); !errors.Is(err, asynq.SkipRetry) {
+		if err := k.w.Hazirla(context.Background(), asynq.NewTask(social.TaskTypeHazirla, []byte(yuk))); !errors.Is(err, asynq.SkipRetry) {
 			t.Errorf("%s: SkipRetry bekleniyordu: %v", yuk, err)
 		}
-		if err := k.w.DosyaSil(context.Background(), asynq.NewTask(sosyal.TaskTypeDosyaSil, []byte(yuk))); !errors.Is(err, asynq.SkipRetry) {
+		if err := k.w.DosyaSil(context.Background(), asynq.NewTask(social.TaskTypeDosyaSil, []byte(yuk))); !errors.Is(err, asynq.SkipRetry) {
 			t.Errorf("%s: DosyaSil SkipRetry bekleniyordu: %v", yuk, err)
 		}
 	}
@@ -313,13 +313,13 @@ func (s *sosyalSilici) DeletePrefix(_ context.Context, onek string) (int, error)
 }
 
 func TestSosyalWorker_DosyaSil(t *testing.T) {
-	gorev := asynq.NewTask(sosyal.TaskTypeDosyaSil, []byte(`{"yayinId":"`+sYayin+`"}`))
+	gorev := asynq.NewTask(social.TaskTypeDosyaSil, []byte(`{"yayinId":"`+sYayin+`"}`))
 	silinmis := hazirKayit()
 	silinmis.Silindi = true
 
 	durumlar := []struct {
 		ad      string
-		kayit   *sosyal.HazirlikKaydi
+		kayit   *social.HazirlikKaydi
 		silinir bool
 	}{
 		{"silinmis", silinmis, true},

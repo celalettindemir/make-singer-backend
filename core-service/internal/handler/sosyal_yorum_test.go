@@ -6,13 +6,13 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 	"github.com/makeasinger/api/pkg/response"
 )
 
 func TestSosyal_YorumYaz201VeSozlesme(t *testing.T) {
-	s := &sahteSosyal{yorum: &sosyal.Yorum{
-		ID: "y1", Yazar: sosyal.ProfilOzeti{KullaniciAdi: "ali", GorunenAd: "Ali", AvatarRengi: 1},
+	s := &sahteSosyal{yorum: &social.Yorum{
+		ID: "y1", Yazar: social.ProfilOzeti{KullaniciAdi: "ali", GorunenAd: "Ali", AvatarRengi: 1},
 		Metin: "guzel", Olusturma: time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC), SilebilirMiyim: true,
 	}}
 	durum, ham := sosyalHamIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPost,
@@ -38,9 +38,9 @@ func TestSosyal_YorumHataKodlari(t *testing.T) {
 		durum int
 		kod   string
 	}{
-		{sosyal.ErrYorumKapali, http.StatusForbidden, "yorum_kapali"},
-		{sosyal.ErrProfilYok, http.StatusConflict, "profil_yok"},
-		{sosyal.ErrBulunamadi, http.StatusNotFound, "bulunamadi"},
+		{social.ErrCommentsDisabled, http.StatusForbidden, "yorum_kapali"},
+		{social.ErrNoProfile, http.StatusConflict, "profil_yok"},
+		{social.ErrNotFound, http.StatusNotFound, "bulunamadi"},
 		{fmtDogrulama("metin"), http.StatusUnprocessableEntity, "dogrulama"},
 	}
 	for _, d := range durumlar {
@@ -51,7 +51,7 @@ func TestSosyal_YorumHataKodlari(t *testing.T) {
 			t.Errorf("POST %v: durum=%d govde=%v", d.hata, durum, govde)
 		}
 	}
-	s := &sahteSosyal{hata: sosyal.ErrYorumKapali}
+	s := &sahteSosyal{hata: social.ErrCommentsDisabled}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodGet, "/api/social/yayinlar/abc/yorumlar", "")
 	if durum != http.StatusForbidden || hataKodu(govde) != "yorum_kapali" {
 		t.Fatalf("GET: durum=%d govde=%v", durum, govde)
@@ -64,7 +64,7 @@ func TestSosyal_YorumHataKodlari(t *testing.T) {
 }
 
 func TestSosyal_YorumlarSayfasi(t *testing.T) {
-	s := &sahteSosyal{yorumSayfa: &sosyal.Sayfa[sosyal.Yorum]{Ogeler: []sosyal.Yorum{}}}
+	s := &sahteSosyal{yorumSayfa: &social.Sayfa[social.Yorum]{Ogeler: []social.Yorum{}}}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodGet,
 		"/api/social/yayinlar/abc/yorumlar?imlec=xyz", "")
 	if durum != http.StatusOK || s.sonImlec != "xyz" || s.sonLimit != 20 || s.sonYayin != "abc" {
@@ -81,7 +81,7 @@ func TestSosyal_YorumSil(t *testing.T) {
 	if durum != http.StatusNoContent || s.sonYayin != "y9" {
 		t.Fatalf("durum=%d id=%q", durum, s.sonYayin)
 	}
-	s.hata = sosyal.ErrYetki
+	s.hata = social.ErrForbidden
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodDelete, "/api/social/yorumlar/y9", "")
 	if durum != http.StatusForbidden || hataKodu(govde) != "yetki" {
 		t.Fatalf("durum=%d govde=%v", durum, govde)
@@ -94,8 +94,8 @@ func TestSosyal_YorumLimitiYalnizcaYazmada(t *testing.T) {
 		return response.Error(c, fiber.StatusTooManyRequests, "yavasla", "Biraz yavasla", nil)
 	}
 	s := &sahteSosyal{
-		yorumSayfa:  &sosyal.Sayfa[sosyal.Yorum]{Ogeler: []sosyal.Yorum{}},
-		yayinYaniti: &sosyal.YayinYaniti{},
+		yorumSayfa:  &social.Sayfa[social.Yorum]{Ogeler: []social.Yorum{}},
+		yayinYaniti: &social.YayinYaniti{},
 	}
 	app := sosyalUygulamasiLimitli(s, sosyalKullanici, SosyalLimitleri{Yayin: gecir, Yorum: yavasla, Cover: gecir})
 	durum, govde := sosyalIstek(t, app, http.MethodPost, "/api/social/yayinlar/abc/yorumlar", `{"metin":"x","zamanMs":null}`)

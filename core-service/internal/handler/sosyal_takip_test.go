@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/makeasinger/api/internal/sosyal"
+	"github.com/makeasinger/api/internal/social"
 )
 
 func TestSosyal_TakipYaniti(t *testing.T) {
@@ -16,7 +16,7 @@ func TestSosyal_TakipYaniti(t *testing.T) {
 		yontem string
 		takip  bool
 	}{{http.MethodPut, true}, {http.MethodDelete, false}} {
-		s := &sahteSosyal{takip: &sosyal.TakipDurumu{Takipci: 4, TakipEdiyorMuyum: d.takip}}
+		s := &sahteSosyal{takip: &social.TakipDurumu{Takipci: 4, TakipEdiyorMuyum: d.takip}}
 		durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), d.yontem, "/api/social/profiller/ayse/takip", "")
 		if durum != http.StatusOK || govde["takipci"] != float64(4) || govde["takipEdiyorMuyum"] != d.takip {
 			t.Fatalf("%s: durum=%d govde=%v", d.yontem, durum, govde)
@@ -28,7 +28,7 @@ func TestSosyal_TakipYaniti(t *testing.T) {
 }
 
 func TestSosyal_KendiniTakip422(t *testing.T) {
-	s := &sahteSosyal{hata: sosyal.ErrKendiniTakip}
+	s := &sahteSosyal{hata: social.ErrSelfFollow}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPut, "/api/social/profiller/ben/takip", "")
 	if durum != http.StatusUnprocessableEntity || hataKodu(govde) != "kendini_takip" {
 		t.Fatalf("durum=%d govde=%v", durum, govde)
@@ -36,7 +36,7 @@ func TestSosyal_KendiniTakip422(t *testing.T) {
 }
 
 func TestSosyal_TakipProfilYok404(t *testing.T) {
-	s := &sahteSosyal{hata: sosyal.ErrBulunamadi}
+	s := &sahteSosyal{hata: social.ErrNotFound}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodDelete, "/api/social/profiller/yok/takip", "")
 	if durum != http.StatusNotFound || hataKodu(govde) != "bulunamadi" {
 		t.Fatalf("durum=%d govde=%v", durum, govde)
@@ -44,13 +44,13 @@ func TestSosyal_TakipProfilYok404(t *testing.T) {
 }
 
 func TestSosyal_OnerilerDizi(t *testing.T) {
-	s := &sahteSosyal{oneriler: []sosyal.ProfilOzeti{{KullaniciAdi: "ayse", GorunenAd: "Ayse", AvatarRengi: 2}}}
+	s := &sahteSosyal{oneriler: []social.ProfilOzeti{{KullaniciAdi: "ayse", GorunenAd: "Ayse", AvatarRengi: 2}}}
 	app := sosyalUygulamasi(s, sosyalKullanici)
 	durum, ham := sosyalHamIstek(t, app, http.MethodGet, "/api/social/oneriler", "")
 	if durum != http.StatusOK || ham != `[{"kullaniciAdi":"ayse","gorunenAd":"Ayse","avatarRengi":2}]` {
 		t.Fatalf("durum=%d govde=%s", durum, ham)
 	}
-	s.oneriler = []sosyal.ProfilOzeti{}
+	s.oneriler = []social.ProfilOzeti{}
 	if _, ham := sosyalHamIstek(t, app, http.MethodGet, "/api/social/oneriler", ""); ham != `[]` {
 		t.Fatalf("bos oneri [] olmali: %s", ham)
 	}
