@@ -175,7 +175,7 @@ func main() {
 	}
 	sosyalHandler := handler.NewSosyalHandler(
 		social.NewService(sosyalDepo, asynqClient, storage, &cfg.R2).WithCopier(kopyalayici))
-	sosyalWorker := worker.NewSosyalWorker(sosyalDepo, kopyalayici, audioClient, silici, deletionmark.NewRedisChecker(redisClient))
+	sosyalWorker := worker.NewSocialWorker(sosyalDepo, kopyalayici, audioClient, silici, deletionmark.NewRedisChecker(redisClient))
 
 	// Initialize handlers
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
@@ -364,7 +364,7 @@ func startWorkerServer(
 	r2Client client.StorageClient,
 	hub *ws.Hub,
 	hesapService *service.AccountService,
-	sosyalWorker *worker.SosyalWorker,
+	sosyalWorker *worker.SocialWorker,
 ) {
 	asynqLogLevel := asynq.InfoLevel
 	if strings.EqualFold(cfg.Server.LogLevel, "debug") {
@@ -404,8 +404,8 @@ func startWorkerServer(
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeMaster, masterWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeAccountCleanup, worker.NewAccountWorker(hesapService).ProcessTask)
-	mux.HandleFunc(social.TaskTypePrepare, sosyalWorker.Hazirla)
-	mux.HandleFunc(social.TaskTypeDeleteFiles, sosyalWorker.DosyaSil)
+	mux.HandleFunc(social.TaskTypePrepare, sosyalWorker.Prepare)
+	mux.HandleFunc(social.TaskTypeDeleteFiles, sosyalWorker.DeleteFiles)
 
 	if err := srv.Run(mux); err != nil {
 		log.Printf("Asynq worker error: %v", err)
