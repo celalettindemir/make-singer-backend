@@ -128,3 +128,43 @@ func TestLyricsService_UserPromptsDemandRequestedLanguage(t *testing.T) {
 		}
 	}
 }
+
+func TestLyricsService_GenerateRecoversFromJSONValidateFailed(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"code":"json_validate_failed","failed_generation":"{\"drafts\":[[\"x\"]]}"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"drafts\":[[\"a\",\"b\"],[\"c\"]]}"}}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	s := NewLyricsService(client.NewGroqClient(&config.GroqConfig{APIKey: "k", BaseURL: srv.URL, Model: "m"}))
+
+	res, err := s.Generate(context.Background(), &model.LyricsGenerateRequest{
+		Genre: model.Genre("pop"), SectionType: model.SectionVerse, Vibes: []string{"x"},
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if len(res.Drafts) != 2 || calls != 2 {
+		t.Errorf("drafts = %v, calls = %d", res.Drafts, calls)
+	}
+}
+
+func TestLyricsService_GeneratePromptStatesDraftsShape(t *testing.T) {
+	var requests []map[string]any
+	s := NewLyricsService(fakeLyricsGroq(t, `{"drafts":[["a"]]}`, &requests))
+	if _, err := s.Generate(context.Background(), &model.LyricsGenerateRequest{
+		Genre: model.Genre("pop"), SectionType: model.SectionVerse, Vibes: []string{"x"},
+	}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	msgs, _ := requests[0]["messages"].([]any)
+	user, _ := msgs[1].(map[string]any)["content"].(string)
+	if !strings.Contains(user, "array of plain strings") && !strings.Contains(user, "plain strings") {
+		t.Errorf("prompt does not state the drafts shape: %q", user)
+	}
+}
