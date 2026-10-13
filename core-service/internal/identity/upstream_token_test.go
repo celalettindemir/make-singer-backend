@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// Sahte token ucu: istegi yakalar ki gonderilen alanlari dogrulayabilelim.
-func TestJetonDegisGoogleAlanlariGonderir(t *testing.T) {
-	var alinan url.Values
-	sunucu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// Fake token endpoint: captures the request so we can verify the sent fields.
+func TestExchangeCode_SendsGoogleFields(t *testing.T) {
+	var captured url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("metot = %s, beklenen POST", r.Method)
 		}
@@ -21,21 +21,21 @@ func TestJetonDegisGoogleAlanlariGonderir(t *testing.T) {
 			t.Errorf("Content-Type = %q", ct)
 		}
 		_ = r.ParseForm()
-		alinan = r.PostForm
+		captured = r.PostForm
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id_token":"sahte.jwt.imza"}`))
 	}))
-	defer sunucu.Close()
+	defer server.Close()
 
-	y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: sunucu.URL, SupportsPKCE: true}
-	idToken, err := y.ExchangeCode(context.Background(), sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
+	y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: server.URL, SupportsPKCE: true}
+	idToken, err := y.ExchangeCode(context.Background(), server.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
 	if err != nil {
 		t.Fatalf("degisim basarisiz: %v", err)
 	}
 	if idToken != "sahte.jwt.imza" {
 		t.Errorf("id_token = %q", idToken)
 	}
-	for alan, beklenen := range map[string]string{
+	for field, want := range map[string]string{
 		"grant_type":    "authorization_code",
 		"code":          "kod-1",
 		"redirect_uri":  "https://biz/geri",
@@ -43,50 +43,51 @@ func TestJetonDegisGoogleAlanlariGonderir(t *testing.T) {
 		"client_secret": "sir",
 		"code_verifier": "dogrulayici-1",
 	} {
-		if alinan.Get(alan) != beklenen {
-			t.Errorf("%s = %q, beklenen %q", alan, alinan.Get(alan), beklenen)
+		if captured.Get(field) != want {
+			t.Errorf("%s = %q, beklenen %q", field, captured.Get(field), want)
 		}
 	}
 }
 
-// PKCE desteklemeyen saglayiciya code_verifier GONDERILMEMELI (K4).
-func TestJetonDegisPKCEsizSaglayiciyaDogrulayiciGondermez(t *testing.T) {
-	var alinan url.Values
-	sunucu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// code_verifier must NOT be sent to a provider that does not support PKCE (K4).
+func TestExchangeCode_NoVerifierWithoutPKCE(t *testing.T) {
+	var captured url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
-		alinan = r.PostForm
+		captured = r.PostForm
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id_token":"sahte.jwt.imza"}`))
 	}))
-	defer sunucu.Close()
+	defer server.Close()
 
-	y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: sunucu.URL, SupportsPKCE: false}
-	if _, err := y.ExchangeCode(context.Background(), sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri"); err != nil {
+	y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: server.URL, SupportsPKCE: false}
+	if _, err := y.ExchangeCode(context.Background(), server.Client(), "kod-1", "dogrulayici-1", "https://biz/geri"); err != nil {
 		t.Fatalf("degisim basarisiz: %v", err)
 	}
-	if alinan.Get("code_verifier") != "" {
-		t.Errorf("code_verifier = %q, PKCE desteklemeyen saglayiciya gonderilmemeli", alinan.Get("code_verifier"))
+	if captured.Get("code_verifier") != "" {
+		t.Errorf("code_verifier = %q, PKCE desteklemeyen saglayiciya gonderilmemeli", captured.Get("code_verifier"))
 	}
 }
 
-// id_token DONMEZSE akis durmali. Bazi saglayicilar hata durumunda
-// HTTP 200 ile {"error":...} doner; govdeye bakmadan 200'u basari
-// saymak, bos bir id_token'i dogrulamaya gondermek demektir.
-func TestJetonDegisIdTokenYokHataVerir(t *testing.T) {
-	durumlar := map[string]string{
+// If id_token does NOT come back, the flow must stop. Some providers
+// answer errors with HTTP 200 and {"error":...}; counting the 200 as
+// success without looking at the body means sending an empty id_token to
+// verification.
+func TestExchangeCode_MissingIDTokenFails(t *testing.T) {
+	statuses := map[string]string{
 		"id_token alani yok":   `{"access_token":"x"}`,
 		"200 ile hata govdesi": `{"error":"invalid_grant"}`,
 	}
-	for ad, govde := range durumlar {
-		t.Run(ad, func(t *testing.T) {
-			sunucu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	for name, body := range statuses {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(govde))
+				_, _ = w.Write([]byte(body))
 			}))
-			defer sunucu.Close()
+			defer server.Close()
 
-			y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: sunucu.URL, SupportsPKCE: true}
-			idToken, err := y.ExchangeCode(context.Background(), sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
+			y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: server.URL, SupportsPKCE: true}
+			idToken, err := y.ExchangeCode(context.Background(), server.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
 			if !errors.Is(err, ErrUpstreamResponse) {
 				t.Errorf("err = %v, beklenen ErrYukariAkisYanit", err)
 			}
@@ -97,17 +98,17 @@ func TestJetonDegisIdTokenYokHataVerir(t *testing.T) {
 	}
 }
 
-func TestJetonDegisHTTPHatasiYutulmaz(t *testing.T) {
-	for _, durum := range []int{http.StatusInternalServerError, http.StatusBadRequest} {
-		t.Run(http.StatusText(durum), func(t *testing.T) {
-			sunucu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(durum)
+func TestExchangeCode_HTTPErrorNotSwallowed(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusBadRequest} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
 				_, _ = w.Write([]byte(`{"error":"bir_sorun"}`))
 			}))
-			defer sunucu.Close()
+			defer server.Close()
 
-			y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: sunucu.URL, SupportsPKCE: true}
-			idToken, err := y.ExchangeCode(context.Background(), sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
+			y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: server.URL, SupportsPKCE: true}
+			idToken, err := y.ExchangeCode(context.Background(), server.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
 			if err == nil {
 				t.Fatal("hata bekleniyordu, nil geldi")
 			}
@@ -118,29 +119,29 @@ func TestJetonDegisHTTPHatasiYutulmaz(t *testing.T) {
 	}
 }
 
-// Yukari akis cevap vermezse akis SONSUZA KADAR BEKLEMEMELI: zaman
-// asimi olmayan bir istek, giris ucunu tutan goroutine'leri biriktirir.
-func TestJetonDegisZamanAsimiUygular(t *testing.T) {
-	sunucu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// If the upstream does not answer, the flow must NOT WAIT FOREVER: a
+// request without a timeout piles up goroutines holding the login endpoint.
+func TestExchangeCode_AppliesTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(2 * time.Second)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id_token":"gecikmis"}`))
 	}))
-	defer sunucu.Close()
+	defer server.Close()
 
-	ctx, iptal := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer iptal()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
 
-	y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: sunucu.URL, SupportsPKCE: true}
-	basla := time.Now()
-	_, err := y.ExchangeCode(ctx, sunucu.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
+	y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: server.URL, SupportsPKCE: true}
+	began := time.Now()
+	_, err := y.ExchangeCode(ctx, server.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
 	if err == nil {
 		t.Fatal("zaman asimi hatasi bekleniyordu, nil geldi")
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v, beklenen context.DeadlineExceeded zincirinde", err)
 	}
-	if time.Since(basla) > 1*time.Second {
-		t.Errorf("JetonDegis cok uzun surdu: %v", time.Since(basla))
+	if time.Since(began) > 1*time.Second {
+		t.Errorf("JetonDegis cok uzun surdu: %v", time.Since(began))
 	}
 }

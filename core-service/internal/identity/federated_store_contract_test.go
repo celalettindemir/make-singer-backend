@@ -8,154 +8,155 @@ import (
 	"time"
 )
 
-// federeKurulum, ayni sozlesmeyi iki uygulamaya da kosturur.
-type federeKurulum struct {
-	ad        string
-	depo      FederatedStore
-	kullanici UserStore
+// federatedSetup runs the same contract against both implementations.
+type federatedSetup struct {
+	name  string
+	store FederatedStore
+	users UserStore
 }
 
-// federeKurulumKurucu, bir federeKurulum'u KENDI alt testinin t'siyle
-// kurar. Baglanti/Skip bu kurucu cagrilana kadar HIC denenmez: aksi
-// halde (eskiden oldugu gibi) t.Skip ust test fonksiyonunun goroutine'ini
-// runtime.Goexit ile sonlandirir ve range dongusune hic girilmeden TUM
-// alt testler -- sahte dahil -- sessizce atlanir. CI'da Postgres servisi
-// olmadigi icin bu, agsiz calismasi gereken sahte kapsamini da yok ederdi.
-type federeKurulumKurucu struct {
-	ad  string
-	kur func(t *testing.T) federeKurulum
+// federatedSetupFactory builds a federatedSetup with the t of ITS OWN
+// subtest. The connection/Skip is NEVER attempted until this factory is
+// called: otherwise (as it used to be) t.Skip ends the parent test
+// function's goroutine with runtime.Goexit, the range loop is never
+// entered, and ALL subtests -- the fake included -- are silently
+// skipped. Since CI has no Postgres service, that would also wipe out the
+// coverage of the fake, which has to run without a network.
+type federatedSetupFactory struct {
+	name  string
+	build func(t *testing.T) federatedSetup
 }
 
-// federeDepoKurulumlari, sahte kurucuyu her zaman ekler; Postgres
-// kurucusu ise testPostgresUserStore ile BIREBIR AYNI kalipla baglanir:
-// KIMLIK_TEST_DB_URL ortam degiskeni, yoksa varsayilan yerel DSN, Baglan +
-// Migrate, baglanamazsa t.Skip, t.Cleanup(havuz.Close). Postgres kaliciydir,
-// bu yuzden her kosuda federe_kimlikler ve users temizlenir. Baglanti
-// denemesi, cagiran t.Run icindeki alt test t'si verilene kadar
-// YAPILMAZ -- boylece olmayan bir Postgres yalnizca "postgres" alt
-// testini atlar, "sahte" alt testi her halde kosar.
-func federeDepoKurulumlari() []federeKurulumKurucu {
-	return []federeKurulumKurucu{
+// federatedStoreSetups always adds the fake factory; the Postgres factory
+// connects with EXACTLY THE SAME pattern as testPostgresUserStore: the
+// KIMLIK_TEST_DB_URL environment variable, else the default local DSN,
+// Connect + Migrate, t.Skip if it cannot connect, t.Cleanup(pool.Close).
+// Postgres is persistent, so the federated identities and users are
+// cleaned on every run. The connection attempt is NOT MADE until the
+// subtest t inside the calling t.Run is given -- so a missing Postgres
+// skips only the "postgres" subtest, and the "fake" subtest runs anyway.
+func federatedStoreSetups() []federatedSetupFactory {
+	return []federatedSetupFactory{
 		{
-			ad: "sahte",
-			kur: func(t *testing.T) federeKurulum {
-				sahteKullanici := NewFakeUserStore()
-				return federeKurulum{
-					ad:        "sahte",
-					depo:      NewFakeFederatedStore(sahteKullanici),
-					kullanici: sahteKullanici,
+			name: "sahte",
+			build: func(t *testing.T) federatedSetup {
+				fakeUsers := NewFakeUserStore()
+				return federatedSetup{
+					name:  "sahte",
+					store: NewFakeFederatedStore(fakeUsers),
+					users: fakeUsers,
 				}
 			},
 		},
 		{
-			ad: "postgres",
-			kur: func(t *testing.T) federeKurulum {
+			name: "postgres",
+			build: func(t *testing.T) federatedSetup {
 				t.Helper()
 				dsn := os.Getenv("KIMLIK_TEST_DB_URL")
 				if dsn == "" {
 					dsn = "postgres://postgres:kimlik-test-yerel@localhost:55432/postgres?sslmode=disable"
 				}
-				ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
-				defer iptal()
-				havuz, err := Connect(ctx, dsn)
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				pool, err := Connect(ctx, dsn)
 				if err != nil {
 					t.Skip("yerel Postgres yok, atlaniyor")
 				}
-				if err := Migrate(ctx, havuz); err != nil {
-					havuz.Close()
+				if err := Migrate(ctx, pool); err != nil {
+					pool.Close()
 					t.Fatalf("Migrate: %v", err)
 				}
-				t.Cleanup(havuz.Close)
-				if _, err := havuz.Exec(ctx, `TRUNCATE federe_kimlikler, users CASCADE`); err != nil {
+				t.Cleanup(pool.Close)
+				if _, err := pool.Exec(ctx, `TRUNCATE federe_kimlikler, users CASCADE`); err != nil {
 					t.Fatalf("tablolar temizlenemedi: %v", err)
 				}
-				return federeKurulum{
-					ad:        "postgres",
-					depo:      NewPostgresFederatedStore(havuz),
-					kullanici: NewPostgresUserStore(havuz),
+				return federatedSetup{
+					name:  "postgres",
+					store: NewPostgresFederatedStore(pool),
+					users: NewPostgresUserStore(pool),
 				}
 			},
 		},
 	}
 }
 
-func TestFedereDepoSozlesmesi(t *testing.T) {
-	for _, kurucu := range federeDepoKurulumlari() {
-		t.Run(kurucu.ad, func(t *testing.T) {
-			k := kurucu.kur(t)
+func TestFederatedStore_Contract(t *testing.T) {
+	for _, setup := range federatedStoreSetups() {
+		t.Run(setup.name, func(t *testing.T) {
+			k := setup.build(t)
 			ctx := context.Background()
 
-			// Bilinmeyen kimlik ErrKimlikYok doner, nil kullanici degil.
-			if _, err := k.depo.UserByIdentity(ctx, "google", "yok-123"); !errors.Is(err, ErrIdentityNotFound) {
+			// An unknown identity returns ErrIdentityNotFound, not a nil user.
+			if _, err := k.store.UserByIdentity(ctx, "google", "yok-123"); !errors.Is(err, ErrIdentityNotFound) {
 				t.Fatalf("bilinmeyen kimlik icin err = %v, beklenen ErrKimlikYok", err)
 			}
 
-			// Federe kullanici olusturma: sifre hash'i BOS olmali, yani
-			// SifreDogru her sifre icin false donmeli.
-			ku, err := k.depo.CreateFederatedUser(ctx, "google", "sub-1", "a@ornek.com", "Ali", true)
+			// Creating a federated user: the password hash must be EMPTY, so
+			// PasswordMatches must return false for every password.
+			user, err := k.store.CreateFederatedUser(ctx, "google", "sub-1", "a@ornek.com", "Ali", true)
 			if err != nil {
 				t.Fatalf("federe kullanici olusturulamadi: %v", err)
 			}
-			if ku.PasswordHash != "" {
+			if user.PasswordHash != "" {
 				t.Error("federe hesaba sifre hash'i yazilmis")
 			}
-			if ku.PasswordMatches("herhangi-bir-sifre-123") {
+			if user.PasswordMatches("herhangi-bir-sifre-123") {
 				t.Error("sifresiz hesaba sifreyle girilebiliyor")
 			}
-			if !ku.EmailVerified {
+			if !user.EmailVerified {
 				t.Error("epostaDogrulandi=true verildi ama EmailVerified false")
 			}
 
-			// Olusturulan kimlik artik bulunabilir ve AYNI kullaniciyi doner.
-			bulunan, err := k.depo.UserByIdentity(ctx, "google", "sub-1")
+			// The created identity can now be found and returns the SAME user.
+			matched, err := k.store.UserByIdentity(ctx, "google", "sub-1")
 			if err != nil {
 				t.Fatalf("kimlik okunamadi: %v", err)
 			}
-			if bulunan.ID != ku.ID {
-				t.Errorf("kullanici id = %q, beklenen %q", bulunan.ID, ku.ID)
+			if matched.ID != user.ID {
+				t.Errorf("kullanici id = %q, beklenen %q", matched.ID, user.ID)
 			}
 
-			// Saglayici ayrimi: ayni sub degeri baska saglayicida AYNI kisi
-			// degildir.
-			if _, err := k.depo.UserByIdentity(ctx, "apple", "sub-1"); !errors.Is(err, ErrIdentityNotFound) {
+			// Provider separation: the same sub value at another provider is NOT
+			// the same person.
+			if _, err := k.store.UserByIdentity(ctx, "apple", "sub-1"); !errors.Is(err, ErrIdentityNotFound) {
 				t.Errorf("apple/sub-1 icin err = %v, beklenen ErrKimlikYok", err)
 			}
 
-			// Mevcut (sifreli) hesaba baglama.
-			sifreli, err := k.kullanici.Create(ctx, "b@ornek.com", "Veli", "cok-uzun-bir-sifre")
+			// Linking to an existing (withPassword) account.
+			withPassword, err := k.users.Create(ctx, "b@ornek.com", "Veli", "cok-uzun-bir-sifre")
 			if err != nil {
 				t.Fatalf("sifreli hesap olusturulamadi: %v", err)
 			}
-			if err := k.depo.Link(ctx, "apple", "apple-sub-9", sifreli.ID); err != nil {
+			if err := k.store.Link(ctx, "apple", "apple-sub-9", withPassword.ID); err != nil {
 				t.Fatalf("bagla: %v", err)
 			}
-			bagli, err := k.depo.UserByIdentity(ctx, "apple", "apple-sub-9")
+			linked, err := k.store.UserByIdentity(ctx, "apple", "apple-sub-9")
 			if err != nil {
 				t.Fatalf("baglanan kimlik okunamadi: %v", err)
 			}
-			if bagli.ID != sifreli.ID {
+			if linked.ID != withPassword.ID {
 				t.Error("bagli kimlik yanlis kullaniciyi donuyor")
 			}
 
-			// AYNI (saglayici, sub) BASKA bir hesaba baglanamaz: aksi halde
-			// bir Google hesabi iki bizim hesabimiza birden baglanir ve
-			// giriste hangisine dusecegi belirsizlesir.
-			if err := k.depo.Link(ctx, "apple", "apple-sub-9", ku.ID); !errors.Is(err, ErrIdentityInUse) {
+			// The SAME (provider, sub) cannot be linked to ANOTHER account:
+			// otherwise one Google account would be linked to two of our accounts
+			// and it would be unclear which one a login lands on.
+			if err := k.store.Link(ctx, "apple", "apple-sub-9", user.ID); !errors.Is(err, ErrIdentityInUse) {
 				t.Errorf("ikinci bagla err = %v, beklenen ErrKimlikKullanimda", err)
 			}
 
-			// Bir kullanici ayni saglayiciya iki kez baglanamaz.
-			if err := k.depo.Link(ctx, "apple", "apple-sub-FARKLI", sifreli.ID); !errors.Is(err, ErrIdentityInUse) {
+			// A user cannot be linked to the same provider twice.
+			if err := k.store.Link(ctx, "apple", "apple-sub-FARKLI", withPassword.ID); !errors.Is(err, ErrIdentityInUse) {
 				t.Errorf("ayni saglayiciya ikinci bagla err = %v, beklenen ErrKimlikKullanimda", err)
 			}
 
-			// SaglayicilarByUserID, K1'in 409 sayfasinin metnini besler.
-			sag, err := k.depo.ProvidersByUserID(ctx, sifreli.ID)
+			// ProvidersByUserID feeds the text of K1's 409 page.
+			providers, err := k.store.ProvidersByUserID(ctx, withPassword.ID)
 			if err != nil {
 				t.Fatalf("saglayicilar okunamadi: %v", err)
 			}
-			if len(sag) != 1 || sag[0] != "apple" {
-				t.Errorf("saglayicilar = %v, beklenen [apple]", sag)
+			if len(providers) != 1 || providers[0] != "apple" {
+				t.Errorf("saglayicilar = %v, beklenen [apple]", providers)
 			}
 		})
 	}

@@ -25,32 +25,32 @@ import (
 )
 
 // ---------------------------------------------------------------------
-// Yardimcilar: sahte yukari akis saglayicisi (AG YOK, kendi RSA
-// anahtarlarimiz). Testler hicbir zaman Apple/Google'a cikmaz.
+// Helpers: fake upstream provider (NO NETWORK, our own RSA keys). The tests
+// never reach out to Apple/Google.
 // ---------------------------------------------------------------------
 
-// fedKid, bir RSA anahtarindan deterministik bir "kid" uretir: ayni
-// anahtar hem JWKS'te yayinlanirken hem token imzalanirken ayni kid'i
-// tasimali, aksi halde dogrulayici dogru anahtari secemez.
-func fedKid(anahtar *rsa.PrivateKey) string {
-	toplam := sha256.Sum256(anahtar.N.Bytes())
-	return base64.RawURLEncoding.EncodeToString(toplam[:8])
+// fedKID derives a deterministic "kid" from an RSA key: the same key must
+// carry the same kid both when published in the JWKS and when signing the
+// token, otherwise the verifier cannot pick the right key.
+func fedKID(key *rsa.PrivateKey) string {
+	total := sha256.Sum256(key.N.Bytes())
+	return base64.RawURLEncoding.EncodeToString(total[:8])
 }
 
-func fedRSAAnahtar(t *testing.T) *rsa.PrivateKey {
+func fedRSAKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
-	anahtar, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("rsa anahtari uretilemedi: %v", err)
 	}
-	return anahtar
+	return key
 }
 
-func fedJWK(anahtar *rsa.PrivateKey) map[string]any {
-	pub := anahtar.PublicKey
+func fedJWK(key *rsa.PrivateKey) map[string]any {
+	pub := key.PublicKey
 	return map[string]any{
 		"kty": "RSA",
-		"kid": fedKid(anahtar),
+		"kid": fedKID(key),
 		"use": "sig",
 		"alg": "RS256",
 		"n":   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
@@ -58,311 +58,312 @@ func fedJWK(anahtar *rsa.PrivateKey) map[string]any {
 	}
 }
 
-// sahteSaglayici, bir yukari akis saglayicisinin (Apple/Google) JWKS ve
-// token uclarini taklit eder. Token ucunun uretecegi id_token'in her
-// alani testten ayarlanabilir: saldiri testleri tam olarak bu alanlari
-// bozar (nonce, aud, imza anahtari).
-type sahteSaglayici struct {
-	ad        string
-	istemciID string
-	sunucu    *httptest.Server
+// fakeProvider imitates the JWKS and token endpoints of an upstream provider
+// (Apple/Google). Every field of the id_token the token endpoint will produce
+// can be set from the test: the attack tests break exactly these fields
+// (nonce, aud, signing key).
+type fakeProvider struct {
+	providerName string
+	clientID     string
+	server       *httptest.Server
 
-	// yayinAnahtar, JWKS'te YAYINLANAN anahtar; imzaAnahtar ise
-	// token'i GERCEKTEN imzalayan anahtar. Ikisi farkli olursa imza
-	// dogrulanamaz (gecersiz imza testi).
-	yayinAnahtar *rsa.PrivateKey
+	// publishedKey is the key PUBLISHED in the JWKS; signingKey is the key that
+	// REALLY signs the token. If the two differ the signature cannot be
+	// verified (the invalid signature test).
+	publishedKey *rsa.PrivateKey
 
-	mu               sync.Mutex
-	imzaAnahtar      *rsa.PrivateKey
-	sub              string
-	eposta           string
-	isim             string
-	epostaDogrulandi bool
-	nonce            string
-	audZorla         string
-	issZorla         string
-	tokenSayisi      int
-	sonKod           string
-	sonDogrulayici   string
-	// uretilenTokenlar, token ucunun dondurdugu TUM id_token'lar:
-	// loglarin hicbirinde gecmedigini dogrulamak icin tutulur.
-	uretilenTokenlar []string
+	mu            sync.Mutex
+	signingKey    *rsa.PrivateKey
+	sub           string
+	email         string
+	name          string
+	emailVerified bool
+	nonce         string
+	forceAud      string
+	forceIss      string
+	tokenCount    int
+	lastCode      string
+	lastVerifier  string
+	// issuedTokens is ALL the id_tokens the token endpoint returned: kept to
+	// verify that none of them appears in any log.
+	issuedTokens []string
 }
 
-func yeniSahteSaglayici(t *testing.T, ad string) *sahteSaglayici {
+func newFakeProvider(t *testing.T, name string) *fakeProvider {
 	t.Helper()
-	anahtar := fedRSAAnahtar(t)
-	s := &sahteSaglayici{
-		ad:               ad,
-		istemciID:        ad + "-istemci",
-		yayinAnahtar:     anahtar,
-		imzaAnahtar:      anahtar,
-		sub:              ad + "-sub-1",
-		eposta:           ad + "@ornek.com",
-		isim:             "Test Kullanici",
-		epostaDogrulandi: true,
+	key := fedRSAKey(t)
+	s := &fakeProvider{
+		providerName:  name,
+		clientID:      name + "-istemci",
+		publishedKey:  key,
+		signingKey:    key,
+		sub:           name + "-sub-1",
+		email:         name + "@ornek.com",
+		name:          "Test Kullanici",
+		emailVerified: true,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]any{fedJWK(s.yayinAnahtar)}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]any{fedJWK(s.publishedKey)}})
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		s.mu.Lock()
-		s.tokenSayisi++
-		s.sonKod = r.PostFormValue("code")
-		s.sonDogrulayici = r.PostFormValue("code_verifier")
+		s.tokenCount++
+		s.lastCode = r.PostFormValue("code")
+		s.lastVerifier = r.PostFormValue("code_verifier")
 		s.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"id_token": s.idToken(t)})
 	})
-	s.sunucu = httptest.NewServer(mux)
-	t.Cleanup(s.sunucu.Close)
+	s.server = httptest.NewServer(mux)
+	t.Cleanup(s.server.Close)
 	return s
 }
 
-// idToken, saglayicinin token ucundan donecek id_token'i uretir.
-func (s *sahteSaglayici) idToken(t *testing.T) string {
+// idToken produces the id_token the provider's token endpoint will return.
+func (s *fakeProvider) idToken(t *testing.T) string {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	iss := s.sunucu.URL
-	if s.issZorla != "" {
-		iss = s.issZorla
+	iss := s.server.URL
+	if s.forceIss != "" {
+		iss = s.forceIss
 	}
-	aud := s.istemciID
-	if s.audZorla != "" {
-		aud = s.audZorla
+	aud := s.clientID
+	if s.forceAud != "" {
+		aud = s.forceAud
 	}
-	simdi := time.Now()
-	jeton := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+	now := time.Now()
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"iss":            iss,
 		"aud":            aud,
 		"sub":            s.sub,
-		"email":          s.eposta,
-		"email_verified": s.epostaDogrulandi,
-		"name":           s.isim,
+		"email":          s.email,
+		"email_verified": s.emailVerified,
+		"name":           s.name,
 		"nonce":          s.nonce,
-		"iat":            simdi.Unix(),
-		"exp":            simdi.Add(time.Hour).Unix(),
+		"iat":            now.Unix(),
+		"exp":            now.Add(time.Hour).Unix(),
 	})
-	jeton.Header["kid"] = fedKid(s.imzaAnahtar)
-	imzali, err := jeton.SignedString(s.imzaAnahtar)
+	token.Header["kid"] = fedKID(s.signingKey)
+	signed, err := token.SignedString(s.signingKey)
 	if err != nil {
 		t.Fatalf("id_token imzalanamadi: %v", err)
 	}
-	s.uretilenTokenlar = append(s.uretilenTokenlar, imzali)
-	return imzali
+	s.issuedTokens = append(s.issuedTokens, signed)
+	return signed
 }
 
-func (s *sahteSaglayici) ayarla(f func(*sahteSaglayici)) {
+func (s *fakeProvider) configure(f func(*fakeProvider)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f(s)
 }
 
-// tokenlar, token ucunun dondurdugu id_token'larin kopyasini doner.
-func (s *sahteSaglayici) tokenlar() []string {
+// tokens returns a copy of the id_tokens the token endpoint returned.
+func (s *fakeProvider) tokens() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]string(nil), s.uretilenTokenlar...)
+	return append([]string(nil), s.issuedTokens...)
 }
 
-func (s *sahteSaglayici) sayilar() int {
+func (s *fakeProvider) counts() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.tokenSayisi
+	return s.tokenCount
 }
 
-// sahteFedereIstekler, FedereIstekDepo'nun bellek ici karsiligi: hem
-// bekleyen istegi okur (Baslat'in var olma kontrolu) hem tamamlama
-// sozlesmesini uygular (ikinci cagri Subject'i EZMEZ).
-type sahteFedereIstekler struct {
+// fakeFederationRequests is the in-memory equivalent of the federation
+// request store: it both reads the pending request (Start's existence check)
+// and implements the completion contract (a second call does NOT overwrite
+// Subject).
+type fakeFederationRequests struct {
 	mu       sync.Mutex
-	istekler map[string]*AuthRequest
-	baglanan map[string]string
-	amrler   map[string][]string
+	requests map[string]*AuthRequest
+	bound    map[string]string
+	amrs     map[string][]string
 }
 
-func newSahteFedereIstekler() *sahteFedereIstekler {
-	return &sahteFedereIstekler{
-		istekler: map[string]*AuthRequest{},
-		baglanan: map[string]string{},
-		amrler:   map[string][]string{},
+func newFakeFederationRequests() *fakeFederationRequests {
+	return &fakeFederationRequests{
+		requests: map[string]*AuthRequest{},
+		bound:    map[string]string{},
+		amrs:     map[string][]string{},
 	}
 }
 
-func (s *sahteFedereIstekler) ekle(id string) {
+func (s *fakeFederationRequests) add(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.istekler[id] = &AuthRequest{ID: id, ClientID: "mobil"}
+	s.requests[id] = &AuthRequest{ID: id, ClientID: "mobil"}
 }
 
-// sil, istegi kayittan DUSURUR: uretimde istekTTL'in (10dk) dolmasiyla
-// Redis'in anahtari atmasinin karsiligi. TTL degerleri BILEREK
-// degistirilmedigi icin testler suresi-dolmayi boyle olcer -- 10 dakika
-// beklemek yerine.
-func (s *sahteFedereIstekler) sil(id string) {
+// drop REMOVES the request from the store: the equivalent of Redis dropping the
+// key when requestTTL (10 min) expires in production. Since the TTL values
+// are DELIBERATELY not changed, the tests measure expiry this way -- instead
+// of waiting 10 minutes.
+func (s *fakeFederationRequests) drop(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.istekler, id)
+	delete(s.requests, id)
 }
 
-func (s *sahteFedereIstekler) GetByID(_ context.Context, id string) (*AuthRequest, error) {
+func (s *fakeFederationRequests) GetByID(_ context.Context, id string) (*AuthRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	istek, varMi := s.istekler[id]
-	if !varMi {
+	req, exists := s.requests[id]
+	if !exists {
 		return nil, ErrRequestNotFound
 	}
-	kopya := *istek
-	return &kopya, nil
+	clone := *req
+	return &clone, nil
 }
 
-func (s *sahteFedereIstekler) MarkDone(_ context.Context, id string, userID string, amr []string) error {
+func (s *fakeFederationRequests) MarkDone(_ context.Context, id string, userID string, amr []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, varMi := s.istekler[id]; !varMi {
+	if _, exists := s.requests[id]; !exists {
 		return ErrRequestNotFound
 	}
-	if mevcut, varMi := s.baglanan[id]; varMi {
-		if mevcut == userID {
+	if existing, exists := s.bound[id]; exists {
+		if existing == userID {
 			return nil
 		}
 		return ErrRequestAlreadyCompleted
 	}
-	s.baglanan[id] = userID
-	s.amrler[id] = append([]string(nil), amr...)
+	s.bound[id] = userID
+	s.amrs[id] = append([]string(nil), amr...)
 	return nil
 }
 
-func (s *sahteFedereIstekler) subject(id string) string {
+func (s *fakeFederationRequests) subject(id string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.baglanan[id]
+	return s.bound[id]
 }
 
-func (s *sahteFedereIstekler) amrOku(id string) []string {
+func (s *fakeFederationRequests) amrFor(id string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.amrler[id]
+	return s.amrs[id]
 }
 
 // ---------------------------------------------------------------------
-// Test ortami
+// Test environment
 // ---------------------------------------------------------------------
 
 const fedTestIssuer = "https://op.ornek"
 
-type fedOrtam struct {
-	f         *FederationPages
+type fedEnv struct {
+	pages     *FederationPages
 	mux       *http.ServeMux
-	depo      *RequestStore
-	kullanici *FakeUserStore
-	federe    *FakeFederatedStore
-	oturumlar *FakeSessionStore
-	istekler  *sahteFedereIstekler
-	google    *sahteSaglayici
-	apple     *sahteSaglayici
+	store     *RequestStore
+	users     *FakeUserStore
+	federated *FakeFederatedStore
+	sessions  *FakeSessionStore
+	requests  *fakeFederationRequests
+	google    *fakeProvider
+	apple     *fakeProvider
 	authReqID string
 
-	// oturumCerez, authReqID'yi BU tarayiciya baglayan Faz 1 oturum
-	// cerezi: /authorize bacaginin uretecegi cerezin karsiligi. Baslat
-	// onu ZORUNLU kilar (bkz. C1).
-	oturumCerez *http.Cookie
+	// sessionCookie is the Phase 1 session cookie that binds authReqID to THIS
+	// browser: the equivalent of the cookie the /authorize leg would produce.
+	// Start REQUIRES it (see C1).
+	sessionCookie *http.Cookie
 }
 
-// testFedereSayfalar, federasyon uclarini GERCEK Redis (durum ve
-// bekleme kayitlari), GERCEK id_token dogrulamasi (kendi RSA
-// anahtarlarimiz) ve bellek ici depolarla kurar.
-func testFedereSayfalar(t *testing.T) *fedOrtam {
+// newTestFederationPages sets up the federation endpoints with REAL Redis
+// (state and pending records), REAL id_token verification (our own RSA keys)
+// and in-memory stores.
+func newTestFederationPages(t *testing.T) *fedEnv {
 	t.Helper()
-	rdb := testRedis(t) // Redis yoksa burada atlanir
-	depo := NewRequestStore(rdb)
-	kullanici := NewFakeUserStore()
-	federe := NewFakeFederatedStore(kullanici)
-	oturumlar := NewFakeSessionStore()
-	istekler := newSahteFedereIstekler()
+	rdb := testRedis(t) // Skipped here if there is no Redis
+	store := NewRequestStore(rdb)
+	users := NewFakeUserStore()
+	federated := NewFakeFederatedStore(users)
+	sessionList := NewFakeSessionStore()
+	reqLog := newFakeFederationRequests()
 
-	google := yeniSahteSaglayici(t, providerGoogle)
-	apple := yeniSahteSaglayici(t, providerApple)
-	appleP8, _ := testP8Uret(t)
+	google := newFakeProvider(t, providerGoogle)
+	apple := newFakeProvider(t, providerApple)
+	appleP8, _ := generateTestP8(t)
 
-	akislar := map[string]*Upstream{
+	flows := map[string]*Upstream{
 		providerGoogle: {
-			Name: providerGoogle, ClientID: google.istemciID, ClientSecret: "google-sir",
-			AuthURL: google.sunucu.URL + "/authorize", TokenURL: google.sunucu.URL + "/token",
-			JWKSURL: google.sunucu.URL + "/jwks", Issuer: google.sunucu.URL,
+			Name: providerGoogle, ClientID: google.clientID, ClientSecret: "google-sir",
+			AuthURL: google.server.URL + "/authorize", TokenURL: google.server.URL + "/token",
+			JWKSURL: google.server.URL + "/jwks", Issuer: google.server.URL,
 			Scopes: []string{"openid", "email", "profile"}, SupportsPKCE: true,
 		},
 		providerApple: {
-			Name: providerApple, ClientID: apple.istemciID,
-			AuthURL: apple.sunucu.URL + "/authorize", TokenURL: apple.sunucu.URL + "/token",
-			JWKSURL: apple.sunucu.URL + "/jwks", Issuer: apple.sunucu.URL,
+			Name: providerApple, ClientID: apple.clientID,
+			AuthURL: apple.server.URL + "/authorize", TokenURL: apple.server.URL + "/token",
+			JWKSURL: apple.server.URL + "/jwks", Issuer: apple.server.URL,
 			Scopes: []string{"openid", "name", "email"}, FormPost: true,
-			// Apple'in client_secret'i her degisimde ES256 ile uretilir
-			// (K5), bu yuzden testte de GERCEK bir .p8 anahtari gerekir.
+			// Apple's client_secret is produced with ES256 on every exchange (K5), so a
+			// REAL .p8 key is needed in the test too.
 			AppleTeamID: "EKIP123", AppleKeyID: "ANAHTAR9", AppleKeyP8: appleP8,
 		},
 	}
-	dogrulayicilar := map[string]*auth.UpstreamVerifier{}
-	for ad, s := range map[string]*sahteSaglayici{providerGoogle: google, providerApple: apple} {
-		d, err := auth.NewUpstreamVerifier(context.Background(), s.sunucu.URL+"/jwks", s.sunucu.URL, s.istemciID)
+	verifiers := map[string]*auth.UpstreamVerifier{}
+	for name, s := range map[string]*fakeProvider{providerGoogle: google, providerApple: apple} {
+		d, err := auth.NewUpstreamVerifier(context.Background(), s.server.URL+"/jwks", s.server.URL, s.clientID)
 		if err != nil {
-			t.Fatalf("%s dogrulayicisi kurulamadi: %v", ad, err)
+			t.Fatalf("%s dogrulayicisi kurulamadi: %v", name, err)
 		}
-		dogrulayicilar[ad] = d
+		verifiers[name] = d
 	}
 
-	geri := func(_ context.Context, id string) string {
+	callback := func(_ context.Context, id string) string {
 		return "/authorize/callback?" + url.Values{"id": {id}}.Encode()
 	}
-	// cerezGuvenli = true: issuer https, yani uretim davranisi.
-	f := NewFederationPages(akislar, dogrulayicilar, depo, federe, kullanici, istekler,
-		oturumlar, geri, fedTestIssuer, true)
+	// secure = true: the issuer is https, i.e. production behavior.
+	f := NewFederationPages(flows, verifiers, store, federated, users, reqLog,
+		sessionList, callback, fedTestIssuer, true)
 	f.httpClient = &http.Client{Timeout: 5 * time.Second}
 
 	mux := http.NewServeMux()
-	araci := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
-	f.Mount(mux, araci, nil)
-	f.MountLink(mux, araci, nil)
+	interceptor := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
+	f.Mount(mux, interceptor, nil)
+	f.MountLink(mux, interceptor, nil)
 
-	o := &fedOrtam{
-		f: f, mux: mux, depo: depo, kullanici: kullanici, federe: federe,
-		oturumlar: oturumlar, istekler: istekler, google: google, apple: apple,
+	o := &fedEnv{
+		pages: f, mux: mux, store: store, users: users, federated: federated,
+		sessions: sessionList, requests: reqLog, google: google, apple: apple,
 		authReqID: "istek-1",
 	}
-	istekler.ekle(o.authReqID)
-	o.oturumCerez = o.oturumBagla(t, o.authReqID)
+	reqLog.add(o.authReqID)
+	o.sessionCookie = o.bindSession(t, o.authReqID)
 	return o
 }
 
-// durumOku, Redis'teki state kaydini TUKETMEDEN okur (testin akisi
-// bozmadan nonce'u ogrenmesi icin). Uretim yolu DurumAl'dir ve o GETDEL
-// kullanir.
-func (o *fedOrtam) durumOku(t *testing.T, state string) FederationState {
+// peekState reads the state record in Redis WITHOUT CONSUMING it (so the test
+// can learn the nonce without disturbing the flow). The production path is
+// TakeState and it uses GETDEL.
+func (o *fedEnv) peekState(t *testing.T, state string) FederationState {
 	t.Helper()
-	veri, err := o.depo.rdb.Get(context.Background(), stateKey(state)).Bytes()
+	data, err := o.store.rdb.Get(context.Background(), stateKey(state)).Bytes()
 	if err != nil {
 		t.Fatalf("durum kaydi okunamadi: %v", err)
 	}
 	var d FederationState
-	if err := json.Unmarshal(veri, &d); err != nil {
+	if err := json.Unmarshal(data, &d); err != nil {
 		t.Fatalf("durum kaydi cozumlenemedi: %v", err)
 	}
 	return d
 }
 
-// baslatHam, baslat ucunu VERILEN oturum cerezi ve istege gore cagirir.
-// capraz=true ise Sec-Fetch-Site: cross-site gonderir.
-func (o *fedOrtam) baslatHam(saglayici, authReqID string, cerez *http.Cookie, capraz bool) *httptest.ResponseRecorder {
-	hedef := "/federasyon/" + saglayici + "/baslat?" + url.Values{"authRequestID": {authReqID}}.Encode()
-	r := httptest.NewRequest(http.MethodGet, hedef, nil)
-	if cerez != nil {
-		r.AddCookie(cerez)
+// startRaw calls the start endpoint with the GIVEN session cookie and request.
+// If crossSite=true it sends Sec-Fetch-Site: cross-site.
+func (o *fedEnv) startRaw(provider, authReqID string, cookie *http.Cookie, crossSite bool) *httptest.ResponseRecorder {
+	target := "/federasyon/" + provider + "/baslat?" + url.Values{"authRequestID": {authReqID}}.Encode()
+	r := httptest.NewRequest(http.MethodGet, target, nil)
+	if cookie != nil {
+		r.AddCookie(cookie)
 	}
-	if capraz {
+	if crossSite {
 		r.Header.Set(headerFetchSite, fetchSiteCrossSite)
 	}
 	w := httptest.NewRecorder()
@@ -370,19 +371,19 @@ func (o *fedOrtam) baslatHam(saglayici, authReqID string, cerez *http.Cookie, ca
 	return w
 }
 
-// durumSayisi, Redis'te kac federasyon state kaydi oldugunu doner:
-// "reddedilen bir baslatma HICBIR kayit yazmadi" iddiasinin kaniti.
-func (o *fedOrtam) durumSayisi(t *testing.T) int {
+// stateCount returns how many federation state records are in Redis: the
+// proof of the claim "a rejected start wrote NO record".
+func (o *fedEnv) stateCount(t *testing.T) int {
 	t.Helper()
-	anahtarlar, err := o.depo.rdb.Keys(context.Background(), stateKey("*")).Result()
+	keyList, err := o.store.rdb.Keys(context.Background(), stateKey("*")).Result()
 	if err != nil {
 		t.Fatalf("durum anahtarlari okunamadi: %v", err)
 	}
-	return len(anahtarlar)
+	return len(keyList)
 }
 
-// fedCerezVarMi, yanitta kimlik_fed cerezi olup olmadigini soyler.
-func fedCerezVarMi(w *httptest.ResponseRecorder) bool {
+// hasFedCookie says whether the response has a kimlik_fed cookie.
+func hasFedCookie(w *httptest.ResponseRecorder) bool {
 	for _, c := range w.Result().Cookies() {
 		if c.Name == cookieNameFederation {
 			return true
@@ -391,98 +392,98 @@ func fedCerezVarMi(w *httptest.ResponseRecorder) bool {
 	return false
 }
 
-// baslat, GET /federasyon/<saglayici>/baslat cagirir ve (state, fed
-// cerezi, yanit) doner. Istegi BASLATAN tarayicinin oturum cerezi
-// GONDERILIR: Baslat onu zorunlu kilar (C1).
-func (o *fedOrtam) baslat(t *testing.T, saglayici, authReqID string) (string, *http.Cookie, *httptest.ResponseRecorder) {
+// start calls GET /federasyon/<provider>/baslat and returns (state, fed
+// cookie, response). The session cookie of the browser that STARTED the
+// request is SENT: Start requires it (C1).
+func (o *fedEnv) start(t *testing.T, provider, authReqID string) (string, *http.Cookie, *httptest.ResponseRecorder) {
 	t.Helper()
-	w := o.baslatHam(saglayici, authReqID, o.oturumCerez, false)
+	w := o.startRaw(provider, authReqID, o.sessionCookie, false)
 	if w.Code != http.StatusFound {
 		return "", nil, w
 	}
-	konum, err := url.Parse(w.Header().Get("Location"))
+	location, err := url.Parse(w.Header().Get("Location"))
 	if err != nil {
 		t.Fatalf("Location cozumlenemedi: %v", err)
 	}
-	state := konum.Query().Get("state")
-	var cerez *http.Cookie
+	state := location.Query().Get("state")
+	var cookie *http.Cookie
 	for _, c := range w.Result().Cookies() {
 		if c.Name == cookieNameFederation {
-			cerez = c
+			cookie = c
 		}
 	}
-	return state, cerez, w
+	return state, cookie, w
 }
 
-// geri, geri donus ucunu cagirir. post=true ise Apple'in form_post
-// donusunu (CAPRAZ-SITE POST) taklit eder.
-func (o *fedOrtam) geri(saglayici, state, kod string, cerez *http.Cookie, post bool) *httptest.ResponseRecorder {
-	yol := "/federasyon/" + saglayici + "/geri"
-	deger := url.Values{"state": {state}, "code": {kod}}
+// callback calls the callback return endpoint. If post=true it imitates
+// Apple's form_post return (a CROSS-SITE POST).
+func (o *fedEnv) callback(provider, state, code string, cookie *http.Cookie, post bool) *httptest.ResponseRecorder {
+	path := "/federasyon/" + provider + "/geri"
+	value := url.Values{"state": {state}, "code": {code}}
 	var r *http.Request
 	if post {
-		r = httptest.NewRequest(http.MethodPost, yol, strings.NewReader(deger.Encode()))
+		r = httptest.NewRequest(http.MethodPost, path, strings.NewReader(value.Encode()))
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		// Apple'in form_post donusu capraz-sitedir (K3).
+		// Apple's form_post return is cross-site (K3).
 		r.Header.Set(headerFetchSite, fetchSiteCrossSite)
 	} else {
-		r = httptest.NewRequest(http.MethodGet, yol+"?"+deger.Encode(), nil)
+		r = httptest.NewRequest(http.MethodGet, path+"?"+value.Encode(), nil)
 	}
-	if cerez != nil {
-		r.AddCookie(cerez)
+	if cookie != nil {
+		r.AddCookie(cookie)
 	}
 	w := httptest.NewRecorder()
 	o.mux.ServeHTTP(w, r)
 	return w
 }
 
-// akisKos, mutlu yolun tamamini kostur: baslat -> (nonce'u sahte
-// saglayiciya ver) -> geri. Donen yanit son adimin yanitidir.
-func (o *fedOrtam) akisKos(t *testing.T, saglayici string, post bool) *httptest.ResponseRecorder {
+// runFlow runs the whole happy path: start -> (give the nonce to the fake
+// provider) -> callback. The returned response is the response of the last step.
+func (o *fedEnv) runFlow(t *testing.T, provider string, post bool) *httptest.ResponseRecorder {
 	t.Helper()
-	state, cerez, w := o.baslat(t, saglayici, o.authReqID)
+	state, cookie, w := o.start(t, provider, o.authReqID)
 	if state == "" {
 		t.Fatalf("baslat basarisiz: durum = %d", w.Code)
 	}
-	d := o.durumOku(t, state)
-	o.saglayiciAl(saglayici).ayarla(func(s *sahteSaglayici) { s.nonce = d.Nonce })
-	return o.geri(saglayici, state, "kod-1", cerez, post)
+	d := o.peekState(t, state)
+	o.provider(provider).configure(func(s *fakeProvider) { s.nonce = d.Nonce })
+	return o.callback(provider, state, "kod-1", cookie, post)
 }
 
-func (o *fedOrtam) saglayiciAl(ad string) *sahteSaglayici {
-	if ad == providerApple {
+func (o *fedEnv) provider(name string) *fakeProvider {
+	if name == providerApple {
 		return o.apple
 	}
 	return o.google
 }
 
 // ---------------------------------------------------------------------
-// Step 1: Baslatma testleri
+// Step 1: Start tests
 // ---------------------------------------------------------------------
 
-// Baslatma, istegi BASLATAN tarayiciya baglanmali: Faz 1'in C1
-// (hesap devralma) acigini federasyon tarafindan yeniden acmamak icin.
-func TestBaslatCerezKoyarVeDurumYazar(t *testing.T) {
-	o := testFedereSayfalar(t)
-	state, cerez, w := o.baslat(t, providerGoogle, o.authReqID)
+// Start must bind the request to the browser that STARTED it: so that the
+// federation side does not reopen Phase 1's C1 (account takeover) hole.
+func TestFederationStart_SetsCookieAndWritesState(t *testing.T) {
+	o := newTestFederationPages(t)
+	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
 	if w.Code != http.StatusFound {
 		t.Fatalf("durum = %d, beklenen 302", w.Code)
 	}
 	if state == "" {
 		t.Fatal("Location'da state yok")
 	}
-	if cerez == nil || cerez.Value == "" {
+	if cookie == nil || cookie.Value == "" {
 		t.Fatal("federasyon cerezi konmadi")
 	}
-	konum, err := url.Parse(w.Header().Get("Location"))
+	location, err := url.Parse(w.Header().Get("Location"))
 	if err != nil {
 		t.Fatalf("Location cozumlenemedi: %v", err)
 	}
-	if !strings.HasPrefix(w.Header().Get("Location"), o.google.sunucu.URL+"/authorize") {
+	if !strings.HasPrefix(w.Header().Get("Location"), o.google.server.URL+"/authorize") {
 		t.Errorf("Location yukari akis authorize adresi degil")
 	}
-	q := konum.Query()
-	if q.Get("client_id") != o.google.istemciID {
+	q := location.Query()
+	if q.Get("client_id") != o.google.clientID {
 		t.Errorf("client_id = %q", q.Get("client_id"))
 	}
 	if q.Get("nonce") == "" {
@@ -491,13 +492,13 @@ func TestBaslatCerezKoyarVeDurumYazar(t *testing.T) {
 	if q.Get("code_challenge_method") != "S256" {
 		t.Errorf("code_challenge_method = %q, beklenen S256", q.Get("code_challenge_method"))
 	}
-	beklenenGeri := fedTestIssuer + "/federasyon/" + providerGoogle + "/geri"
-	if q.Get("redirect_uri") != beklenenGeri {
-		t.Errorf("redirect_uri = %q, beklenen %q", q.Get("redirect_uri"), beklenenGeri)
+	wantCallback := fedTestIssuer + "/federasyon/" + providerGoogle + "/geri"
+	if q.Get("redirect_uri") != wantCallback {
+		t.Errorf("redirect_uri = %q, beklenen %q", q.Get("redirect_uri"), wantCallback)
 	}
 
-	d := o.durumOku(t, state)
-	if d.Cookie != cerez.Value {
+	d := o.peekState(t, state)
+	if d.Cookie != cookie.Value {
 		t.Error("durum kaydindaki cerez degeri, yanittaki cerezle ayni degil")
 	}
 	if d.AuthRequestID != o.authReqID {
@@ -512,40 +513,40 @@ func TestBaslatCerezKoyarVeDurumYazar(t *testing.T) {
 	if d.CodeVerifier == "" {
 		t.Error("kayitta kod dogrulayicisi yok")
 	}
-	// Dogrulayici URL'e DUZ METIN girmemeli; yalnizca ozeti gider.
+	// The verifier must not appear in the URL in PLAIN TEXT; only its digest goes.
 	if strings.Contains(w.Header().Get("Location"), d.CodeVerifier) {
 		t.Error("kod dogrulayicisi authorize URL'ine duz metin kondu")
 	}
 }
 
-// K2: Apple'in form_post donusu CROSS-SITE'tir ve SameSite=Lax cerez
-// o POST'ta GONDERILMEZ. Bu yuzden federasyon cerezi None olmali --
-// ama HttpOnly ve Secure'dan VAZGECILMEZ.
-func TestFederasyonCereziSameSiteNone(t *testing.T) {
-	o := testFedereSayfalar(t)
-	_, cerez, _ := o.baslat(t, providerApple, o.authReqID)
-	if cerez == nil {
+// K2: Apple's form_post return is CROSS-SITE and a SameSite=Lax cookie is NOT
+// SENT on that POST. That is why the federation cookie must be None -- but
+// HttpOnly and Secure CANNOT be given up.
+func TestFederationCookie_SameSiteNone(t *testing.T) {
+	o := newTestFederationPages(t)
+	_, cookie, _ := o.start(t, providerApple, o.authReqID)
+	if cookie == nil {
 		t.Fatal("federasyon cerezi konmadi")
 	}
-	if cerez.SameSite != http.SameSiteNoneMode {
-		t.Errorf("SameSite = %v, beklenen None (K2: Apple form_post capraz-site POST'tur)", cerez.SameSite)
+	if cookie.SameSite != http.SameSiteNoneMode {
+		t.Errorf("SameSite = %v, beklenen None (K2: Apple form_post capraz-site POST'tur)", cookie.SameSite)
 	}
-	if !cerez.HttpOnly {
+	if !cookie.HttpOnly {
 		t.Error("HttpOnly kapali")
 	}
-	if !cerez.Secure {
+	if !cookie.Secure {
 		t.Error("Secure kapali (issuer https)")
 	}
-	if cerez.Path != "/federasyon" {
-		t.Errorf("Path = %q, beklenen /federasyon (oturum cerezini EZMEMELI)", cerez.Path)
+	if cookie.Path != "/federasyon" {
+		t.Errorf("Path = %q, beklenen /federasyon (oturum cerezini EZMEMELI)", cookie.Path)
 	}
 }
 
-// Oturum cerezi DEGISMEMELI: SameSite=None'a cevirmek Faz 1'in
-// login-CSRF korumasini zayiflatirdi.
-func TestBaslatOturumCerezineDokunmaz(t *testing.T) {
-	o := testFedereSayfalar(t)
-	_, _, w := o.baslat(t, providerGoogle, o.authReqID)
+// The session cookie must NOT CHANGE: turning it into SameSite=None would
+// weaken Phase 1's login-CSRF protection.
+func TestFederationStart_LeavesSessionCookie(t *testing.T) {
+	o := newTestFederationPages(t)
+	_, _, w := o.start(t, providerGoogle, o.authReqID)
 	for _, c := range w.Result().Cookies() {
 		if c.Name == cookieNameSession {
 			t.Fatalf("baslat oturum cerezine dokundu: %+v", c)
@@ -553,33 +554,33 @@ func TestBaslatOturumCerezineDokunmaz(t *testing.T) {
 	}
 }
 
-func TestBaslatBilinmeyenSaglayici404(t *testing.T) {
-	o := testFedereSayfalar(t)
-	_, _, w := o.baslat(t, "facebook", o.authReqID)
+func TestFederationStart_UnknownProvider404(t *testing.T) {
+	o := newTestFederationPages(t)
+	_, _, w := o.start(t, "facebook", o.authReqID)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("durum = %d, beklenen 404", w.Code)
 	}
 }
 
-func TestBaslatGecersizAuthRequestIDReddedilir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	// "var olmayan id" icin oturum baglamasi KURULUR: aksi halde test
-	// 403'te durur ve "istek var mi" kontrolunu hic olcmez.
-	yokCerez := o.oturumBagla(t, "yok-boyle-bir-istek")
+func TestFederationStart_InvalidAuthRequestIDRejected(t *testing.T) {
+	o := newTestFederationPages(t)
+	// A session binding IS SET UP for the "nonexistent id": otherwise the test
+	// stops at 403 and never measures the "does the request exist" check.
+	missingCookie := o.bindSession(t, "yok-boyle-bir-istek")
 	for _, d := range []struct {
-		ad    string
-		id    string
-		cerez *http.Cookie
+		name   string
+		id     string
+		cookie *http.Cookie
 	}{
-		{"bos id", "", o.oturumCerez},
-		{"var olmayan id", "yok-boyle-bir-istek", yokCerez},
+		{"bos id", "", o.sessionCookie},
+		{"var olmayan id", "yok-boyle-bir-istek", missingCookie},
 	} {
-		t.Run(d.ad, func(t *testing.T) {
-			w := o.baslatHam(providerGoogle, d.id, d.cerez, false)
+		t.Run(d.name, func(t *testing.T) {
+			w := o.startRaw(providerGoogle, d.id, d.cookie, false)
 			if w.Code != http.StatusBadRequest {
 				t.Errorf("durum = %d, beklenen 400", w.Code)
 			}
-			if fedCerezVarMi(w) {
+			if hasFedCookie(w) {
 				t.Error("gecersiz istekte federasyon cerezi konmamali")
 			}
 			if !strings.Contains(w.Body.String(), msgRequestInvalid) {
@@ -589,38 +590,38 @@ func TestBaslatGecersizAuthRequestIDReddedilir(t *testing.T) {
 	}
 }
 
-// C1: authRequestID TEK BASINA yetki girdisi DEGILDIR. Baslat, istegi
-// /authorize'da BASLATAN tarayicinin oturum baglamasini ZORUNLU kilar.
-// Aksi halde canli bir authRequestID'yi ogrenen biri federasyon
-// bacagini KENDI tarayicisinda kosturup Geri'de istegi KENDI hesabina
-// tamamlatabilir (Faz 1'in C1 hesap devralmasi, yeni bir kapidan).
-func TestBaslatOturumBaglamasiZorunlu(t *testing.T) {
+// C1: authRequestID ALONE is NOT an authorization input. Start REQUIRES the
+// session binding of the browser that STARTED the request at /authorize.
+// Otherwise someone who learns a live authRequestID could run the
+// federation leg in THEIR OWN browser and make Callback complete the request
+// for THEIR OWN account (Phase 1's C1 account takeover, through a new door).
+func TestFederationStart_SessionBindingRequired(t *testing.T) {
 	for _, d := range []struct {
-		ad    string
-		cerez func(o *fedOrtam, t *testing.T) *http.Cookie
+		name   string
+		cookie func(o *fedEnv, t *testing.T) *http.Cookie
 	}{
-		{"oturum cerezi yok", func(*fedOrtam, *testing.T) *http.Cookie { return nil }},
-		{"uydurma oturum cerezi", func(*fedOrtam, *testing.T) *http.Cookie {
+		{"oturum cerezi yok", func(*fedEnv, *testing.T) *http.Cookie { return nil }},
+		{"uydurma oturum cerezi", func(*fedEnv, *testing.T) *http.Cookie {
 			return &http.Cookie{Name: cookieNameSession, Value: "saldirganin-uydurdugu-deger"}
 		}},
-		{"BASKA bir istege bagli oturum", func(o *fedOrtam, t *testing.T) *http.Cookie {
-			return o.oturumBagla(t, "saldirganin-kendi-istegi")
+		{"BASKA bir istege bagli oturum", func(o *fedEnv, t *testing.T) *http.Cookie {
+			return o.bindSession(t, "saldirganin-kendi-istegi")
 		}},
 	} {
-		t.Run(d.ad, func(t *testing.T) {
-			o := testFedereSayfalar(t)
-			oncekiKayit := o.durumSayisi(t)
+		t.Run(d.name, func(t *testing.T) {
+			o := newTestFederationPages(t)
+			previousRecord := o.stateCount(t)
 
-			w := o.baslatHam(providerGoogle, o.authReqID, d.cerez(o, t), false)
+			w := o.startRaw(providerGoogle, o.authReqID, d.cookie(o, t), false)
 			if w.Code != http.StatusForbidden {
 				t.Errorf("durum = %d, beklenen 403", w.Code)
 			}
-			if fedCerezVarMi(w) {
+			if hasFedCookie(w) {
 				t.Error("baglamasiz istege federasyon cerezi KONMAMALI")
 			}
-			if sonra := o.durumSayisi(t); sonra != oncekiKayit {
+			if after := o.stateCount(t); after != previousRecord {
 				t.Errorf("state kaydi yazildi (%d -> %d); baglamasiz istek HICBIR kayit uretmemeli",
-					oncekiKayit, sonra)
+					previousRecord, after)
 			}
 			if w.Header().Get("Location") != "" {
 				t.Errorf("yukari akisa yonlendirildi: %q", w.Header().Get("Location"))
@@ -629,210 +630,212 @@ func TestBaslatOturumBaglamasiZorunlu(t *testing.T) {
 	}
 }
 
-// C1 (b): K3'un muafiyeti YALNIZCA geri donus ucuna aittir. Baslat
-// capraz-siteden cagrilamaz; AuthorizeSar'in capraz-site dalinda
-// baglama KURMAMA karari ancak tamamlama yollarinin HEPSI baglama
-// aradiginda ise yarar.
-func TestBaslatCaprazSiteReddedilir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	oncekiKayit := o.durumSayisi(t)
+// C1 (b): K3's exemption belongs ONLY to the return endpoint. Start cannot be
+// called from cross-site; WrapAuthorize's decision NOT to set up a binding in
+// its cross-site branch only works if ALL completion paths look for a
+// binding.
+func TestFederationStart_CrossSiteRejected(t *testing.T) {
+	o := newTestFederationPages(t)
+	previousRecord := o.stateCount(t)
 
-	// Oturum cerezi GECERLI: reddin TEK sebebi capraz-site olmali.
-	w := o.baslatHam(providerGoogle, o.authReqID, o.oturumCerez, true)
+	// The session cookie is VALID: the ONLY reason for the rejection must be
+	// cross-site.
+	w := o.startRaw(providerGoogle, o.authReqID, o.sessionCookie, true)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("durum = %d, beklenen 403", w.Code)
 	}
-	if fedCerezVarMi(w) {
+	if hasFedCookie(w) {
 		t.Error("capraz-site istege federasyon cerezi KONMAMALI")
 	}
-	if sonra := o.durumSayisi(t); sonra != oncekiKayit {
-		t.Errorf("state kaydi yazildi (%d -> %d)", oncekiKayit, sonra)
+	if after := o.stateCount(t); after != previousRecord {
+		t.Errorf("state kaydi yazildi (%d -> %d)", previousRecord, after)
 	}
 }
 
-// C1 (b)'nin degismezi: AuthorizeSar, /authorize'a capraz-siteden
-// gelindiginde baglama KURMAZ ve "auth istegi olusur ama hicbir
-// tarayici ona bagli olmadigi icin ... istek TAMAMLANAMAZ" varsayimina
-// guvenir. Federasyon bacagi o varsayimi KIRMAMALI: baglamasiz bir
-// istek federasyon uzerinden de tamamlanamaz.
-func TestBaslatBaglamasizIstekFederasyonlaTamamlanamaz(t *testing.T) {
-	o := testFedereSayfalar(t)
-	// AuthorizeSar'in geride biraktigi durum: istek VAR, baglama YOK.
-	baglamasiz := "baglamasiz-istek"
-	o.istekler.ekle(baglamasiz)
+// The invariant of C1 (b): when /authorize is reached from cross-site,
+// WrapAuthorize sets up NO binding and relies on the assumption "the auth
+// request is created but, since no browser is bound to it, the request
+// CANNOT BE COMPLETED". The federation leg must NOT BREAK that assumption:
+// a request without a binding cannot be completed via federation either.
+func TestFederationStart_UnboundRequestCannotComplete(t *testing.T) {
+	o := newTestFederationPages(t)
+	// The state WrapAuthorize leaves behind: the request EXISTS, the binding
+	// does NOT.
+	unbound := "baglamasiz-istek"
+	o.requests.add(unbound)
 
-	w := o.baslatHam(providerGoogle, baglamasiz, nil, false)
+	w := o.startRaw(providerGoogle, unbound, nil, false)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("durum = %d, beklenen 403", w.Code)
 	}
-	// Tamamlanabilecek hicbir sey uretilmedi: state yok, cerez yok.
-	if fedCerezVarMi(w) {
+	// Nothing that could be completed was produced: no state, no cookie.
+	if hasFedCookie(w) {
 		t.Error("federasyon cerezi konmus")
 	}
-	if n := o.durumSayisi(t); n != 0 {
+	if n := o.stateCount(t); n != 0 {
 		t.Errorf("state kaydi sayisi = %d, beklenen 0", n)
 	}
-	// Ve istek HICBIR kullaniciya baglanmadi.
-	if s := o.istekler.subject(baglamasiz); s != "" {
+	// And the request was NOT BOUND to any user.
+	if s := o.requests.subject(unbound); s != "" {
 		t.Errorf("Subject = %q, beklenen bos (TamamlandiIsaretle'ye ULASILMAMALI)", s)
 	}
 }
 
-// Yapilandirilmamis saglayici butonu hic gorunmedigi icin buraya
-// gelinmemeli; gelinirse 404, "500" degil.
-func TestBaslatYapilandirilmamisSaglayici404(t *testing.T) {
-	o := testFedereSayfalar(t)
-	// Apple yapilandirilmamis bir kurulumu taklit et.
-	delete(o.f.upstreams, providerApple)
-	_, _, w := o.baslat(t, providerApple, o.authReqID)
+// Since the button of an unconfigured provider never shows, we should not
+// arrive here; if we do, 404, not "500".
+func TestFederationStart_UnconfiguredProvider404(t *testing.T) {
+	o := newTestFederationPages(t)
+	// Imitate a setup where Apple is not configured.
+	delete(o.pages.upstreams, providerApple)
+	_, _, w := o.start(t, providerApple, o.authReqID)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("durum = %d, beklenen 404", w.Code)
 	}
 }
 
 // ---------------------------------------------------------------------
-// Step 2: Geri donus testleri
+// Step 2: Callback tests
 // ---------------------------------------------------------------------
 
-// beklenenCallback, mutlu yolda beklenen yonlendirme adresi.
-func (o *fedOrtam) beklenenCallback() string {
+// expectedCallback is the redirect address expected on the happy path.
+func (o *fedEnv) expectedCallback() string {
 	return "/authorize/callback?" + url.Values{"id": {o.authReqID}}.Encode()
 }
 
-// Mutlu yol: bilinen (saglayici, sub) -> o kullaniciya giris.
-func TestGeriBilinenKimlikGirisYapar(t *testing.T) {
-	o := testFedereSayfalar(t)
-	mevcut, err := o.kullanici.Create(context.Background(), "bagli@ornek.com", "Bagli", "cokgizlisifre")
+// Happy path: known (provider, sub) -> login as that user.
+func TestFederationCallback_KnownIdentityLogsIn(t *testing.T) {
+	o := newTestFederationPages(t)
+	existing, err := o.users.Create(context.Background(), "bagli@ornek.com", "Bagli", "cokgizlisifre")
 	if err != nil {
 		t.Fatalf("kullanici olusturulamadi: %v", err)
 	}
-	if err := o.federe.Link(context.Background(), providerGoogle, o.google.sub, mevcut.ID); err != nil {
+	if err := o.federated.Link(context.Background(), providerGoogle, o.google.sub, existing.ID); err != nil {
 		t.Fatalf("kimlik baglanamadi: %v", err)
 	}
 
-	w := o.akisKos(t, providerGoogle, false)
+	w := o.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusFound {
 		t.Fatalf("durum = %d, beklenen 302, govde = %q", w.Code, w.Body.String())
 	}
-	if konum := w.Header().Get("Location"); konum != o.beklenenCallback() {
-		t.Errorf("Location = %q, beklenen %q", konum, o.beklenenCallback())
+	if location := w.Header().Get("Location"); location != o.expectedCallback() {
+		t.Errorf("Location = %q, beklenen %q", location, o.expectedCallback())
 	}
-	if s := o.istekler.subject(o.authReqID); s != mevcut.ID {
-		t.Errorf("Subject = %q, beklenen %q", s, mevcut.ID)
+	if s := o.requests.subject(o.authReqID); s != existing.ID {
+		t.Errorf("Subject = %q, beklenen %q", s, existing.ID)
 	}
-	if got := o.istekler.amrOku(o.authReqID); !slices.Equal(got, []string{"fed"}) {
+	if got := o.requests.amrFor(o.authReqID); !slices.Equal(got, []string{"fed"}) {
 		t.Errorf("amr = %v, beklenen [fed]", got)
 	}
-	if o.google.sayilar() != 1 {
-		t.Errorf("token ucu %d kez cagrildi, beklenen 1", o.google.sayilar())
+	if o.google.counts() != 1 {
+		t.Errorf("token ucu %d kez cagrildi, beklenen 1", o.google.counts())
 	}
 }
 
-// Yeni kimlik -> hesap olusturulur ve giris olur.
-func TestGeriYeniKimlikHesapAcar(t *testing.T) {
-	o := testFedereSayfalar(t)
-	o.google.ayarla(func(s *sahteSaglayici) { s.eposta = "yeni@ornek.com" })
+// New identity -> the account is created and the user logs in.
+func TestFederationCallback_NewIdentityCreatesAccount(t *testing.T) {
+	o := newTestFederationPages(t)
+	o.google.configure(func(s *fakeProvider) { s.email = "yeni@ornek.com" })
 
-	w := o.akisKos(t, providerGoogle, false)
+	w := o.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusFound {
 		t.Fatalf("durum = %d, beklenen 302, govde = %q", w.Code, w.Body.String())
 	}
-	yeni, err := o.kullanici.ByEmail(context.Background(), "yeni@ornek.com")
+	fresh, err := o.users.ByEmail(context.Background(), "yeni@ornek.com")
 	if err != nil {
 		t.Fatalf("yeni kullanici bulunamadi: %v", err)
 	}
-	if yeni.PasswordHash != "" {
+	if fresh.PasswordHash != "" {
 		t.Error("federe hesabin sifresi olmamali")
 	}
-	bagli, err := o.federe.UserByIdentity(context.Background(), providerGoogle, o.google.sub)
+	linked, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub)
 	if err != nil {
 		t.Fatalf("federe kimlik yazilmamis: %v", err)
 	}
-	if bagli.ID != yeni.ID {
-		t.Errorf("kimlik %q kullanicisina bagli, beklenen %q", bagli.ID, yeni.ID)
+	if linked.ID != fresh.ID {
+		t.Errorf("kimlik %q kullanicisina bagli, beklenen %q", linked.ID, fresh.ID)
 	}
-	if s := o.istekler.subject(o.authReqID); s != yeni.ID {
-		t.Errorf("Subject = %q, beklenen %q", s, yeni.ID)
+	if s := o.requests.subject(o.authReqID); s != fresh.ID {
+		t.Errorf("Subject = %q, beklenen %q", s, fresh.ID)
 	}
-	if got := o.istekler.amrOku(o.authReqID); !slices.Equal(got, []string{"fed"}) {
+	if got := o.requests.amrFor(o.authReqID); !slices.Equal(got, []string{"fed"}) {
 		t.Errorf("amr = %v, beklenen [fed]", got)
 	}
 }
 
-// Apple'in form_post donusu CAPRAZ-SITE bir POST'tur (K2/K3): hem POST
-// kabul edilmeli hem de Sec-Fetch-Site: cross-site REDDEDILMEMELI.
-func TestGeriCaprazSitePostKabulEdilir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	w := o.akisKos(t, providerApple, true)
+// Apple's form_post return is a CROSS-SITE POST (K2/K3): the POST must be
+// accepted AND Sec-Fetch-Site: cross-site must NOT be REJECTED.
+func TestFederationCallback_CrossSitePostAccepted(t *testing.T) {
+	o := newTestFederationPages(t)
+	w := o.runFlow(t, providerApple, true)
 	if w.Code != http.StatusFound {
 		t.Fatalf("durum = %d, beklenen 302, govde = %q", w.Code, w.Body.String())
 	}
-	if o.istekler.subject(o.authReqID) == "" {
+	if o.requests.subject(o.authReqID) == "" {
 		t.Error("istek tamamlanmadi")
 	}
 }
 
-// --- SALDIRI TESTLERI ---
+// --- ATTACK TESTS ---
 
-// state yok veya bilinmiyor: akis durmali. Bu, callback'i tahmin edip
-// kurbanin istegini tamamlamaya calisan saldirganin ilk denemesidir.
-func TestGeriBilinmeyenStateReddedilir(t *testing.T) {
-	o := testFedereSayfalar(t)
+// state missing or unknown: the flow must stop. This is the first attempt of
+// an attacker who tries to guess the callback and complete the victim's request.
+func TestFederationCallback_UnknownStateRejected(t *testing.T) {
+	o := newTestFederationPages(t)
 	for _, d := range []struct {
-		ad    string
+		name  string
 		state string
 	}{
 		{"bos state", ""},
 		{"uydurma state", "uydurma-state-degeri"},
 	} {
-		t.Run(d.ad, func(t *testing.T) {
-			w := o.geri(providerGoogle, d.state, "kod-1", &http.Cookie{Name: cookieNameFederation, Value: "herhangi"}, false)
+		t.Run(d.name, func(t *testing.T) {
+			w := o.callback(providerGoogle, d.state, "kod-1", &http.Cookie{Name: cookieNameFederation, Value: "herhangi"}, false)
 			if w.Code != http.StatusForbidden {
 				t.Errorf("durum = %d, beklenen 403", w.Code)
 			}
-			if o.istekler.subject(o.authReqID) != "" {
+			if o.requests.subject(o.authReqID) != "" {
 				t.Error("istek TAMAMLANMAMALI")
 			}
-			if o.google.sayilar() != 0 {
+			if o.google.counts() != 0 {
 				t.Error("token degisimi HIC yapilmamali")
 			}
 		})
 	}
 }
 
-// state TEK KULLANIMLIK: ayni callback iki kez oynatilamaz.
-func TestGeriStateTekrariReddedilir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	o.google.ayarla(func(s *sahteSaglayici) { s.eposta = "tekrar@ornek.com" })
+// state is SINGLE-USE: the same callback cannot be replayed twice.
+func TestFederationCallback_StateReplayRejected(t *testing.T) {
+	o := newTestFederationPages(t)
+	o.google.configure(func(s *fakeProvider) { s.email = "tekrar@ornek.com" })
 
-	state, cerez, w := o.baslat(t, providerGoogle, o.authReqID)
+	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
 	if state == "" {
 		t.Fatalf("baslat basarisiz: durum = %d", w.Code)
 	}
-	d := o.durumOku(t, state)
-	o.google.ayarla(func(s *sahteSaglayici) { s.nonce = d.Nonce })
+	d := o.peekState(t, state)
+	o.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
 
-	ilk := o.geri(providerGoogle, state, "kod-1", cerez, false)
-	if ilk.Code != http.StatusFound {
-		t.Fatalf("ilk donus durum = %d, beklenen 302, govde = %q", ilk.Code, ilk.Body.String())
+	first := o.callback(providerGoogle, state, "kod-1", cookie, false)
+	if first.Code != http.StatusFound {
+		t.Fatalf("ilk donus durum = %d, beklenen 302, govde = %q", first.Code, first.Body.String())
 	}
-	ikinci := o.geri(providerGoogle, state, "kod-1", cerez, false)
-	if ikinci.Code != http.StatusForbidden {
-		t.Errorf("ikinci donus durum = %d, beklenen 403 (state tek kullanimlik)", ikinci.Code)
+	second := o.callback(providerGoogle, state, "kod-1", cookie, false)
+	if second.Code != http.StatusForbidden {
+		t.Errorf("ikinci donus durum = %d, beklenen 403 (state tek kullanimlik)", second.Code)
 	}
-	if o.google.sayilar() != 1 {
-		t.Errorf("token ucu %d kez cagrildi, beklenen 1 (tekrar oynatma token degisimine ULASMAMALI)", o.google.sayilar())
+	if o.google.counts() != 1 {
+		t.Errorf("token ucu %d kez cagrildi, beklenen 1 (tekrar oynatma token degisimine ULASMAMALI)", o.google.counts())
 	}
 }
 
-// K2'nin kanitlanmasi: state DOGRU ama cerez YOK/YANLIS ise
-// reddedilmeli. Aksi halde saldirgan kendi yetkilendirmesinden aldigi
-// gecerli bir state+code ciftini kurbanin tarayicisinda acarak
-// kurbanin akisini kendi hesabina tamamlatabilir.
-func TestGeriCerezEslesmezseReddedilir(t *testing.T) {
+// Proof of K2: if the state is RIGHT but the cookie is MISSING/WRONG it must
+// be rejected. Otherwise an attacker could open a valid state+code pair from
+// their own authorization in the victim's browser and make the victim's flow
+// complete for the attacker's own account.
+func TestFederationCallback_CookieMismatchRejected(t *testing.T) {
 	for _, d := range []struct {
-		ad        string
-		cerezUret func(dogru *http.Cookie) *http.Cookie
+		name       string
+		makeCookie func(correct *http.Cookie) *http.Cookie
 	}{
 		{"cerez yok", func(*http.Cookie) *http.Cookie { return nil }},
 		{"yanlis cerez", func(*http.Cookie) *http.Cookie {
@@ -842,404 +845,402 @@ func TestGeriCerezEslesmezseReddedilir(t *testing.T) {
 			return &http.Cookie{Name: cookieNameFederation, Value: ""}
 		}},
 	} {
-		t.Run(d.ad, func(t *testing.T) {
-			o := testFedereSayfalar(t)
-			// 1) Saldirgan kendi tarayicisinda gecerli bir state alir.
-			state, dogruCerez, w := o.baslat(t, providerGoogle, o.authReqID)
+		t.Run(d.name, func(t *testing.T) {
+			o := newTestFederationPages(t)
+			// 1) The attacker gets a valid state in their own browser.
+			state, validCookie, w := o.start(t, providerGoogle, o.authReqID)
 			if state == "" {
 				t.Fatalf("baslat basarisiz: durum = %d", w.Code)
 			}
-			durum := o.durumOku(t, state)
-			o.google.ayarla(func(s *sahteSaglayici) { s.nonce = durum.Nonce })
+			status := o.peekState(t, state)
+			o.google.configure(func(s *fakeProvider) { s.nonce = status.Nonce })
 
-			// 2) Ayni state ile kurbanin tarayicisindan (cerez yok/yanlis) gelinir.
-			yanit := o.geri(providerGoogle, state, "kod-1", d.cerezUret(dogruCerez), false)
-			if yanit.Code != http.StatusForbidden {
-				t.Errorf("durum = %d, beklenen 403", yanit.Code)
+			// 2) It arrives with the same state from the victim's browser (cookie missing/wrong).
+			resp := o.callback(providerGoogle, state, "kod-1", d.makeCookie(validCookie), false)
+			if resp.Code != http.StatusForbidden {
+				t.Errorf("durum = %d, beklenen 403", resp.Code)
 			}
-			if o.istekler.subject(o.authReqID) != "" {
+			if o.requests.subject(o.authReqID) != "" {
 				t.Error("istek TAMAMLANMAMALI (Subject bos kalmali)")
 			}
-			if o.google.sayilar() != 0 {
+			if o.google.counts() != 0 {
 				t.Error("token degisimi HIC yapilmamali")
 			}
 		})
 	}
 }
 
-// nonce: Task 2'deki DogrulaNonce'un akista gercekten cagrildiginin
-// kaniti. Yukari akis BASKA bir nonce'lu id_token dondururse akis
-// durmali.
-func TestGeriNonceEslesmezseReddedilir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	state, cerez, w := o.baslat(t, providerGoogle, o.authReqID)
+// nonce: the proof that Task 2's VerifyWithNonce really gets called in the
+// flow. If the upstream returns an id_token with ANOTHER nonce the flow must stop.
+func TestFederationCallback_NonceMismatchRejected(t *testing.T) {
+	o := newTestFederationPages(t)
+	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
 	if state == "" {
 		t.Fatalf("baslat basarisiz: durum = %d", w.Code)
 	}
-	// Saglayici BASKA bir nonce ile imzaliyor: saldirganin kendi
-	// yetkilendirmesinden aldigi gecerli (imza/iss/aud dogru) bir
-	// id_token'i kurbanin akisina enjekte etmesi senaryosu.
-	o.google.ayarla(func(s *sahteSaglayici) { s.nonce = "saldirganin-nonce-degeri" })
+	// The provider signs with ANOTHER nonce: the scenario where an attacker
+	// injects a valid (signature/iss/aud correct) id_token obtained from their
+	// own authorization into the victim's flow.
+	o.google.configure(func(s *fakeProvider) { s.nonce = "saldirganin-nonce-degeri" })
 
-	yanit := o.geri(providerGoogle, state, "kod-1", cerez, false)
-	if yanit.Code != http.StatusForbidden {
-		t.Errorf("durum = %d, beklenen 403", yanit.Code)
+	resp := o.callback(providerGoogle, state, "kod-1", cookie, false)
+	if resp.Code != http.StatusForbidden {
+		t.Errorf("durum = %d, beklenen 403", resp.Code)
 	}
-	if o.istekler.subject(o.authReqID) != "" {
+	if o.requests.subject(o.authReqID) != "" {
 		t.Error("istek TAMAMLANMAMALI")
 	}
-	if _, err := o.kullanici.ByEmail(context.Background(), o.google.eposta); err == nil {
+	if _, err := o.users.ByEmail(context.Background(), o.google.email); err == nil {
 		t.Error("nonce eslesmezken hesap OLUSTURULMAMALI")
 	}
 }
 
-// Imzasi gecersiz veya baska bir anahtarla imzalanmis id_token
-// reddedilmeli.
-func TestGeriGecersizImzaReddedilir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	// JWKS'te yayinlanmayan BASKA bir anahtarla imzala.
-	o.google.ayarla(func(s *sahteSaglayici) { s.imzaAnahtar = fedRSAAnahtar(t) })
+// An id_token with an invalid signature, or signed with another key, must be rejected.
+func TestFederationCallback_InvalidSignatureRejected(t *testing.T) {
+	o := newTestFederationPages(t)
+	// Sign with ANOTHER key that is not published in the JWKS.
+	o.google.configure(func(s *fakeProvider) { s.signingKey = fedRSAKey(t) })
 
-	w := o.akisKos(t, providerGoogle, false)
+	w := o.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("durum = %d, beklenen 403", w.Code)
 	}
-	if o.istekler.subject(o.authReqID) != "" {
+	if o.requests.subject(o.authReqID) != "" {
 		t.Error("istek TAMAMLANMAMALI")
 	}
 }
 
-// Yukari akis aud'u BASKA bir istemciye verilmis bir id_token
-// dondururse reddedilmeli (baska uygulamanin tokeniyle giris).
-func TestGeriYanlisAudienceReddedilir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	o.google.ayarla(func(s *sahteSaglayici) { s.audZorla = "baska-uygulama" })
+// If the upstream returns an id_token whose aud was issued to ANOTHER client
+// it must be rejected (login with another app's token).
+func TestFederationCallback_WrongAudienceRejected(t *testing.T) {
+	o := newTestFederationPages(t)
+	o.google.configure(func(s *fakeProvider) { s.forceAud = "baska-uygulama" })
 
-	w := o.akisKos(t, providerGoogle, false)
+	w := o.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("durum = %d, beklenen 403", w.Code)
 	}
-	if o.istekler.subject(o.authReqID) != "" {
+	if o.requests.subject(o.authReqID) != "" {
 		t.Error("istek TAMAMLANMAMALI")
 	}
 }
 
-// authRequestID BASKA bir kullaniciya zaten tamamlanmissa
-// ErrIstekZatenTamamlandi yolundan reddedilmeli (Faz 1'in kurali
-// federasyonda da gecerli).
-func TestGeriTamamlanmisIstekBaskaKullaniciyaReddedilir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	if err := o.istekler.MarkDone(context.Background(), o.authReqID, "baska-kullanici", []string{amrFederation}); err != nil {
+// If the authRequestID has already been completed for ANOTHER user it must be
+// rejected through the ErrRequestAlreadyCompleted path (Phase 1's rule also
+// applies to federation).
+func TestFederationCallback_CompletedRequestOtherUserRejected(t *testing.T) {
+	o := newTestFederationPages(t)
+	if err := o.requests.MarkDone(context.Background(), o.authReqID, "baska-kullanici", []string{amrFederation}); err != nil {
 		t.Fatalf("on tamamlama: %v", err)
 	}
-	w := o.akisKos(t, providerGoogle, false)
+	w := o.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusConflict {
 		t.Errorf("durum = %d, beklenen 409", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), msgRequestAlreadyUsed) {
 		t.Errorf("govde = %q", w.Body.String())
 	}
-	if s := o.istekler.subject(o.authReqID); s != "baska-kullanici" {
+	if s := o.requests.subject(o.authReqID); s != "baska-kullanici" {
 		t.Errorf("Subject ezildi: %q", s)
 	}
 }
 
-// Saglayici, YOLDAN degil state KAYDINDAN okunur. Aksi halde saldirgan
-// Google'da baslatilmis bir akisi /federasyon/apple/geri'ye getirip
-// dogrulayici secimini karistirabilir.
-func TestGeriSaglayiciKayittanOkunur(t *testing.T) {
-	o := testFedereSayfalar(t)
-	o.google.ayarla(func(s *sahteSaglayici) { s.eposta = "kayittan@ornek.com" })
+// The provider is read from the state RECORD, not from the path. Otherwise an
+// attacker could bring a flow started at Google to /federasyon/apple/geri and
+// confuse the verifier selection.
+func TestFederationCallback_ProviderReadFromState(t *testing.T) {
+	o := newTestFederationPages(t)
+	o.google.configure(func(s *fakeProvider) { s.email = "kayittan@ornek.com" })
 
-	state, cerez, w := o.baslat(t, providerGoogle, o.authReqID)
+	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
 	if state == "" {
 		t.Fatalf("baslat basarisiz: durum = %d", w.Code)
 	}
-	d := o.durumOku(t, state)
-	o.google.ayarla(func(s *sahteSaglayici) { s.nonce = d.Nonce })
+	d := o.peekState(t, state)
+	o.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
 
-	// Google'da baslatilmis akis, APPLE yolundan geri gelir.
-	yanit := o.geri(providerApple, state, "kod-1", cerez, false)
-	if yanit.Code != http.StatusFound {
+	// A flow started at Google comes back through the APPLE path.
+	resp := o.callback(providerApple, state, "kod-1", cookie, false)
+	if resp.Code != http.StatusFound {
 		t.Fatalf("durum = %d, beklenen 302 (akis kayittaki GOOGLE ile surmeli), govde = %q",
-			yanit.Code, yanit.Body.String())
+			resp.Code, resp.Body.String())
 	}
-	if o.google.sayilar() != 1 {
-		t.Errorf("google token ucu %d kez cagrildi, beklenen 1", o.google.sayilar())
+	if o.google.counts() != 1 {
+		t.Errorf("google token ucu %d kez cagrildi, beklenen 1", o.google.counts())
 	}
-	if o.apple.sayilar() != 0 {
-		t.Errorf("apple token ucu %d kez cagrildi, beklenen 0 (yol degeri kullanilmamali)", o.apple.sayilar())
+	if o.apple.counts() != 0 {
+		t.Errorf("apple token ucu %d kez cagrildi, beklenen 0 (yol degeri kullanilmamali)", o.apple.counts())
 	}
-	bagli, err := o.federe.UserByIdentity(context.Background(), providerGoogle, o.google.sub)
+	linked, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub)
 	if err != nil {
 		t.Fatalf("kimlik GOOGLE olarak yazilmamis: %v", err)
 	}
-	if bagli.Email != "kayittan@ornek.com" {
-		t.Errorf("e-posta = %q", bagli.Email)
+	if linked.Email != "kayittan@ornek.com" {
+		t.Errorf("e-posta = %q", linked.Email)
 	}
 }
 
-// Geri donus ucu kimlik dogrulamasizdir ve her istek bir Redis okumasi
-// (ve gecerli state'te yukari akisa bir HTTP cagrisi) tetikler; sinir
-// GIRIS ve BAGLAMA uclarindan AYRI bir sayacta tutulmali.
-func TestGeriHizLimitiUygulanir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	hiz, err := NewRateLimiter(o.depo.rdb, RateLimitConfig{
+// The callback return endpoint is unauthenticated and every request triggers a
+// Redis read (and, with a valid state, an HTTP call to the upstream); the
+// limit must be kept in a counter SEPARATE from the LOGIN and LINK endpoints.
+func TestFederationCallback_RateLimitApplied(t *testing.T) {
+	o := newTestFederationPages(t)
+	limiter, err := NewRateLimiter(o.store.rdb, RateLimitConfig{
 		LoginIPPerMin: 1, LoginEmailPerHour: 100, SignupIPPerHour: 100,
 	}, []byte("test-anahtari"))
 	if err != nil {
 		t.Fatalf("hiz limiti kurulamadi: %v", err)
 	}
 	mux := http.NewServeMux()
-	araci := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
-	o.f.Mount(mux, araci, hiz)
+	interceptor := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
+	o.pages.Mount(mux, interceptor, limiter)
 	o.mux = mux
 
-	ilk := o.geri(providerGoogle, "uydurma-state", "kod-1", nil, false)
-	if ilk.Code == http.StatusTooManyRequests {
+	first := o.callback(providerGoogle, "uydurma-state", "kod-1", nil, false)
+	if first.Code == http.StatusTooManyRequests {
 		t.Fatal("ilk deneme 429 aldi; sinir yanlis kurulmus")
 	}
-	ikinci := o.geri(providerGoogle, "uydurma-state", "kod-1", nil, false)
-	if ikinci.Code != http.StatusTooManyRequests {
-		t.Errorf("ikinci deneme durum = %d, beklenen 429", ikinci.Code)
+	second := o.callback(providerGoogle, "uydurma-state", "kod-1", nil, false)
+	if second.Code != http.StatusTooManyRequests {
+		t.Errorf("ikinci deneme durum = %d, beklenen 429", second.Code)
 	}
-	anahtarlar, err := o.depo.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
+	keyList, err := o.store.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
 	if err != nil {
 		t.Fatalf("anahtarlar okunamadi: %v", err)
 	}
-	var geriVar bool
-	for _, a := range anahtarlar {
+	var hasCallback bool
+	for _, a := range keyList {
 		if strings.Contains(a, ":federasyon-geri:") {
-			geriVar = true
+			hasCallback = true
 		}
 		if strings.Contains(a, ":giris:") || strings.Contains(a, ":baglama:") {
 			t.Errorf("federasyon donusu baska bir ucun sayacini tuketti: %q", a)
 		}
 	}
-	if !geriVar {
-		t.Errorf("federasyon-geri sayaci olusmadi; anahtarlar: %v", anahtarlar)
+	if !hasCallback {
+		t.Errorf("federasyon-geri sayaci olusmadi; anahtarlar: %v", keyList)
 	}
 }
 
-// /federasyon/{saglayici}/baslat IP basina sayilmali ve giris/kayit/
-// baglama/geri sayaclarindan AYRI anahtarda olmali: aksi halde
-// federasyon denemeleri sifre deneme butcesini tuketir ve mesru
-// kullanici kendi giris akisini kilitler.
-func TestFederasyonBaslatHizLimitiAyriSayilir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	hiz, err := NewRateLimiter(o.depo.rdb, RateLimitConfig{
+// /federasyon/{provider}/baslat must be counted per IP and must be on a key
+// SEPARATE from the login/signup/link/callback counters: otherwise federation
+// attempts would use up the password attempt budget and a legitimate user
+// would lock their own login flow.
+func TestFederationStart_RateLimitCountedSeparately(t *testing.T) {
+	o := newTestFederationPages(t)
+	limiter, err := NewRateLimiter(o.store.rdb, RateLimitConfig{
 		LoginIPPerMin: 1, LoginEmailPerHour: 100, SignupIPPerHour: 100,
 	}, []byte("test-anahtari"))
 	if err != nil {
 		t.Fatalf("hiz limiti kurulamadi: %v", err)
 	}
 	mux := http.NewServeMux()
-	araci := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
-	o.f.Mount(mux, araci, hiz)
+	interceptor := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
+	o.pages.Mount(mux, interceptor, limiter)
 	o.mux = mux
 
-	ilk := o.baslatHam(providerGoogle, o.authReqID, o.oturumCerez, false)
-	if ilk.Code == http.StatusTooManyRequests {
+	first := o.startRaw(providerGoogle, o.authReqID, o.sessionCookie, false)
+	if first.Code == http.StatusTooManyRequests {
 		t.Fatal("ilk baslatma 429 aldi; sinir yanlis kurulmus")
 	}
-	ikinci := o.baslatHam(providerGoogle, o.authReqID, o.oturumCerez, false)
-	if ikinci.Code != http.StatusTooManyRequests {
-		t.Errorf("ikinci baslatma durumu = %d, beklenen 429", ikinci.Code)
+	second := o.startRaw(providerGoogle, o.authReqID, o.sessionCookie, false)
+	if second.Code != http.StatusTooManyRequests {
+		t.Errorf("ikinci baslatma durumu = %d, beklenen 429", second.Code)
 	}
 
-	anahtarlar, err := o.depo.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
+	keyList, err := o.store.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
 	if err != nil {
 		t.Fatalf("anahtarlar okunamadi: %v", err)
 	}
-	var baslatVar bool
-	for _, a := range anahtarlar {
+	var hasStart bool
+	for _, a := range keyList {
 		if strings.Contains(a, ":federasyon-baslat:") {
-			baslatVar = true
+			hasStart = true
 		}
-		// Diger uclarin sayaclari TUKETILMEMIS olmali. ":federasyon-geri:"
-		// de dahil: baslat ile geri ayri butceler.
-		for _, yabanci := range []string{":giris:", ":kayit:", ":baglama:", ":federasyon-geri:"} {
-			if strings.Contains(a, yabanci) {
+		// The counters of the other endpoints must NOT have been consumed. Including
+		// ":federasyon-geri:": start and callback are separate budgets.
+		for _, foreign := range []string{":giris:", ":kayit:", ":baglama:", ":federasyon-geri:"} {
+			if strings.Contains(a, foreign) {
 				t.Errorf("federasyon baslatma baska bir ucun sayacini tuketti: %q", a)
 			}
 		}
 	}
-	if !baslatVar {
-		t.Errorf("federasyon-baslat sayaci olusmadi; anahtarlar: %v", anahtarlar)
+	if !hasStart {
+		t.Errorf("federasyon-baslat sayaci olusmadi; anahtarlar: %v", keyList)
 	}
 }
 
-// Hicbir log satirinda state, kod, id_token, cerez veya e-posta
-// GECMEMELI. Faz 1'de bu bir Critical'di.
-func TestGeriLoglarSizdirmaz(t *testing.T) {
-	o := testFedereSayfalar(t)
-	o.google.ayarla(func(s *sahteSaglayici) { s.eposta = "sizmasin@ornek.com" })
+// NO log line may contain state, code, id_token, cookie or email. In Phase 1
+// this was a Critical.
+func TestFederationCallback_LogsDoNotLeak(t *testing.T) {
+	o := newTestFederationPages(t)
+	o.google.configure(func(s *fakeProvider) { s.email = "sizmasin@ornek.com" })
 
-	var tampon strings.Builder
-	eskiCikti := log.Writer()
-	eskiBayrak := log.Flags()
-	log.SetOutput(&tampon)
+	var buf strings.Builder
+	oldOutput := log.Writer()
+	oldFlag := log.Flags()
+	log.SetOutput(&buf)
 	log.SetFlags(0)
 	t.Cleanup(func() {
-		log.SetOutput(eskiCikti)
-		log.SetFlags(eskiBayrak)
+		log.SetOutput(oldOutput)
+		log.SetFlags(oldFlag)
 	})
 
-	// 1) Mutlu yol.
-	state, cerez, w := o.baslat(t, providerGoogle, o.authReqID)
+	// 1) Happy path.
+	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
 	if state == "" {
 		t.Fatalf("baslat basarisiz: durum = %d", w.Code)
 	}
-	d := o.durumOku(t, state)
-	o.google.ayarla(func(s *sahteSaglayici) { s.nonce = d.Nonce })
-	o.geri(providerGoogle, state, "gizli-kod-degeri", cerez, false)
+	d := o.peekState(t, state)
+	o.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
+	o.callback(providerGoogle, state, "gizli-kod-degeri", cookie, false)
 
-	// 2) Hatali yollar: bilinmeyen state, cerez uyusmazligi, nonce
-	//    uyusmazligi, tekrar oynatma.
-	o.geri(providerGoogle, "uydurma-state", "gizli-kod-degeri", cerez, false)
-	o.geri(providerGoogle, state, "gizli-kod-degeri", nil, false)
-	state2, cerez2, _ := o.baslat(t, providerGoogle, o.authReqID)
-	o.google.ayarla(func(s *sahteSaglayici) { s.nonce = "yanlis-nonce" })
-	o.geri(providerGoogle, state2, "gizli-kod-degeri", cerez2, false)
+	// 2) Faulty paths: unknown state, cookie mismatch, nonce mismatch, replay.
+	o.callback(providerGoogle, "uydurma-state", "gizli-kod-degeri", cookie, false)
+	o.callback(providerGoogle, state, "gizli-kod-degeri", nil, false)
+	state2, cookie2, _ := o.start(t, providerGoogle, o.authReqID)
+	o.google.configure(func(s *fakeProvider) { s.nonce = "yanlis-nonce" })
+	o.callback(providerGoogle, state2, "gizli-kod-degeri", cookie2, false)
 
-	ciktilar := tampon.String()
-	yasakli := map[string]string{
+	outputs := buf.String()
+	forbiddenMap := map[string]string{
 		"state":       state,
 		"state-2":     state2,
 		"kod":         "gizli-kod-degeri",
-		"cerez":       cerez.Value,
-		"cerez-2":     cerez2.Value,
+		"cerez":       cookie.Value,
+		"cerez-2":     cookie2.Value,
 		"nonce":       d.Nonce,
 		"eposta":      "sizmasin@ornek.com",
 		"istek id":    o.authReqID,
 		"dogrulayici": d.CodeVerifier,
 	}
-	for ad, deger := range yasakli {
-		if deger == "" {
+	for name, value := range forbiddenMap {
+		if value == "" {
 			continue
 		}
-		if strings.Contains(ciktilar, deger) {
-			t.Errorf("log %s degerini sizdirdi; loglar: %q", ad, ciktilar)
+		if strings.Contains(outputs, value) {
+			t.Errorf("log %s degerini sizdirdi; loglar: %q", name, outputs)
 		}
 	}
-	// id_token: hem mutlu yolda hem dogrulamanin DUSTUGU yolda uretildi;
-	// hicbiri (ne tamami ne de bir parcasi) loga girmemeli.
-	tokenlar := o.google.tokenlar()
-	if len(tokenlar) == 0 {
+	// id_token: it was produced both on the happy path and on the path where the
+	// verification FAILED; none of it (neither all nor a part) may enter a log.
+	tokenList := o.google.tokens()
+	if len(tokenList) == 0 {
 		t.Fatal("hic id_token uretilmedi; test id_token sizmasini OLCMUYOR")
 	}
-	for i, jeton := range tokenlar {
-		if strings.Contains(ciktilar, jeton) {
-			t.Errorf("log %d. id_token'i sizdirdi; loglar: %q", i, ciktilar)
+	for i, token := range tokenList {
+		if strings.Contains(outputs, token) {
+			t.Errorf("log %d. id_token'i sizdirdi; loglar: %q", i, outputs)
 		}
-		// Imza parcasi da aranir: kirpilmis bir token da sizmadir.
-		for _, parca := range strings.Split(jeton, ".") {
-			if len(parca) > 16 && strings.Contains(ciktilar, parca) {
-				t.Errorf("log %d. id_token'in bir parcasini sizdirdi; loglar: %q", i, ciktilar)
+		// The signature part is searched for too: a trimmed token is a leak as well.
+		for _, part := range strings.Split(token, ".") {
+			if len(part) > 16 && strings.Contains(outputs, part) {
+				t.Errorf("log %d. id_token'in bir parcasini sizdirdi; loglar: %q", i, outputs)
 			}
 		}
 	}
 }
 
 // ---------------------------------------------------------------------
-// I3: suresi-dolma, GERCEK sunucu hatasindan ayrilmali
+// I3: expiry must be told apart from a REAL server error
 // ---------------------------------------------------------------------
 
-// istekTTL (10dk) sayaci EN BASTA, /authorize'da baslar ve hicbir yolda
-// uzatilmaz; federasyonDurumTTL de 10dk'dir ama SIRALI tuketilir. Yani
-// federasyon zinciri, isaret ettigi auth istegini GECEBILIR:
-// T=9dk50sn'de Baslat gecer (istek VAR), kullanici Google'da 30 saniye
-// gecirir, T=10dk20sn'de Geri'de istek artik YOKTUR. Bu siradan bir
-// suresi-dolmadir ve eskiden 500 ureterek gercek sunucu hatalariyla
-// AYNI alarmi caliyor, ustelik kullaniciya ne oldugunu soylemiyordu.
-func TestGeriIstekTTLIleDustugunde400Doner(t *testing.T) {
-	o := testFedereSayfalar(t)
-	state, cerez, w := o.baslat(t, providerGoogle, o.authReqID)
+// The requestTTL (10 min) counter starts at the very beginning, at
+// /authorize, and is never extended on any path; federationStateTTL is also
+// 10 min but is consumed IN SEQUENCE. So the federation chain can OUTLIVE the
+// auth request it points to: Start passes at T=9m50s (the request EXISTS),
+// the user spends 30 seconds at Google, and at T=10m20s the request NO LONGER
+// EXISTS in Callback. This is an ordinary expiry and it used to produce a
+// 500, raising the SAME alarm as real server errors and not telling the user
+// what happened.
+func TestFederationCallback_ExpiredRequestReturns400(t *testing.T) {
+	o := newTestFederationPages(t)
+	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
 	if state == "" {
 		t.Fatalf("baslat basarisiz: durum = %d", w.Code)
 	}
-	d := o.durumOku(t, state)
-	o.google.ayarla(func(s *sahteSaglayici) { s.nonce = d.Nonce })
+	d := o.peekState(t, state)
+	o.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
 
-	// T=10dk20sn: istek TTL ile Redis'ten dustu. TTL degerleri
-	// degistirilmedigi icin kayit ELLE dusurulur.
-	o.istekler.sil(o.authReqID)
+	// T=10m20s: the request dropped from Redis by TTL. Since the TTL values are
+	// not changed, the record is dropped BY HAND.
+	o.requests.drop(o.authReqID)
 
-	yanit := o.geri(providerGoogle, state, "kod-1", cerez, false)
-	if yanit.Code == http.StatusInternalServerError {
-		t.Fatalf("siradan bir suresi-dolma 500 uretti: govde = %q", yanit.Body.String())
+	resp := o.callback(providerGoogle, state, "kod-1", cookie, false)
+	if resp.Code == http.StatusInternalServerError {
+		t.Fatalf("siradan bir suresi-dolma 500 uretti: govde = %q", resp.Body.String())
 	}
-	if yanit.Code != http.StatusBadRequest {
-		t.Fatalf("durum = %d, beklenen 400, govde = %q", yanit.Code, yanit.Body.String())
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("durum = %d, beklenen 400, govde = %q", resp.Code, resp.Body.String())
 	}
-	if !strings.Contains(yanit.Body.String(), msgRequestExpired) {
-		t.Errorf("kullaniciya ne oldugu soylenmemis: govde = %q", yanit.Body.String())
+	if !strings.Contains(resp.Body.String(), msgRequestExpired) {
+		t.Errorf("kullaniciya ne oldugu soylenmemis: govde = %q", resp.Body.String())
 	}
 }
 
-// Siniflandirmanin UCUNU de pinler. Ozellikle son satir onemli: gercek
-// bir sunucu hatasi 500 OLARAK KALMALI, aksi halde "her seyi 400 yap"
-// mutasyonu digerlerini gecirirdi.
-func TestIstekTamamlamaHatasiSiniflandirmasi(t *testing.T) {
+// It pins all THREE ends of the classification. The last row matters in
+// particular: a real server error must STAY 500, otherwise the "make
+// everything 400" mutation would pass the others.
+func TestWriteCompletionError_Classification(t *testing.T) {
 	f := &FederationPages{}
-	durumlar := []struct {
-		ad    string
-		hata  error
-		kod   int
-		metin string
+	statuses := []struct {
+		name string
+		err  error
+		code int
+		text string
 	}{
 		{"zaten tamamlandi", ErrRequestAlreadyCompleted, http.StatusConflict, msgRequestAlreadyUsed},
 		{"TTL ile dustu", ErrRequestNotFound, http.StatusBadRequest, msgRequestExpired},
 		{"gercek sunucu hatasi", errors.New("redis baglantisi dustu"), http.StatusInternalServerError, msgServerError},
 	}
-	for _, d := range durumlar {
-		t.Run(d.ad, func(t *testing.T) {
+	for _, d := range statuses {
+		t.Run(d.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			f.writeCompletionError(w, d.hata)
-			if w.Code != d.kod {
-				t.Errorf("durum = %d, beklenen %d", w.Code, d.kod)
+			f.writeCompletionError(w, d.err)
+			if w.Code != d.code {
+				t.Errorf("durum = %d, beklenen %d", w.Code, d.code)
 			}
-			if !strings.Contains(w.Body.String(), d.metin) {
-				t.Errorf("govde = %q, beklenen %q", w.Body.String(), d.metin)
+			if !strings.Contains(w.Body.String(), d.text) {
+				t.Errorf("govde = %q, beklenen %q", w.Body.String(), d.text)
 			}
 		})
 	}
 }
 
 // ---------------------------------------------------------------------
-// M-b: yukari akis e-posta vermezse hesap ACILMAZ
+// M-b: if the upstream gives no email NO account is created
 // ---------------------------------------------------------------------
 
-// users tablosunda "email NOT NULL" + "UNIQUE (lower(email))" var, yani
-// e-postasiz EN FAZLA BIR federe hesap olusabilir; ikincisi
-// ErrEpostaKullanimda ile BOS e-posta gosteren bir 409'a cakilir ve o
-// kullanici bir daha HIC kaydolamaz. Bu yuzden bos e-postayla hesap
-// acmak SESSIZCE kabul edilmez, ACIKCA reddedilir.
+// The users table has "email NOT NULL" + "UNIQUE (lower(email))", so AT MOST
+// ONE federated account without an email can exist; the second one hits a
+// 409 showing an EMPTY email via ErrEmailInUse and that user can NEVER sign
+// up again. That is why creating an account with an empty email is not
+// silently accepted but EXPLICITLY rejected.
 //
-// Iki AYRI sub ile kosulur: ikisi de ayni aciklayici yaniti almali.
-// Eski davranista birincisi hesap acar, IKINCISI kalici olarak
-// kilitlenirdi.
-func TestYukariAkisEpostaVermezseHesapAcilmaz(t *testing.T) {
+// It is run with TWO SEPARATE subs: both must get the same explanatory
+// response. In the old behavior the first would open an account and the
+// SECOND would be locked out permanently.
+func TestFederationCallback_NoUpstreamEmailNoAccount(t *testing.T) {
 	for _, sub := range []string{"epostasiz-1", "epostasiz-2"} {
 		t.Run(sub, func(t *testing.T) {
-			o := testFedereSayfalar(t)
-			o.google.ayarla(func(s *sahteSaglayici) {
-				s.eposta = ""
+			o := newTestFederationPages(t)
+			o.google.configure(func(s *fakeProvider) {
+				s.email = ""
 				s.sub = sub
 			})
 
-			w := o.akisKos(t, providerGoogle, false)
+			w := o.runFlow(t, providerGoogle, false)
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("durum = %d, beklenen 400, govde = %q", w.Code, w.Body.String())
 			}
 			if !strings.Contains(w.Body.String(), msgUpstreamNoEmail) {
 				t.Errorf("kullaniciya ne yapacagi soylenmemis: govde = %q", w.Body.String())
 			}
-			// Hicbir hesap ACILMAMIS ve giris YAPILMAMIS olmali.
-			if _, err := o.federe.UserByIdentity(context.Background(), providerGoogle, sub); !errors.Is(err, ErrIdentityNotFound) {
+			// No account must have been CREATED and no login must have HAPPENED.
+			if _, err := o.federated.UserByIdentity(context.Background(), providerGoogle, sub); !errors.Is(err, ErrIdentityNotFound) {
 				t.Errorf("bos e-postayla hesap ACILDI (hata = %v)", err)
 			}
-			if o.istekler.subject(o.authReqID) != "" {
+			if o.requests.subject(o.authReqID) != "" {
 				t.Error("bos e-postayla giris YAPILDI")
 			}
 		})
@@ -1247,48 +1248,48 @@ func TestYukariAkisEpostaVermezseHesapAcilmaz(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// M-c: kimlik_fed cerezi donuste temizlenir (HIJYEN)
+// M-c: the kimlik_fed cookie is cleared on return (HYGIENE)
 // ---------------------------------------------------------------------
 
-// Bu bir guvenlik duzeltmesi DEGIL: guvenlik dayanagi state kaydinin
-// GETDEL ile tek kullanimlik olmasidir, yani geride kalan cerez tek
-// basina hicbir akisi yeniden oynatamaz. Yine de akis bitince cerezin
-// 10 dakika daha tarayicida durmasi icin bir neden yok.
-func TestGeriBasarilidaFederasyonCereziSilinir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	w := o.akisKos(t, providerGoogle, false)
+// This is NOT a security fix: the security basis is that the state record is
+// single-use through GETDEL, so a leftover cookie alone cannot replay any
+// flow. Still, there is no reason for the cookie to stay in the browser for
+// 10 more minutes after the flow ends.
+func TestFederationCallback_SuccessClearsFederationCookie(t *testing.T) {
+	o := newTestFederationPages(t)
+	w := o.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusFound {
 		t.Fatalf("akis basarisiz: durum = %d, govde = %q", w.Code, w.Body.String())
 	}
 
-	var silme *http.Cookie
+	var deletion *http.Cookie
 	for _, c := range w.Result().Cookies() {
 		if c.Name == cookieNameFederation {
-			silme = c
+			deletion = c
 		}
 	}
-	if silme == nil {
+	if deletion == nil {
 		t.Fatal("basarili donuste kimlik_fed silme cerezi YOK")
 	}
-	if silme.MaxAge >= 0 {
-		t.Errorf("MaxAge = %d, beklenen negatif (MaxAge=0 cerezi OTURUM cerezi olarak yasatir)", silme.MaxAge)
+	if deletion.MaxAge >= 0 {
+		t.Errorf("MaxAge = %d, beklenen negatif (MaxAge=0 cerezi OTURUM cerezi olarak yasatir)", deletion.MaxAge)
 	}
-	if silme.Value != "" {
-		t.Errorf("silme cerezi hala deger tasiyor: %q", silme.Value)
+	if deletion.Value != "" {
+		t.Errorf("silme cerezi hala deger tasiyor: %q", deletion.Value)
 	}
-	// Oznitelikler YAZMA anindakiyle ayni olmak ZORUNDA, aksi halde
-	// tarayici eskisini silmek yerine yanina IKINCI bir cerez yazar.
-	yazma := o.f.federationCookie("deger")
-	if silme.Path != yazma.Path {
-		t.Errorf("Path = %q, beklenen %q", silme.Path, yazma.Path)
+	// The attributes MUST BE THE SAME as at write time, otherwise the browser
+	// writes a SECOND cookie next to the old one instead of deleting it.
+	writing := o.pages.federationCookie("deger")
+	if deletion.Path != writing.Path {
+		t.Errorf("Path = %q, beklenen %q", deletion.Path, writing.Path)
 	}
-	if silme.Secure != yazma.Secure {
-		t.Errorf("Secure = %v, beklenen %v", silme.Secure, yazma.Secure)
+	if deletion.Secure != writing.Secure {
+		t.Errorf("Secure = %v, beklenen %v", deletion.Secure, writing.Secure)
 	}
-	if silme.HttpOnly != yazma.HttpOnly {
-		t.Errorf("HttpOnly = %v, beklenen %v", silme.HttpOnly, yazma.HttpOnly)
+	if deletion.HttpOnly != writing.HttpOnly {
+		t.Errorf("HttpOnly = %v, beklenen %v", deletion.HttpOnly, writing.HttpOnly)
 	}
-	if silme.SameSite != yazma.SameSite {
-		t.Errorf("SameSite = %v, beklenen %v", silme.SameSite, yazma.SameSite)
+	if deletion.SameSite != writing.SameSite {
+		t.Errorf("SameSite = %v, beklenen %v", deletion.SameSite, writing.SameSite)
 	}
 }

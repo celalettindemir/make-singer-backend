@@ -17,23 +17,23 @@ func testAuthCfg() *config.AuthConfig {
 			"com.makesinger.app:/oauth2redirect",
 			"https://makesinger.ornek.dev/oauth2redirect",
 		},
-		// Depo testleri (depo_test.go) CreateAccessAndRefreshTokens gibi
-		// TTL'e bagli yollari da olcer; bunlar 0 birakilirsa access kaydi
-		// TTL<=0 ile sessizce yazilmaz ve refresh aninda "gecmis" sayilir,
-		// o yollar fiilen hic test edilmemis olur.
+		// The store tests (token_store_test.go) also exercise TTL-dependent paths
+		// such as CreateAccessAndRefreshTokens. If these are left at 0, the access
+		// record is silently not written because TTL<=0, and refresh counts as
+		// "expired" at once, so those paths would never actually be tested.
 		AccessTTL:  15 * time.Minute,
 		RefreshTTL: 1440 * time.Hour,
 	}
 }
 
-func TestMobilIstemciArayuzuKarsilar(t *testing.T) {
+func TestMobileClient_SatisfiesInterface(t *testing.T) {
 	var _ op.Client = NewMobileClient(testAuthCfg())
 }
 
-// Public client: secret tasimaz, bu yuzden kimlik dogrulama yontemi
-// "none" olmali. "basic" secilirse kutuphane secret bekler ve token
-// istegi reddedilir.
-func TestMobilIstemciPublicVeNative(t *testing.T) {
+// Public client: it carries no secret, so the authentication method must
+// be "none". With "basic" the library expects a secret and the token
+// request is rejected.
+func TestMobileClient_PublicAndNative(t *testing.T) {
 	c := NewMobileClient(testAuthCfg())
 	if c.AuthMethod() != oidc.AuthMethodNone {
 		t.Errorf("AuthMethod = %v, beklenen none", c.AuthMethod())
@@ -46,44 +46,44 @@ func TestMobilIstemciPublicVeNative(t *testing.T) {
 	}
 }
 
-// Yalnizca authorization code akisi. Implicit veya token response type
-// public client'ta jetonu adres cubuguna dusurur.
-func TestMobilIstemciYalnizcaKodAkisi(t *testing.T) {
+// Authorization code flow only. The implicit or token response type
+// would put the token in the address bar for a public client.
+func TestMobileClient_CodeFlowOnly(t *testing.T) {
 	c := NewMobileClient(testAuthCfg())
-	tipler := c.ResponseTypes()
-	if len(tipler) != 1 || tipler[0] != oidc.ResponseTypeCode {
-		t.Errorf("ResponseTypes = %v, beklenen [code]", tipler)
+	types := c.ResponseTypes()
+	if len(types) != 1 || types[0] != oidc.ResponseTypeCode {
+		t.Errorf("ResponseTypes = %v, beklenen [code]", types)
 	}
-	var refreshVar bool
+	var hasRefresh bool
 	for _, g := range c.GrantTypes() {
 		if g == oidc.GrantTypeImplicit {
 			t.Error("implicit grant acik")
 		}
 		if g == oidc.GrantTypeRefreshToken {
-			refreshVar = true
+			hasRefresh = true
 		}
 	}
-	if !refreshVar {
+	if !hasRefresh {
 		t.Error("refresh_token grant kapali; oturum yenilenemez")
 	}
 }
 
-func TestMobilIstemciRedirectleri(t *testing.T) {
+func TestMobileClient_RedirectURIs(t *testing.T) {
 	c := NewMobileClient(testAuthCfg())
 	if len(c.RedirectURIs()) != 2 {
 		t.Errorf("RedirectURIs = %v", c.RedirectURIs())
 	}
 }
 
-// DevMode acik kalirsa kutuphane redirect URI dogrulamasini gevsetir;
-// uretimde bu, jetonlari saldirganin adresine yollamak demektir.
-func TestMobilIstemciDevModeKapali(t *testing.T) {
+// If DevMode stays on, the library relaxes redirect URI validation; in
+// production that would mean sending tokens to an attacker's address.
+func TestMobileClient_DevModeOff(t *testing.T) {
 	if NewMobileClient(testAuthCfg()).DevMode() {
 		t.Error("DevMode acik")
 	}
 }
 
-func TestMobilIstemciIzinliScopelar(t *testing.T) {
+func TestMobileClient_AllowedScopes(t *testing.T) {
 	c := NewMobileClient(testAuthCfg())
 	for _, s := range []string{oidc.ScopeOpenID, oidc.ScopeProfile, oidc.ScopeEmail, oidc.ScopeOfflineAccess} {
 		if !c.IsScopeAllowed(s) {

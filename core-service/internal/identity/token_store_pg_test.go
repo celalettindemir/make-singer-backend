@@ -11,37 +11,37 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/op"
 )
 
-// testPostgres, yerel Postgres ister. Yoksa test atlanir: birim testler
-// agsiz gecmek zorunda (bkz. testRedis, istek_test.go). DSN ortam
-// degiskeninden alinir; varsayilan deger tek kullanimlik, TEST-YEREL bir
-// konteyner icindir (uretim sirri DEGILDIR ve kaynak koda uretim sirri
-// yazilmaz).
+// testPostgres wants a local Postgres. If there is none the test is
+// skipped: unit tests have to pass without a network (see testRedis,
+// request_test.go). The DSN comes from the environment variable; the
+// default value is for a throwaway, TEST-LOCAL container (it is NOT a
+// production secret, and no production secret is ever written into source).
 func testPostgres(t *testing.T) *PostgresTokenStore {
 	t.Helper()
 	dsn := os.Getenv("KIMLIK_TEST_DB_URL")
 	if dsn == "" {
 		dsn = "postgres://postgres:kimlik-test-yerel@localhost:55432/postgres?sslmode=disable"
 	}
-	ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
-	defer iptal()
-	havuz, err := Connect(ctx, dsn)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pool, err := Connect(ctx, dsn)
 	if err != nil {
 		t.Skip("yerel Postgres yok, atlaniyor")
 	}
-	if err := Migrate(ctx, havuz); err != nil {
-		havuz.Close()
+	if err := Migrate(ctx, pool); err != nil {
+		pool.Close()
 		t.Fatalf("Migrate: %v", err)
 	}
-	t.Cleanup(havuz.Close)
-	// rdb nil: bu testler yalnizca refresh yolunu olcer, access kayitlari
-	// (Redis) hic kullanilmaz.
-	return NewPostgresTokenStore(havuz, nil)
+	t.Cleanup(pool.Close)
+	// rdb is nil: these tests only measure the refresh path, the access
+	// records (Redis) are never used.
+	return NewPostgresTokenStore(pool, nil)
 }
 
-// pgTestKullanici, refresh_tokens.user_id'nin users'a FK'si oldugu icin
-// gercek bir kullanici satiri acar ve testin sonunda siler (refresh
-// kayitlari ON DELETE CASCADE ile gider, testler birbirini kirletmez).
-func pgTestKullanici(t *testing.T, s *PostgresTokenStore) string {
+// pgTestUser opens a real user row because refresh_tokens.user_id has an
+// FK to users, and deletes it at the end of the test (refresh records go
+// via ON DELETE CASCADE, so tests do not pollute each other).
+func pgTestUser(t *testing.T, s *PostgresTokenStore) string {
 	t.Helper()
 	id := uuid.NewString()
 	ctx := context.Background()
@@ -56,95 +56,95 @@ func pgTestKullanici(t *testing.T, s *PostgresTokenStore) string {
 	return id
 }
 
-// BULGU (Critical) icin CANLI POSTGRES testi. Bu kod yolunun Postgres
-// kolu bugune kadar hic test edilmedi; bulgunun gec ortaya cikmasinin
-// nedeni buydu. Olculen: gercek bir veritabaninda rotasyon -> eski
-// jetonu KUTUPHANENIN CAGIRDIGI metotla (TokenRequestByRefreshToken)
-// yeniden sunma -> ailenin TAMAMININ revoked_at almasi.
-func TestPGYenidenKullanimAileyiIptalEder(t *testing.T) {
+// LIVE POSTGRES test for the finding (Critical). The Postgres branch of
+// this code path had never been tested until now; that is why the
+// finding surfaced late. What is measured: on a real database, rotation
+// -> presenting the old token again through the method the LIBRARY calls
+// (TokenRequestByRefreshToken) -> the WHOLE family gets revoked_at.
+func TestPostgresTokenStore_ReuseRevokesFamily(t *testing.T) {
 	s := testPostgres(t)
 	ctx := context.Background()
-	userID := pgTestKullanici(t, s)
+	userID := pgTestUser(t, s)
 
-	anahtar, err := LoadSigningKey(testPEM(t))
+	key, err := LoadSigningKey(testPEM(t))
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
 	}
-	d := NewStorage(testAuthCfg(), NewFakeUserStore(), s, nil, anahtar)
+	d := NewStorage(testAuthCfg(), NewFakeUserStore(), s, nil, key)
 
-	kayit := yeniRefresh(userID)
-	eski, err := s.CreateRefresh(ctx, kayit)
+	record := newRefresh(userID)
+	old, err := s.CreateRefresh(ctx, record)
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	yeni, err := s.RotateRefresh(ctx, eski, yeniRefresh(userID))
+	fresh, err := s.RotateRefresh(ctx, old, newRefresh(userID))
 	if err != nil {
 		t.Fatalf("RefreshDondur: %v", err)
 	}
-	if _, err := s.GetRefresh(ctx, yeni); err != nil {
+	if _, err := s.GetRefresh(ctx, fresh); err != nil {
 		t.Fatalf("rotasyon sonrasi yeni jeton gecersiz: %v", err)
 	}
 
-	// Kullanilmis jeton kutuphanenin gordugu hatayla reddedilmeli...
-	if _, err := d.TokenRequestByRefreshToken(ctx, eski); !errors.Is(err, op.ErrInvalidRefreshToken) {
+	// The used token must be rejected with the error the library sees...
+	if _, err := d.TokenRequestByRefreshToken(ctx, old); !errors.Is(err, op.ErrInvalidRefreshToken) {
 		t.Fatalf("hata = %v, beklenen op.ErrInvalidRefreshToken", err)
 	}
-	// ...ve ailenin TAMAMI olmus olmali. SQL ile dogrula: ayni aileden
-	// kac satir var ve kaci hala yasiyor.
-	familyID, err := s.RefreshFamilyID(ctx, eski)
+	// ...and the WHOLE family must be dead. Verify with SQL: how many rows
+	// are in the same family and how many are still alive.
+	familyID, err := s.RefreshFamilyID(ctx, old)
 	if err != nil {
 		t.Fatalf("RefreshAileID: %v", err)
 	}
-	var toplam, yasayan int
+	var total, alive int
 	if err := s.pool.QueryRow(ctx,
 		`SELECT count(*), count(*) FILTER (WHERE revoked_at IS NULL)
 		   FROM refresh_tokens WHERE family_id = $1`, familyID).
-		Scan(&toplam, &yasayan); err != nil {
+		Scan(&total, &alive); err != nil {
 		t.Fatalf("aile sorgulanamadi: %v", err)
 	}
-	if toplam != 2 {
-		t.Errorf("ailede %d satir var, beklenen 2", toplam)
+	if total != 2 {
+		t.Errorf("ailede %d satir var, beklenen 2", total)
 	}
-	if yasayan != 0 {
-		t.Errorf("ailede %d satir hala iptal edilmemis, beklenen 0", yasayan)
+	if alive != 0 {
+		t.Errorf("ailede %d satir hala iptal edilmemis, beklenen 0", alive)
 	}
-	// Mesru istemcinin elindeki guncel jeton da artik calismamali.
-	if _, err := d.TokenRequestByRefreshToken(ctx, yeni); !errors.Is(err, op.ErrInvalidRefreshToken) {
+	// The current token in the legitimate client's hands must not work any more either.
+	if _, err := d.TokenRequestByRefreshToken(ctx, fresh); !errors.Is(err, op.ErrInvalidRefreshToken) {
 		t.Errorf("guncel jeton hala kabul ediliyor: %v", err)
 	}
 }
 
-// Postgres kolunun RefreshOku sirasi sahte depoyla BIREBIR ayni olmali:
-// kullanilmis -> ErrJetonTekrar, iptal edilmis -> ErrJetonYok.
-func TestPGRefreshOkuHataSirasi(t *testing.T) {
+// The Postgres branch's GetRefresh order must be EXACTLY the same as the
+// fake store's: used -> ErrTokenReused, revoked -> ErrTokenNotFound.
+func TestPostgresTokenStore_GetRefreshErrorOrder(t *testing.T) {
 	s := testPostgres(t)
 	ctx := context.Background()
-	userID := pgTestKullanici(t, s)
+	userID := pgTestUser(t, s)
 
-	eski, err := s.CreateRefresh(ctx, yeniRefresh(userID))
+	old, err := s.CreateRefresh(ctx, newRefresh(userID))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	if _, err := s.RotateRefresh(ctx, eski, yeniRefresh(userID)); err != nil {
+	if _, err := s.RotateRefresh(ctx, old, newRefresh(userID)); err != nil {
 		t.Fatalf("RefreshDondur: %v", err)
 	}
-	// used_at dolu, revoked_at bos: yeniden kullanim.
-	if _, err := s.GetRefresh(ctx, eski); !errors.Is(err, ErrTokenReused) {
+	// used_at set, revoked_at empty: reuse.
+	if _, err := s.GetRefresh(ctx, old); !errors.Is(err, ErrTokenReused) {
 		t.Fatalf("hata = %v, beklenen ErrJetonTekrar", err)
 	}
-	// Aile iptal edildikten sonra ayni jeton artik ErrJetonYok: alarm
-	// tekrar calmaz.
-	familyID, err := s.RefreshFamilyID(ctx, eski)
+	// After the family is revoked the same token is now ErrTokenNotFound: the
+	// alarm does not ring again.
+	familyID, err := s.RefreshFamilyID(ctx, old)
 	if err != nil {
 		t.Fatalf("RefreshAileID: %v", err)
 	}
 	if err := s.RevokeFamily(ctx, familyID); err != nil {
 		t.Fatalf("AileIptal: %v", err)
 	}
-	if _, err := s.GetRefresh(ctx, eski); !errors.Is(err, ErrTokenNotFound) {
+	if _, err := s.GetRefresh(ctx, old); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
 	}
-	// Bilinmeyen jeton: ne kayit ne aile.
+	// Unknown token: neither a record nor a family.
 	if _, err := s.GetRefresh(ctx, "uydurma"); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
 	}

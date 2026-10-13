@@ -10,9 +10,10 @@ import (
 	"github.com/makeasinger/api/internal/config"
 )
 
-// Issuer bossa OP hic baslamamali: bos issuer ile uretilen discovery
-// belgesi kullanilamaz ve hata ancak ilk giris denemesinde gorunur.
-func TestIssuerBossaBaslamaz(t *testing.T) {
+// If the issuer is empty the OP must not start at all: a discovery document
+// produced with an empty issuer is unusable and the error would only show up
+// at the first login attempt.
+func TestStart_EmptyIssuerFails(t *testing.T) {
 	cfg := testAuthCfg()
 	cfg.Issuer = ""
 	if _, err := Start(context.Background(), cfg, nil, "development"); err == nil {
@@ -20,27 +21,27 @@ func TestIssuerBossaBaslamaz(t *testing.T) {
 	}
 }
 
-// Sirlar eksikse baslamamali; sessizce zayif varsayilana dusmek
-// uretimde fark edilmez.
-func TestEksikSirlarlaBaslamaz(t *testing.T) {
-	temel := func() *config.AuthConfig {
+// It must not start if the secrets are missing; silently falling back to a
+// weak default would go unnoticed in production.
+func TestStart_MissingSecretsFails(t *testing.T) {
+	base := func() *config.AuthConfig {
 		c := testAuthCfg()
 		c.DBURL = "postgres://yok/yok"
 		c.SigningKeyPEM = "gecersiz"
 		c.CryptoKey = "kisa"
 		return c
 	}
-	if _, err := Start(context.Background(), temel(), nil, "development"); err == nil {
+	if _, err := Start(context.Background(), base(), nil, "development"); err == nil {
 		t.Error("gecersiz sirlarla baslatildi")
 	}
 }
 
-// http:// issuer + yerel host (localhost) + production olmayan ortam:
-// guvensiz moda izin var, yani Start http/https kontrolunu GECER. Sirlar
-// (SigningKeyPEM vb.) testAuthCfg'de eksik oldugu icin Start yine de
-// hata doner, ama bu hata https ile ILGILI OLMAMALI — aksi halde http
-// kontrolunun kendisi engelliyor demektir.
-func TestHTTPIssuerYerelGelistirmedeGuvensizModaGecer(t *testing.T) {
+// http:// issuer + local host (localhost) + a non-production environment:
+// insecure mode is allowed, so Start PASSES the http/https check. Since the
+// secrets (SigningKeyPEM etc.) are missing in testAuthCfg, Start still
+// returns an error, but that error must NOT BE ABOUT https -- otherwise it
+// means the http check itself is blocking.
+func TestValidateInsecureIssuer_LocalHTTPAllowed(t *testing.T) {
 	cfg := testAuthCfg()
 	cfg.Issuer = "http://localhost:8001"
 	_, err := Start(context.Background(), cfg, nil, "development")
@@ -52,10 +53,10 @@ func TestHTTPIssuerYerelGelistirmedeGuvensizModaGecer(t *testing.T) {
 	}
 }
 
-// http:// issuer ama host yerel degil (uretim benzeri bir alan adi):
-// guvensiz moda izin yok, https zorunlu hatasi donmeli ve Start hicbir
-// baglanti acmadan durmali.
-func TestHTTPIssuerUzakHostReddedilir(t *testing.T) {
+// http:// issuer but the host is not local (a production-like domain):
+// insecure mode is not allowed, the https-required error must be returned
+// and Start must stop without opening any connection.
+func TestValidateInsecureIssuer_RemoteHostRejected(t *testing.T) {
 	cfg := testAuthCfg()
 	cfg.Issuer = "http://auth.example.com"
 	_, err := Start(context.Background(), cfg, nil, "development")
@@ -67,10 +68,10 @@ func TestHTTPIssuerUzakHostReddedilir(t *testing.T) {
 	}
 }
 
-// http:// issuer + production ortami: host localhost olsa bile izin
-// yok. Uretimde AUTH_ISSUER'a yanlislikla http:// yazilirsa TLS'siz OIDC
-// sessizce ayaga kalkmamali.
-func TestHTTPIssuerProductiondaReddedilir(t *testing.T) {
+// http:// issuer + production environment: not allowed even if the host is
+// localhost. If AUTH_ISSUER is mistakenly written as http:// in production,
+// OIDC without TLS must not silently come up.
+func TestValidateInsecureIssuer_ProductionRejected(t *testing.T) {
 	cfg := testAuthCfg()
 	cfg.Issuer = "http://localhost:8001"
 	_, err := Start(context.Background(), cfg, nil, "production")
@@ -82,103 +83,103 @@ func TestHTTPIssuerProductiondaReddedilir(t *testing.T) {
 	}
 }
 
-// ---- I2: gecersiz/0 sure degerleri ----
+// ---- I2: invalid/0 duration values ----
 
-// viper, COZULEMEYEN bir sure degerinde varsayilana DUSMEZ; sessizce 0s
-// verir (orn. AUTH_ACCESS_TTL="15min", AUTH_REFRESH_TTL="60d" —
-// dokumanlardaki "15 dakika"/"60 gun" ifadelerinin dogal yazimlari).
-// 0 TTL yikicidir: AccessTTL=0 ile access kaydi hic yazilmaz ve jeton
-// exp=now ile uretilir (her /api/* 401), RefreshTTL=0 ile her refresh
-// kaydi dogdugu an olur (tum kullanicilar aninda disari atilir). Start
-// bunlari HIC DOGRULAMIYOR ve hatasiz donuyordu.
-func TestGecersizTTLIleBaslamaz(t *testing.T) {
-	durumlar := []struct {
-		ad       string
-		degistir func(*config.AuthConfig)
-		anahtar  string
+// viper does NOT fall back to the default on a duration it CANNOT PARSE; it
+// silently gives 0s (e.g. AUTH_ACCESS_TTL="15min", AUTH_REFRESH_TTL="60d" --
+// the natural spellings of the "15 minutes"/"60 days" in the docs).
+// A 0 TTL is destructive: with AccessTTL=0 the access record is never
+// written and the token is produced with exp=now (every /api/* gets 401),
+// with RefreshTTL=0 every refresh record dies the moment it is born (all
+// users are logged out instantly). Start did NOT VALIDATE these AT ALL and
+// returned without an error.
+func TestStart_InvalidTTLFails(t *testing.T) {
+	statuses := []struct {
+		name   string
+		mutate func(*config.AuthConfig)
+		key    string
 	}{
 		{"access_ttl 0", func(c *config.AuthConfig) { c.AccessTTL = 0 }, "access_ttl"},
 		{"access_ttl negatif", func(c *config.AuthConfig) { c.AccessTTL = -time.Minute }, "access_ttl"},
 		{"refresh_ttl 0", func(c *config.AuthConfig) { c.RefreshTTL = 0 }, "refresh_ttl"},
 		{"refresh_ttl negatif", func(c *config.AuthConfig) { c.RefreshTTL = -time.Hour }, "refresh_ttl"},
 	}
-	for _, d := range durumlar {
-		t.Run(d.ad, func(t *testing.T) {
+	for _, d := range statuses {
+		t.Run(d.name, func(t *testing.T) {
 			cfg := testAuthCfg()
-			d.degistir(cfg)
+			d.mutate(cfg)
 			_, err := Start(context.Background(), cfg, nil, "development")
 			if err == nil {
 				t.Fatal("gecersiz TTL ile baslatildi")
 			}
-			// Testin ADININ SOYLEDIGI SEBEPTEN reddedildigini dogrula:
-			// testAuthCfg'de sirlar da eksik, yani "bir hata dondu"
-			// kontrolu vacuous olurdu.
-			if !strings.Contains(err.Error(), d.anahtar) {
-				t.Errorf("hata %q icermeli, gelen: %v", d.anahtar, err)
+			// Verify it is rejected FOR THE REASON THE TEST NAME SAYS:
+			// the secrets are missing in testAuthCfg too, so the "an error was
+			// returned" check would be vacuous.
+			if !strings.Contains(err.Error(), d.key) {
+				t.Errorf("hata %q icermeli, gelen: %v", d.key, err)
 			}
 		})
 	}
 }
 
-// ---- I3: bos ClientID / RedirectURIs ----
+// ---- I3: empty ClientID / RedirectURIs ----
 
-// ClientID bos oldugunda middleware.NewOPAuthMiddleware kurulumHatasi'na
-// duser ve HER /api/* istegini 401 reddeder; /health ise hala
-// "kimlik": true donuyordu (tam kesinti + yanlis saglik sinyali).
-// RedirectURIs bos oldugunda her /authorize reddedilir, hic kullanici
-// giris yapamaz. config.yaml bunun yasak oldugunu YAZIYORDU ama kod
-// zorlamiyordu.
-func TestBosIstemciYapilandirmasiIleBaslamaz(t *testing.T) {
-	durumlar := []struct {
-		ad       string
-		degistir func(*config.AuthConfig)
-		anahtar  string
+// When ClientID is empty middleware.NewOPAuthMiddleware falls into setupErr
+// and rejects EVERY /api/* request with 401; meanwhile /health still
+// returned "identity": true (a total outage + a false health signal).
+// When RedirectURIs is empty every /authorize is rejected and no user can
+// log in. config.yaml SAID this was forbidden but the code did not enforce it.
+func TestStart_EmptyClientConfigFails(t *testing.T) {
+	statuses := []struct {
+		name   string
+		mutate func(*config.AuthConfig)
+		key    string
 	}{
 		{"client_id bos", func(c *config.AuthConfig) { c.ClientID = "" }, "client_id"},
 		{"redirect_uris nil", func(c *config.AuthConfig) { c.RedirectURIs = nil }, "redirect_uris"},
 		{"redirect_uris bos dilim", func(c *config.AuthConfig) { c.RedirectURIs = []string{} }, "redirect_uris"},
 		{"redirect_uris bos girdi", func(c *config.AuthConfig) { c.RedirectURIs = []string{"  "} }, "redirect_uris"},
 	}
-	for _, d := range durumlar {
-		t.Run(d.ad, func(t *testing.T) {
+	for _, d := range statuses {
+		t.Run(d.name, func(t *testing.T) {
 			cfg := testAuthCfg()
-			d.degistir(cfg)
+			d.mutate(cfg)
 			_, err := Start(context.Background(), cfg, nil, "development")
 			if err == nil {
 				t.Fatal("bos istemci yapilandirmasi ile baslatildi")
 			}
-			if !strings.Contains(err.Error(), d.anahtar) {
-				t.Errorf("hata %q icermeli, gelen: %v", d.anahtar, err)
+			if !strings.Contains(err.Error(), d.key) {
+				t.Errorf("hata %q icermeli, gelen: %v", d.key, err)
 			}
 		})
 	}
 }
 
-// Gecerli bir yapilandirma bu dogrulamalarin HICBIRINE takilmamali:
-// aksi halde yukaridaki testler "her sey reddediliyor" diye de gecerdi.
-func TestGecerliYapilandirmaDogrulamayiGecer(t *testing.T) {
+// A valid configuration must not trip ANY of these validations: otherwise the
+// tests above would also hold for "everything is rejected".
+func TestValidateConfig_ValidPasses(t *testing.T) {
 	if err := validateConfig(testAuthCfg()); err != nil {
 		t.Errorf("gecerli yapilandirma reddedildi: %v", err)
 	}
 }
 
-// Apple federasyonu uc alanin (EkipID/AnahtarID/AnahtarP8) hepsi
-// olmadan calisamaz: client_secret her degisimde bu uctan uretilir
-// (bkz. K5). Eksik olan BASLANGICTA (startup) hata vermeli, kullanicinin
-// Apple ile giris denedigi anda kesfedilen bir sessiz bozukluk degil.
-func TestAppleFederasyonuEksikAlanlarlaBaslamaz(t *testing.T) {
-	durumlar := []struct {
-		ad     string
-		federe config.FederationClient
+// Apple federation cannot work without all three fields
+// (TeamID/KeyID/KeyP8): the client_secret is produced from these on every
+// exchange (see K5). What is missing must fail at STARTUP, not be a silent
+// breakage discovered when the user tries to log in with Apple.
+func TestValidateConfig_AppleMissingFieldsFails(t *testing.T) {
+	statuses := []struct {
+		name      string
+		federated config.FederationClient
 	}{
 		{"ekip id eksik", config.FederationClient{Name: "apple", ClientID: "tr.makesinger.giris", AppleKeyID: "AB12", AppleKeyP8: "pem-verisi"}},
 		{"anahtar id eksik", config.FederationClient{Name: "apple", ClientID: "tr.makesinger.giris", AppleTeamID: "TEAM1", AppleKeyP8: "pem-verisi"}},
 		{"anahtar p8 eksik", config.FederationClient{Name: "apple", ClientID: "tr.makesinger.giris", AppleTeamID: "TEAM1", AppleKeyID: "AB12"}},
 	}
-	for _, d := range durumlar {
-		t.Run(d.ad, func(t *testing.T) {
+	for _, d := range statuses {
+		t.Run(d.name, func(t *testing.T) {
 			cfg := testAuthCfg()
-			cfg.Federation = []config.FederationClient{d.federe}
+			cfg.Federation = []config.FederationClient{d.federated}
 			if err := validateConfig(cfg); err == nil {
 				t.Fatal("eksik apple alanlariyla dogrulama gecti")
 			}
@@ -186,14 +187,14 @@ func TestAppleFederasyonuEksikAlanlarlaBaslamaz(t *testing.T) {
 	}
 }
 
-// Apple'in uc alani da doluysa VE .p8 GERCEKTEN ayristirilabiliyorsa
-// dogrulama gecmeli (vacuous reddetme kontrolu).
+// If Apple's three fields are all set AND the .p8 can REALLY be parsed the
+// validation must pass (vacuous rejection check).
 //
-// Eskiden burada AppleAnahtarP8 olarak "pem-verisi" gibi bir yer tutucu
-// yetiyordu; bu test o yer tutucuyu kabul ederek I1'in actigi kapiyi
-// PINLIYORDU. Artik gercek bir anahtar uretiliyor.
-func TestAppleFederasyonuTamAlanlarlaGecer(t *testing.T) {
-	p8, _ := testP8Uret(t)
+// Previously a placeholder such as "pem-verisi" was enough for AppleKeyP8;
+// this test PINNED the door I1 opened by accepting that placeholder. Now a
+// real key is generated.
+func TestValidateConfig_AppleCompletePasses(t *testing.T) {
+	p8, _ := generateTestP8(t)
 	cfg := testAuthCfg()
 	cfg.Federation = []config.FederationClient{{
 		Name: "apple", ClientID: "tr.makesinger.giris",
@@ -204,29 +205,29 @@ func TestAppleFederasyonuTamAlanlarlaGecer(t *testing.T) {
 	}
 }
 
-// I1: alanlarin "bos olmamasi" YETMEZ. K8s'te PEM sirlarinin en sik
-// gercek hatasi, anahtarin tek satirda ve gercek yeni satirlar yerine
-// literal \n ile mount edilmesidir. Boyle bir deger bos DEGILDIR, yani
-// eski kontrolu gecer; pod Ready olur, "Apple ile giris" butonu gorunur
-// ve hata ancak kullanici Apple'da Face ID + iki adimli onayi
-// BITIRDIKTEN sonra anlamsiz bir 403 oturum sayfasi olarak cikar.
-// Baslangicta yakalanmak ZORUNDA.
-func TestAppleP8BaslangictaAyristirilir(t *testing.T) {
-	gercek, _ := testP8Uret(t)
-	// Gercek dagitim hatasinin birebir girdisi: ayni anahtar, yeni
-	// satirlari literal \n dizisine cevrilmis halde.
-	literalKacisli := strings.ReplaceAll(gercek, "\n", `\n`)
+// I1: the fields being "non-empty" is NOT ENOUGH. The most common real
+// mistake with PEM secrets in K8s is mounting the key on a single line with
+// literal \n instead of real newlines. Such a value is not empty, so it
+// passes the old check; the pod becomes Ready, the "Sign in with Apple"
+// button shows, and the error only appears as a meaningless 403 session page
+// AFTER the user FINISHES Face ID + two-step approval at Apple.
+// It MUST be caught at startup.
+func TestValidateConfig_AppleP8ParsedAtStartup(t *testing.T) {
+	real, _ := generateTestP8(t)
+	// The exact input of the real deployment mistake: the same key with the
+	// newlines converted to the literal \n sequence.
+	escapedLiteral := strings.ReplaceAll(real, "\n", `\n`)
 
-	durumlar := []struct {
-		ad string
-		p8 string
+	statuses := []struct {
+		name string
+		p8   string
 	}{
-		{"literal \\n ile tek satira dusmus p8", literalKacisli},
+		{"literal \\n ile tek satira dusmus p8", escapedLiteral},
 		{"PEM olmayan yer tutucu", "pem-verisi"},
 		{"PEM govdesi bozuk", "-----BEGIN PRIVATE KEY-----\nbu-base64-degil\n-----END PRIVATE KEY-----\n"},
 	}
-	for _, d := range durumlar {
-		t.Run(d.ad, func(t *testing.T) {
+	for _, d := range statuses {
+		t.Run(d.name, func(t *testing.T) {
 			cfg := testAuthCfg()
 			cfg.Federation = []config.FederationClient{{
 				Name: "apple", ClientID: "tr.makesinger.giris",
@@ -239,8 +240,8 @@ func TestAppleP8BaslangictaAyristirilir(t *testing.T) {
 			if !strings.Contains(err.Error(), "AUTH_FED_APPLE_KEY_P8") {
 				t.Errorf("hata operatore ne yapacagini soylemiyor: %v", err)
 			}
-			// Hata mesaji anahtar ICERIGINI sizdirmamali: ne ham deger,
-			// ne base64 govdesi loglara/stderr'e dusmeli.
+			// The error message must not leak the key CONTENT: neither the raw value
+			// nor its base64 body should end up in logs/stderr.
 			if strings.Contains(err.Error(), d.p8) {
 				t.Errorf("hata mesaji anahtar icerigini sizdiriyor: %v", err)
 			}
@@ -248,11 +249,11 @@ func TestAppleP8BaslangictaAyristirilir(t *testing.T) {
 	}
 }
 
-// I2: Google'in tek zorunlu sirri client_secret'tir. Bos iken token
-// degisimi 401 invalid_client ile duser ve kullanici 403 gorur; pod
-// Ready, metrikler temiz, alarm yok. Apple icin fail-closed baslangic
-// kontrolu varken Google icin olmamasi acik bir asimetriydi.
-func TestGoogleFederasyonuSecretsizBaslamaz(t *testing.T) {
+// I2: Google's only mandatory secret is client_secret. When it is empty the
+// token exchange fails with 401 invalid_client and the user sees 403; the pod
+// is Ready, metrics are clean, there is no alarm. It was an obvious
+// asymmetry that Apple had a fail-closed startup check and Google did not.
+func TestValidateConfig_GoogleWithoutSecretFails(t *testing.T) {
 	cfg := testAuthCfg()
 	cfg.Federation = []config.FederationClient{{
 		Name: "google", ClientID: "123.apps.googleusercontent.com",
@@ -266,12 +267,12 @@ func TestGoogleFederasyonuSecretsizBaslamaz(t *testing.T) {
 	}
 }
 
-// Vacuous reddetme kontrolu: secret doluysa Google gecmeli. Ayrica
-// kuralin DOGRU tarafini pinler: "client_id de bos" durumu bir hata
-// DEGILDIR -- o saglayici federasyonIstemcileriOlustur'da listeye hic
-// girmez, yani yapilandirmaDogrula'ya hic ulasmaz ve bos bir federasyon
-// listesi gecerlidir.
-func TestGoogleFederasyonuSecretVarsaGecer(t *testing.T) {
+// Vacuous rejection check: if the secret is set, Google must pass. It also
+// pins the RIGHT side of the rule: the "client_id is empty too" case is NOT
+// an error -- that provider never enters the list in
+// setupFederation, so it never reaches validateConfig, and an empty
+// federation list is valid.
+func TestValidateConfig_GoogleWithSecretPasses(t *testing.T) {
 	cfg := testAuthCfg()
 	cfg.Federation = []config.FederationClient{{
 		Name: "google", ClientID: "123.apps.googleusercontent.com", ClientSecret: "gizli",
@@ -286,14 +287,14 @@ func TestGoogleFederasyonuSecretVarsaGecer(t *testing.T) {
 	}
 }
 
-// ---- I3: /health GERCEK hazirligi yansitsin ----
+// ---- I3: /health must reflect REAL readiness ----
 
-// Hazir(), "Start basariyla dondu mu" degil "dinleyici su an hizmet
-// veriyor mu" sorusunu yanitlar. nil alici icin de guvenli olmali:
-// /health, OP hic kurulmadiginda da bunu cagiriyor.
-func TestHazirDinleyiciDurumunuYansitir(t *testing.T) {
-	var yok *Server
-	if yok.Ready() {
+// Ready() answers "is the listener serving right now", not "did Start
+// return successfully". It must also be safe for a nil receiver:
+// /health calls it even when the OP was never set up.
+func TestServer_ReadyReflectsListener(t *testing.T) {
+	var missing *Server
+	if missing.Ready() {
 		t.Error("nil Sunucu hazir gorundu")
 	}
 
@@ -305,35 +306,35 @@ func TestHazirDinleyiciDurumunuYansitir(t *testing.T) {
 	if !s.Ready() {
 		t.Error("hazir=true iken Hazir() false dondu")
 	}
-	// Dinleyici cokerse (veya kapanirsa) /health bunu gormeli.
+	// If the listener crashes (or closes) /health must see it.
 	s.ready.Store(false)
 	if s.Ready() {
 		t.Error("dinleyici durduktan sonra hala hazir gorunuyor")
 	}
 }
 
-// Faz 1'in fail-closed kurali: hiz limiti KURULAMAZSA Start hic
-// basarili olmamali. Limitsiz bir giris ucuyla ayaga kalkmak hem
-// sinirsiz brute-force hem de ana API'yi dusuren bir CPU DoS yuzeyi
-// demektir (bkz. hizlimit.go).
+// Phase 1's fail-closed rule: if the rate limiter CANNOT BE SET UP, Start
+// must never succeed. Coming up with a login endpoint that has no limit
+// means both unlimited brute force and a CPU DoS surface that takes down
+// the main API (see ratelimit.go).
 //
-// NEDEN BU KADAR KURULUM: hiz limiti Start icinde veritabani ve
-// migration'dan SONRA kurulur. Yapilandirmanin geri kalani eksik
-// birakilirsa Start zaten daha once duser ve test hiz limiti yolunu HIC
-// olcmez. Bu yuzden burada gercek Postgres ve Redis kullanilir;
-// yoksa test atlanir (bkz. testRedis, testPostgres).
-func TestHizLimitiKurulamazsaStartBasarisiz(t *testing.T) {
+// WHY SO MUCH SETUP: the rate limiter is set up inside Start AFTER the
+// database and migrations. If the rest of the configuration is left
+// incomplete Start already fails earlier and the test NEVER measures the
+// rate limiter path. So a real Postgres and Redis are used here; if they
+// are absent the test is skipped (see testRedis, testPostgres).
+func TestStart_FailsWhenRateLimiterInvalid(t *testing.T) {
 	rdb := testRedis(t)
 	dsn := os.Getenv("KIMLIK_TEST_DB_URL")
 	if dsn == "" {
 		dsn = "postgres://postgres:kimlik-test-yerel@localhost:55432/postgres?sslmode=disable"
 	}
 
-	temel := func() *config.AuthConfig {
+	base := func() *config.AuthConfig {
 		c := testAuthCfg()
 		c.DBURL = dsn
 		c.SigningKeyPEM = testPEM(t)
-		c.CryptoKey = testCryptoAnahtari
+		c.CryptoKey = testCryptoKey
 		c.Port = "0"
 		c.LoginIPPerMin = 10
 		c.LoginEmailPerHour = 10
@@ -341,26 +342,27 @@ func TestHizLimitiKurulamazsaStartBasarisiz(t *testing.T) {
 		return c
 	}
 
-	// Once SAGLIK kontrolu: ayni yapilandirma limit degerleri GECERLI
-	// iken Start'i hiz limitine KADAR goturebiliyor olmali. Aksi halde
-	// asagidaki iddia, limitle ilgisiz bir hatayi dogrulamis olurdu.
-	sunucu, err := Start(context.Background(), temel(), rdb, "development")
+	// First a HEALTH check: the same configuration must be able to take Start
+	// all the way to the rate limiter while the limit values are VALID.
+	// Otherwise the assertion below would have verified an error unrelated to
+	// the limit.
+	server, err := Start(context.Background(), base(), rdb, "development")
 	if err != nil {
 		if strings.Contains(err.Error(), "veritabanina baglanilamadi") {
 			t.Skip("yerel Postgres yok, atlaniyor")
 		}
 		t.Fatalf("gecerli yapilandirma hiz limitine gelemeden dustu: %v", err)
 	}
-	ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
-	defer iptal()
-	if kapatmaHata := sunucu.Shutdown(ctx); kapatmaHata != nil {
-		t.Fatalf("Kapat: %v", kapatmaHata)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if closeErr := server.Shutdown(ctx); closeErr != nil {
+		t.Fatalf("Kapat: %v", closeErr)
 	}
 
-	// Simdi YALNIZCA limit degerini bozuyoruz.
-	bozuk := temel()
-	bozuk.LoginIPPerMin = 0
-	s, err := Start(context.Background(), bozuk, rdb, "development")
+	// Now we break ONLY the limit value.
+	broken := base()
+	broken.LoginIPPerMin = 0
+	s, err := Start(context.Background(), broken, rdb, "development")
 	if err == nil {
 		if s != nil {
 			_ = s.Shutdown(context.Background())

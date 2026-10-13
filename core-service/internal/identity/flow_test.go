@@ -20,41 +20,41 @@ import (
 	"golang.org/x/text/language"
 )
 
-// Bu dosya, OP'nin TAMAMINI gercek bir TCP dinleyicisi uzerinde ucan uca
-// olcer: /authorize -> /giris -> /authorize/callback -> /oauth/token.
-// Yalnizca Redis ister (kullanici ve jeton depolari sahte), bu yuzden
-// Postgres olmadan da kosar; Redis yoksa testRedis (istek_test.go) ile
-// AYNI kalipta atlanir.
+// This file measures the WHOLE OP end to end over a real TCP listener:
+// /authorize -> /giris -> /authorize/callback -> /oauth/token. It needs only
+// Redis (the user and token stores are fakes), so it also runs without
+// Postgres; if there is no Redis it is skipped with the SAME pattern as
+// testRedis (request_test.go).
 
-// testCryptoAnahtari, op.Config.CryptoKey icin 32 baytlik TEST-YEREL
-// degerdir. Uretim sirri DEGILDIR ve uretimde AUTH_CRYPTO_KEY'den
-// gelir; kaynak koda uretim sirri yazilmaz.
-const testCryptoAnahtari = "kimlik-test-yerel-crypto-32byte!"
+// testCryptoKey is a 32-byte TEST-LOCAL value for op.Config.CryptoKey. It is
+// NOT a production secret and in production it comes from AUTH_CRYPTO_KEY;
+// no production secret is written into source code.
+const testCryptoKey = "kimlik-test-yerel-crypto-32byte!"
 
 const testRedirectURI = "com.makesinger.app:/oauth2redirect"
 
-type akisOrtami struct {
-	issuer    string
-	kullanici UserStore
-	istekler  *RequestStore
+type flowEnv struct {
+	issuer   string
+	users    UserStore
+	requests *RequestStore
 
-	// federe ve yukari YALNIZCA federasyonlu kurulumda doludur (bkz.
-	// testSunucuKurAyarli): uctan uca testler yukari akisin yanitlarini
-	// bozmak ve yazilan eslesmeleri saymak zorunda.
-	federe *FakeFederatedStore
-	yukari map[string]*sahteOP
+	// federated and upstreams are filled ONLY in a federated setup (see
+	// setupTestServerWithUpstream): the end-to-end tests have to break the
+	// upstream's responses and count the links that get written.
+	federated *FakeFederatedStore
+	upstreams map[string]*fakeOP
 }
 
-// testSunucu, muxKur ile uretimdekiyle AYNI kablolamayi kurar ve gercek
-// bir dinleyicide yayinlar. Issuer, dinleyicinin adresinden turetilir:
-// discovery ve op.AuthCallbackURL dogru adresi uretsin.
-func testSunucu(t *testing.T) *akisOrtami {
+// newTestServer sets up EXACTLY THE SAME wiring as production with buildMux
+// and serves it on a real listener. The issuer is derived from the
+// listener's address so that discovery and op.AuthCallbackURL produce the
+// right address.
+func newTestServer(t *testing.T) *flowEnv {
 	t.Helper()
-	// Uretim kablolamasi HER akis testinde kosar (muxKur gercek bir
-	// *HizLimit alir), ama sinirlar bu testleri etkilemeyecek kadar
-	// yuksek: hiz limitinin KENDISI hizlimit_test.go'da dar sinirlarla
-	// olculur.
-	return testSunucuAyarli(t, RateLimitConfig{
+	// The production wiring runs in EVERY flow test (buildMux receives a real
+	// *RateLimiter), but the limits are high enough not to affect these tests:
+	// the rate limit ITSELF is measured with tight limits in ratelimit_test.go.
+	return newTestServerWithLimits(t, RateLimitConfig{
 		LoginIPPerMin:     1000,
 		LoginEmailPerHour: 1000,
 		SignupIPPerHour:   1000,
@@ -62,65 +62,66 @@ func testSunucu(t *testing.T) *akisOrtami {
 	})
 }
 
-func testSunucuAyarli(t *testing.T, ayar RateLimitConfig) *akisOrtami {
+func newTestServerWithLimits(t *testing.T, cfg RateLimitConfig) *flowEnv {
 	t.Helper()
-	return testSunucuKur(t, ayar, false)
+	return setupTestServer(t, cfg, false)
 }
 
-// testSunucuFedere, AYNI kablolamayi federasyon YAPILANDIRILMIS halde
-// kurar: muxKur'un "akislar dolu" dali kosar, yani federasyon uclari ve
-// giris sayfasindaki butonlar gercekten vardir.
+// newTestServerFederated sets up the SAME wiring with federation CONFIGURED:
+// the "flows are set" branch of buildMux runs, i.e. the federation endpoints
+// and the buttons on the login page REALLY exist.
 //
-// NEDEN AYRI BIR GIRIS NOKTASI: akis testlerinin cogu federasyonsuz
-// kurulumu olcer ve her birine iki RSA anahtari + iki sahte saglayici
-// maliyeti yuklemek gereksiz. Federasyon kablolamasini olcen testler bu
-// varyanti cagirir.
-func testSunucuFedere(t *testing.T, ayar RateLimitConfig) *akisOrtami {
+// WHY A SEPARATE ENTRY POINT: most flow tests measure the setup without
+// federation and loading each of them with the cost of two RSA keys + two
+// fake providers is unnecessary. The tests that measure the federation
+// wiring call this variant.
+func newTestServerFederated(t *testing.T, cfg RateLimitConfig) *flowEnv {
 	t.Helper()
-	return testSunucuKur(t, ayar, true)
+	return setupTestServer(t, cfg, true)
 }
 
-func testSunucuKur(t *testing.T, ayar RateLimitConfig, federe bool) *akisOrtami {
+func setupTestServer(t *testing.T, cfg RateLimitConfig, federated bool) *flowEnv {
 	t.Helper()
-	// Varsayilan sahte yukari akis ayari: hicbir alan bozulmamis.
-	return testSunucuKurAyarli(t, ayar, federe, sahteOPAyar{})
+	// Default fake upstream config: no field is broken.
+	return setupTestServerWithUpstream(t, cfg, federated, fakeOPConfig{})
 }
 
-// testSunucuKurAyarli, testSunucuKur'un sahte yukari akis ayari da
-// verilebilen surumudur. AYRI BIR GIRIS NOKTASI: testSunucuKur ve
-// testSunucuFedere imzalari ve cagiranlari BOZULMADAN kaliyor, uctan
-// uca testler ise yukari akisin her yanitini bozabiliyor.
-func testSunucuKurAyarli(
-	t *testing.T, ayar RateLimitConfig, federe bool, opAyar sahteOPAyar,
-) *akisOrtami {
+// setupTestServerWithUpstream is the variant of setupTestServer that also
+// accepts the fake upstream config. A SEPARATE ENTRY POINT: the signatures
+// of setupTestServer and newTestServerFederated and their callers stay
+// UNTOUCHED, while the end-to-end tests can break any response of the
+// upstream.
+func setupTestServerWithUpstream(
+	t *testing.T, limits RateLimitConfig, federated bool, upstreamCfg fakeOPConfig,
+) *flowEnv {
 	t.Helper()
-	rdb := testRedis(t) // Redis yoksa burada atlanir
+	rdb := testRedis(t) // Skipped here if there is no Redis
 
-	anahtar, err := LoadSigningKey(testPEM(t))
+	key, err := LoadSigningKey(testPEM(t))
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
 	}
-	cryptoAnahtar, err := CryptoKey(testCryptoAnahtari)
+	cryptoKey, err := CryptoKey(testCryptoKey)
 	if err != nil {
 		t.Fatalf("CryptoAnahtar: %v", err)
 	}
 
-	dinleyici, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("dinleyici acilamadi: %v", err)
 	}
-	issuer := "http://" + dinleyici.Addr().String()
+	issuer := "http://" + listener.Addr().String()
 
 	cfg := testAuthCfg()
 	cfg.Issuer = issuer
 	cfg.RedirectURIs = []string{testRedirectURI}
 
-	kullanici := NewFakeUserStore()
-	istekler := NewRequestStore(rdb)
-	depo := NewStorage(cfg, kullanici, NewFakeTokenStore(), istekler, anahtar)
+	users := NewFakeUserStore()
+	reqLog := NewRequestStore(rdb)
+	store := NewStorage(cfg, users, NewFakeTokenStore(), reqLog, key)
 
 	opCfg := &op.Config{
-		CryptoKey:             cryptoAnahtar,
+		CryptoKey:             cryptoKey,
 		CodeMethodS256:        true,
 		AuthMethodPost:        false,
 		GrantTypeRefreshToken: true,
@@ -129,70 +130,70 @@ func testSunucuKurAyarli(
 			oidc.ScopeOpenID, oidc.ScopeProfile, oidc.ScopeEmail, oidc.ScopeOfflineAccess,
 		},
 	}
-	saglayici, err := op.NewProvider(opCfg, depo, op.StaticIssuer(issuer), op.WithAllowInsecure())
+	provider, err := op.NewProvider(opCfg, store, op.StaticIssuer(issuer), op.WithAllowInsecure())
 	if err != nil {
 		t.Fatalf("OpenIDProvider: %v", err)
 	}
 
-	hizLimit, err := NewRateLimiter(rdb, ayar, []byte(testCryptoAnahtari))
+	rateLimiter, err := NewRateLimiter(rdb, limits, []byte(testCryptoKey))
 	if err != nil {
 		t.Fatalf("NewHizLimit: %v", err)
 	}
 
-	// Federasyon parametreleri: federe=false iken nil (muxKur
-	// federasyon ucunu HIC baglamaz), true iken SAHTE bir yukari akis
-	// ile dolu. Sahte saglayici yerel bir httptest sunucusudur; test
-	// hicbir zaman Apple/Google'a cikmaz.
+	// Federation parameters: nil when federated=false (buildMux does NOT wire
+	// the federation endpoint AT ALL), filled with a FAKE upstream when true. The
+	// fake provider is a local httptest server; the test never reaches out to
+	// Apple/Google.
 	var (
-		akislar        map[string]*Upstream
-		dogrulayicilar map[string]*auth.UpstreamVerifier
-		federeDepo     FederatedStore
-		sahteFedere    *FakeFederatedStore
-		oplar          map[string]*sahteOP
+		flows          map[string]*Upstream
+		verifiers      map[string]*auth.UpstreamVerifier
+		federatedStore FederatedStore
+		fakeFederated  *FakeFederatedStore
+		ops            map[string]*fakeOP
 	)
-	if federe {
-		// Google (302 donus) ve Apple (form_post donus) birlikte
-		// kurulur; ikisi de yerel httptest sunucularidir.
-		akislar, dogrulayicilar, oplar = federasyonKablola(t, opAyar)
-		sahteFedere = NewFakeFederatedStore(kullanici)
-		federeDepo = sahteFedere
+	if federated {
+		// Google (302 return) and Apple (form_post return) are set up together;
+		// both are local httptest servers.
+		flows, verifiers, ops = wireFederation(t, upstreamCfg)
+		fakeFederated = NewFakeFederatedStore(users)
+		federatedStore = fakeFederated
 	}
 
-	// cerezGuvenli=false: test dinleyicisi http, Secure cerez
-	// tasinmazdi.
+	// secure=false: the test listener is http and a Secure cookie would not be
+	// sent.
 	srv := &http.Server{
 		Handler: buildMux(
-			saglayici, kullanici, istekler, federeDepo,
-			akislar, dogrulayicilar, issuer, false, hizLimit,
+			provider, users, reqLog, federatedStore,
+			flows, verifiers, issuer, false, rateLimiter,
 		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	go func() { _ = srv.Serve(dinleyici) }()
+	go func() { _ = srv.Serve(listener) }()
 	t.Cleanup(func() {
-		ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
-		defer iptal()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
 		_ = srv.Shutdown(ctx)
 	})
 
-	return &akisOrtami{
+	return &flowEnv{
 		issuer:    issuer,
-		kullanici: kullanici,
-		istekler:  istekler,
-		federe:    sahteFedere,
-		yukari:    oplar,
+		users:     users,
+		requests:  reqLog,
+		federated: fakeFederated,
+		upstreams: ops,
 	}
 }
 
-// tarayici, kendi cerez kabi olan ve yonlendirmeleri OTOMATIK TAKIP
-// ETMEYEN bir istemci doner: her bacagi tek tek olcebilmek icin.
-func tarayici(t *testing.T) *http.Client {
+// newBrowser returns a client that has its own cookie jar and does NOT follow
+// redirects AUTOMATICALLY: so that every leg can be measured one by one.
+func newBrowser(t *testing.T) *http.Client {
 	t.Helper()
-	kap, err := cookiejar.New(nil)
+	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatalf("cookiejar: %v", err)
 	}
 	return &http.Client{
-		Jar:     kap,
+		Jar:     jar,
 		Timeout: 5 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -200,7 +201,7 @@ func tarayici(t *testing.T) *http.Client {
 	}
 }
 
-// pkceS256, (verifier, challenge) ciftini uretir.
+// pkceS256 produces a (verifier, challenge) pair.
 func pkceS256(t *testing.T) (string, string) {
 	t.Helper()
 	verifier, err := randomToken()
@@ -210,22 +211,22 @@ func pkceS256(t *testing.T) (string, string) {
 	return verifier, oidc.NewSHACodeChallenge(verifier)
 }
 
-// authorizeURL, verilen PKCE parametreleriyle bir /authorize adresi
-// kurar. challenge veya method bos gecilirse o parametre HIC
-// EKLENMEZ (eksik parametre ile bos parametreyi ayirmak icin).
-func (o *akisOrtami) authorizeURL(challenge, method string) string {
-	return o.authorizeURLKapsamli(challenge, method, "openid offline_access")
+// authorizeURL builds an /authorize address with the given PKCE parameters.
+// If challenge or method is passed empty that parameter is NOT ADDED AT ALL
+// (to tell a missing parameter from an empty one).
+func (o *flowEnv) authorizeURL(challenge, method string) string {
+	return o.authorizeURLWithScope(challenge, method, "openid offline_access")
 }
 
-// authorizeURLKapsamli, authorizeURL'in kapsam da secilebilen
-// surumudur: uctan uca testler email ve profile kapsamlarini da ister
-// (id_token ve userinfo iddialari olculuyor).
-func (o *akisOrtami) authorizeURLKapsamli(challenge, method, kapsam string) string {
+// authorizeURLWithScope is the variant of authorizeURL where the scope can be
+// chosen too: the end-to-end tests request the email and profile scopes as
+// well (the id_token and userinfo claims are measured).
+func (o *flowEnv) authorizeURLWithScope(challenge, method, scope string) string {
 	q := url.Values{
 		"client_id":     {"makesinger-mobil"},
 		"redirect_uri":  {testRedirectURI},
 		"response_type": {"code"},
-		"scope":         {kapsam},
+		"scope":         {scope},
 		"state":         {"durum-1"},
 		"nonce":         {"nonce-1"},
 	}
@@ -238,897 +239,902 @@ func (o *akisOrtami) authorizeURLKapsamli(challenge, method, kapsam string) stri
 	return o.issuer + "/authorize?" + q.Encode()
 }
 
-func al(t *testing.T, c *http.Client, adres string) *http.Response {
+func mustGet(t *testing.T, c *http.Client, address string) *http.Response {
 	t.Helper()
-	yanit, err := c.Get(adres)
+	resp, err := c.Get(address)
 	if err != nil {
 		t.Fatalf("GET basarisiz: %v", err)
 	}
-	t.Cleanup(func() { _ = yanit.Body.Close() })
-	return yanit
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
 }
 
-func govde(t *testing.T, yanit *http.Response) string {
+func readBody(t *testing.T, resp *http.Response) string {
 	t.Helper()
-	b, err := io.ReadAll(yanit.Body)
+	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("govde okunamadi: %v", err)
 	}
 	return string(b)
 }
 
-// authRequestIDCikar, /authorize'in giris sayfasina yonlendirmesinden
-// authRequestID'yi alir.
-func authRequestIDCikar(t *testing.T, yanit *http.Response) string {
+// extractAuthRequestID takes the authRequestID from the /authorize redirect
+// to the login page.
+func extractAuthRequestID(t *testing.T, resp *http.Response) string {
 	t.Helper()
-	if yanit.StatusCode != http.StatusFound {
-		t.Fatalf("/authorize durumu = %d, beklenen 302", yanit.StatusCode)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("/authorize durumu = %d, beklenen 302", resp.StatusCode)
 	}
-	konum, err := url.Parse(yanit.Header.Get("Location"))
+	location, err := url.Parse(resp.Header.Get("Location"))
 	if err != nil {
 		t.Fatalf("Location cozulemedi: %v", err)
 	}
-	if konum.Path != pathLogin {
-		t.Fatalf("Location yolu = %q, beklenen %q", konum.Path, pathLogin)
+	if location.Path != pathLogin {
+		t.Fatalf("Location yolu = %q, beklenen %q", location.Path, pathLogin)
 	}
-	id := konum.Query().Get("authRequestID")
+	id := location.Query().Get("authRequestID")
 	if id == "" {
 		t.Fatal("Location'da authRequestID yok")
 	}
 	return id
 }
 
-var akisCSRFDeseni = regexp.MustCompile(`name="csrf" value="([^"]*)"`)
+var flowCSRFPattern = regexp.MustCompile(`name="csrf" value="([^"]*)"`)
 
-// girisDene, verilen tarayicida giris formunu ACMAYA calisir ve form
-// gosterildiyse gonderir. Doner: (POST yaniti veya form yaniti, GET
-// formunun durum kodu).
+// tryLogin TRIES to open the login form in the given browser and submits it
+// if the form was shown. Returns: (the POST response or the form response,
+// the status code of the GET form).
 //
-// NEDEN "DENE": baglama artik YALNIZCA /authorize'da kuruldugu icin,
-// akisi baslatmayan bir tarayicida GET /giris 403 doner ve POST'a hic
-// gelinmez. Saldiri testleri iki durumu da olcebilmeli: duzeltilmis
-// kodda form hic gosterilmez, mutasyonlu kodda (GET yeniden mintlerse)
-// gosterilir ve akis tamamlanir.
-func (o *akisOrtami) girisDene(t *testing.T, c *http.Client, id, eposta, sifre string) (*http.Response, int) {
+// WHY "TRY": since the binding is now set up ONLY at /authorize, a browser
+// that did not start the flow gets 403 on GET /giris and never reaches the
+// POST. The attack tests have to be able to measure both cases: in the
+// fixed code the form is never shown, in the mutated code (if GET mints
+// again) it is shown and the flow completes.
+func (o *flowEnv) tryLogin(t *testing.T, c *http.Client, id, email, password string) (*http.Response, int) {
 	t.Helper()
-	formYanit := al(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
-	if formYanit.StatusCode != http.StatusOK {
-		return formYanit, formYanit.StatusCode
+	formResp := mustGet(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
+	if formResp.StatusCode != http.StatusOK {
+		return formResp, formResp.StatusCode
 	}
-	esler := akisCSRFDeseni.FindStringSubmatch(govde(t, formYanit))
-	if esler == nil {
+	matches := flowCSRFPattern.FindStringSubmatch(readBody(t, formResp))
+	if matches == nil {
 		t.Fatal("giris formunda CSRF jetonu yok")
 	}
 	form := url.Values{
-		"eposta": {eposta}, "sifre": {sifre},
-		"authRequestID": {id}, fieldCSRF: {esler[1]},
+		"eposta": {email}, "sifre": {password},
+		"authRequestID": {id}, fieldCSRF: {matches[1]},
 	}
-	yanit, err := c.PostForm(o.issuer+pathLogin, form)
+	resp, err := c.PostForm(o.issuer+pathLogin, form)
 	if err != nil {
 		t.Fatalf("POST /giris: %v", err)
 	}
-	t.Cleanup(func() { _ = yanit.Body.Close() })
-	return yanit, http.StatusOK
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp, http.StatusOK
 }
 
-// girisFormuAc, giris formunu acar ve formdaki CSRF jetonunu doner.
-// Form reddedilirse test durur.
-func (o *akisOrtami) girisFormuAc(t *testing.T, c *http.Client, id string) string {
+// openLoginForm opens the login form and returns the CSRF token in the form.
+// The test stops if the form is rejected.
+func (o *flowEnv) openLoginForm(t *testing.T, c *http.Client, id string) string {
 	t.Helper()
-	formYanit := al(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
-	if formYanit.StatusCode != http.StatusOK {
-		t.Fatalf("giris formu durumu = %d", formYanit.StatusCode)
+	formResp := mustGet(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
+	if formResp.StatusCode != http.StatusOK {
+		t.Fatalf("giris formu durumu = %d", formResp.StatusCode)
 	}
-	esler := akisCSRFDeseni.FindStringSubmatch(govde(t, formYanit))
-	if esler == nil {
+	matches := flowCSRFPattern.FindStringSubmatch(readBody(t, formResp))
+	if matches == nil {
 		t.Fatal("giris formunda CSRF jetonu yok")
 	}
-	return esler[1]
+	return matches[1]
 }
 
-// girisGonder, ACIK bir formdan POST /giris yapar. Formu yeniden
-// ACMAZ: gercek tarayici da basarisiz denemede formu yeniden
-// yuklemez, govdeyle birlikte donen sayfayi gosterir.
-func (o *akisOrtami) girisGonder(t *testing.T, c *http.Client, id, csrf, eposta, sifre string) *http.Response {
+// submitLogin does POST /giris from an OPEN form. It does NOT reopen the
+// form: a real browser does not reload the form after a failed attempt, it
+// shows the page that came back with the body.
+func (o *flowEnv) submitLogin(t *testing.T, c *http.Client, id, csrf, email, password string) *http.Response {
 	t.Helper()
-	yanit, err := c.PostForm(o.issuer+pathLogin, url.Values{
-		"eposta": {eposta}, "sifre": {sifre},
+	resp, err := c.PostForm(o.issuer+pathLogin, url.Values{
+		"eposta": {email}, "sifre": {password},
 		"authRequestID": {id}, fieldCSRF: {csrf},
 	})
 	if err != nil {
 		t.Fatalf("POST /giris: %v", err)
 	}
-	t.Cleanup(func() { _ = yanit.Body.Close() })
-	return yanit
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
 }
 
-// girisYap, girisDene'nin "form GOSTERILMEK ZORUNDA" surumudur: mutlu
-// yol testleri icin.
-func (o *akisOrtami) girisYap(t *testing.T, c *http.Client, id, eposta, sifre string) *http.Response {
+// login is the variant of tryLogin where the form "MUST BE SHOWN": for the
+// happy path tests.
+func (o *flowEnv) login(t *testing.T, c *http.Client, id, email, password string) *http.Response {
 	t.Helper()
-	yanit, formDurum := o.girisDene(t, c, id, eposta, sifre)
-	if formDurum != http.StatusOK {
-		t.Fatalf("giris formu durumu = %d", formDurum)
+	resp, formStatus := o.tryLogin(t, c, id, email, password)
+	if formStatus != http.StatusOK {
+		t.Fatalf("giris formu durumu = %d", formStatus)
 	}
-	return yanit
+	return resp
 }
 
-// kodCikar, callback yanitindan authorization code'u cikarir (yoksa bos
-// string).
-func kodCikar(t *testing.T, yanit *http.Response) string {
+// extractCode extracts the authorization code from the callback response (an
+// empty string if absent).
+func extractCode(t *testing.T, resp *http.Response) string {
 	t.Helper()
-	if yanit.StatusCode != http.StatusFound {
+	if resp.StatusCode != http.StatusFound {
 		return ""
 	}
-	konum, err := url.Parse(yanit.Header.Get("Location"))
+	location, err := url.Parse(resp.Header.Get("Location"))
 	if err != nil {
 		return ""
 	}
-	return konum.Query().Get("code")
+	return location.Query().Get("code")
 }
 
-// jetonAl, authorization code'u jetona cevirir.
-func (o *akisOrtami) jetonAl(t *testing.T, kod, verifier string) (int, map[string]any) {
+// exchangeToken exchanges the authorization code for a token.
+func (o *flowEnv) exchangeToken(t *testing.T, code, verifier string) (int, map[string]any) {
 	t.Helper()
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
-		"code":          {kod},
+		"code":          {code},
 		"redirect_uri":  {testRedirectURI},
 		"client_id":     {"makesinger-mobil"},
 		"code_verifier": {verifier},
 	}
-	yanit, err := http.PostForm(o.issuer+"/oauth/token", form)
+	resp, err := http.PostForm(o.issuer+"/oauth/token", form)
 	if err != nil {
 		t.Fatalf("POST /oauth/token: %v", err)
 	}
-	defer func() { _ = yanit.Body.Close() }()
-	var govdeJSON map[string]any
-	_ = json.NewDecoder(yanit.Body).Decode(&govdeJSON)
-	return yanit.StatusCode, govdeJSON
+	defer func() { _ = resp.Body.Close() }()
+	var bodyJSON map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&bodyJSON)
+	return resp.StatusCode, bodyJSON
 }
 
-// testKullanici, sahte depoda bir hesap acar.
-func (o *akisOrtami) testKullanici(t *testing.T, eposta, sifre string) *User {
+// createTestUser opens an account in the fake store.
+func (o *flowEnv) createTestUser(t *testing.T, email, password string) *User {
 	t.Helper()
-	k, err := o.kullanici.Create(context.Background(), eposta, "Test", sifre)
+	k, err := o.users.Create(context.Background(), email, "Test", password)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	return k
 }
 
-// ---- Mutlu yol ----
+// ---- Happy path ----
 
-// Ucan uca S256 PKCE akisi: /authorize -> /giris -> callback -> jeton.
-// Bu test, C1 ve C2 duzeltmelerinin akisi KIRMADIGININ kilidi.
-func TestAkisS256IleUctanUcaCalisir(t *testing.T) {
-	o := testSunucu(t)
-	kullanici := o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
+// End-to-end S256 PKCE flow: /authorize -> /giris -> callback -> token.
+// This test is the lock that the C1 and C2 fixes did not break the flow.
+func TestFlow_S256EndToEnd(t *testing.T) {
+	o := newTestServer(t)
+	users := o.createTestUser(t, "kurban@ornek.com", "dogruSifre12")
 	verifier, challenge := pkceS256(t)
-	c := tarayici(t)
+	c := newBrowser(t)
 
-	id := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge, "S256")))
+	id := extractAuthRequestID(t, mustGet(t, c, o.authorizeURL(challenge, "S256")))
 
-	girisYanit := o.girisYap(t, c, id, "kurban@ornek.com", "dogruSifre12")
-	if girisYanit.StatusCode != http.StatusFound {
+	loginResp := o.login(t, c, id, "kurban@ornek.com", "dogruSifre12")
+	if loginResp.StatusCode != http.StatusFound {
 		t.Fatalf("POST /giris durumu = %d, beklenen 302. govde: %s",
-			girisYanit.StatusCode, govde(t, girisYanit))
+			loginResp.StatusCode, readBody(t, loginResp))
 	}
-	callbackURL := girisYanit.Header.Get("Location")
+	callbackURL := loginResp.Header.Get("Location")
 	if !strings.Contains(callbackURL, "/authorize/callback") {
 		t.Fatalf("giris sonrasi Location beklenmedik: %q", callbackURL)
 	}
 
-	cbYanit := al(t, c, callbackURL)
-	if cbYanit.StatusCode != http.StatusFound {
+	cbResp := mustGet(t, c, callbackURL)
+	if cbResp.StatusCode != http.StatusFound {
 		t.Fatalf("callback durumu = %d, beklenen 302. govde: %s",
-			cbYanit.StatusCode, govde(t, cbYanit))
+			cbResp.StatusCode, readBody(t, cbResp))
 	}
-	son, err := url.Parse(cbYanit.Header.Get("Location"))
+	last, err := url.Parse(cbResp.Header.Get("Location"))
 	if err != nil {
 		t.Fatalf("Location cozulemedi: %v", err)
 	}
-	kod := son.Query().Get("code")
-	if kod == "" {
-		t.Fatalf("kod uretilmedi, Location: %q", son.String())
+	code := last.Query().Get("code")
+	if code == "" {
+		t.Fatalf("kod uretilmedi, Location: %q", last.String())
 	}
-	if son.Query().Get("state") != "durum-1" {
-		t.Errorf("state = %q", son.Query().Get("state"))
+	if last.Query().Get("state") != "durum-1" {
+		t.Errorf("state = %q", last.Query().Get("state"))
 	}
 
-	durum, jeton := o.jetonAl(t, kod, verifier)
-	if durum != http.StatusOK {
-		t.Fatalf("token durumu = %d, govde: %v", durum, jeton)
+	status, token := o.exchangeToken(t, code, verifier)
+	if status != http.StatusOK {
+		t.Fatalf("token durumu = %d, govde: %v", status, token)
 	}
-	if jeton["access_token"] == nil || jeton["access_token"] == "" {
+	if token["access_token"] == nil || token["access_token"] == "" {
 		t.Error("access_token yok")
 	}
-	if jeton["refresh_token"] == nil || jeton["refresh_token"] == "" {
+	if token["refresh_token"] == nil || token["refresh_token"] == "" {
 		t.Error("offline_access istendi ama refresh_token yok")
 	}
-	_ = kullanici
+	_ = users
 }
 
-// ---- C1: hesap devralma saldirisinin kendisi ----
+// ---- C1: the account takeover attack itself ----
 //
-// Re-review, onceki tek saldiri testinin (saldirgan giris formunu HIC
-// acmiyordu) somurunun yalnizca BIR varyantini modelledigini gosterdi.
-// Asil somuru, saldirganin GET /giris ile KENDINE baglama mintlemesiydi;
-// iki zamanlama varyantinin ikisi de canli jeton aldi. Asagidaki iki
-// test o iki varyanti AYRI AYRI olcer.
+// The re-review showed that the previous single attack test (the attacker did
+// NOT OPEN the login form AT ALL) modeled only ONE variant of the exploit.
+// The real exploit was the attacker minting a binding for THEMSELVES with
+// GET /giris; both timing variants obtained a live token. The two tests
+// below measure those two variants SEPARATELY.
 //
-// devralmaDogrula, her iki varyantta da ayni sonucu dogrular: saldirgan
-// kod ALMAZ ve auth istegi kurbanin kimligine HIC baglanmaz.
+// assertNoTakeover verifies the same result in both variants: the attacker
+// gets NO code and the auth request is NEVER bound to the victim's identity.
 //
-// NEDEN "403" DEGIL "KOD YOK": saldirgan kendi istegine bagli oldugu
-// icin /authorize/callback'te cerez kontrolunu GECER; kutuphane
-// (pkg/op/auth_request.go AuthorizeCallback) istegi Done() olmadigi
-// icin reddeder ve istemcinin redirect_uri'sine error=... ile 302
-// doner. Olculmesi gereken sey durum kodu degil, KOD URETILMEDIGI ve
-// istegin baglanmadigidir.
-func devralmaDogrula(t *testing.T, o *akisOrtami, id string, cbYanit *http.Response) {
+// WHY "NO CODE" AND NOT "403": since the attacker is bound to their own
+// request they PASS the cookie check at /authorize/callback; the library
+// (pkg/op/auth_request.go AuthorizeCallback) rejects the request because it
+// is not Done() and answers with a 302 to the client's redirect_uri with
+// error=.... What has to be measured is not the status code but that NO CODE
+// WAS PRODUCED and the request was not bound.
+func assertNoTakeover(t *testing.T, o *flowEnv, id string, cbResp *http.Response) {
 	t.Helper()
-	if kod := kodCikar(t, cbYanit); kod != "" {
-		t.Fatalf("HESAP DEVRALMA: saldirgan kod aldi (durum %d)", cbYanit.StatusCode)
+	if code := extractCode(t, cbResp); code != "" {
+		t.Fatalf("HESAP DEVRALMA: saldirgan kod aldi (durum %d)", cbResp.StatusCode)
 	}
-	istek, err := o.istekler.GetByID(context.Background(), id)
+	req, err := o.requests.GetByID(context.Background(), id)
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
-	if istek.Done() {
+	if req.Done() {
 		t.Fatal("HESAP DEVRALMA YOLU ACIK: saldirganin auth istegi bir kimlige baglandi")
 	}
 }
 
-// SOMURU 1 (on-baglama). Saldirgan /authorize'i kendi S256 ciftiyle
-// cagirir, SONRA kendi tarayicisinda GET /giris acar (giris YAPMAZ,
-// yalnizca baglama almaya calisir), linki kurbana yollar; kurban AYRI
-// bir cerez kabinda giris yapmaya calisir; saldirgan callback'i cagirir.
+// EXPLOIT 1 (pre-binding). The attacker calls /authorize with their own S256
+// pair, THEN opens GET /giris in their own browser (does NOT log in, only
+// tries to get a binding), sends the link to the victim; the victim tries to
+// log in in a SEPARATE cookie jar; the attacker calls the callback.
 //
-// Beklenti: kurbanin GET'i 403 (baglamasi yok, form gosterilmez),
-// saldirgan kod ALMAZ. GET /giris yeniden baglama mintlerse bu test
-// FAIL eder (mutasyon kaniti raporda).
-func TestSomuru1OnBaglamaIleDevralinamaz(t *testing.T) {
-	o := testSunucu(t)
-	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
+// Expectation: the victim's GET is 403 (no binding, the form is not shown),
+// the attacker gets NO code. If GET /giris mints a binding again this test
+// FAILS (mutation proof in the report).
+func TestExploit1_PreBindingCannotTakeOver(t *testing.T) {
+	o := newTestServer(t)
+	o.createTestUser(t, "kurban@ornek.com", "dogruSifre12")
 	_, challenge := pkceS256(t)
 
-	saldirgan := tarayici(t)
-	kurban := tarayici(t)
+	attacker := newBrowser(t)
+	victim := newBrowser(t)
 
-	// 1) Saldirgan akisi baslatir (challenge/state SALDIRGANIN).
-	id := authRequestIDCikar(t, al(t, saldirgan, o.authorizeURL(challenge, "S256")))
+	// 1) The attacker starts the flow (the challenge/state are the ATTACKER's).
+	id := extractAuthRequestID(t, mustGet(t, attacker, o.authorizeURL(challenge, "S256")))
 
-	// 2) ON-BAGLAMA: saldirgan formu KENDI tarayicisinda acar. Bu 200
-	//    doner (akisi o baslatti, baglamasi var) ama giris YAPMAZ.
-	saldirganForm := al(t, saldirgan, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
-	if saldirganForm.StatusCode != http.StatusOK {
-		t.Fatalf("saldirganin kendi formu durumu = %d; senaryo kurulamadi", saldirganForm.StatusCode)
+	// 2) PRE-BINDING: the attacker opens the form in THEIR OWN browser. This
+	// returns 200 (they started the flow, they have a binding) but does NOT log in.
+	attackerForm := mustGet(t, attacker, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
+	if attackerForm.StatusCode != http.StatusOK {
+		t.Fatalf("saldirganin kendi formu durumu = %d; senaryo kurulamadi", attackerForm.StatusCode)
 	}
 
-	// 3) Kurban AYRI tarayicida ayni linki acar ve girisi dener.
-	kurbanYanit, formDurum := o.girisDene(t, kurban, id, "kurban@ornek.com", "dogruSifre12")
-	if formDurum != http.StatusForbidden {
-		t.Errorf("kurbanin GET /giris durumu = %d, beklenen 403 (baglamasi yok, form gosterilmemeli)", formDurum)
+	// 3) The victim opens the same link in a SEPARATE browser and tries to log in.
+	victimResp, formStatus := o.tryLogin(t, victim, id, "kurban@ornek.com", "dogruSifre12")
+	if formStatus != http.StatusForbidden {
+		t.Errorf("kurbanin GET /giris durumu = %d, beklenen 403 (baglamasi yok, form gosterilmemeli)", formStatus)
 	}
-	if kurbanYanit.StatusCode == http.StatusFound {
+	if victimResp.StatusCode == http.StatusFound {
 		t.Error("kurbanin girisi saldirganin istegini tamamladi")
 	}
 
-	// 4) Saldirgan kodu KENDI tarayicisinda toplamaya calisir.
-	devralmaDogrula(t, o, id, al(t, saldirgan, o.issuer+"/authorize/callback?id="+url.QueryEscape(id)))
+	// 4) The attacker tries to collect the code in THEIR OWN browser.
+	assertNoTakeover(t, o, id, mustGet(t, attacker, o.issuer+"/authorize/callback?id="+url.QueryEscape(id)))
 }
 
-// SOMURU 2 (giris sonrasi baglama). Ayni somuru, ama saldirgan
-// baglamayi kurbanin girisi TAMAMLANDIKTAN SONRA almaya calisir:
-// zamanlama sarti bile yok. Sira SOMURU 1'den FARKLI oldugu icin ayri
-// bir testtir.
-func TestSomuru2GirisSonrasiBaglamaIleDevralinamaz(t *testing.T) {
-	o := testSunucu(t)
-	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
+// EXPLOIT 2 (post-login binding). The same exploit, but the attacker tries to
+// get the binding AFTER the victim's login has COMPLETED: there is not even a
+// timing condition. The order is DIFFERENT from EXPLOIT 1, so it is a separate
+// test.
+func TestExploit2_PostLoginBindingCannotTakeOver(t *testing.T) {
+	o := newTestServer(t)
+	o.createTestUser(t, "kurban@ornek.com", "dogruSifre12")
 	_, challenge := pkceS256(t)
 
-	saldirgan := tarayici(t)
-	kurban := tarayici(t)
+	attacker := newBrowser(t)
+	victim := newBrowser(t)
 
-	// 1) Saldirgan akisi baslatir.
-	id := authRequestIDCikar(t, al(t, saldirgan, o.authorizeURL(challenge, "S256")))
+	// 1) The attacker starts the flow.
+	id := extractAuthRequestID(t, mustGet(t, attacker, o.authorizeURL(challenge, "S256")))
 
-	// 2) Kurban ONCE giris yapmayi dener (saldirgan henuz formu
-	//    acmamistir).
-	kurbanYanit, formDurum := o.girisDene(t, kurban, id, "kurban@ornek.com", "dogruSifre12")
-	if formDurum != http.StatusForbidden {
-		t.Errorf("kurbanin GET /giris durumu = %d, beklenen 403", formDurum)
+	// 2) The victim FIRST tries to log in (the attacker has not opened the form
+	// yet).
+	victimResp, formStatus := o.tryLogin(t, victim, id, "kurban@ornek.com", "dogruSifre12")
+	if formStatus != http.StatusForbidden {
+		t.Errorf("kurbanin GET /giris durumu = %d, beklenen 403", formStatus)
 	}
-	if kurbanYanit.StatusCode == http.StatusFound {
+	if victimResp.StatusCode == http.StatusFound {
 		t.Error("kurbanin girisi saldirganin istegini tamamladi")
 	}
 
-	// 3) Saldirgan SONRA formu acar (baglama almaya calisir) ve kodu
-	//    toplar.
-	al(t, saldirgan, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
-	devralmaDogrula(t, o, id, al(t, saldirgan, o.issuer+"/authorize/callback?id="+url.QueryEscape(id)))
+	// 3) The attacker THEN opens the form (tries to get a binding) and collects
+	// the code.
+	mustGet(t, attacker, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
+	assertNoTakeover(t, o, id, mustGet(t, attacker, o.issuer+"/authorize/callback?id="+url.QueryEscape(id)))
 }
 
-// Akisi BASLATMAYAN bir tarayicida GET /giris form BILE gostermez.
-// (Birim karsiligi sayfa_test.go TestFormGetBaglamasizReddedilir;
-// buradaki uretim mux'u uzerinden kosar.)
-func TestGetGirisBaglamasizUretimMuxundaReddedilir(t *testing.T) {
-	o := testSunucu(t)
+// In a browser that did NOT START the flow GET /giris does not even show the
+// form. (Its unit counterpart is page_test.go
+// TestFormGet_WithoutBindingRejected; this one runs over the production mux.)
+func TestBuildMux_LoginGetWithoutBindingRejected(t *testing.T) {
+	o := newTestServer(t)
 	_, challenge := pkceS256(t)
-	baslatan := tarayici(t)
-	yabanci := tarayici(t)
+	starter := newBrowser(t)
+	foreign := newBrowser(t)
 
-	id := authRequestIDCikar(t, al(t, baslatan, o.authorizeURL(challenge, "S256")))
+	id := extractAuthRequestID(t, mustGet(t, starter, o.authorizeURL(challenge, "S256")))
 
-	yanit := al(t, yabanci, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
-	if yanit.StatusCode != http.StatusForbidden {
-		t.Fatalf("yabanci tarayici GET /giris durumu = %d, beklenen 403", yanit.StatusCode)
+	resp := mustGet(t, foreign, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("yabanci tarayici GET /giris durumu = %d, beklenen 403", resp.StatusCode)
 	}
-	if strings.Contains(govde(t, yanit), `name="csrf"`) {
+	if strings.Contains(readBody(t, resp), `name="csrf"`) {
 		t.Error("reddedilen GET formu gosterdi")
 	}
 
-	// NEGATIF KONTROL: akisi baslatan tarayicida AYNI link 200 doner,
-	// yani 403 baglama yuzunden (uc tumuyle kapanmis degil).
-	if kendi := al(t, baslatan, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id)); kendi.StatusCode != http.StatusOK {
-		t.Errorf("baslatan tarayicida GET /giris durumu = %d, beklenen 200", kendi.StatusCode)
+	// NEGATIVE CONTROL: in the browser that started the flow the SAME link
+	// returns 200, i.e. the 403 is because of the binding (the endpoint is not
+	// fully closed).
+	if own := mustGet(t, starter, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id)); own.StatusCode != http.StatusOK {
+		t.Errorf("baslatan tarayicida GET /giris durumu = %d, beklenen 200", own.StatusCode)
 	}
 }
 
-// PARALEL AKIS: ayni tarayicida (ayni cerez kabi) iki /authorize
-// baslatilir; IKISININ de POST'u ve callback'i calismali.
+// PARALLEL FLOW: two /authorize are started in the same browser (the same
+// cookie jar); the POST and callback of BOTH must work.
 //
-// Bu testin yakaladigi sey: baglama /authorize'a tasinirken cerez ->
-// TEK id modeli korunsa ikinci /authorize birincinin baglamasini EZER
-// ve birinci sekme 403 olurdu (devralma yerine DoS). Bkz.
-// oturumBaglamaUstSinir.
-func TestParalelIkiAkisAyniTarayicidaCalisir(t *testing.T) {
-	o := testSunucu(t)
-	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
-	c := tarayici(t)
+// What this test catches: when the binding was moved to /authorize, if the
+// cookie -> SINGLE id model had been kept the second /authorize would
+// OVERWRITE the first one's binding and the first tab would get 403 (a DoS
+// instead of a takeover). See maxSessionBindings.
+func TestFlow_TwoParallelFlowsSameBrowser(t *testing.T) {
+	o := newTestServer(t)
+	o.createTestUser(t, "kurban@ornek.com", "dogruSifre12")
+	c := newBrowser(t)
 
 	verifier1, challenge1 := pkceS256(t)
 	verifier2, challenge2 := pkceS256(t)
 
-	// Iki sekme: ikisi de giris yapilmadan ONCE baslatilir.
-	id1 := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge1, "S256")))
-	id2 := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge2, "S256")))
+	// Two tabs: both are started BEFORE logging in.
+	id1 := extractAuthRequestID(t, mustGet(t, c, o.authorizeURL(challenge1, "S256")))
+	id2 := extractAuthRequestID(t, mustGet(t, c, o.authorizeURL(challenge2, "S256")))
 	if id1 == id2 {
 		t.Fatal("iki /authorize ayni authRequestID uretti")
 	}
 
-	// Sekme 1 ONCE tamamlanir: ikinci /authorize onun baglamasini
-	// ezmemis olmali.
+	// Tab 1 completes FIRST: the second /authorize must not have overwritten its
+	// binding.
 	for _, d := range []struct {
-		ad       string
+		name     string
 		id       string
 		verifier string
 	}{{"sekme-1", id1, verifier1}, {"sekme-2", id2, verifier2}} {
-		t.Run(d.ad, func(t *testing.T) {
-			girisYanit := o.girisYap(t, c, d.id, "kurban@ornek.com", "dogruSifre12")
-			if girisYanit.StatusCode != http.StatusFound {
+		t.Run(d.name, func(t *testing.T) {
+			loginResp := o.login(t, c, d.id, "kurban@ornek.com", "dogruSifre12")
+			if loginResp.StatusCode != http.StatusFound {
 				t.Fatalf("POST /giris durumu = %d, beklenen 302. govde: %s",
-					girisYanit.StatusCode, govde(t, girisYanit))
+					loginResp.StatusCode, readBody(t, loginResp))
 			}
-			cbYanit := al(t, c, girisYanit.Header.Get("Location"))
-			kod := kodCikar(t, cbYanit)
-			if kod == "" {
-				t.Fatalf("kod uretilmedi (callback durumu %d)", cbYanit.StatusCode)
+			cbResp := mustGet(t, c, loginResp.Header.Get("Location"))
+			code := extractCode(t, cbResp)
+			if code == "" {
+				t.Fatalf("kod uretilmedi (callback durumu %d)", cbResp.StatusCode)
 			}
-			durum, jeton := o.jetonAl(t, kod, d.verifier)
-			if durum != http.StatusOK {
-				t.Fatalf("token durumu = %d, govde: %v", durum, jeton)
+			status, token := o.exchangeToken(t, code, d.verifier)
+			if status != http.StatusOK {
+				t.Fatalf("token durumu = %d, govde: %v", status, token)
 			}
-			if jeton["access_token"] == nil || jeton["access_token"] == "" {
+			if token["access_token"] == nil || token["access_token"] == "" {
 				t.Error("access_token yok")
 			}
 		})
 	}
 }
 
-// Kurbanin KENDI tarayicisi akisi tamamlayabilmeli: baglama yalnizca
-// yabancilari keser, mesru akisi kesmez.
-func TestKendiTarayicisiAkisiTamamlar(t *testing.T) {
-	o := testSunucu(t)
-	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
+// The victim's OWN browser must be able to complete the flow: the binding
+// only cuts off strangers, it does not cut off the legitimate flow.
+func TestFlow_OwnBrowserCompletes(t *testing.T) {
+	o := newTestServer(t)
+	o.createTestUser(t, "kurban@ornek.com", "dogruSifre12")
 	_, challenge := pkceS256(t)
-	c := tarayici(t)
+	c := newBrowser(t)
 
-	id := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge, "S256")))
-	girisYanit := o.girisYap(t, c, id, "kurban@ornek.com", "dogruSifre12")
-	if girisYanit.StatusCode != http.StatusFound {
-		t.Fatalf("giris durumu = %d", girisYanit.StatusCode)
+	id := extractAuthRequestID(t, mustGet(t, c, o.authorizeURL(challenge, "S256")))
+	loginResp := o.login(t, c, id, "kurban@ornek.com", "dogruSifre12")
+	if loginResp.StatusCode != http.StatusFound {
+		t.Fatalf("giris durumu = %d", loginResp.StatusCode)
 	}
-	cbYanit := al(t, c, girisYanit.Header.Get("Location"))
-	if cbYanit.StatusCode != http.StatusFound {
-		t.Fatalf("callback durumu = %d, beklenen 302", cbYanit.StatusCode)
+	cbResp := mustGet(t, c, loginResp.Header.Get("Location"))
+	if cbResp.StatusCode != http.StatusFound {
+		t.Fatalf("callback durumu = %d, beklenen 302", cbResp.StatusCode)
 	}
-	konum, _ := url.Parse(cbYanit.Header.Get("Location"))
-	if konum.Query().Get("code") == "" {
+	location, _ := url.Parse(cbResp.Header.Get("Location"))
+	if location.Query().Get("code") == "" {
 		t.Error("kendi tarayicisinda kod uretilmedi; mesru akis kirildi")
 	}
 }
 
-// ---- C2: PKCE S256 zorunlu ----
+// ---- C2: PKCE S256 is mandatory ----
 
-// pkceRed, /authorize'in istegi reddettigini dogrular: ya 400 doner ya
-// da istemcinin redirect_uri'sine error=invalid_request ile 302 doner.
-// HER IKI durumda da giris sayfasina GIDILMEMELI (kullanici sifresini
-// bos yere girmemeli).
-func pkceRed(t *testing.T, yanit *http.Response) {
+// assertPKCERejected verifies that /authorize rejected the request: it either
+// returns 400 or returns a 302 to the client's redirect_uri with
+// error=invalid_request. In BOTH cases the login page must NOT BE REACHED
+// (the user must not enter their password for nothing).
+func assertPKCERejected(t *testing.T, resp *http.Response) {
 	t.Helper()
-	switch yanit.StatusCode {
+	switch resp.StatusCode {
 	case http.StatusFound:
-		konum := yanit.Header.Get("Location")
-		if strings.Contains(konum, pathLogin) {
-			t.Fatalf("istek giris sayfasina yonlendirildi: %q", konum)
+		location := resp.Header.Get("Location")
+		if strings.Contains(location, pathLogin) {
+			t.Fatalf("istek giris sayfasina yonlendirildi: %q", location)
 		}
-		if !strings.Contains(konum, "error=invalid_request") {
-			t.Fatalf("Location'da error=invalid_request yok: %q", konum)
+		if !strings.Contains(location, "error=invalid_request") {
+			t.Fatalf("Location'da error=invalid_request yok: %q", location)
 		}
 	case http.StatusBadRequest:
-		// Kabul: dogrudan hata.
+		// Accepted: a direct error.
 	default:
-		t.Fatalf("durum = %d, red bekleniyordu", yanit.StatusCode)
+		t.Fatalf("durum = %d, red bekleniyordu", resp.StatusCode)
 	}
 }
 
-// C2: code_challenge HIC yoksa /authorize REDDEDILIR. Ayni zamanda
-// M1: eskiden 302 ile giris sayfasina gidiliyor, kullanici sifresini
-// giriyor ve hata ancak token ucunda ortaya cikiyordu.
-func TestAuthorizeCodeChallengesizReddedilir(t *testing.T) {
-	o := testSunucu(t)
-	c := tarayici(t)
-	pkceRed(t, al(t, c, o.authorizeURL("", "")))
+// C2: if there is NO code_challenge AT ALL /authorize is REJECTED. Also M1:
+// it used to go to the login page with a 302, the user entered their
+// password and the error only appeared at the token endpoint.
+func TestAuthorize_MissingCodeChallengeRejected(t *testing.T) {
+	o := newTestServer(t)
+	c := newBrowser(t)
+	assertPKCERejected(t, mustGet(t, c, o.authorizeURL("", "")))
 }
 
-// C2: code_challenge var ama method=plain -> REDDEDILIR. plain'de
-// challenge == verifier'dir; PKCE fiilen devre disidir.
-func TestAuthorizePlainReddedilir(t *testing.T) {
-	o := testSunucu(t)
-	c := tarayici(t)
+// C2: code_challenge is present but method=plain -> REJECTED. With plain
+// challenge == verifier; PKCE is effectively disabled.
+func TestAuthorize_PlainRejected(t *testing.T) {
+	o := newTestServer(t)
+	c := newBrowser(t)
 	verifier, _ := pkceS256(t)
-	pkceRed(t, al(t, c, o.authorizeURL(verifier, "plain")))
+	assertPKCERejected(t, mustGet(t, c, o.authorizeURL(verifier, "plain")))
 }
 
-// C2: method HIC verilmemis (bos string) -> REDDEDILIR. Kutuphane bos
-// method'u duz karsilastirma olarak isler.
-func TestAuthorizeMethodsuzReddedilir(t *testing.T) {
-	o := testSunucu(t)
-	c := tarayici(t)
+// C2: method NOT GIVEN AT ALL (empty string) -> REJECTED. The library treats
+// an empty method as a plain comparison.
+func TestAuthorize_MissingMethodRejected(t *testing.T) {
+	o := newTestServer(t)
+	c := newBrowser(t)
 	verifier, _ := pkceS256(t)
-	pkceRed(t, al(t, c, o.authorizeURL(verifier, "")))
+	assertPKCERejected(t, mustGet(t, c, o.authorizeURL(verifier, "")))
 }
 
-// C2: bilinmeyen bir method da REDDEDILIR.
-func TestAuthorizeBilinmeyenMethodReddedilir(t *testing.T) {
-	o := testSunucu(t)
-	c := tarayici(t)
+// C2: an unknown method is REJECTED too.
+func TestAuthorize_UnknownMethodRejected(t *testing.T) {
+	o := newTestServer(t)
+	c := newBrowser(t)
 	_, challenge := pkceS256(t)
-	pkceRed(t, al(t, c, o.authorizeURL(challenge, "S512")))
+	assertPKCERejected(t, mustGet(t, c, o.authorizeURL(challenge, "S512")))
 }
 
-// C2: method=S256 + gecerli challenge CALISIR (giris sayfasina gider).
-func TestAuthorizeS256Calisir(t *testing.T) {
-	o := testSunucu(t)
-	c := tarayici(t)
+// C2: method=S256 + a valid challenge WORKS (goes to the login page).
+func TestAuthorize_S256Works(t *testing.T) {
+	o := newTestServer(t)
+	c := newBrowser(t)
 	_, challenge := pkceS256(t)
-	if id := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge, "S256"))); id == "" {
+	if id := extractAuthRequestID(t, mustGet(t, c, o.authorizeURL(challenge, "S256"))); id == "" {
 		t.Error("authRequestID bos")
 	}
 }
 
-// C2 regresyon kilidi: S256 akisinda YANLIS code_verifier ile jeton
-// alinamaz.
-func TestYanlisVerifierReddedilir(t *testing.T) {
-	o := testSunucu(t)
-	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
+// C2 regression lock: in the S256 flow a token cannot be obtained with a
+// WRONG code_verifier.
+func TestToken_WrongVerifierRejected(t *testing.T) {
+	o := newTestServer(t)
+	o.createTestUser(t, "kurban@ornek.com", "dogruSifre12")
 	_, challenge := pkceS256(t)
-	c := tarayici(t)
+	c := newBrowser(t)
 
-	id := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge, "S256")))
-	girisYanit := o.girisYap(t, c, id, "kurban@ornek.com", "dogruSifre12")
-	cbYanit := al(t, c, girisYanit.Header.Get("Location"))
-	konum, _ := url.Parse(cbYanit.Header.Get("Location"))
-	kod := konum.Query().Get("code")
-	if kod == "" {
+	id := extractAuthRequestID(t, mustGet(t, c, o.authorizeURL(challenge, "S256")))
+	loginResp := o.login(t, c, id, "kurban@ornek.com", "dogruSifre12")
+	cbResp := mustGet(t, c, loginResp.Header.Get("Location"))
+	location, _ := url.Parse(cbResp.Header.Get("Location"))
+	code := location.Query().Get("code")
+	if code == "" {
 		t.Fatal("kod uretilmedi")
 	}
 
-	yanlisVerifier, _ := pkceS256(t)
-	durum, jetonGovde := o.jetonAl(t, kod, yanlisVerifier)
-	if durum == http.StatusOK {
-		t.Fatalf("yanlis code_verifier ile jeton verildi: %v", jetonGovde)
+	wrongVerifier, _ := pkceS256(t)
+	status, tokenBody := o.exchangeToken(t, code, wrongVerifier)
+	if status == http.StatusOK {
+		t.Fatalf("yanlis code_verifier ile jeton verildi: %v", tokenBody)
 	}
 }
 
-// C2 IKINCI KATMAN: /authorize kontrolu atlansa bile token ucu
-// korumali. GetCodeChallenge fail-closed oldugu icin, S256 OLMAYAN bir
-// challenge ile DOGRUDAN depoya yazilmis (yani /authorize kontrolunden
-// gecmemis) bir istegin kodu jetona cevrilemez. Fail-closed kaldirilirsa
-// bu test FAIL eder.
-func TestPlainChallengeTokenUcundaReddedilir(t *testing.T) {
-	o := testSunucu(t)
+// C2 SECOND LAYER: even if the /authorize check were bypassed the token
+// endpoint is protected. Since GetCodeChallenge is fail-closed, the code of a
+// request written DIRECTLY to the store with a challenge that is not S256
+// (i.e. one that did not pass the /authorize check) cannot be exchanged for a
+// token. If the fail-closed behavior is removed this test FAILS.
+func TestToken_PlainChallengeRejected(t *testing.T) {
+	o := newTestServer(t)
 	ctx := context.Background()
-	kullanici := o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
+	users := o.createTestUser(t, "kurban@ornek.com", "dogruSifre12")
 
-	// /authorize'i BYPASS ederek plain challenge'li bir istek yaz.
+	// Write a request with a plain challenge BY BYPASSING /authorize.
 	verifier, _ := pkceS256(t)
-	istek, err := o.istekler.Create(ctx, &oidc.AuthRequest{
+	req, err := o.requests.Create(ctx, &oidc.AuthRequest{
 		ClientID:            "makesinger-mobil",
 		RedirectURI:         testRedirectURI,
 		Scopes:              oidc.SpaceDelimitedArray{oidc.ScopeOpenID},
 		ResponseType:        oidc.ResponseTypeCode,
-		CodeChallenge:       verifier, // plain'de challenge == verifier
+		CodeChallenge:       verifier, // with plain, challenge == verifier
 		CodeChallengeMethod: oidc.CodeChallengeMethodPlain,
 		State:               "durum-1",
 	}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := o.istekler.MarkDone(ctx, istek.GetID(), kullanici.ID, []string{amrPassword}); err != nil {
+	if err := o.requests.MarkDone(ctx, req.GetID(), users.ID, []string{amrPassword}); err != nil {
 		t.Fatalf("TamamlandiIsaretle: %v", err)
 	}
-	const kod = "test-kod-plain"
-	if err := o.istekler.SaveCode(ctx, istek.GetID(), kod); err != nil {
+	const code = "test-kod-plain"
+	if err := o.requests.SaveCode(ctx, req.GetID(), code); err != nil {
 		t.Fatalf("KodKaydet: %v", err)
 	}
 
-	durum, jetonGovde := o.jetonAl(t, kod, verifier)
-	if durum == http.StatusOK {
-		t.Fatalf("plain challenge ile jeton verildi: %v", jetonGovde)
+	status, tokenBody := o.exchangeToken(t, code, verifier)
+	if status == http.StatusOK {
+		t.Fatalf("plain challenge ile jeton verildi: %v", tokenBody)
 	}
 }
 
-// Discovery, yalnizca S256 ilan etmeli ve ilan ettigi sey fiilen
-// zorlanan sey olmali (bkz. pkce.go).
-func TestDiscoveryYalnizcaS256IlanEder(t *testing.T) {
-	o := testSunucu(t)
-	yanit := al(t, tarayici(t), o.issuer+"/.well-known/openid-configuration")
-	if yanit.StatusCode != http.StatusOK {
-		t.Fatalf("discovery durumu = %d", yanit.StatusCode)
+// Discovery must advertise only S256 and what it advertises must be what is
+// actually enforced (see pkce.go).
+func TestDiscovery_AdvertisesOnlyS256(t *testing.T) {
+	o := newTestServer(t)
+	resp := mustGet(t, newBrowser(t), o.issuer+"/.well-known/openid-configuration")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("discovery durumu = %d", resp.StatusCode)
 	}
-	var belge struct {
+	var doc struct {
 		Methods []string `json:"code_challenge_methods_supported"`
 	}
-	if err := json.Unmarshal([]byte(govde(t, yanit)), &belge); err != nil {
+	if err := json.Unmarshal([]byte(readBody(t, resp)), &doc); err != nil {
 		t.Fatalf("discovery cozulemedi: %v", err)
 	}
-	if len(belge.Methods) != 1 || belge.Methods[0] != "S256" {
-		t.Errorf("code_challenge_methods_supported = %v, beklenen [S256]", belge.Methods)
+	if len(doc.Methods) != 1 || doc.Methods[0] != "S256" {
+		t.Errorf("code_challenge_methods_supported = %v, beklenen [S256]", doc.Methods)
 	}
 }
 
-// M3: YAYINLANAN discovery belgesi desteklenmeyen akislari ilan
-// ETMEMELI. Inceleyici bunlarin hepsini canli denedi ve hepsi dogru
-// reddediliyor (guvenlik sorunu yok), ama metadata'ya guvenip implicit
-// deneyen uyumlu bir RP gereksiz yere hata alirdi.
+// M3: the PUBLISHED discovery document must NOT advertise unsupported flows.
+// The reviewer tried all of them live and all are correctly rejected (no
+// security problem), but a compliant RP that trusted the metadata and tried
+// implicit would get an error for nothing.
 //
-// Bu test, discoveryDuzelt'in gercekten YAYIN YOLUNDA oldugunu olcer:
-// belge kutuphanenin kendi op.CreateDiscoveryConfig'inden gecip bizim
-// mux'umuz uzerinden doner.
-func TestDiscoveryDesteklenmeyenAkislariIlanEtmez(t *testing.T) {
-	o := testSunucu(t)
-	yanit := al(t, tarayici(t), o.issuer+"/.well-known/openid-configuration")
-	if yanit.StatusCode != http.StatusOK {
-		t.Fatalf("discovery durumu = %d", yanit.StatusCode)
+// This test measures that trimDiscovery is really ON THE PUBLISH PATH: the
+// document passes through the library's own op.CreateDiscoveryConfig and
+// comes back through our mux.
+func TestDiscovery_OmitsUnsupportedFlows(t *testing.T) {
+	o := newTestServer(t)
+	resp := mustGet(t, newBrowser(t), o.issuer+"/.well-known/openid-configuration")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("discovery durumu = %d", resp.StatusCode)
 	}
-	var belge struct {
-		ResponseTypes []string `json:"response_types_supported"`
-		GrantTypes    []string `json:"grant_types_supported"`
-		DeviceUcu     string   `json:"device_authorization_endpoint"`
-		Issuer        string   `json:"issuer"`
-		TokenUcu      string   `json:"token_endpoint"`
+	var doc struct {
+		ResponseTypes  []string `json:"response_types_supported"`
+		GrantTypes     []string `json:"grant_types_supported"`
+		DeviceEndpoint string   `json:"device_authorization_endpoint"`
+		Issuer         string   `json:"issuer"`
+		TokenEndpoint  string   `json:"token_endpoint"`
 	}
-	ham := govde(t, yanit)
-	if err := json.Unmarshal([]byte(ham), &belge); err != nil {
+	raw := readBody(t, resp)
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
 		t.Fatalf("discovery cozulemedi: %v", err)
 	}
 
-	if len(belge.ResponseTypes) != 1 || belge.ResponseTypes[0] != "code" {
-		t.Errorf("response_types_supported = %v, beklenen [code]", belge.ResponseTypes)
+	if len(doc.ResponseTypes) != 1 || doc.ResponseTypes[0] != "code" {
+		t.Errorf("response_types_supported = %v, beklenen [code]", doc.ResponseTypes)
 	}
-	for _, yasak := range []string{"implicit", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:ietf:params:oauth:grant-type:device_code"} {
-		for _, g := range belge.GrantTypes {
-			if g == yasak {
-				t.Errorf("grant_types_supported desteklenmeyen %q iceriyor: %v", yasak, belge.GrantTypes)
+	for _, forbidden := range []string{"implicit", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:ietf:params:oauth:grant-type:device_code"} {
+		for _, g := range doc.GrantTypes {
+			if g == forbidden {
+				t.Errorf("grant_types_supported desteklenmeyen %q iceriyor: %v", forbidden, doc.GrantTypes)
 			}
 		}
 	}
-	if belge.DeviceUcu != "" {
-		t.Errorf("device_authorization_endpoint ilan edildi: %q", belge.DeviceUcu)
+	if doc.DeviceEndpoint != "" {
+		t.Errorf("device_authorization_endpoint ilan edildi: %q", doc.DeviceEndpoint)
 	}
 
-	// Belgenin GERI KALANI bozulmamis olmali: issuer ve token ucu
-	// kutuphanenin urettigi degerler, istek baglamindan cozulen issuer
-	// ile birlikte dogru gelmeli (araci.Handler sarmasi calisiyor mu).
-	if belge.Issuer != o.issuer {
-		t.Errorf("issuer = %q, beklenen %q", belge.Issuer, o.issuer)
+	// The REST of the document must not be broken: the issuer and the token
+	// endpoint are values produced by the library and must come out right
+	// together with the issuer resolved from the request context (does the
+	// interceptor.Handler wrapping work).
+	if doc.Issuer != o.issuer {
+		t.Errorf("issuer = %q, beklenen %q", doc.Issuer, o.issuer)
 	}
-	if belge.TokenUcu != o.issuer+"/oauth/token" {
-		t.Errorf("token_endpoint = %q, beklenen %q", belge.TokenUcu, o.issuer+"/oauth/token")
+	if doc.TokenEndpoint != o.issuer+"/oauth/token" {
+		t.Errorf("token_endpoint = %q, beklenen %q", doc.TokenEndpoint, o.issuer+"/oauth/token")
 	}
 }
 
-// ---- LOGIN-CSRF: /authorize'a capraz-siteden PKCE enjeksiyonu ----
+// ---- LOGIN-CSRF: PKCE injection into /authorize from cross-site ----
 
-// alBaslikli, al'in fetch-metadata basliklari eklenen surumudur.
-// fetchSite bos gecilirse baslik HIC EKLENMEZ.
-func alBaslikli(t *testing.T, c *http.Client, adres, fetchSite string) *http.Response {
+// getWithFetchSite is the variant of mustGet with fetch-metadata headers
+// added. If fetchSite is passed empty the header is NOT ADDED AT ALL.
+func getWithFetchSite(t *testing.T, c *http.Client, address, fetchSite string) *http.Response {
 	t.Helper()
-	istek, err := http.NewRequestWithContext(t.Context(), http.MethodGet, adres, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, address, nil)
 	if err != nil {
 		t.Fatalf("istek kurulamadi: %v", err)
 	}
 	if fetchSite != "" {
-		istek.Header.Set(headerFetchSite, fetchSite)
-		istek.Header.Set(headerFetchMode, "navigate")
+		req.Header.Set(headerFetchSite, fetchSite)
+		req.Header.Set(headerFetchMode, "navigate")
 	}
-	yanit, err := c.Do(istek)
+	resp, err := c.Do(req)
 	if err != nil {
 		t.Fatalf("GET basarisiz: %v", err)
 	}
-	t.Cleanup(func() { _ = yanit.Body.Close() })
-	return yanit
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
 }
 
-// LOGIN-CSRF SOMURUSU (inceleyicinin senaryosu, birebir): saldirgan
-// kurbani kendi hazirladigi /authorize adresine yonlendirir. Oturum
-// cerezi SameSite=Lax oldugu icin ust-duzey navigasyonda TASINIR, yani
-// kurbanin MEVCUT cerezi istege gider. Duzeltme oncesinde saldirganin
-// code_challenge'i ile dogan authRequestID kurbanin baglama kumesine
-// eklenirdi; kurban formu acip giris yapar, uretilen kodun
-// code_verifier'i ise SALDIRGANDA olurdu (PKCE'nin korudugu TEK
-// senaryo, RFC 8252 bolum 8.1, cokerdi).
+// LOGIN-CSRF EXPLOIT (the reviewer's scenario, exactly): the attacker
+// redirects the victim to the /authorize address they prepared. Since the
+// session cookie is SameSite=Lax it IS SENT on the top-level navigation, i.e.
+// the victim's EXISTING cookie goes with the request. Before the fix, the
+// authRequestID born with the attacker's code_challenge would be added to the
+// victim's binding set; the victim would open the form and log in, and the
+// code_verifier of the code produced would be with the ATTACKER (the ONLY
+// scenario PKCE protects, RFC 8252 section 8.1, would collapse).
 //
-// Simdi: capraz-site navigasyonda yeni baglama EKLENMEZ, kurban o id
-// icin 403 alir ve istek TAMAMLANAMAZ — saldirganin verifier'ini
-// bilmesi ise yaramaz.
-func TestLoginCSRFCaprazSiteEnjeksiyonuTamamlanamaz(t *testing.T) {
-	o := testSunucu(t)
-	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
-	kurban := tarayici(t)
+// Now: no new binding is ADDED on a cross-site navigation, the victim gets
+// 403 for that id and the request CANNOT BE COMPLETED -- the attacker knowing
+// the verifier does not help.
+func TestLoginCSRF_CrossSiteInjectionCannotComplete(t *testing.T) {
+	o := newTestServer(t)
+	o.createTestUser(t, "kurban@ornek.com", "dogruSifre12")
+	victim := newBrowser(t)
 
-	// 1) Kurbanin MESRU akisi: native uygulama sistem tarayicisini acar
-	// (Sec-Fetch-Site: none). Cerez ve baglama burada dogar.
-	kurbanVerifier, kurbanChallenge := pkceS256(t)
-	mesruID := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(kurbanChallenge, "S256"), fetchSiteNone))
+	// 1) The victim's LEGITIMATE flow: the native app opens the system browser
+	// (Sec-Fetch-Site: none). The cookie and binding are born here.
+	victimVerifier, victimChallenge := pkceS256(t)
+	legitID := extractAuthRequestID(t, getWithFetchSite(t, victim, o.authorizeURL(victimChallenge, "S256"), fetchSiteNone))
 
-	// 2) Saldirganin hazirladigi adres, KURBANIN tarayicisinda
-	// capraz-site ust-duzey navigasyonla acilir. code_challenge
-	// SALDIRGANIN; verifier'i yalnizca o biliyor.
-	// Verifier'i KASITLI olarak tutmuyoruz: kanit, saldirganin onu
-	// bilmesinin ise yaramamasi — asagida HIC kod uretilmedigi icin
-	// degistirecek bir sey YOK (adim 4).
-	_, saldirganChallenge := pkceS256(t)
-	enjekteID := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(saldirganChallenge, "S256"), fetchSiteCrossSite))
-	if enjekteID == mesruID {
+	// 2) The address the attacker prepared is opened in the VICTIM's browser by a
+	// cross-site top-level navigation. The code_challenge is the ATTACKER's;
+	// only they know the verifier.
+	// We DELIBERATELY do not keep the verifier: the proof is that the attacker
+	// knowing it does not help -- since NO code is produced below there is
+	// NOTHING to exchange (step 4).
+	_, attackerChallenge := pkceS256(t)
+	injectedID := extractAuthRequestID(t, getWithFetchSite(t, victim, o.authorizeURL(attackerChallenge, "S256"), fetchSiteCrossSite))
+	if injectedID == legitID {
 		t.Fatal("iki /authorize ayni authRequestID uretti")
 	}
 
-	// 3) Kurban enjekte id ile formu ACAMAZ: baglama kurulmadi -> 403.
-	_, formDurum := o.girisDene(t, kurban, enjekteID, "kurban@ornek.com", "dogruSifre12")
-	if formDurum != http.StatusForbidden {
-		t.Fatalf("LOGIN-CSRF ACIK: enjekte id icin GET /giris durumu = %d, beklenen 403", formDurum)
+	// 3) The victim CANNOT open the form with the injected id: no binding was
+	// set up -> 403.
+	_, formStatus := o.tryLogin(t, victim, injectedID, "kurban@ornek.com", "dogruSifre12")
+	if formStatus != http.StatusForbidden {
+		t.Fatalf("LOGIN-CSRF ACIK: enjekte id icin GET /giris durumu = %d, beklenen 403", formStatus)
 	}
 
-	// 4) Dolayisiyla saldirganin istegi icin KOD URETILMEZ ve istek
-	// hicbir kimlige BAGLANMAZ: saldirganin verifier'i ise yaramaz.
-	devralmaDogrula(t, o, enjekteID,
-		al(t, kurban, o.issuer+"/authorize/callback?id="+url.QueryEscape(enjekteID)))
+	// 4) So NO CODE IS PRODUCED for the attacker's request and the request is
+	// NOT BOUND to any identity: the attacker's verifier is of no use.
+	assertNoTakeover(t, o, injectedID,
+		mustGet(t, victim, o.issuer+"/authorize/callback?id="+url.QueryEscape(injectedID)))
 
-	// 5) KURBANIN MESRU AKISI BOZULMADI (kontrol DoS'a cevrilmedi):
-	// ayni cerez kabiyla ucan uca tamamlanir ve jeton alir.
-	csrf := o.girisFormuAc(t, kurban, mesruID)
-	girisYanit := o.girisGonder(t, kurban, mesruID, csrf, "kurban@ornek.com", "dogruSifre12")
-	if girisYanit.StatusCode != http.StatusFound {
-		t.Fatalf("kurbanin mesru POST /giris durumu = %d, beklenen 302", girisYanit.StatusCode)
+	// 5) THE VICTIM'S LEGITIMATE FLOW WAS NOT BROKEN (the check was not turned
+	// into a DoS): it completes end to end with the same cookie jar and gets a token.
+	csrf := o.openLoginForm(t, victim, legitID)
+	loginResp := o.submitLogin(t, victim, legitID, csrf, "kurban@ornek.com", "dogruSifre12")
+	if loginResp.StatusCode != http.StatusFound {
+		t.Fatalf("kurbanin mesru POST /giris durumu = %d, beklenen 302", loginResp.StatusCode)
 	}
-	kod := kodCikar(t, al(t, kurban, girisYanit.Header.Get("Location")))
-	if kod == "" {
+	code := extractCode(t, mustGet(t, victim, loginResp.Header.Get("Location")))
+	if code == "" {
 		t.Fatal("kurbanin mesru akisi kod uretmedi: kontrol mesru akisi kirdi")
 	}
-	durum, jeton := o.jetonAl(t, kod, kurbanVerifier)
-	if durum != http.StatusOK {
-		t.Fatalf("kurbanin jeton degisimi durumu = %d, govde: %v", durum, jeton)
+	status, token := o.exchangeToken(t, code, victimVerifier)
+	if status != http.StatusOK {
+		t.Fatalf("kurbanin jeton degisimi durumu = %d, govde: %v", status, token)
 	}
-	if jeton["access_token"] == nil || jeton["access_token"] == "" {
+	if token["access_token"] == nil || token["access_token"] == "" {
 		t.Error("kurbanin mesru akisinda access_token yok")
 	}
 }
 
-// Capraz-site istek, kurbanin MEVCUT baglamalarini ve cerezini
-// BOZMAZ: kontrol yalnizca "yeni baglama eklememek"tir, cerez
-// yenilenmez veya kume temizlenmez. Iki paralel mesru akis, aralarina
-// giren capraz-site istekten SONRA da tamamlanabilmeli.
-func TestCaprazSiteIstekMevcutBaglamalariBozmaz(t *testing.T) {
-	o := testSunucu(t)
-	o.testKullanici(t, "kurban@ornek.com", "dogruSifre12")
-	kurban := tarayici(t)
+// A cross-site request does NOT BREAK the victim's EXISTING bindings and
+// cookie: the check is only "do not add a new binding", the cookie is not
+// renewed or the set cleared. Two parallel legitimate flows must still be
+// able to complete AFTER the cross-site request that came in between.
+func TestAuthorize_CrossSiteKeepsExistingBindings(t *testing.T) {
+	o := newTestServer(t)
+	o.createTestUser(t, "kurban@ornek.com", "dogruSifre12")
+	victim := newBrowser(t)
 
 	_, challenge1 := pkceS256(t)
 	_, challenge2 := pkceS256(t)
-	id1 := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(challenge1, "S256"), fetchSiteNone))
-	id2 := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(challenge2, "S256"), fetchSiteNone))
+	id1 := extractAuthRequestID(t, getWithFetchSite(t, victim, o.authorizeURL(challenge1, "S256"), fetchSiteNone))
+	id2 := extractAuthRequestID(t, getWithFetchSite(t, victim, o.authorizeURL(challenge2, "S256"), fetchSiteNone))
 
-	// Araya capraz-site bir istek girer.
-	_, saldirganChallenge := pkceS256(t)
-	enjekteID := authRequestIDCikar(t, alBaslikli(t, kurban, o.authorizeURL(saldirganChallenge, "S256"), fetchSiteCrossSite))
-	if g := al(t, kurban, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(enjekteID)); g.StatusCode != http.StatusForbidden {
+	// A cross-site request comes in between.
+	_, attackerChallenge := pkceS256(t)
+	injectedID := extractAuthRequestID(t, getWithFetchSite(t, victim, o.authorizeURL(attackerChallenge, "S256"), fetchSiteCrossSite))
+	if g := mustGet(t, victim, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(injectedID)); g.StatusCode != http.StatusForbidden {
 		t.Fatalf("enjekte id icin GET /giris durumu = %d, beklenen 403", g.StatusCode)
 	}
 
-	// Iki mesru sekme de hala formunu acip girisi tamamlayabilmeli.
+	// Both legitimate tabs must still be able to open their form and complete the login.
 	for _, id := range []string{id1, id2} {
-		csrf := o.girisFormuAc(t, kurban, id)
-		yanit := o.girisGonder(t, kurban, id, csrf, "kurban@ornek.com", "dogruSifre12")
-		if yanit.StatusCode != http.StatusFound {
-			t.Fatalf("mesru sekme POST /giris durumu = %d, beklenen 302", yanit.StatusCode)
+		csrf := o.openLoginForm(t, victim, id)
+		resp := o.submitLogin(t, victim, id, csrf, "kurban@ornek.com", "dogruSifre12")
+		if resp.StatusCode != http.StatusFound {
+			t.Fatalf("mesru sekme POST /giris durumu = %d, beklenen 302", resp.StatusCode)
 		}
-		if kod := kodCikar(t, al(t, kurban, yanit.Header.Get("Location"))); kod == "" {
+		if code := extractCode(t, mustGet(t, victim, resp.Header.Get("Location"))); code == "" {
 			t.Fatal("mesru sekme kod uretmedi: capraz-site istek baglamayi bozdu")
 		}
 	}
 }
 
-// Federasyon HIC yapilandirilmamissa (testSunucu akislari bos gecer)
-// hicbir federasyon ucu baglanmamali ve giris sayfasi butonsuz ama
-// BOZULMADAN calismali.
+// If federation is NOT CONFIGURED AT ALL (setupTestServer passes empty flows)
+// NO federation endpoint must be wired and the login page must work without
+// buttons, UNBROKEN.
 //
-// NEDEN ONEMLI: baglanmamis bir uc ile gorunen bir buton, ya da gorunmez
-// bir butonla cagrilabilir bir uc, iki yonde de kullaniciyi hataya
-// goturur. Uretim kablolamasi (muxKur) bu kurali kendisi uygulamali.
-func TestFederasyonsuzKurulumUclariBaglamaz(t *testing.T) {
-	o := testSunucu(t)
-	c := tarayici(t)
+// WHY IT MATTERS: an endpoint that is wired with a button that is not shown,
+// or a button that is shown with an endpoint that is not wired, leads the user
+// into an error either way. The production wiring (buildMux) must enforce
+// this rule itself.
+func TestBuildMux_NoFederationMountsNoEndpoints(t *testing.T) {
+	o := newTestServer(t)
+	c := newBrowser(t)
 
-	for _, yol := range []string{
+	for _, path := range []string{
 		"/federasyon/google/baslat?authRequestID=x",
 		"/federasyon/apple/baslat?authRequestID=x",
 		"/federasyon/google/geri?state=x&code=y",
 		"/baglama?beklemeID=x",
 	} {
-		yanit := al(t, c, o.issuer+yol)
-		if yanit.StatusCode != http.StatusNotFound {
-			t.Errorf("%s durumu = %d, beklenen 404 (uc baglanmamali)", yol, yanit.StatusCode)
+		resp := mustGet(t, c, o.issuer+path)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s durumu = %d, beklenen 404 (uc baglanmamali)", path, resp.StatusCode)
 		}
 	}
 
-	// Giris sayfasi hala calisir ve HICBIR federasyon butonu tasimaz.
+	// The login page still works and carries NO federation button.
 	_, challenge := pkceS256(t)
-	id := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge, "S256")))
-	formYanit := al(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
-	if formYanit.StatusCode != http.StatusOK {
-		t.Fatalf("giris formu durumu = %d, beklenen 200", formYanit.StatusCode)
+	id := extractAuthRequestID(t, mustGet(t, c, o.authorizeURL(challenge, "S256")))
+	formResp := mustGet(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
+	if formResp.StatusCode != http.StatusOK {
+		t.Fatalf("giris formu durumu = %d, beklenen 200", formResp.StatusCode)
 	}
-	govdeMetni := govde(t, formYanit)
-	if !strings.Contains(govdeMetni, `name="sifre"`) {
-		t.Errorf("giris formu bozuldu:\n%s", govdeMetni)
+	bodyText := readBody(t, formResp)
+	if !strings.Contains(bodyText, `name="sifre"`) {
+		t.Errorf("giris formu bozuldu:\n%s", bodyText)
 	}
-	if strings.Contains(govdeMetni, "/federasyon/") {
-		t.Errorf("federasyonsuz kurulumda buton cikti:\n%s", govdeMetni)
+	if strings.Contains(bodyText, "/federasyon/") {
+		t.Errorf("federasyonsuz kurulumda buton cikti:\n%s", bodyText)
 	}
 }
 
-// ---- Federasyon kablolamasi (muxKur uzerinden) ----
+// ---- Federation wiring (through buildMux) ----
 
-// fedButonDeseni, giris sayfasindaki federasyon butonunun href'ini alir.
-var fedButonDeseni = regexp.MustCompile(`href="(/federasyon/[^"]*)"`)
+// fedButtonPattern takes the href of the federation button on the login page.
+var fedButtonPattern = regexp.MustCompile(`href="(/federasyon/[^"]*)"`)
 
-// Federasyon uclarinin URETIM KABLOLAMASINDA, yani muxKur icinde
-// GERCEKTEN baglandigini ve hiz limitli olduklarini olcer.
+// It measures that the federation endpoints are REALLY wired in the
+// PRODUCTION WIRING, i.e. inside buildMux, and that they are rate limited.
 //
-// NEDEN BU TEST VAR: muxKur'un "akislar dolu" dali hicbir testte
-// kosmuyordu (tek cagiran federasyon parametrelerine nil geciyordu),
-// yani fedSayfalar.Bagla / BaglamaBagla cagrilari TUMUYLE SILINSE bile
-// paket yesil kaliyordu. Somut sonuc: AUTH_FED_GOOGLE_CLIENT_ID dolu bir
-// surecte giris sayfasinda buton GORUNUR ama uc mux'ta olmadigi icin
-// istek mux.Handle("/", saglayici)'ya duser ve kullanici 404 alir. Ayni
-// sekilde iki cagriya hizLimit yerine nil gecmek de yesil kaliyordu,
-// yani uc kimlik dogrulamasiz uc sinirsiz yayina girebilirdi.
+// WHY THIS TEST EXISTS: the "flows are set" branch of buildMux did not run in
+// any test (the only caller passed nil as the federation parameters), so the
+// package would stay green even if the Mount / MountLink calls were DELETED
+// ENTIRELY. The concrete result: in a process where
+// AUTH_FED_GOOGLE_CLIENT_ID is set the button is VISIBLE on the login page
+// but, since the endpoint is not in the mux, the request falls to
+// mux.Handle("/", provider) and the user gets a 404. Likewise, passing nil
+// instead of the limiter to the two calls also stayed green, so the
+// unauthenticated endpoints could have gone live without any limit.
 //
-// Her alt test testSunucuFedere'yi KENDI govdesinde cagirir: Redis yoksa
-// atlanmasi gereken sey o alt testtir, ustteki test degil (bir ust
-// seviyede cagirmak butun olcumu sessizce atlatan bir hataya yol acar).
-func TestMuxKurFederasyonKablolamasi(t *testing.T) {
-	// Sinirlari YUKSEK tutan ayar: baglilik alt testleri hiz limitine
-	// takilmamali; hiz limitini olcen alt testler kendi dar ayarini
-	// kurar.
-	gevsek := RateLimitConfig{
+// Every subtest calls newTestServerFederated in ITS OWN body: what has to be
+// skipped when there is no Redis is that subtest, not the test above it
+// (calling it at a higher level would cause an error that silently skips the
+// whole measurement).
+func TestBuildMux_FederationWiring(t *testing.T) {
+	// A config that keeps the limits HIGH: the wiring subtests must not be caught
+	// by the rate limit; the subtests that measure the rate limit set up their
+	// own tight config.
+	relaxed := RateLimitConfig{
 		LoginIPPerMin:     50,
 		LoginEmailPerHour: 50,
 		SignupIPPerHour:   50,
 	}
 
 	t.Run("baslat ve baglama uclari mux'a bagli", func(t *testing.T) {
-		o := testSunucuFedere(t, gevsek)
-		c := tarayici(t)
+		o := newTestServerFederated(t, relaxed)
+		c := newBrowser(t)
 
-		// authRequestID YOK: Baslat'in kontrol sirasinda (saglayici 404
-		// -> bos id 400 -> capraz-site 403 -> oturum baglamasi 403 ->
-		// IDileOku 400) bu, saglayici COZULDUKTEN sonraki ilk
-		// kontroldur. Yani 400 ancak handler CALISTIYSA donebilir;
-		// uc baglanmamis olsa istek mux.Handle("/", saglayici)'ya duser.
-		baslat := al(t, c, o.issuer+federationStartPath(providerGoogle))
-		if baslat.StatusCode == http.StatusNotFound {
+		// NO authRequestID: in Start's check order (provider 404 -> empty id 400 ->
+		// cross-site 403 -> session binding 403 -> reading the ID 400) this is the
+		// first check after the provider is RESOLVED. So a 400 can come back only if
+		// the handler RAN; if the endpoint were not wired the request would fall to
+		// mux.Handle("/", provider).
+		start := mustGet(t, c, o.issuer+federationStartPath(providerGoogle))
+		if start.StatusCode == http.StatusNotFound {
 			t.Errorf("%s mux'a BAGLI DEGIL: 404 dondu", federationStartPath(providerGoogle))
-		} else if baslat.StatusCode != http.StatusBadRequest {
-			t.Errorf("baslat durumu = %d, beklenen 400 (bos authRequestID)", baslat.StatusCode)
+		} else if start.StatusCode != http.StatusBadRequest {
+			t.Errorf("baslat durumu = %d, beklenen 400 (bos authRequestID)", start.StatusCode)
 		}
 
-		// beklemeID YOK: baglamaGet gecerli bir bekleme baglamasi
-		// bulamayinca 403 doner (oturumRed). 404 ise ucun hic
-		// baglanmadigi anlamina gelir.
-		baglama := al(t, c, o.issuer+pathLink)
-		if baglama.StatusCode == http.StatusNotFound {
+		// NO pendingID: when the link GET handler finds no valid pending binding it
+		// returns 403 (session reject). A 404 would mean the endpoint was never wired.
+		binding := mustGet(t, c, o.issuer+pathLink)
+		if binding.StatusCode == http.StatusNotFound {
 			t.Errorf("%s mux'a BAGLI DEGIL: 404 dondu", pathLink)
-		} else if baglama.StatusCode != http.StatusForbidden {
-			t.Errorf("baglama durumu = %d, beklenen 403 (bekleme yok)", baglama.StatusCode)
+		} else if binding.StatusCode != http.StatusForbidden {
+			t.Errorf("baglama durumu = %d, beklenen 403 (bekleme yok)", binding.StatusCode)
 		}
 	})
 
 	t.Run("giris sayfasindaki buton bagli ucun yoluna gider", func(t *testing.T) {
-		o := testSunucuFedere(t, gevsek)
-		c := tarayici(t)
+		o := newTestServerFederated(t, relaxed)
+		c := newBrowser(t)
 		_, challenge := pkceS256(t)
-		id := authRequestIDCikar(t, al(t, c, o.authorizeURL(challenge, "S256")))
+		id := extractAuthRequestID(t, mustGet(t, c, o.authorizeURL(challenge, "S256")))
 
-		sayfa := al(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
-		if sayfa.StatusCode != http.StatusOK {
-			t.Fatalf("giris sayfasi durumu = %d", sayfa.StatusCode)
+		page := mustGet(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
+		if page.StatusCode != http.StatusOK {
+			t.Fatalf("giris sayfasi durumu = %d", page.StatusCode)
 		}
-		// TUM butonlar denetlenir: kurulumda birden fazla saglayici
-		// yapilandirilmis olabilir (bkz. federasyonKablola) ve her
-		// butonun yolu bagli bir ucun yolu olmak ZORUNDA.
-		tumEsler := fedButonDeseni.FindAllStringSubmatch(govde(t, sayfa), -1)
-		if tumEsler == nil {
+		// ALL buttons are checked: more than one provider may be configured in the
+		// setup (see wireFederation) and the path of every button MUST be the path of
+		// a wired endpoint.
+		allMatches := fedButtonPattern.FindAllStringSubmatch(readBody(t, page), -1)
+		if allMatches == nil {
 			t.Fatal("giris sayfasinda federasyon butonu yok")
 		}
-		gorulen := map[string]bool{}
-		for _, esler := range tumEsler {
-			// Sablon href icindeki "&" karakterini kacirir; yolu
-			// ayirmak icin sorgu kismini atiyoruz, iddia YOL uzerine.
-			butonYol, _, _ := strings.Cut(esler[1], "?")
-			gorulen[butonYol] = true
-			// Butonun GERCEK href'i de ayni mux'ta cevap bulmali.
-			yanit := al(t, c, o.issuer+html.UnescapeString(esler[1]))
-			if yanit.StatusCode == http.StatusNotFound {
-				t.Errorf("buton href'i 404 dondu: %q", esler[1])
+		seen := map[string]bool{}
+		for _, matches := range allMatches {
+			// The template escapes the "&" character inside the href; to separate the
+			// path we drop the query part, the assertion is on the PATH.
+			buttonPath, _, _ := strings.Cut(matches[1], "?")
+			seen[buttonPath] = true
+			// The button's REAL href must get an answer on the same mux too.
+			resp := mustGet(t, c, o.issuer+html.UnescapeString(matches[1]))
+			if resp.StatusCode == http.StatusNotFound {
+				t.Errorf("buton href'i 404 dondu: %q", matches[1])
 			}
 		}
-		if !gorulen[federationStartPath(providerGoogle)] {
-			t.Fatalf("Google butonu bagli ucun yoluna gitmiyor; gorulen yollar: %v", gorulen)
+		if !seen[federationStartPath(providerGoogle)] {
+			t.Fatalf("Google butonu bagli ucun yoluna gitmiyor; gorulen yollar: %v", seen)
 		}
 	})
 
 	t.Run("baslat ucu hiz limitli", func(t *testing.T) {
-		o := testSunucuFedere(t, RateLimitConfig{
+		o := newTestServerFederated(t, RateLimitConfig{
 			LoginIPPerMin: 1, LoginEmailPerHour: 50, SignupIPPerHour: 50,
 		})
-		c := tarayici(t)
-		yol := o.issuer + federationStartPath(providerGoogle)
+		c := newBrowser(t)
+		path := o.issuer + federationStartPath(providerGoogle)
 
-		if ilk := al(t, c, yol); ilk.StatusCode == http.StatusTooManyRequests {
+		if first := mustGet(t, c, path); first.StatusCode == http.StatusTooManyRequests {
 			t.Fatal("ilk baslatma 429 aldi; sinir yanlis kurulmus")
 		}
-		if ikinci := al(t, c, yol); ikinci.StatusCode != http.StatusTooManyRequests {
-			t.Errorf("ikinci baslatma durumu = %d, beklenen 429", ikinci.StatusCode)
+		if second := mustGet(t, c, path); second.StatusCode != http.StatusTooManyRequests {
+			t.Errorf("ikinci baslatma durumu = %d, beklenen 429", second.StatusCode)
 		}
 	})
 
 	t.Run("baglama ucu hiz limitli", func(t *testing.T) {
-		o := testSunucuFedere(t, RateLimitConfig{
+		o := newTestServerFederated(t, RateLimitConfig{
 			LoginIPPerMin: 1, LoginEmailPerHour: 50, SignupIPPerHour: 50,
 		})
-		c := tarayici(t)
-		yol := o.issuer + pathLink
+		c := newBrowser(t)
+		path := o.issuer + pathLink
 
-		if ilk := al(t, c, yol); ilk.StatusCode == http.StatusTooManyRequests {
+		if first := mustGet(t, c, path); first.StatusCode == http.StatusTooManyRequests {
 			t.Fatal("ilk baglama 429 aldi; sinir yanlis kurulmus")
 		}
-		if ikinci := al(t, c, yol); ikinci.StatusCode != http.StatusTooManyRequests {
-			t.Errorf("ikinci baglama durumu = %d, beklenen 429", ikinci.StatusCode)
+		if second := mustGet(t, c, path); second.StatusCode != http.StatusTooManyRequests {
+			t.Errorf("ikinci baglama durumu = %d, beklenen 429", second.StatusCode)
 		}
 	})
 }

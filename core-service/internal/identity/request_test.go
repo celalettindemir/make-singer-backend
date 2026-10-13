@@ -12,13 +12,13 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/op"
 )
 
-// testRedis, yerel Redis ister. Yoksa test atlanir: birim testler agsiz
-// gecmek zorunda (bkz. Global Constraints).
+// testRedis wants a local Redis. If there is none the test is skipped: unit
+// tests have to pass without a network (see Global Constraints).
 func testRedis(t *testing.T) *redis.Client {
 	t.Helper()
 	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379", DB: 15})
-	ctx, iptal := context.WithTimeout(context.Background(), time.Second)
-	defer iptal()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		t.Skip("yerel Redis yok, atlaniyor")
 	}
@@ -26,14 +26,14 @@ func testRedis(t *testing.T) *redis.Client {
 	return rdb
 }
 
-func TestAuthIstekArayuzuKarsilar(t *testing.T) {
+func TestAuthRequest_SatisfiesInterface(t *testing.T) {
 	var _ op.AuthRequest = &AuthRequest{}
 }
 
-func TestIstekOlusturVeOku(t *testing.T) {
-	depo := NewRequestStore(testRedis(t))
+func TestRequestStore_CreateAndGet(t *testing.T) {
+	store := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Create(ctx, &oidc.AuthRequest{
+	req, err := store.Create(ctx, &oidc.AuthRequest{
 		ClientID:            "makesinger-mobil",
 		RedirectURI:         "com.makesinger.app:/oauth2redirect",
 		Scopes:              oidc.SpaceDelimitedArray{oidc.ScopeOpenID},
@@ -46,198 +46,198 @@ func TestIstekOlusturVeOku(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	okunan, err := depo.GetByID(ctx, istek.GetID())
+	readBack, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
-	if okunan.GetNonce() != "n1" {
-		t.Errorf("nonce = %q, beklenen n1", okunan.GetNonce())
+	if readBack.GetNonce() != "n1" {
+		t.Errorf("nonce = %q, beklenen n1", readBack.GetNonce())
 	}
-	if okunan.GetCodeChallenge() == nil || okunan.GetCodeChallenge().Challenge != "abc" {
-		t.Errorf("code challenge kaybolmus: %+v", okunan.GetCodeChallenge())
+	if readBack.GetCodeChallenge() == nil || readBack.GetCodeChallenge().Challenge != "abc" {
+		t.Errorf("code challenge kaybolmus: %+v", readBack.GetCodeChallenge())
 	}
 }
 
-// Kod TEK kullanimlik olmali. Ikinci kez kullanilabilirse, adres
-// cubugundan veya loglardan kod kapan biri jeton alir.
-func TestKodTekKullanimlik(t *testing.T) {
-	depo := NewRequestStore(testRedis(t))
+// The code must be SINGLE-USE. If it can be used a second time, anyone who
+// grabs a code from the address bar or the logs gets a token.
+func TestRequestStore_CodeSingleUse(t *testing.T) {
+	store := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Create(ctx, &oidc.AuthRequest{
+	req, err := store.Create(ctx, &oidc.AuthRequest{
 		ClientID:     "makesinger-mobil",
 		ResponseType: oidc.ResponseTypeCode,
 	}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.SaveCode(ctx, istek.GetID(), "kod123"); err != nil {
+	if err := store.SaveCode(ctx, req.GetID(), "kod123"); err != nil {
 		t.Fatalf("KodKaydet: %v", err)
 	}
-	if _, err := depo.GetByCode(ctx, "kod123"); err != nil {
+	if _, err := store.GetByCode(ctx, "kod123"); err != nil {
 		t.Fatalf("ilk okuma basarisiz: %v", err)
 	}
-	if _, err := depo.GetByCode(ctx, "kod123"); !errors.Is(err, ErrRequestNotFound) {
+	if _, err := store.GetByCode(ctx, "kod123"); !errors.Is(err, ErrRequestNotFound) {
 		t.Errorf("ikinci okuma hatasi = %v, beklenen ErrIstekYok", err)
 	}
 }
 
-func TestOlmayanIstek(t *testing.T) {
-	depo := NewRequestStore(testRedis(t))
-	if _, err := depo.GetByID(context.Background(), "yok"); !errors.Is(err, ErrRequestNotFound) {
+func TestRequestStore_MissingRequest(t *testing.T) {
+	store := NewRequestStore(testRedis(t))
+	if _, err := store.GetByID(context.Background(), "yok"); !errors.Is(err, ErrRequestNotFound) {
 		t.Errorf("hata = %v, beklenen ErrIstekYok", err)
 	}
 }
 
-// Giris tamamlanmadan istek "done" olmamali: aksi halde kod, kullanici
-// hic dogrulanmadan verilir.
-func TestIstekBaslangictaTamamlanmamis(t *testing.T) {
-	depo := NewRequestStore(testRedis(t))
+// The request must not be "done" before the login completes: otherwise the
+// code would be issued without the user ever being verified.
+func TestAuthRequest_InitiallyNotDone(t *testing.T) {
+	store := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	req, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if istek.Done() {
+	if req.Done() {
 		t.Error("yeni istek tamamlanmis gorunuyor")
 	}
-	if istek.GetSubject() != "" {
-		t.Errorf("subject = %q, bos olmali", istek.GetSubject())
+	if req.GetSubject() != "" {
+		t.Errorf("subject = %q, bos olmali", req.GetSubject())
 	}
-	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
+	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
 		t.Fatalf("TamamlandiIsaretle: %v", err)
 	}
-	okunan, err := depo.GetByID(ctx, istek.GetID())
+	readBack, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
-	if !okunan.Done() || okunan.GetSubject() != "kullanici-1" {
-		t.Errorf("tamamlanmis istek yanlis: done=%v subject=%q", okunan.Done(), okunan.GetSubject())
+	if !readBack.Done() || readBack.GetSubject() != "kullanici-1" {
+		t.Errorf("tamamlanmis istek yanlis: done=%v subject=%q", readBack.Done(), readBack.GetSubject())
 	}
 }
 
-// C1 ek bulgu: zaten tamamlanmis bir istek BASKA bir kullaniciya
-// yeniden baglanamaz; Subject EZILMEZ.
-func TestTamamlandiIsaretleSubjectEzmez(t *testing.T) {
-	depo := NewRequestStore(testRedis(t))
+// C1 extra finding: an already completed request cannot be rebound to
+// ANOTHER user; Subject is NOT OVERWRITTEN.
+func TestRequestStore_MarkDoneKeepsSubject(t *testing.T) {
+	store := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	req, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
+	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
 		t.Fatalf("ilk TamamlandiIsaretle: %v", err)
 	}
-	// 15 kez ust uste baska kimliklerle dene: hepsi reddedilmeli.
+	// Try 15 times in a row with other identities: all must be rejected.
 	for i := 0; i < 15; i++ {
-		if err := depo.MarkDone(ctx, istek.GetID(), "saldirgan", []string{amrPassword}); !errors.Is(err, ErrRequestAlreadyCompleted) {
+		if err := store.MarkDone(ctx, req.GetID(), "saldirgan", []string{amrPassword}); !errors.Is(err, ErrRequestAlreadyCompleted) {
 			t.Fatalf("%d. deneme hatasi = %v, beklenen ErrIstekZatenTamamlandi", i+1, err)
 		}
 	}
-	okunan, err := depo.GetByID(ctx, istek.GetID())
+	readBack, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
-	if okunan.GetSubject() != "kullanici-1" {
-		t.Errorf("subject = %q, EZILMIS (beklenen kullanici-1)", okunan.GetSubject())
+	if readBack.GetSubject() != "kullanici-1" {
+		t.Errorf("subject = %q, EZILMIS (beklenen kullanici-1)", readBack.GetSubject())
 	}
 }
 
-// AYNI kullanici icin ikinci cagri NO-OP olmali: durust bir cift
-// gonderim (formu iki kez yollamak, geri tusu) hata gostermemeli ve
-// AuthTime gercek giris anini korumali.
-func TestTamamlandiIsaretleAyniKullaniciNoOp(t *testing.T) {
-	depo := NewRequestStore(testRedis(t))
+// A second call for the SAME user must be a NO-OP: an honest double submit
+// (sending the form twice, the back button) must not show an error and
+// AuthTime must keep the real login moment.
+func TestRequestStore_MarkDoneSameUserNoOp(t *testing.T) {
+	store := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	req, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
+	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
 		t.Fatalf("ilk TamamlandiIsaretle: %v", err)
 	}
-	ilk, err := depo.GetByID(ctx, istek.GetID())
+	first, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
-	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
+	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
 		t.Fatalf("ikinci TamamlandiIsaretle (ayni kullanici) hata dondu: %v", err)
 	}
-	ikinci, err := depo.GetByID(ctx, istek.GetID())
+	second, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
-	if !ikinci.GetAuthTime().Equal(ilk.GetAuthTime()) {
+	if !second.GetAuthTime().Equal(first.GetAuthTime()) {
 		t.Error("AuthTime yeniden yazildi; no-op olmasi gerekirdi")
 	}
 }
 
-// M4: Olustur'a gelen ucuncu parametre id_token_hint'in "sub"udur, bir
-// istek ID'si DEGILDIR. Istek ID'si HER ZAMAN yeni bir UUID olmali;
-// aksi halde es zamanli iki akis ayni Redis anahtarini ezer.
-func TestIstekIDIpucuSubjectOlmaz(t *testing.T) {
-	depo := NewRequestStore(testRedis(t))
+// M4: the third parameter given to Create is the "sub" of id_token_hint, it
+// is NOT a request ID. The request ID must ALWAYS be a fresh UUID; otherwise
+// two concurrent flows overwrite the same Redis key.
+func TestRequestStore_IDIsNotHintSubject(t *testing.T) {
+	store := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	const ipucu = "kullanici-42"
-	birinci, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, ipucu)
+	const hint = "kullanici-42"
+	firstRecord, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, hint)
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if birinci.GetID() == ipucu {
+	if firstRecord.GetID() == hint {
 		t.Fatal("istek ID'si id_token_hint sub'una esitlendi")
 	}
-	if birinci.HintSubject != ipucu {
-		t.Errorf("IpucuSubject = %q, beklenen %q", birinci.HintSubject, ipucu)
+	if firstRecord.HintSubject != hint {
+		t.Errorf("IpucuSubject = %q, beklenen %q", firstRecord.HintSubject, hint)
 	}
-	// Ipucu Done()'u etkilememeli: kullanici henuz giris yapmadi.
-	if birinci.Done() || birinci.GetSubject() != "" {
+	// The hint must not affect Done(): the user has not logged in yet.
+	if firstRecord.Done() || firstRecord.GetSubject() != "" {
 		t.Error("ipucu ile istek tamamlanmis gorunuyor")
 	}
-	// Es zamanli ikinci akis ayni anahtari EZMEMELI.
-	ikinci, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, ipucu)
+	// A concurrent second flow must NOT overwrite the same key.
+	second, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, hint)
 	if err != nil {
 		t.Fatalf("ikinci Olustur: %v", err)
 	}
-	if ikinci.GetID() == birinci.GetID() {
+	if second.GetID() == firstRecord.GetID() {
 		t.Fatal("ayni ipucu ile iki istek ayni ID'yi aldi")
 	}
 }
 
-// K6: sifreyle giris sonrasi GetAMR() ["pwd"] donmeli.
-func TestAMRSifreyleGiristePwd(t *testing.T) {
-	depo := NewRequestStore(testRedis(t))
+// K6: after a password login GetAMR() must return ["pwd"].
+func TestAMR_PasswordLoginIsPwd(t *testing.T) {
+	store := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	req, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
+	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
 		t.Fatalf("TamamlandiIsaretle: %v", err)
 	}
-	okunan, err := depo.GetByID(ctx, istek.GetID())
+	readBack, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
-	if got := okunan.GetAMR(); len(got) != 1 || got[0] != "pwd" {
+	if got := readBack.GetAMR(); len(got) != 1 || got[0] != "pwd" {
 		t.Errorf("GetAMR() = %v, beklenen [pwd]", got)
 	}
 }
 
-// K6: Google ile giren kullanicinin tokeninda "pwd" YAZMAMALI.
-func TestAMRFederasyondaPwdDegil(t *testing.T) {
-	depo := NewRequestStore(testRedis(t))
+// K6: the token of a user who logged in with Google must NOT say "pwd".
+func TestAMR_FederationIsNotPwd(t *testing.T) {
+	store := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	req, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrFederation}); err != nil {
+	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrFederation}); err != nil {
 		t.Fatalf("TamamlandiIsaretle: %v", err)
 	}
-	okunan, err := depo.GetByID(ctx, istek.GetID())
+	readBack, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
-	got := okunan.GetAMR()
+	got := readBack.GetAMR()
 	if len(got) != 1 || got[0] != amrFederation {
 		t.Errorf("GetAMR() = %v, beklenen [%s]", got, amrFederation)
 	}
@@ -248,50 +248,51 @@ func TestAMRFederasyondaPwdDegil(t *testing.T) {
 	}
 }
 
-// Varsayilan sessizce "pwd" OLMAMALI: amr vermeyi unutan bir cagiran
-// yanlis bir beyan uretmemeli, bos uretmeli.
-func TestAMRVarsayilanPwdDegil(t *testing.T) {
-	istek := &AuthRequest{}
-	if len(istek.GetAMR()) != 0 {
-		t.Errorf("GetAMR() = %v, beklenen bos", istek.GetAMR())
+// The default must NOT silently be "pwd": a caller that forgot to give amr
+// must not produce a false statement, it must produce an empty one.
+func TestAMR_DefaultIsNotPwd(t *testing.T) {
+	req := &AuthRequest{}
+	if len(req.GetAMR()) != 0 {
+		t.Errorf("GetAMR() = %v, beklenen bos", req.GetAMR())
 	}
 }
 
-// amr ikinci (no-op) cagrida EZILMEMELI: ilk gercek giris yonteminin
-// dogru olani kaydeder.
-func TestAMRNoOpdaEzilmez(t *testing.T) {
-	depo := NewRequestStore(testRedis(t))
+// amr must NOT BE OVERWRITTEN on the second (no-op) call: it records the
+// right one, the first real login method.
+func TestAMR_NotOverwrittenOnNoOp(t *testing.T) {
+	store := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	istek, err := depo.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
+	req, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
 		t.Fatalf("Olustur: %v", err)
 	}
-	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
+	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
 		t.Fatalf("ilk TamamlandiIsaretle: %v", err)
 	}
-	// Ayni kullanici icin ikinci cagri, FARKLI bir amr ile gelse bile
-	// NO-OP olmali ve ilk amr'i EZMEMELI.
-	if err := depo.MarkDone(ctx, istek.GetID(), "kullanici-1", []string{amrFederation}); err != nil {
+	// Even if the second call for the same user comes with a DIFFERENT amr it
+	// must be a NO-OP and must NOT overwrite the first amr.
+	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrFederation}); err != nil {
 		t.Fatalf("ikinci TamamlandiIsaretle (no-op): %v", err)
 	}
-	okunan, err := depo.GetByID(ctx, istek.GetID())
+	readBack, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
 		t.Fatalf("IDileOku: %v", err)
 	}
-	if got := okunan.GetAMR(); len(got) != 1 || got[0] != amrPassword {
+	if got := readBack.GetAMR(); len(got) != 1 || got[0] != amrPassword {
 		t.Errorf("GetAMR() = %v, beklenen [%s] (ezilmemis olmali)", got, amrPassword)
 	}
 }
 
-// amr Postgres'teki refresh_tokens.amr kolonuna da dogru dusmeli:
-// yenileme sonrasi token'da hala dogru amr olmali. Sahte (bellek ici)
-// TokenStore kullanilir: olculen Depo'nun AuthIstek -> RefreshKayit ->
-// refresh rotasyonu uzerinden amr'i tasima mantigi, Postgres suruculugu
-// degil (o ayri bir testle, jeton_depo_pg_test.go'da olculuyor).
-func TestAMRRefreshYenilemesindeKorunur(t *testing.T) {
-	d := testDepo(t)
+// amr must also land correctly in the refresh_tokens.amr column in Postgres:
+// after a refresh the token must still carry the right amr. The fake
+// (in-memory) TokenStore is used: what is measured is the logic of the
+// Storage carrying amr through AuthRequest -> RefreshRecord -> refresh
+// rotation, not the Postgres driver (that is measured by a separate test in
+// token_store_pg_test.go).
+func TestAMR_PreservedOnRefresh(t *testing.T) {
+	d := newTestStorage(t)
 	ctx := context.Background()
-	istek := &AuthRequest{
+	req := &AuthRequest{
 		ID:       "istek-amr-1",
 		ClientID: "makesinger-mobil",
 		Subject:  "kullanici-1",
@@ -299,69 +300,70 @@ func TestAMRRefreshYenilemesindeKorunur(t *testing.T) {
 		AuthTime: time.Now().UTC(),
 		AMR:      []string{amrFederation},
 	}
-	_, refreshToken, _, err := d.CreateAccessAndRefreshTokens(ctx, istek, "")
+	_, refreshToken, _, err := d.CreateAccessAndRefreshTokens(ctx, req, "")
 	if err != nil {
 		t.Fatalf("CreateAccessAndRefreshTokens: %v", err)
 	}
-	kayit, err := d.tokens.GetRefresh(ctx, refreshToken)
+	record, err := d.tokens.GetRefresh(ctx, refreshToken)
 	if err != nil {
 		t.Fatalf("RefreshOku: %v", err)
 	}
-	if len(kayit.AMR) != 1 || kayit.AMR[0] != amrFederation {
-		t.Fatalf("ilk kayitta amr = %v, beklenen [%s]", kayit.AMR, amrFederation)
+	if len(record.AMR) != 1 || record.AMR[0] != amrFederation {
+		t.Fatalf("ilk kayitta amr = %v, beklenen [%s]", record.AMR, amrFederation)
 	}
-	// Kutuphanenin gercek cagri sirasini taklit et: refresh akisinda
-	// TokenRequestByRefreshToken amr'i tasiyan RefreshTokenRequest'i
-	// uretir, CreateAccessAndRefreshTokens onu rotasyona verir.
-	refreshIstegi, err := d.TokenRequestByRefreshToken(ctx, refreshToken)
+	// Imitate the library's real call order: in the refresh flow
+	// TokenRequestByRefreshToken produces the RefreshTokenRequest that carries
+	// amr, and CreateAccessAndRefreshTokens hands it to rotation.
+	refreshReq, err := d.TokenRequestByRefreshToken(ctx, refreshToken)
 	if err != nil {
 		t.Fatalf("TokenRequestByRefreshToken: %v", err)
 	}
-	_, yeniRefreshToken, _, err := d.CreateAccessAndRefreshTokens(ctx, refreshIstegi, refreshToken)
+	_, rotatedRefreshToken, _, err := d.CreateAccessAndRefreshTokens(ctx, refreshReq, refreshToken)
 	if err != nil {
 		t.Fatalf("CreateAccessAndRefreshTokens (rotasyon): %v", err)
 	}
-	yeniKayit, err := d.tokens.GetRefresh(ctx, yeniRefreshToken)
+	newRecord, err := d.tokens.GetRefresh(ctx, rotatedRefreshToken)
 	if err != nil {
 		t.Fatalf("RefreshOku (yeni): %v", err)
 	}
-	if len(yeniKayit.AMR) != 1 || yeniKayit.AMR[0] != amrFederation {
-		t.Errorf("rotasyon sonrasi amr = %v, beklenen [%s]", yeniKayit.AMR, amrFederation)
+	if len(newRecord.AMR) != 1 || newRecord.AMR[0] != amrFederation {
+		t.Errorf("rotasyon sonrasi amr = %v, beklenen [%s]", newRecord.AMR, amrFederation)
 	}
 }
 
-// Cerez baglamasi, auth istegiyle ayni depoda tutulur ve okunabilir
-// olmali; eslesmeyen bir cerez degeri ErrOturumYok dondurmeli.
-func TestOturumBaglamaYazVeOku(t *testing.T) {
-	depo := NewRequestStore(testRedis(t))
+// The cookie binding is kept in the same store as the auth request and must
+// be readable; a cookie value that does not match must return
+// ErrSessionNotFound.
+func TestRequestStore_WriteAndReadSession(t *testing.T) {
+	store := NewRequestStore(testRedis(t))
 	ctx := context.Background()
-	// Kume: bir cerez birden fazla istege bagli olabilir (paralel
-	// sekmeler, bkz. oturumBaglamaUstSinir). Redis'e giden JSON tur
-	// yolculugunu da dogruluyoruz: alanlar disa acik olmazsa
-	// encoding/json onlari sessizce atlar ve baglama kaybolur.
-	var baglama SessionBinding
-	baglama.Add("istek-1", "csrf-1")
-	baglama.Add("istek-2", "csrf-2")
-	if err := depo.WriteSession(ctx, "oturum-1", baglama, requestTTL); err != nil {
+	// Set: one cookie can be bound to more than one request (parallel tabs, see
+	// maxSessionBindings). We also verify the JSON round trip through Redis:
+	// if the fields are not exported, encoding/json silently skips them and the
+	// binding is lost.
+	var binding SessionBinding
+	binding.Add("istek-1", "csrf-1")
+	binding.Add("istek-2", "csrf-2")
+	if err := store.WriteSession(ctx, "oturum-1", binding, requestTTL); err != nil {
 		t.Fatalf("OturumYaz: %v", err)
 	}
-	okunan, err := depo.ReadSession(ctx, "oturum-1")
+	readBack, err := store.ReadSession(ctx, "oturum-1")
 	if err != nil {
 		t.Fatalf("OturumOku: %v", err)
 	}
-	if !reflect.DeepEqual(okunan, baglama) {
-		t.Errorf("baglama = %+v, beklenen %+v", okunan, baglama)
+	if !reflect.DeepEqual(readBack, binding) {
+		t.Errorf("baglama = %+v, beklenen %+v", readBack, binding)
 	}
 	for _, d := range []struct{ id, csrf string }{{"istek-1", "csrf-1"}, {"istek-2", "csrf-2"}} {
-		csrf, bagliMi := okunan.CSRFFor(d.id)
-		if !bagliMi || csrf != d.csrf {
-			t.Errorf("CSRFBul(%q) = (%q, %v), beklenen (%q, true)", d.id, csrf, bagliMi, d.csrf)
+		csrf, isBound := readBack.CSRFFor(d.id)
+		if !isBound || csrf != d.csrf {
+			t.Errorf("CSRFBul(%q) = (%q, %v), beklenen (%q, true)", d.id, csrf, isBound, d.csrf)
 		}
 	}
-	if _, bagliMi := okunan.CSRFFor("istek-3"); bagliMi {
+	if _, isBound := readBack.CSRFFor("istek-3"); isBound {
 		t.Error("baglanmamis id icin CSRFBul true dondu")
 	}
-	if _, err := depo.ReadSession(ctx, "yok"); !errors.Is(err, ErrSessionNotFound) {
+	if _, err := store.ReadSession(ctx, "yok"); !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("hata = %v, beklenen ErrOturumYok", err)
 	}
 }

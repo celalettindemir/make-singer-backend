@@ -6,228 +6,228 @@ import (
 	"testing"
 )
 
-// Bu dosya OLCUM ARACINI olcer: cerezKavanozu ve yardimcilari
-// (tasinirMi, cerezYoluEsler, adimBaglami) federasyon saldiri
-// testlerinin ZEMINIDIR.
+// This file tests the MEASURING INSTRUMENT: cookieJar and its helpers
+// (sendable, cookiePathMatches, stepContext) are the FOUNDATION of the
+// federation attack tests.
 //
-// NEDEN GEREKLI: kavanoz fazla GEVSEK olursa saldiri testleri YANLIS
-// YESIL verir ve bunu hicbir sey kirmiziya cevirmez. Ornek: tasinirMi
-// "hep true" donerse Apple form_post testi Google GET akisinin
-// kopyasina doner ve SameSite=None zorunlulugunun (K2) canli kaniti
-// SESSIZCE kaybolur. Burada kavanozun kendisi dogrudan olculuyor,
-// boylece o gevseme derhal gorulur.
+// WHY IT IS NEEDED: if the jar is too LOOSE, the attack tests give FALSE
+// GREENS and nothing turns them red. Example: if sendable always
+// returns true, the Apple form_post test degrades into a copy of the
+// Google GET flow and the live proof of the SameSite=None requirement
+// (K2) is lost SILENTLY. Here the jar itself is measured directly, so
+// such loosening shows up at once.
 //
-// Kavanozun davranisi uctan uca testlerin hicbir yerinde dolayli
-// olarak olculemez: akis yesil kaldiginda kavanozun kurali uyguladigi
-// mi, kurali hic uygulamadigi mi bilinmez.
+// The jar's behavior cannot be measured indirectly anywhere in the
+// end-to-end tests: when the flow stays green, nobody knows whether the
+// jar enforced the rule or never applied it at all.
 
-// Testlerde kullanilan sabit adres: kavanoz host + path uzerinden
-// secim yapar, scheme'i kullanmaz.
-const kavanozHedef = "http://kimlik.ornek/federasyon/google/geri"
+// The fixed address used in tests: the jar selects by host + path and
+// does not use the scheme.
+const jarTarget = "http://kimlik.ornek/federasyon/google/geri"
 
-// TestCerezKavanozuSameSiteUygular, tasinirMi'nin tarayici kuralini
-// GERCEKTEN uyguladigini olcer. Standart net/http/cookiejar SameSite'i
-// yalnizca KAYDEDER, istek seciminde kullanmaz; bu kavanozun tum varlik
-// sebebi o bosluktur.
-func TestCerezKavanozuSameSiteUygular(t *testing.T) {
-	durumlar := []struct {
-		ad       string
+// TestCookieJar_EnforcesSameSite checks that sendable REALLY enforces the
+// browser rule. The standard net/http/cookiejar only STORES SameSite and
+// does not use it when selecting for a request; that gap is the whole
+// reason this jar exists.
+func TestCookieJar_EnforcesSameSite(t *testing.T) {
+	statuses := []struct {
+		name     string
 		sameSite http.SameSite
-		baglam   cerezBaglam
-		beklenen bool
+		ctx      cookieContext
+		want     bool
 	}{
 		{
-			// Apple'in form_post donusu tam budur: Lax cerez
-			// TASINMAZ, bu yuzden federasyon cerezi None olmak
+			// This is exactly Apple's form_post return: a Lax cookie is NOT SENT,
+			// so the federation cookie has to be None (K2).
 			// zorundadir (K2).
-			ad:       "Lax capraz-site POST'ta tasinmaz",
-			sameSite: http.SameSiteLaxMode, baglam: baglamCaprazPost, beklenen: false,
+			name:     "Lax capraz-site POST'ta tasinmaz",
+			sameSite: http.SameSiteLaxMode, ctx: ctxCrossSitePost, want: false,
 		},
 		{
-			ad:       "Lax ayni-site'ta tasinir",
-			sameSite: http.SameSiteLaxMode, baglam: baglamAyniSite, beklenen: true,
+			name:     "Lax ayni-site'ta tasinir",
+			sameSite: http.SameSiteLaxMode, ctx: ctxSameSite, want: true,
 		},
 		{
-			ad:       "None capraz-site POST'ta tasinir",
-			sameSite: http.SameSiteNoneMode, baglam: baglamCaprazPost, beklenen: true,
+			name:     "None capraz-site POST'ta tasinir",
+			sameSite: http.SameSiteNoneMode, ctx: ctxCrossSitePost, want: true,
 		},
 		{
-			// Google'in 302 donusu ust-duzey capraz-site GET'tir:
-			// Lax tasinir, Strict tasinmaz.
-			ad:       "Strict capraz-site GET'te tasinmaz",
-			sameSite: http.SameSiteStrictMode, baglam: baglamCaprazGet, beklenen: false,
+			// Google's 302 return is a top-level cross-site GET:
+			// Lax is sent, Strict is not.
+			name:     "Strict capraz-site GET'te tasinmaz",
+			sameSite: http.SameSiteStrictMode, ctx: ctxCrossSiteGet, want: false,
 		},
 		{
-			ad:       "Lax capraz-site GET'te tasinir",
-			sameSite: http.SameSiteLaxMode, baglam: baglamCaprazGet, beklenen: true,
+			name:     "Lax capraz-site GET'te tasinir",
+			sameSite: http.SameSiteLaxMode, ctx: ctxCrossSiteGet, want: true,
 		},
 		{
-			// Kullanicinin kendi baslattigi navigasyon (native
-			// uygulama sistem tarayicisini acar): her sey tasinir.
-			ad:       "Strict baslatma navigasyonunda tasinir",
-			sameSite: http.SameSiteStrictMode, baglam: baglamBaslatma, beklenen: true,
+			// Navigation the user started themselves (a native app opens the
+			// system browser): everything is sent.
+			name:     "Strict baslatma navigasyonunda tasinir",
+			sameSite: http.SameSiteStrictMode, ctx: ctxUserInitiated, want: true,
 		},
 	}
 
-	hedef, err := url.Parse(kavanozHedef)
+	to, err := url.Parse(jarTarget)
 	if err != nil {
 		t.Fatalf("hedef cozulemedi: %v", err)
 	}
 
-	for _, d := range durumlar {
-		t.Run(d.ad, func(t *testing.T) {
-			kavanoz := yeniCerezKavanozu()
-			kavanoz.SetCookies(hedef, []*http.Cookie{{
+	for _, d := range statuses {
+		t.Run(d.name, func(t *testing.T) {
+			jar := newCookieJar()
+			jar.SetCookies(to, []*http.Cookie{{
 				Name: "deneme", Value: "deger", Path: "/federasyon", SameSite: d.sameSite,
 			}})
-			kavanoz.baglamKur(d.baglam)
-			tasindi := len(kavanoz.Cookies(hedef)) == 1
-			if tasindi != d.beklenen {
-				t.Errorf("tasindi = %v, beklenen %v", tasindi, d.beklenen)
+			jar.setContext(d.ctx)
+			carried := len(jar.Cookies(to)) == 1
+			if carried != d.want {
+				t.Errorf("tasindi = %v, beklenen %v", carried, d.want)
 			}
 		})
 	}
 }
 
-// TestCerezKavanozuYolSiniri, cerezYoluEsler'in RFC 6265 yol onekini
-// uyguladigini olcer. Federasyon cerezi Path=/federasyon ile yazilir:
-// kavanoz yolu yok sayarsa cerezin yuzeyinin sinirli oldugu iddiasi
-// (TestUctanUcaAppleGirisiFormPost) OLCULMEZ olur.
-func TestCerezKavanozuYolSiniri(t *testing.T) {
-	durumlar := []struct {
-		cerezYol string
-		istekYol string
-		beklenen bool
+// TestCookieJar_PathScope checks that cookiePathMatches applies the
+// RFC 6265 path prefix. The federation cookie is written with
+// Path=/federasyon: if the jar ignores the path, the claim that the
+// cookie's surface is limited (TestE2E_AppleLoginFormPost) goes UNMEASURED.
+func TestCookieJar_PathScope(t *testing.T) {
+	statuses := []struct {
+		cookiePath  string
+		requestPath string
+		want        bool
 	}{
 		{"/federasyon", "/federasyon", true},
 		{"/federasyon", "/federasyon/google/geri", true},
 		{"/federasyon/", "/federasyon/google", true},
-		// Yol onekini KARAKTER olarak degil SEGMENT olarak uygula:
-		// /federasyonlar, /federasyon'un alti degildir.
+		// Apply the path prefix by SEGMENT, not by CHARACTER:
+		// /federasyonlar is not under /federasyon.
 		{"/federasyon", "/federasyonlar", false},
 		{"/federasyon", "/giris", false},
 		{"/", "/herhangi", true},
 	}
 
-	for _, d := range durumlar {
-		if sonuc := cerezYoluEsler(d.cerezYol, d.istekYol); sonuc != d.beklenen {
+	for _, d := range statuses {
+		if res := cookiePathMatches(d.cookiePath, d.requestPath); res != d.want {
 			t.Errorf("cerezYoluEsler(%q, %q) = %v, beklenen %v",
-				d.cerezYol, d.istekYol, sonuc, d.beklenen)
+				d.cookiePath, d.requestPath, res, d.want)
 		}
 	}
 
-	// Yol KAVANOZDA da uygulanmali: yalnizca yardimcinin dogru olmasi
-	// Cookies()'in onu cagirdigini kanitlamaz.
-	yazan, err := url.Parse("http://kimlik.ornek/federasyon/google/baslat")
+	// The path must be enforced IN THE JAR too: the helper being right alone
+	// does not prove that Cookies() calls it.
+	writer, err := url.Parse("http://kimlik.ornek/federasyon/google/baslat")
 	if err != nil {
 		t.Fatalf("adres cozulemedi: %v", err)
 	}
-	kavanoz := yeniCerezKavanozu()
-	kavanoz.SetCookies(yazan, []*http.Cookie{{
+	jar := newCookieJar()
+	jar.SetCookies(writer, []*http.Cookie{{
 		Name: "deneme", Value: "deger", Path: "/federasyon", SameSite: http.SameSiteNoneMode,
 	}})
-	kavanoz.baglamKur(baglamAyniSite)
-	disYol, err := url.Parse("http://kimlik.ornek/giris")
+	jar.setContext(ctxSameSite)
+	outsidePath, err := url.Parse("http://kimlik.ornek/giris")
 	if err != nil {
 		t.Fatalf("adres cozulemedi: %v", err)
 	}
-	if n := len(kavanoz.Cookies(disYol)); n != 0 {
+	if n := len(jar.Cookies(outsidePath)); n != 0 {
 		t.Errorf("/giris'e %d cerez tasindi, beklenen 0 (Path=/federasyon)", n)
 	}
-	if n := len(kavanoz.Cookies(yazan)); n != 1 {
+	if n := len(jar.Cookies(writer)); n != 1 {
 		t.Errorf("/federasyon/... yoluna %d cerez tasindi, beklenen 1", n)
 	}
 }
 
-// TestCerezKavanozuHostAyrimi, cerezlerin host basina tutuldugunu
-// olcer: sahte yukari akis ve kendi dinleyicimiz AYRI host'lardir ve
-// birinin cerezi digerine GITMEMELI.
-func TestCerezKavanozuHostAyrimi(t *testing.T) {
-	biz, err := url.Parse("http://kimlik.ornek/federasyon")
+// TestCookieJar_HostIsolation checks that cookies are kept per host: the
+// fake upstream and our own listener are SEPARATE hosts, and one's
+// cookie must NOT go to the other.
+func TestCookieJar_HostIsolation(t *testing.T) {
+	ours, err := url.Parse("http://kimlik.ornek/federasyon")
 	if err != nil {
 		t.Fatalf("adres cozulemedi: %v", err)
 	}
-	yukari, err := url.Parse("http://yukari.ornek/federasyon")
+	upstream, err := url.Parse("http://yukari.ornek/federasyon")
 	if err != nil {
 		t.Fatalf("adres cozulemedi: %v", err)
 	}
-	kavanoz := yeniCerezKavanozu()
-	kavanoz.SetCookies(biz, []*http.Cookie{{
+	jar := newCookieJar()
+	jar.SetCookies(ours, []*http.Cookie{{
 		Name: "deneme", Value: "deger", Path: "/federasyon", SameSite: http.SameSiteNoneMode,
 	}})
-	kavanoz.baglamKur(baglamAyniSite)
-	if n := len(kavanoz.Cookies(yukari)); n != 0 {
+	jar.setContext(ctxSameSite)
+	if n := len(jar.Cookies(upstream)); n != 0 {
 		t.Errorf("baska host'a %d cerez tasindi, beklenen 0", n)
 	}
-	if n := len(kavanoz.Cookies(biz)); n != 1 {
+	if n := len(jar.Cookies(ours)); n != 1 {
 		t.Errorf("kendi host'una %d cerez tasindi, beklenen 1", n)
 	}
 }
 
-// TestCerezKavanozuSilme, cerezSil'in TUM host'lardan sildigini olcer:
-// "cerez olmadan tamamlanamaz" iddiasinda tek degiskenin cerez oldugu
-// buna dayanir (TestSaldiriCerezsizCallbackReddedilir).
-func TestCerezKavanozuSilme(t *testing.T) {
-	hedef, err := url.Parse(kavanozHedef)
+// TestCookieJar_Delete checks that deleteCookie deletes from ALL hosts:
+// the claim "cannot complete without the cookie" relies on the cookie
+// being the only variable (TestAttack_CallbackWithoutCookieRejected).
+func TestCookieJar_Delete(t *testing.T) {
+	to, err := url.Parse(jarTarget)
 	if err != nil {
 		t.Fatalf("hedef cozulemedi: %v", err)
 	}
-	kavanoz := yeniCerezKavanozu()
-	kavanoz.SetCookies(hedef, []*http.Cookie{
+	jar := newCookieJar()
+	jar.SetCookies(to, []*http.Cookie{
 		{Name: cookieNameFederation, Value: "deger", Path: "/federasyon", SameSite: http.SameSiteNoneMode},
 		{Name: "baska", Value: "kalsin", Path: "/", SameSite: http.SameSiteNoneMode},
 	})
-	kavanoz.baglamKur(baglamAyniSite)
-	if n := len(kavanoz.Cookies(hedef)); n != 2 {
+	jar.setContext(ctxSameSite)
+	if n := len(jar.Cookies(to)); n != 2 {
 		t.Fatalf("silme oncesi %d cerez, beklenen 2", n)
 	}
-	kavanoz.cerezSil(cookieNameFederation)
-	kalan := kavanoz.Cookies(hedef)
-	if len(kalan) != 1 || kalan[0].Name != "baska" {
-		t.Errorf("silmeden sonra kalan = %v, beklenen yalnizca \"baska\"", kalan)
+	jar.deleteCookie(cookieNameFederation)
+	remaining := jar.Cookies(to)
+	if len(remaining) != 1 || remaining[0].Name != "baska" {
+		t.Errorf("silmeden sonra kalan = %v, beklenen yalnizca \"baska\"", remaining)
 	}
-	if kavanoz.cerezDegeri(cookieNameFederation) != "" {
+	if jar.cookieValue(cookieNameFederation) != "" {
 		t.Error("cerezDegeri silinmis cerezi hala donduruyor")
 	}
 }
 
-// TestAdimBaglami, yonlendirme zincirinin her adimindaki cerez
-// baglaminin kaynak/hedef host ve yonteme gore dogru siniflandigini
-// olcer. Yanlis siniflandirma, capraz-site donusu ayni-site saymaya
-// yol acar ve SameSite kurali hic devreye girmez.
-func TestAdimBaglami(t *testing.T) {
-	coz := func(ham string) *url.URL {
+// TestStepContext checks that the cookie context at each step of the
+// redirect chain is classified correctly by source/target host and
+// method. A wrong classification would count a cross-site return as
+// same-site, and the SameSite rule would never apply.
+func TestStepContext(t *testing.T) {
+	parse := func(raw string) *url.URL {
 		t.Helper()
-		u, err := url.Parse(ham)
+		u, err := url.Parse(raw)
 		if err != nil {
-			t.Fatalf("adres cozulemedi (%q): %v", ham, err)
+			t.Fatalf("adres cozulemedi (%q): %v", raw, err)
 		}
 		return u
 	}
-	biz := coz("http://kimlik.ornek/federasyon/google/baslat")
-	bizBaska := coz("http://kimlik.ornek/authorize/callback")
-	yukari := coz("http://yukari.ornek/authorize")
+	ours := parse("http://kimlik.ornek/federasyon/google/baslat")
+	otherSite := parse("http://kimlik.ornek/authorize/callback")
+	upstream := parse("http://yukari.ornek/authorize")
 
-	durumlar := []struct {
-		ad       string
-		kaynak   *url.URL
-		hedef    *url.URL
-		yontem   string
-		beklenen cerezBaglam
+	statuses := []struct {
+		name   string
+		from   *url.URL
+		to     *url.URL
+		method string
+		want   cookieContext
 	}{
-		{"ayni host GET ayni-site", biz, bizBaska, http.MethodGet, baglamAyniSite},
-		{"ayni host POST ayni-site", biz, bizBaska, http.MethodPost, baglamAyniSite},
-		{"baska host GET capraz-GET", yukari, bizBaska, http.MethodGet, baglamCaprazGet},
-		// Apple'in form_post donusu: bizim icin capraz-site POST.
-		{"baska host POST capraz-POST", yukari, bizBaska, http.MethodPost, baglamCaprazPost},
-		// Zincirin ilk adiminda kaynak YOKTUR; capraz sayilmak
-		// GUVENLI yondur (daha az cerez tasinir).
-		{"kaynaksiz GET capraz-GET", nil, biz, http.MethodGet, baglamCaprazGet},
+		{"ayni host GET ayni-site", ours, otherSite, http.MethodGet, ctxSameSite},
+		{"ayni host POST ayni-site", ours, otherSite, http.MethodPost, ctxSameSite},
+		{"baska host GET capraz-GET", upstream, otherSite, http.MethodGet, ctxCrossSiteGet},
+		// Apple's form_post return: a cross-site POST for us.
+		{"baska host POST capraz-POST", upstream, otherSite, http.MethodPost, ctxCrossSitePost},
+		// The first step of the chain has NO source; being counted as cross-site
+		// is the SAFE direction (fewer cookies are sent).
+		{"kaynaksiz GET capraz-GET", nil, ours, http.MethodGet, ctxCrossSiteGet},
 	}
 
-	for _, d := range durumlar {
-		if sonuc := adimBaglami(d.kaynak, d.hedef, d.yontem); sonuc != d.beklenen {
-			t.Errorf("%s: adimBaglami = %v, beklenen %v", d.ad, sonuc, d.beklenen)
+	for _, d := range statuses {
+		if res := stepContext(d.from, d.to, d.method); res != d.want {
+			t.Errorf("%s: adimBaglami = %v, beklenen %v", d.name, res, d.want)
 		}
 	}
 }

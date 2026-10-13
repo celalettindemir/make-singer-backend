@@ -8,36 +8,36 @@ import (
 	"testing"
 )
 
-// Durum kaydi TEK KULLANIMLIKTIR. Iki kez okunabilirse saldirgan
-// yakaladigi bir callback URL'ini tekrar oynatabilir.
-func TestDurumTekKullanimlik(t *testing.T) {
+// The state record is SINGLE-USE. If it could be read twice, an attacker
+// could replay a callback URL they captured.
+func TestRequestStore_StateSingleUse(t *testing.T) {
 	rdb := testRedis(t)
 	d := NewRequestStore(rdb)
 	ctx := context.Background()
 
-	istenen := FederationState{
+	requested := FederationState{
 		AuthRequestID: "istek-1",
 		Nonce:         "nonce-1",
 		Provider:      "google",
 		Cookie:        "cerez-degeri",
 		CodeVerifier:  "dogrulayici-1",
 	}
-	if err := d.WriteState(ctx, "state-1", istenen); err != nil {
+	if err := d.WriteState(ctx, "state-1", requested); err != nil {
 		t.Fatalf("durum yazilamadi: %v", err)
 	}
-	okunan, err := d.TakeState(ctx, "state-1")
+	readBack, err := d.TakeState(ctx, "state-1")
 	if err != nil {
 		t.Fatalf("durum okunamadi: %v", err)
 	}
-	if okunan != istenen {
-		t.Errorf("okunan = %+v, beklenen %+v", okunan, istenen)
+	if readBack != requested {
+		t.Errorf("okunan = %+v, beklenen %+v", readBack, requested)
 	}
 	if _, err := d.TakeState(ctx, "state-1"); !errors.Is(err, ErrStateNotFound) {
 		t.Errorf("ikinci okuma err = %v, beklenen ErrDurumYok", err)
 	}
 }
 
-func TestBilinmeyenDurumErrDurumYok(t *testing.T) {
+func TestRequestStore_UnknownStateNotFound(t *testing.T) {
 	rdb := testRedis(t)
 	d := NewRequestStore(rdb)
 	if _, err := d.TakeState(context.Background(), "hic-yazilmadi"); !errors.Is(err, ErrStateNotFound) {
@@ -45,7 +45,7 @@ func TestBilinmeyenDurumErrDurumYok(t *testing.T) {
 	}
 }
 
-func TestAuthorizeURLGoogle(t *testing.T) {
+func TestUpstream_AuthorizeURLGoogle(t *testing.T) {
 	y := &Upstream{
 		Name:         "google",
 		ClientID:     "istemci-123",
@@ -58,7 +58,7 @@ func TestAuthorizeURLGoogle(t *testing.T) {
 		t.Fatalf("URL cozumlenemedi: %v", err)
 	}
 	q := u.Query()
-	for alan, beklenen := range map[string]string{
+	for field, want := range map[string]string{
 		"client_id":             "istemci-123",
 		"response_type":         "code",
 		"scope":                 "openid email profile",
@@ -67,11 +67,11 @@ func TestAuthorizeURLGoogle(t *testing.T) {
 		"redirect_uri":          "https://biz/federasyon/google/geri",
 		"code_challenge_method": "S256",
 	} {
-		if q.Get(alan) != beklenen {
-			t.Errorf("%s = %q, beklenen %q", alan, q.Get(alan), beklenen)
+		if q.Get(field) != want {
+			t.Errorf("%s = %q, beklenen %q", field, q.Get(field), want)
 		}
 	}
-	// Dogrulayicinin KENDISI degil, S256 ozeti gonderilir.
+	// The S256 digest is sent, not the verifier ITSELF.
 	if q.Get("code_challenge") == "" {
 		t.Error("code_challenge bos")
 	}
@@ -80,9 +80,9 @@ func TestAuthorizeURLGoogle(t *testing.T) {
 	}
 }
 
-// K4: Apple'in PKCE destegi dokumante degil; bilinmeyen parametre
-// gondermek akisi kirma riskidir.
-func TestAuthorizeURLApplePKCEGondermez(t *testing.T) {
+// K4: Apple's PKCE support is not documented; sending an unknown
+// parameter risks breaking the flow.
+func TestUpstream_AuthorizeURLAppleOmitsPKCE(t *testing.T) {
 	y := &Upstream{
 		Name: "apple", ClientID: "tr.makesinger.giris",
 		AuthURL:      "https://appleid.apple.com/auth/authorize",
@@ -94,19 +94,19 @@ func TestAuthorizeURLApplePKCEGondermez(t *testing.T) {
 	if q.Get("code_challenge") != "" || q.Get("code_challenge_method") != "" {
 		t.Error("Apple'a PKCE parametresi gonderilmis")
 	}
-	// name/email scope'u istenince Apple form_post ile doner; bunu
-	// ACIKCA istiyoruz, cunku geri donus handler'i POST'u beklemek
-	// zorunda (bkz. K2).
+	// When the name/email scope is requested, Apple returns with form_post;
+	// we ask for it EXPLICITLY because the callback handler has to expect
+	// a POST (see K2).
 	if q.Get("response_mode") != "form_post" {
 		t.Errorf("response_mode = %q, beklenen form_post", q.Get("response_mode"))
 	}
 }
 
-// kodDogrulayiciUret, PKCE icin yeterince uzun bir dogrulayici ve onun
-// S256 meydan okumasini uretmeli; ikisi de bos olmamali ve farkli
-// cagrilar farkli degerler vermeli (sabit/tahmin edilebilir deger
-// PKCE'yi etkisiz kilar).
-func TestKodDogrulayiciUret(t *testing.T) {
+// TestGenerateCodeVerifier: generateCodeVerifier must produce a long
+// enough verifier and its S256 challenge; neither may be empty and
+// different calls must give different values (a constant/predictable
+// value would make PKCE ineffective).
+func TestGenerateCodeVerifier(t *testing.T) {
 	d1, m1, err := generateCodeVerifier()
 	if err != nil {
 		t.Fatalf("kodDogrulayiciUret: %v", err)

@@ -7,686 +7,688 @@ import (
 	"testing"
 )
 
-// Bu dosya federasyon akisini UCTAN UCA, gercek bir net/http
-// dinleyicisi (muxKur) ve CEREZ KAVANOZU uzerinde olcer. Test
-// altyapisi sahte_yukari_akis_test.go'dadir.
+// This file measures the federation flow END TO END, over a real net/http
+// listener (buildMux) and the COOKIE JAR. The test infrastructure is in
+// fake_upstream_test.go.
 //
-// NEDEN BU DOSYA VAR: Faz 1'de gorev basina incelemeler, kendi
-// katmanlarimizla kutuphanenin cagri sirasi arasindaki uyusmazligi
-// YAPISAL OLARAK yakalayamadi; canliya cikan iki Critical tam oradaydi.
-// Burada hicbir iddia tek bir katmanin cagrisina degil, akisin
-// GOZLENEBILIR sonucuna (uretilen kod, verilen jeton, yazilan eslesme)
-// dayanir.
+// WHY THIS FILE EXISTS: in Phase 1 the per-task reviews could not catch the
+// mismatch between our own layers and the library's call order STRUCTURALLY;
+// the two Criticals that went live were exactly there. Here no assertion
+// rests on the call of a single layer, but on the OBSERVABLE result of the
+// flow (the code produced, the token issued, the link written).
 //
-// Her saldiri testi AYNI KALIBI izler: once onkosulun GERCEKTEN
-// kuruldugu assert edilir (pozitif kontrol), sonra red olculur. Bu
-// kalip zorunlu: Faz 1'de iki test, duzeltmeyi hic olcmedigi halde
-// yesil gecmisti.
+// Every attack test follows the SAME PATTERN: first it is asserted that the
+// precondition was REALLY set up (positive control), then the rejection is
+// measured. This pattern is mandatory: in Phase 1 two tests passed green
+// without ever measuring the fix.
 
 // ---------------------------------------------------------------------
-// Ortak yardimcilar
+// Common helpers
 // ---------------------------------------------------------------------
 
-// kullaniciBilgisi, access token ile /userinfo ucunu cagirir.
+// userinfo calls the /userinfo endpoint with the access token.
 //
-// NEDEN AYRI BIR YUZEY: id_token ve /userinfo, claim'leri BIRBIRINDEN
-// BAGIMSIZ iki yoldan doldurur (id_token: Depo.SetUserinfoFromRequest,
-// userinfo: Depo.SetUserinfoFromToken). Birinin dogru olmasi digerini
-// kanitlamaz, bu yuzden mutlu yol testleri IKISINI de olcer.
-func (o *akisOrtami) kullaniciBilgisi(t *testing.T, erisimJetonu string) map[string]any {
+// WHY A SEPARATE SURFACE: the id_token and /userinfo fill the claims through
+// TWO INDEPENDENT paths (id_token: Storage.SetUserinfoFromRequest,
+// userinfo: Storage.SetUserinfoFromToken). One being right does not prove the
+// other, so the happy path tests measure BOTH.
+func (o *flowEnv) userinfo(t *testing.T, accessToken string) map[string]any {
 	t.Helper()
-	b := o.YeniTarayici(t)
-	yanit := b.istekBaslikli(t, http.MethodGet, o.issuer+"/userinfo", map[string]string{
-		"Authorization": "Bearer " + erisimJetonu,
+	b := o.NewBrowser(t)
+	resp := b.getWithHeaders(t, http.MethodGet, o.issuer+"/userinfo", map[string]string{
+		"Authorization": "Bearer " + accessToken,
 	})
-	if yanit.Durum != http.StatusOK {
-		t.Fatalf("/userinfo durumu = %d, govde: %s", yanit.Durum, yanit.Govde())
+	if resp.Status != http.StatusOK {
+		t.Fatalf("/userinfo durumu = %d, govde: %s", resp.Status, resp.Body())
 	}
-	return jsonCoz(t, yanit.Govde())
+	return decodeJSON(t, resp.Body())
 }
 
-// federasyonKodu, federasyon akisini bastan sona kosturur ve uretilen
-// authorization code ile akisi kosturan tarayiciyi doner.
-func (o *akisOrtami) federasyonKodu(t *testing.T, saglayici string) (string, *fedTarayici) {
+// federationCode runs the federation flow from start to finish and returns
+// the produced authorization code and the browser that ran the flow.
+func (o *flowEnv) federationCode(t *testing.T, provider string) (string, *fedBrowser) {
 	t.Helper()
-	oturum := o.YeniTarayici(t)
-	istekID := oturum.AuthorizeBaslat(t)
-	son := oturum.FederasyonAkisiniKostur(t, saglayici, istekID)
-	kod := son.KonumKod()
-	if kod == "" {
+	session := o.NewBrowser(t)
+	requestID := session.StartAuthorize(t)
+	last := session.RunFederationFlow(t, provider, requestID)
+	code := last.LocationCode()
+	if code == "" {
 		t.Fatalf("%s akisi kod uretmedi; son durum %d, konum %q, govde: %s",
-			saglayici, son.Durum, son.Konum(), son.Govde())
+			provider, last.Status, last.Location(), last.Body())
 	}
-	return kod, oturum
+	return code, session
 }
 
-// federasyonJetonu, federasyon akisini bastan sona kosturur ve token
-// ucunun yanitini doner. Mutlu yol testlerinin ortak govdesi.
-func (o *akisOrtami) federasyonJetonu(
-	t *testing.T, saglayici string,
-) (map[string]any, *fedTarayici) {
+// federationTokens runs the federation flow from start to finish and returns
+// the response of the token endpoint. The common body of the happy path tests.
+func (o *flowEnv) federationTokens(
+	t *testing.T, provider string,
+) (map[string]any, *fedBrowser) {
 	t.Helper()
-	kod, oturum := o.federasyonKodu(t, saglayici)
-	durum, jeton := o.jetonAl(t, kod, oturum.verifier)
-	if durum != http.StatusOK {
-		t.Fatalf("token durumu = %d, govde: %v", durum, jeton)
+	code, session := o.federationCode(t, provider)
+	status, token := o.exchangeToken(t, code, session.verifier)
+	if status != http.StatusOK {
+		t.Fatalf("token durumu = %d, govde: %v", status, token)
 	}
-	return jeton, oturum
+	return token, session
 }
 
-// erisimJetonuSub, access token'in sub claim'ini (bizim kullanici
-// kimligimizi) doner.
-func erisimJetonuSub(t *testing.T, jeton map[string]any) string {
+// accessTokenSub returns the sub claim of the access token (our user ID).
+func accessTokenSub(t *testing.T, token map[string]any) string {
 	t.Helper()
-	erisim, _ := jeton["access_token"].(string)
-	if erisim == "" {
+	access, _ := token["access_token"].(string)
+	if access == "" {
 		t.Fatal("access_token yok")
 	}
-	_, iddialar := jwtIddialari(t, erisim)
-	sub, _ := iddialar["sub"].(string)
+	_, claims := jwtClaims(t, access)
+	sub, _ := claims["sub"].(string)
 	if sub == "" {
 		t.Fatal("access token'da sub yok")
 	}
 	return sub
 }
 
-// yukariAkisKoduAl, yukari akistan GECERLI bir (state, code) ciftini
-// alir ama BIZIM geri bacagimizi KOSTURMAZ: donen deger, geri ucunun
-// cagrilmaya hazir TAM adresidir. Saldiri testlerinin girdisi tam
-// olarak budur -- saldirgan kendi yetkilendirmesinden gecerli bir cift
-// elde eder.
-func yukariAkisKoduAl(t *testing.T, b *fedTarayici, saglayici, istekID string) string {
+// upstreamCallbackURL takes a VALID (state, code) pair from the upstream but
+// does NOT RUN OUR callback leg: the returned value is the FULL address of the
+// callback endpoint, ready to be called. This is exactly the input of the
+// attack tests -- the attacker gets a valid pair from their own authorization.
+func upstreamCallbackURL(t *testing.T, b *fedBrowser, provider, requestID string) string {
 	t.Helper()
-	baslat := b.FederasyonBaslat(t, saglayici, istekID)
-	if baslat.Durum != http.StatusFound {
-		t.Fatalf("baslat durumu = %d, beklenen 302. govde: %s", baslat.Durum, baslat.Govde())
+	start := b.StartFederation(t, provider, requestID)
+	if start.Status != http.StatusFound {
+		t.Fatalf("baslat durumu = %d, beklenen 302. govde: %s", start.Status, start.Body())
 	}
-	if baslat.fedCerezi() == nil {
+	if start.fedCookie() == nil {
 		t.Fatal("baslat federasyon cerezi yazmadi; senaryo kurulamadi")
 	}
-	// Kullanici yukari akista onay verir (capraz-site ust-duzey GET).
-	yukari := b.istek(t, http.MethodGet, baslat.Konum(), nil, baglamCaprazGet)
-	if yukari.Durum != http.StatusFound {
-		t.Fatalf("yukari akis /authorize durumu = %d, beklenen 302", yukari.Durum)
+	// The user approves in the upstream flow (cross-site top-level GET).
+	upstream := b.do(t, http.MethodGet, start.Location(), nil, ctxCrossSiteGet)
+	if upstream.Status != http.StatusFound {
+		t.Fatalf("yukari akis /authorize durumu = %d, beklenen 302", upstream.Status)
 	}
-	geri := yukari.Konum()
-	ayristirilan, err := url.Parse(geri)
+	callback := upstream.Location()
+	parsed, err := url.Parse(callback)
 	if err != nil {
 		t.Fatalf("geri adresi cozulemedi: %v", err)
 	}
-	if ayristirilan.Query().Get("code") == "" || ayristirilan.Query().Get("state") == "" {
-		t.Fatalf("yukari akis code+state dondurmedi: %q", geri)
+	if parsed.Query().Get("code") == "" || parsed.Query().Get("state") == "" {
+		t.Fatalf("yukari akis code+state dondurmedi: %q", callback)
 	}
-	return geri
+	return callback
 }
 
 // ---------------------------------------------------------------------
-// Mutlu yollar
+// Happy paths
 // ---------------------------------------------------------------------
 
-// Ucan uca: /authorize -> /giris -> Google butonu ->
-// /federasyon/google/baslat -> sahte Google -> /federasyon/google/geri
-// -> /authorize/callback -> kod -> /oauth/token -> access + id + refresh
+// End to end: /authorize -> /giris -> Google button ->
+// /federasyon/google/baslat -> fake Google -> /federasyon/google/geri
+// -> /authorize/callback -> code -> /oauth/token -> access + id + refresh
 //
-// Gercek bir net/http dinleyicisi ve CEREZ KAVANOZU ile kosar; cerez
-// davranisi (Path, SameSite) akisin parcasidir ve elle kurulan
-// isteklerle olculemez.
-func TestUctanUcaGoogleGirisi(t *testing.T) {
-	const eposta = "google-kullanici@ornek.com"
-	ortam := akisOrtamiKur(t, sahteOPAyar{
-		Eposta:           eposta,
-		EpostaDogrulandi: true,
-		Ad:               "Google Kullanici",
-		Sub:              "google-sub-1",
+// It runs with a real net/http listener and a COOKIE JAR; the cookie
+// behavior (Path, SameSite) is part of the flow and cannot be measured with
+// hand-built requests.
+func TestE2E_GoogleLogin(t *testing.T) {
+	const email = "google-kullanici@ornek.com"
+	env := setupFlowEnv(t, fakeOPConfig{
+		Email:         email,
+		EmailVerified: true,
+		Name:          "Google Kullanici",
+		Sub:           "google-sub-1",
 	})
 
-	jeton, _ := ortam.federasyonJetonu(t, providerGoogle)
+	token, _ := env.federationTokens(t, providerGoogle)
 
-	// 0) Yukari akisa GITTIGIMIZ istek de akisin parcasi: kendi PKCE
-	//    ciftimizi ve nonce'umuzu gonderdigimiz orada gorunur.
-	sorgu := ortam.YukariAkis(t, providerGoogle).authorizeSorgusu()
-	if sorgu.Get("code_challenge_method") != "S256" || sorgu.Get("code_challenge") == "" {
-		t.Errorf("yukari akisa S256 PKCE gonderilmedi: %v", sorgu)
+	// 0) The request WE SEND to the upstream is part of the flow too: our own
+	// PKCE pair and nonce are visible there.
+	query := env.Upstream(t, providerGoogle).lastAuthorizeQuery()
+	if query.Get("code_challenge_method") != "S256" || query.Get("code_challenge") == "" {
+		t.Errorf("yukari akisa S256 PKCE gonderilmedi: %v", query)
 	}
-	if sorgu.Get("nonce") == "" {
+	if query.Get("nonce") == "" {
 		t.Error("yukari akisa nonce gonderilmedi")
 	}
 
-	// 1) access_token: RS256 ile imzali ve BIZIM istemcimiz icin.
-	erisim, _ := jeton["access_token"].(string)
-	if erisim == "" {
+	// 1) access_token: signed with RS256 and for OUR client.
+	access, _ := token["access_token"].(string)
+	if access == "" {
 		t.Fatal("access_token yok")
 	}
-	baslik, erisimIddia := jwtIddialari(t, erisim)
-	if baslik["alg"] != "RS256" {
-		t.Errorf("access token alg = %v, beklenen RS256", baslik["alg"])
+	header, accessClaims := jwtClaims(t, access)
+	if header["alg"] != "RS256" {
+		t.Errorf("access token alg = %v, beklenen RS256", header["alg"])
 	}
-	if !audIcerir(erisimIddia["aud"], "makesinger-mobil") {
-		t.Errorf("access token aud = %v, beklenen makesinger-mobil", erisimIddia["aud"])
+	if !audContains(accessClaims["aud"], "makesinger-mobil") {
+		t.Errorf("access token aud = %v, beklenen makesinger-mobil", accessClaims["aud"])
 	}
 
-	// 2) amr = ["fed"]: kullanicinin federasyonla dogrulandigi
-	//    jetonda GORUNMELI. amr'i tasiyan jeton id_token'dir
-	//    (brief access token diyor; kutuphane onu id_token'a koyuyor,
-	//    bkz. rapor).
-	idJeton, _ := jeton["id_token"].(string)
-	if idJeton == "" {
+	// 2) amr = ["fed"]: the fact that the user was verified through federation
+	// must be VISIBLE in the token. The token that carries amr is the id_token
+	// (the brief says access token; the library puts it in the id_token, see
+	// the report).
+	idToken, _ := token["id_token"].(string)
+	if idToken == "" {
 		t.Fatal("id_token yok")
 	}
-	_, idIddia := jwtIddialari(t, idJeton)
-	amr := amrDegerleri(idIddia["amr"])
+	_, idClaim := jwtClaims(t, idToken)
+	amr := amrValues(idClaim["amr"])
 	if len(amr) != 1 || amr[0] != amrFederation {
 		t.Errorf("amr = %v, beklenen [%s]", amr, amrFederation)
 	}
 
-	// 3) id_token OIDC Core 1.0 §2'nin REQUIRED claim'ini TASIMALI:
-	//    sub DOLU ve access token'in sub'uyla AYNI kullanici. Ayrica
-	//    email scope'u istendigi icin email de id_token'da olmali.
-	//    Bu iddia ayri bir yuzeydir: kutuphane id_token userinfo'sunu
-	//    Depo.SetUserinfoFromRequest'ten besler, /userinfo ucunu ise
-	//    Depo.SetUserinfoFromToken'dan.
-	beklenenSub := erisimJetonuSub(t, jeton)
-	if idSub, _ := idIddia["sub"].(string); idSub != beklenenSub {
-		t.Errorf("id_token sub = %v, beklenen %q (access token'in sub'u)", idIddia["sub"], beklenenSub)
+	// 3) The id_token must CARRY the REQUIRED claim of OIDC Core 1.0 §2: sub
+	// must be set and the SAME user as the access token's sub. Since the email
+	// scope is requested, the email must be in the id_token as well. This
+	// assertion is a separate surface: the library feeds the id_token's userinfo
+	// from Storage.SetUserinfoFromRequest and the /userinfo endpoint from
+	// Storage.SetUserinfoFromToken.
+	wantSub := accessTokenSub(t, token)
+	if idSub, _ := idClaim["sub"].(string); idSub != wantSub {
+		t.Errorf("id_token sub = %v, beklenen %q (access token'in sub'u)", idClaim["sub"], wantSub)
 	}
-	if idIddia["email"] != eposta {
-		t.Errorf("id_token email = %v, beklenen %q", idIddia["email"], eposta)
+	if idClaim["email"] != email {
+		t.Errorf("id_token email = %v, beklenen %q", idClaim["email"], email)
 	}
 
-	// 4) Federasyon DOGRU kullaniciyi cozdu: userinfo'da yukari
-	//    akisin e-postasi ve bizim sub'umuz dolu.
-	bilgi := ortam.kullaniciBilgisi(t, erisim)
-	if bilgi["sub"] == "" || bilgi["sub"] == nil {
+	// 4) Federation resolved the RIGHT user: the upstream's email and our sub
+	// are set in the userinfo.
+	info := env.userinfo(t, access)
+	if info["sub"] == "" || info["sub"] == nil {
 		t.Error("userinfo'da sub yok")
 	}
-	if bilgi["email"] != eposta {
-		t.Errorf("userinfo email = %v, beklenen %q", bilgi["email"], eposta)
+	if info["email"] != email {
+		t.Errorf("userinfo email = %v, beklenen %q", info["email"], email)
 	}
 
-	// 5) refresh_token verildi ve BIR KEZ donebilir; donen jetonla
-	//    eski jeton gecersizlesir (aile rotasyonu).
-	refresh, _ := jeton["refresh_token"].(string)
+	// 5) A refresh_token was issued and can be exchanged ONCE; the old token
+	// becomes invalid with the returned one (family rotation).
+	refresh, _ := token["refresh_token"].(string)
 	if refresh == "" {
 		t.Fatal("offline_access istendi ama refresh_token yok")
 	}
-	durum, yeni := ortam.yenile(t, refresh)
-	if durum != http.StatusOK {
-		t.Fatalf("refresh durumu = %d, govde: %v", durum, yeni)
+	status, fresh := env.refresh(t, refresh)
+	if status != http.StatusOK {
+		t.Fatalf("refresh durumu = %d, govde: %v", status, fresh)
 	}
-	yeniRefresh, _ := yeni["refresh_token"].(string)
-	if yeniRefresh == "" || yeniRefresh == refresh {
-		t.Errorf("refresh dondurulmedi: eski ile ayni veya bos (%q)", yeniRefresh)
+	rotatedRefresh, _ := fresh["refresh_token"].(string)
+	if rotatedRefresh == "" || rotatedRefresh == refresh {
+		t.Errorf("refresh dondurulmedi: eski ile ayni veya bos (%q)", rotatedRefresh)
 	}
-	if tekrarDurum, tekrarGovde := ortam.yenile(t, refresh); tekrarDurum == http.StatusOK {
-		t.Errorf("tuketilmis refresh_token yeniden kabul edildi: %v", tekrarGovde)
+	if repeatStatus, repeatBody := env.refresh(t, refresh); repeatStatus == http.StatusOK {
+		t.Errorf("tuketilmis refresh_token yeniden kabul edildi: %v", repeatBody)
 	}
 }
 
-// Ayni akis, ama donus CROSS-SITE POST.
-// Bu test K2'nin canli kanitidir: SameSite=Lax bir cerezle GECMEZ,
-// SameSite=None ile GECER. Kanit yalnizca yazili degil OLCULUYOR:
-// cerez kavanozu SameSite kuralini uygular (standart cookiejar onu yok
-// sayar, bkz. cerezKavanozu) ve cerezin Lax'e cevrilmesi bu testi
-// DUSURUR (mutasyon kaniti raporda).
-func TestUctanUcaAppleGirisiFormPost(t *testing.T) {
-	const eposta = "apple-kullanici@ornek.com"
-	ortam := akisOrtamiKur(t, sahteOPAyar{
-		Eposta:           eposta,
-		EpostaDogrulandi: true,
-		Ad:               "Apple Kullanici",
-		Sub:              "apple-sub-1",
+// The same flow, but the return is a CROSS-SITE POST.
+// This test is the live proof of K2: it does NOT pass with a SameSite=Lax
+// cookie, it passes with SameSite=None. The proof is not only written but
+// MEASURED: the cookie jar applies the SameSite rule (the standard cookiejar
+// ignores it, see cookieJar) and turning the cookie into Lax makes this test
+// FAIL (mutation proof in the report).
+func TestE2E_AppleLoginFormPost(t *testing.T) {
+	const email = "apple-kullanici@ornek.com"
+	env := setupFlowEnv(t, fakeOPConfig{
+		Email:         email,
+		EmailVerified: true,
+		Name:          "Apple Kullanici",
+		Sub:           "apple-sub-1",
 	})
 
-	// ONKOSUL: donus GERCEKTEN capraz-site POST olmali. Baslat
-	// adresinde response_mode=form_post yoksa test, Google ile ayni
-	// GET donusunu olcer ve K2 hakkinda HICBIR SEY soylemez.
-	oturum := ortam.YeniTarayici(t)
-	istekID := oturum.AuthorizeBaslat(t)
-	baslat := oturum.FederasyonBaslat(t, providerApple, istekID)
-	if baslat.Durum != http.StatusFound {
-		t.Fatalf("baslat durumu = %d, beklenen 302", baslat.Durum)
+	// PRECONDITION: the return must REALLY be a cross-site POST. If the start
+	// address has no response_mode=form_post the test measures the same GET
+	// return as Google and says NOTHING about K2.
+	session := env.NewBrowser(t)
+	requestID := session.StartAuthorize(t)
+	start := session.StartFederation(t, providerApple, requestID)
+	if start.Status != http.StatusFound {
+		t.Fatalf("baslat durumu = %d, beklenen 302", start.Status)
 	}
-	yukariURL, err := url.Parse(baslat.Konum())
+	upstreamURL, err := url.Parse(start.Location())
 	if err != nil {
 		t.Fatalf("yukari akis adresi cozulemedi: %v", err)
 	}
-	if yukariURL.Query().Get("response_mode") != "form_post" {
+	if upstreamURL.Query().Get("response_mode") != "form_post" {
 		t.Fatalf("Apple akisi form_post istemiyor (response_mode=%q); test K2'yi OLCMUYOR",
-			yukariURL.Query().Get("response_mode"))
+			upstreamURL.Query().Get("response_mode"))
 	}
-	// Federasyon cerezi, capraz-site POST'ta tasinabilmek icin
-	// SameSite=None olmali ve yuzeyi /federasyon ile sinirli olmali.
-	cerez := baslat.fedCerezi()
-	if cerez == nil {
+	// To be carried on a cross-site POST the federation cookie must be
+	// SameSite=None and its surface must be limited to /federasyon.
+	cookie := start.fedCookie()
+	if cookie == nil {
 		t.Fatal("baslat federasyon cerezi yazmadi")
 	}
-	if cerez.SameSite != http.SameSiteNoneMode {
-		t.Errorf("federasyon cerezi SameSite = %v, beklenen None", cerez.SameSite)
+	if cookie.SameSite != http.SameSiteNoneMode {
+		t.Errorf("federasyon cerezi SameSite = %v, beklenen None", cookie.SameSite)
 	}
-	if cerez.Path != "/federasyon" {
-		t.Errorf("federasyon cerezi Path = %q, beklenen /federasyon", cerez.Path)
+	if cookie.Path != "/federasyon" {
+		t.Errorf("federasyon cerezi Path = %q, beklenen /federasyon", cookie.Path)
 	}
 
-	// Akisin kalani: sahte Apple form_post ile BIZE POST eder.
-	son := oturum.akisiTakipEt(t, baslat)
-	kod := son.KonumKod()
-	if kod == "" {
+	// The rest of the flow: the fake Apple POSTs to US with form_post.
+	last := session.follow(t, start)
+	code := last.LocationCode()
+	if code == "" {
 		t.Fatalf("form_post akisi kod uretmedi; son durum %d, konum %q, govde: %s",
-			son.Durum, son.Konum(), son.Govde())
+			last.Status, last.Location(), last.Body())
 	}
-	durum, jeton := ortam.jetonAl(t, kod, oturum.verifier)
-	if durum != http.StatusOK {
-		t.Fatalf("token durumu = %d, govde: %v", durum, jeton)
+	status, token := env.exchangeToken(t, code, session.verifier)
+	if status != http.StatusOK {
+		t.Fatalf("token durumu = %d, govde: %v", status, token)
 	}
-	erisim, _ := jeton["access_token"].(string)
-	if erisim == "" {
+	access, _ := token["access_token"].(string)
+	if access == "" {
 		t.Fatal("access_token yok")
 	}
-	if bilgi := ortam.kullaniciBilgisi(t, erisim); bilgi["email"] != eposta {
-		t.Errorf("userinfo email = %v, beklenen %q", bilgi["email"], eposta)
+	if info := env.userinfo(t, access); info["email"] != email {
+		t.Errorf("userinfo email = %v, beklenen %q", info["email"], email)
 	}
 }
 
-// Ikinci giris AYNI hesaba dusmeli: (saglayici, sub) eslesmesi kalici.
-func TestUctanUcaIkinciGirisAyniHesap(t *testing.T) {
-	ortam := akisOrtamiKur(t, sahteOPAyar{
-		Eposta:           "tekrar@ornek.com",
-		EpostaDogrulandi: true,
-		Ad:               "Tekrar Giren",
-		Sub:              "google-sub-sabit",
+// The second login must land on the SAME account: the (provider, sub) link is permanent.
+func TestE2E_SecondLoginSameAccount(t *testing.T) {
+	env := setupFlowEnv(t, fakeOPConfig{
+		Email:         "tekrar@ornek.com",
+		EmailVerified: true,
+		Name:          "Tekrar Giren",
+		Sub:           "google-sub-sabit",
 	})
 
-	ilk, _ := ortam.federasyonJetonu(t, providerGoogle)
-	ilkSub := erisimJetonuSub(t, ilk)
-	// ONKOSUL: ilk giris GERCEKTEN bir eslesme yazmis olmali; aksi
-	// halde ikinci girisin "ayni hesap" olmasi hicbir sey kanitlamaz.
-	if sayi := ortam.FedereEslesmeSayisi(t); sayi != 1 {
-		t.Fatalf("ilk giristen sonra eslesme sayisi = %d, beklenen 1", sayi)
+	first, _ := env.federationTokens(t, providerGoogle)
+	firstSub := accessTokenSub(t, first)
+	// PRECONDITION: the first login must REALLY have written a link; otherwise
+	// the second login being the "same account" proves nothing.
+	if count := env.FederatedLinkCount(t); count != 1 {
+		t.Fatalf("ilk giristen sonra eslesme sayisi = %d, beklenen 1", count)
 	}
 
-	ikinci, _ := ortam.federasyonJetonu(t, providerGoogle)
-	if ikinciSub := erisimJetonuSub(t, ikinci); ikinciSub != ilkSub {
-		t.Errorf("ikinci giris BASKA hesaba dustu: %q != %q", ikinciSub, ilkSub)
+	second, _ := env.federationTokens(t, providerGoogle)
+	if secondSub := accessTokenSub(t, second); secondSub != firstSub {
+		t.Errorf("ikinci giris BASKA hesaba dustu: %q != %q", secondSub, firstSub)
 	}
-	if sayi := ortam.FedereEslesmeSayisi(t); sayi != 1 {
-		t.Errorf("ikinci giris yeni bir eslesme yazdi: sayi = %d", sayi)
+	if count := env.FederatedLinkCount(t); count != 1 {
+		t.Errorf("ikinci giris yeni bir eslesme yazdi: sayi = %d", count)
 	}
 }
 
-// Apple ikinci giriste email claim'i GONDERMEZ. Bu, hesabi
-// kaybetmeye yol acmamali -- eslesme sub uzerinden.
-func TestUctanUcaAppleIkinciGiristeEpostaGelmez(t *testing.T) {
-	ortam := akisOrtamiKur(t, sahteOPAyar{
-		Eposta:           "apple-ilk@ornek.com",
-		EpostaDogrulandi: true,
-		Ad:               "Apple Ilk",
-		Sub:              "apple-sub-sabit",
+// Apple does NOT SEND the email claim on the second login. This must not
+// lead to losing the account -- the link is by sub.
+func TestE2E_AppleSecondLoginWithoutEmail(t *testing.T) {
+	env := setupFlowEnv(t, fakeOPConfig{
+		Email:         "apple-ilk@ornek.com",
+		EmailVerified: true,
+		Name:          "Apple Ilk",
+		Sub:           "apple-sub-sabit",
 	})
 
-	ilk, _ := ortam.federasyonJetonu(t, providerApple)
-	ilkSub := erisimJetonuSub(t, ilk)
-	if sayi := ortam.FedereEslesmeSayisi(t); sayi != 1 {
-		t.Fatalf("ilk giristen sonra eslesme sayisi = %d, beklenen 1", sayi)
+	first, _ := env.federationTokens(t, providerApple)
+	firstSub := accessTokenSub(t, first)
+	if count := env.FederatedLinkCount(t); count != 1 {
+		t.Fatalf("ilk giristen sonra eslesme sayisi = %d, beklenen 1", count)
 	}
 
-	// ONKOSUL: Apple ikinci turda e-postayi HIC gondermez. TEK DEGISEN
-	// budur: Ad gibi diger alanlar DOGRU kalir, yoksa testin hangi
-	// eksikligi olctugu belirsizlesir.
-	apple := ortam.YukariAkis(t, providerApple)
-	apple.ayarla(func(a *sahteOPAyar) { a.Eposta = "" })
+	// PRECONDITION: Apple sends NO email AT ALL in the second round. This is the
+	// ONLY thing that changes: other fields such as the Name stay RIGHT,
+	// otherwise it becomes unclear which gap the test measures.
+	apple := env.Upstream(t, providerApple)
+	apple.configure(func(a *fakeOPConfig) { a.Email = "" })
 
-	ikinci, _ := ortam.federasyonJetonu(t, providerApple)
-	if ikinciSub := erisimJetonuSub(t, ikinci); ikinciSub != ilkSub {
-		t.Errorf("e-postasiz ikinci giris BASKA hesaba dustu: %q != %q", ikinciSub, ilkSub)
+	second, _ := env.federationTokens(t, providerApple)
+	if secondSub := accessTokenSub(t, second); secondSub != firstSub {
+		t.Errorf("e-postasiz ikinci giris BASKA hesaba dustu: %q != %q", secondSub, firstSub)
 	}
-	if sayi := ortam.FedereEslesmeSayisi(t); sayi != 1 {
-		t.Errorf("e-postasiz ikinci giris yeni hesap acti: eslesme sayisi = %d", sayi)
+	if count := env.FederatedLinkCount(t); count != 1 {
+		t.Errorf("e-postasiz ikinci giris yeni hesap acti: eslesme sayisi = %d", count)
 	}
-	// E-posta kaybolmamali: ilk turda ogrenilen adres hesapta kalir.
-	erisim, _ := ikinci["access_token"].(string)
-	if bilgi := ortam.kullaniciBilgisi(t, erisim); bilgi["email"] != "apple-ilk@ornek.com" {
-		t.Errorf("userinfo email = %v, beklenen ilk turdaki adres", bilgi["email"])
+	// The email must not be lost: the address learned in the first round stays
+	// on the account.
+	access, _ := second["access_token"].(string)
+	if info := env.userinfo(t, access); info["email"] != "apple-ilk@ornek.com" {
+		t.Errorf("userinfo email = %v, beklenen ilk turdaki adres", info["email"])
 	}
-	// BIZIM id_token'imiz de e-postayi TASIR. Celiski degil: claim'in
-	// kaynagi yukari akisin bu turdaki yaniti DEGIL, kendi
-	// veritabanimizdaki kullanici kaydidir (Depo.userinfoDoldur,
-	// kullanici.ByID uzerinden). Yukari akisin e-postayi bir daha hic
-	// gondermemesi kendi jetonlarimizi fakirlestirmez.
-	idJeton, _ := ikinci["id_token"].(string)
-	if idJeton == "" {
+	// OUR id_token CARRIES the email too. This is not a contradiction: the
+	// source of the claim is NOT the upstream's response in this round but the
+	// user record in our own database (Storage.fillUserinfo, through
+	// users.ByID). The upstream never sending the email again does not impoverish
+	// our own tokens.
+	idToken, _ := second["id_token"].(string)
+	if idToken == "" {
 		t.Fatal("id_token yok")
 	}
-	_, idIddia := jwtIddialari(t, idJeton)
-	if idIddia["email"] != "apple-ilk@ornek.com" {
-		t.Errorf("id_token email = %v, beklenen ilk turdaki adres", idIddia["email"])
+	_, idClaim := jwtClaims(t, idToken)
+	if idClaim["email"] != "apple-ilk@ornek.com" {
+		t.Errorf("id_token email = %v, beklenen ilk turdaki adres", idClaim["email"])
 	}
-	if idSub, _ := idIddia["sub"].(string); idSub != ilkSub {
-		t.Errorf("id_token sub = %v, beklenen %q", idIddia["sub"], ilkSub)
+	if idSub, _ := idClaim["sub"].(string); idSub != firstSub {
+		t.Errorf("id_token sub = %v, beklenen %q", idClaim["sub"], firstSub)
 	}
 }
 
 // ---------------------------------------------------------------------
-// Saldirilar
+// Attacks
 // ---------------------------------------------------------------------
 
-// Saldirgan kendi Google yetkilendirmesinden gecerli bir state+code
-// cifti alir ve kurbanin tarayicisinda callback'i acar. Kurbanin
-// akisi saldirganin hesabina TAMAMLANMAMALI.
+// The attacker gets a valid state+code pair from their own Google
+// authorization and opens the callback in the victim's browser. The victim's
+// flow must NOT BE COMPLETED for the attacker's account.
 //
-// NEDEN KURBAN DA KENDI FEDERASYON BACAGINI KOSTURUYOR: kurban yalnizca
-// /authorize yapsa kurbanda kimlik_fed cerezi HIC olmaz ve red
-// "cerez YOK" dalindan gelir -- yani bu test
-// TestSaldiriCerezsizCallbackReddedilir ile AYNI mekanizmayi olcer,
-// cerez DEGERI karsilastirmasi (subtle.ConstantTimeCompare, bkz.
-// FedereSayfalar.Geri) ise hic kosmaz. Kurbana kendi cerezini aldirinca
-// cerez VARDIR ama DEGERI saldirganinkiyle eslesmez: olculen sey
-// baglamanin kendisi olur.
-func TestSaldiriBaskaTarayicidaBaslatilanAkisTamamlanamaz(t *testing.T) {
-	ortam := akisOrtamiKur(t, sahteOPAyar{
-		Eposta:           "saldirgan@ornek.com",
-		EpostaDogrulandi: true,
-		Sub:              "google-sub-saldirgan",
+// WHY THE VICTIM ALSO RUNS THEIR OWN FEDERATION LEG: if the victim only
+// did /authorize, the victim would have NO kimlik_fed cookie AT ALL and the
+// rejection would come from the "NO cookie" branch -- i.e. this test would
+// measure the SAME mechanism as TestAttack_CallbackWithoutCookieRejected,
+// and the cookie VALUE comparison (subtle.ConstantTimeCompare, see
+// FederationPages.Callback) would never run. When the victim gets their own
+// cookie the cookie EXISTS but its VALUE does not match the attacker's: what
+// is measured is the binding itself.
+func TestAttack_FlowFromOtherBrowserCannotComplete(t *testing.T) {
+	env := setupFlowEnv(t, fakeOPConfig{
+		Email:         "saldirgan@ornek.com",
+		EmailVerified: true,
+		Sub:           "google-sub-saldirgan",
 	})
 
-	saldirgan := ortam.YeniTarayici(t)
-	kurban := ortam.YeniTarayici(t)
-	saldirganIstek := saldirgan.AuthorizeBaslat(t)
-	kurbanIstek := kurban.AuthorizeBaslat(t)
+	attacker := env.NewBrowser(t)
+	victim := env.NewBrowser(t)
+	attackerRequest := attacker.StartAuthorize(t)
+	victimRequest := victim.StartAuthorize(t)
 
-	// ONKOSUL 1: saldirgan GECERLI bir state+code cifti elde etti.
-	geriURL := yukariAkisKoduAl(t, saldirgan, providerGoogle, saldirganIstek)
+	// PRECONDITION 1: the attacker obtained a VALID state+code pair.
+	callbackURL := upstreamCallbackURL(t, attacker, providerGoogle, attackerRequest)
 
-	// ONKOSUL 2: kurban KENDI federasyon bacagini baslatti, yani
-	// kurbanin tarayicisinda da bir kimlik_fed cerezi VAR.
-	kurbanBaslat := kurban.FederasyonBaslat(t, providerGoogle, kurbanIstek)
-	if kurbanBaslat.Durum != http.StatusFound {
-		t.Fatalf("kurbanin baslat durumu = %d, beklenen 302", kurbanBaslat.Durum)
+	// PRECONDITION 2: the victim started THEIR OWN federation leg, i.e. there is
+	// a kimlik_fed cookie in the victim's browser too.
+	victimStart := victim.StartFederation(t, providerGoogle, victimRequest)
+	if victimStart.Status != http.StatusFound {
+		t.Fatalf("kurbanin baslat durumu = %d, beklenen 302", victimStart.Status)
 	}
-	if kurbanBaslat.fedCerezi() == nil {
+	if victimStart.fedCookie() == nil {
 		t.Fatal("kurbanin baslat'i federasyon cerezi yazmadi; senaryo kurulamadi")
 	}
 
-	// ONKOSUL 3: iki cerezin DEGERLERI farkli. Esit olsalardi asagidaki
-	// red cerez baglamasindan degil baska bir seyden gelirdi.
-	kurbanCerez := kurban.kavanoz.cerezDegeri(cookieNameFederation)
-	saldirganCerez := saldirgan.kavanoz.cerezDegeri(cookieNameFederation)
-	if kurbanCerez == "" || saldirganCerez == "" {
-		t.Fatalf("cerez degerleri okunamadi (kurban %q, saldirgan %q)", kurbanCerez, saldirganCerez)
+	// PRECONDITION 3: the VALUES of the two cookies are different. If they were
+	// equal the rejection below would come from something other than the cookie
+	// binding.
+	victimCookie := victim.jar.cookieValue(cookieNameFederation)
+	attackerCookie := attacker.jar.cookieValue(cookieNameFederation)
+	if victimCookie == "" || attackerCookie == "" {
+		t.Fatalf("cerez degerleri okunamadi (kurban %q, saldirgan %q)", victimCookie, attackerCookie)
 	}
-	if kurbanCerez == saldirganCerez {
+	if victimCookie == attackerCookie {
 		t.Fatal("iki tarayicinin federasyon cerezi AYNI; baglama testi bos olurdu")
 	}
 
-	// Saldirgan o adresi kurbanin tarayicisinda actirir: kurbanda cerez
-	// VAR ama DEGERI saldirganin state kaydindakiyle eslesmedigi icin
-	// reddedilmeli.
-	red := kurban.istek(t, http.MethodGet, geriURL, nil, baglamCaprazGet)
-	if red.Durum != http.StatusForbidden {
+	// The attacker has that address opened in the victim's browser: the victim
+	// HAS a cookie but its VALUE does not match the one in the attacker's state
+	// record, so it must be rejected.
+	red := victim.do(t, http.MethodGet, callbackURL, nil, ctxCrossSiteGet)
+	if red.Status != http.StatusForbidden {
 		t.Errorf("baska tarayicida callback durumu = %d, beklenen 403. govde: %s",
-			red.Durum, red.Govde())
+			red.Status, red.Body())
 	}
-	if ortam.IstekTamamlandiMi(t, saldirganIstek) {
+	if env.RequestDone(t, attackerRequest) {
 		t.Fatal("HESAP DEVRALMA: saldirganin istegi kurbanin tarayicisinda tamamlandi")
 	}
-	if ortam.IstekTamamlandiMi(t, kurbanIstek) {
+	if env.RequestDone(t, victimRequest) {
 		t.Fatal("kurbanin istegi saldirganin akisiyla tamamlandi")
 	}
-	if _, err := kurban.KodDegis(t, saldirganIstek); err == nil {
+	if _, err := victim.ExchangeCode(t, attackerRequest); err == nil {
 		t.Fatal("kurbanin tarayicisinda kod degisimi basarili oldu")
 	}
-	if sayi := ortam.FedereEslesmeSayisi(t); sayi != 0 {
-		t.Errorf("reddedilen akis eslesme yazdi: sayi = %d", sayi)
+	if count := env.FederatedLinkCount(t); count != 0 {
+		t.Errorf("reddedilen akis eslesme yazdi: sayi = %d", count)
 	}
 
-	// POZITIF KONTROL: AYNI yolla alinmis ikinci bir cift, saldirganin
-	// KENDI tarayicisinda calisir. Yani olculen sey cerez baglamasidir,
-	// bozuk bir senaryo kurulumu degil.
-	kendiIstek := saldirgan.AuthorizeBaslat(t)
-	kendiGeri := yukariAkisKoduAl(t, saldirgan, providerGoogle, kendiIstek)
-	kendi := saldirgan.akisiTakipEt(t,
-		saldirgan.istek(t, http.MethodGet, kendiGeri, nil, baglamCaprazGet))
-	if kendi.KonumKod() == "" {
+	// POSITIVE CONTROL: a second pair obtained the SAME way works in the
+	// attacker's OWN browser. So what is measured is the cookie binding, not a
+	// broken scenario setup.
+	ownRequest := attacker.StartAuthorize(t)
+	ownCallback := upstreamCallbackURL(t, attacker, providerGoogle, ownRequest)
+	own := attacker.follow(t,
+		attacker.do(t, http.MethodGet, ownCallback, nil, ctxCrossSiteGet))
+	if own.LocationCode() == "" {
 		t.Fatalf("saldirganin kendi tarayicisinda akis tamamlanmadi (durum %d); senaryo gecersiz",
-			kendi.Durum)
+			own.Status)
 	}
 }
 
-// Saldirgan kurbanin state'ini ele gecirmis olsa bile, cerez
-// olmadan tamamlayamamali (K2).
-func TestSaldiriCerezsizCallbackReddedilir(t *testing.T) {
-	ortam := akisOrtamiKur(t, sahteOPAyar{
-		Eposta:           "cerezsiz@ornek.com",
-		EpostaDogrulandi: true,
-		Sub:              "google-sub-cerezsiz",
+// Even if the attacker has captured the victim's state, they must not be able
+// to complete without the cookie (K2).
+func TestAttack_CallbackWithoutCookieRejected(t *testing.T) {
+	env := setupFlowEnv(t, fakeOPConfig{
+		Email:         "cerezsiz@ornek.com",
+		EmailVerified: true,
+		Sub:           "google-sub-cerezsiz",
 	})
 
-	oturum := ortam.YeniTarayici(t)
-	istekID := oturum.AuthorizeBaslat(t)
-	// ONKOSUL: gecerli bir state+code cifti var ve cerez YAZILDI
-	// (yukariAkisKoduAl ikisini de dogrular).
-	geriURL := yukariAkisKoduAl(t, oturum, providerGoogle, istekID)
+	session := env.NewBrowser(t)
+	requestID := session.StartAuthorize(t)
+	// PRECONDITION: there is a valid state+code pair and the cookie was WRITTEN
+	// (the upstream code helper verifies both).
+	callbackURL := upstreamCallbackURL(t, session, providerGoogle, requestID)
 
-	// Cerez SILINIR: tek degisen sey budur.
-	oturum.kavanoz.cerezSil(cookieNameFederation)
-	red := oturum.istek(t, http.MethodGet, geriURL, nil, baglamCaprazGet)
-	if red.Durum != http.StatusForbidden {
-		t.Errorf("cerezsiz callback durumu = %d, beklenen 403. govde: %s", red.Durum, red.Govde())
+	// The cookie is DELETED: this is the only thing that changes.
+	session.jar.deleteCookie(cookieNameFederation)
+	red := session.do(t, http.MethodGet, callbackURL, nil, ctxCrossSiteGet)
+	if red.Status != http.StatusForbidden {
+		t.Errorf("cerezsiz callback durumu = %d, beklenen 403. govde: %s", red.Status, red.Body())
 	}
-	if ortam.IstekTamamlandiMi(t, istekID) {
+	if env.RequestDone(t, requestID) {
 		t.Fatal("cerezsiz callback istegi tamamladi")
 	}
-	if sayi := ortam.FedereEslesmeSayisi(t); sayi != 0 {
-		t.Errorf("cerezsiz callback eslesme yazdi: sayi = %d", sayi)
+	if count := env.FederatedLinkCount(t); count != 0 {
+		t.Errorf("cerezsiz callback eslesme yazdi: sayi = %d", count)
 	}
 
-	// POZITIF KONTROL: cerez YERINDE olan yeni bir tur tamamlanir.
-	yeniIstek := oturum.AuthorizeBaslat(t)
-	yeniGeri := yukariAkisKoduAl(t, oturum, providerGoogle, yeniIstek)
-	son := oturum.akisiTakipEt(t, oturum.istek(t, http.MethodGet, yeniGeri, nil, baglamCaprazGet))
-	if son.KonumKod() == "" {
+	// POSITIVE CONTROL: a new round with the cookie IN PLACE completes.
+	newRequest := session.StartAuthorize(t)
+	newCallback := upstreamCallbackURL(t, session, providerGoogle, newRequest)
+	last := session.follow(t, session.do(t, http.MethodGet, newCallback, nil, ctxCrossSiteGet))
+	if last.LocationCode() == "" {
 		t.Fatalf("cerezli akis tamamlanmadi (durum %d); test cerezi DEGIL baska bir seyi olcuyor",
-			son.Durum)
+			last.Status)
 	}
 }
 
-// Ayni callback iki kez oynatilamaz (state GETDEL).
-func TestSaldiriCallbackTekrariReddedilir(t *testing.T) {
-	ortam := akisOrtamiKur(t, sahteOPAyar{
-		Eposta:           "tekrar-oynatma@ornek.com",
-		EpostaDogrulandi: true,
-		Sub:              "google-sub-tekrar",
+// The same callback cannot be replayed twice (state GETDEL).
+func TestAttack_CallbackReplayRejected(t *testing.T) {
+	env := setupFlowEnv(t, fakeOPConfig{
+		Email:         "tekrar-oynatma@ornek.com",
+		EmailVerified: true,
+		Sub:           "google-sub-tekrar",
 	})
 
-	oturum := ortam.YeniTarayici(t)
-	istekID := oturum.AuthorizeBaslat(t)
-	geriURL := yukariAkisKoduAl(t, oturum, providerGoogle, istekID)
+	session := env.NewBrowser(t)
+	requestID := session.StartAuthorize(t)
+	callbackURL := upstreamCallbackURL(t, session, providerGoogle, requestID)
 
-	// ONKOSUL: callback BIR KEZ gercekten calisir.
-	ilk := oturum.akisiTakipEt(t, oturum.istek(t, http.MethodGet, geriURL, nil, baglamCaprazGet))
-	if ilk.KonumKod() == "" {
-		t.Fatalf("ilk callback kod uretmedi (durum %d); tekrar testi bos olurdu", ilk.Durum)
+	// PRECONDITION: the callback REALLY works ONCE.
+	first := session.follow(t, session.do(t, http.MethodGet, callbackURL, nil, ctxCrossSiteGet))
+	if first.LocationCode() == "" {
+		t.Fatalf("ilk callback kod uretmedi (durum %d); tekrar testi bos olurdu", first.Status)
 	}
-	if !ortam.IstekTamamlandiMi(t, istekID) {
+	if !env.RequestDone(t, requestID) {
 		t.Fatal("ilk callback istegi tamamlamadi; tekrar testi bos olurdu")
 	}
-	google := ortam.YukariAkis(t, providerGoogle)
-	if sayi := google.tokenSayaci(); sayi != 1 {
-		t.Fatalf("ilk turda yukari akis token cagrisi = %d, beklenen 1", sayi)
+	google := env.Upstream(t, providerGoogle)
+	if count := google.tokenCalls(); count != 1 {
+		t.Fatalf("ilk turda yukari akis token cagrisi = %d, beklenen 1", count)
 	}
 
-	// AYNI adres ikinci kez: state kaydi GETDEL ile tuketildi.
-	tekrar := oturum.istek(t, http.MethodGet, geriURL, nil, baglamCaprazGet)
-	if tekrar.Durum != http.StatusForbidden {
+	// The SAME address a second time: the state record was consumed by GETDEL.
+	again := session.do(t, http.MethodGet, callbackURL, nil, ctxCrossSiteGet)
+	if again.Status != http.StatusForbidden {
 		t.Errorf("tekrar oynatilan callback durumu = %d, beklenen 403. govde: %s",
-			tekrar.Durum, tekrar.Govde())
+			again.Status, again.Body())
 	}
-	// Red, yukari akisa GITMEDEN once olmali: state kontrolu kod
-	// degisiminden ONCE kosuyor.
-	if sayi := google.tokenSayaci(); sayi != 1 {
-		t.Errorf("tekrar oynatma yukari akisa yeni bir token cagrisi yapti: sayi = %d", sayi)
+	// The rejection must happen BEFORE going to the upstream: the state check
+	// runs BEFORE the code exchange.
+	if count := google.tokenCalls(); count != 1 {
+		t.Errorf("tekrar oynatma yukari akisa yeni bir token cagrisi yapti: sayi = %d", count)
 	}
-	if sayi := ortam.FedereEslesmeSayisi(t); sayi != 1 {
-		t.Errorf("tekrar oynatma eslesme sayisini degistirdi: %d, beklenen 1", sayi)
+	if count := env.FederatedLinkCount(t); count != 1 {
+		t.Errorf("tekrar oynatma eslesme sayisini degistirdi: %d, beklenen 1", count)
 	}
 }
 
-// Yukari akis BASKA bir uygulamaya verilmis bir id_token dondururse
-// (aud yanlis) giris OLMAMALI.
-func TestSaldiriBaskaUygulamaninTokeniyleGirilemez(t *testing.T) {
-	ortam := akisOrtamiKur(t, sahteOPAyar{
-		Eposta:           "aud@ornek.com",
-		EpostaDogrulandi: true,
-		Sub:              "google-sub-aud",
+// If the upstream returns an id_token issued to ANOTHER application (wrong
+// aud) there must be NO login.
+func TestAttack_OtherAppTokenRejected(t *testing.T) {
+	env := setupFlowEnv(t, fakeOPConfig{
+		Email:         "aud@ornek.com",
+		EmailVerified: true,
+		Sub:           "google-sub-aud",
 	})
-	google := ortam.YukariAkis(t, providerGoogle)
+	google := env.Upstream(t, providerGoogle)
 
-	// ONKOSUL: dogru aud ile akis GERCEKTEN tamamlaniyor. Aksi halde
-	// asagidaki red, aud'dan degil baska bir bozukluktan gelirdi.
-	ortam.federasyonJetonu(t, providerGoogle)
-	if sayi := ortam.FedereEslesmeSayisi(t); sayi != 1 {
-		t.Fatalf("dogru aud ile eslesme sayisi = %d, beklenen 1", sayi)
+	// PRECONDITION: with the right aud the flow REALLY completes. Otherwise the
+	// rejection below would come from something other than aud.
+	env.federationTokens(t, providerGoogle)
+	if count := env.FederatedLinkCount(t); count != 1 {
+		t.Fatalf("dogru aud ile eslesme sayisi = %d, beklenen 1", count)
 	}
 
-	// TEK DEGISEN: aud artik BASKA bir uygulamaya ait.
-	google.ayarla(func(a *sahteOPAyar) { a.YanlisAudience = "baska-uygulama" })
-	oturum := ortam.YeniTarayici(t)
-	istekID := oturum.AuthorizeBaslat(t)
-	red := oturum.FederasyonAkisiniKostur(t, providerGoogle, istekID)
-	if red.Durum != http.StatusForbidden {
-		t.Errorf("yanlis aud ile durum = %d, beklenen 403. govde: %s", red.Durum, red.Govde())
+	// THE ONLY CHANGE: aud now belongs to ANOTHER application.
+	google.configure(func(a *fakeOPConfig) { a.WrongAudience = "baska-uygulama" })
+	session := env.NewBrowser(t)
+	requestID := session.StartAuthorize(t)
+	red := session.RunFederationFlow(t, providerGoogle, requestID)
+	if red.Status != http.StatusForbidden {
+		t.Errorf("yanlis aud ile durum = %d, beklenen 403. govde: %s", red.Status, red.Body())
 	}
-	if red.KonumKod() != "" {
+	if red.LocationCode() != "" {
 		t.Fatal("yanlis aud'lu id_token ile kod uretildi")
 	}
-	if ortam.IstekTamamlandiMi(t, istekID) {
+	if env.RequestDone(t, requestID) {
 		t.Fatal("yanlis aud'lu id_token ile istek tamamlandi")
 	}
-	if sayi := ortam.FedereEslesmeSayisi(t); sayi != 1 {
-		t.Errorf("yanlis aud'lu akis yeni eslesme yazdi: sayi = %d", sayi)
+	if count := env.FederatedLinkCount(t); count != 1 {
+		t.Errorf("yanlis aud'lu akis yeni eslesme yazdi: sayi = %d", count)
 	}
 }
 
-// nonce'u baska olan bir id_token enjekte edilemez.
-func TestSaldiriNonceEnjeksiyonuReddedilir(t *testing.T) {
-	ortam := akisOrtamiKur(t, sahteOPAyar{
-		Eposta:           "nonce@ornek.com",
-		EpostaDogrulandi: true,
-		Sub:              "google-sub-nonce",
+// An id_token with a different nonce cannot be injected.
+func TestAttack_NonceInjectionRejected(t *testing.T) {
+	env := setupFlowEnv(t, fakeOPConfig{
+		Email:         "nonce@ornek.com",
+		EmailVerified: true,
+		Sub:           "google-sub-nonce",
 	})
-	google := ortam.YukariAkis(t, providerGoogle)
+	google := env.Upstream(t, providerGoogle)
 
-	// ONKOSUL: dogru nonce ile akis tamamlaniyor.
-	ortam.federasyonJetonu(t, providerGoogle)
-	if sayi := ortam.FedereEslesmeSayisi(t); sayi != 1 {
-		t.Fatalf("dogru nonce ile eslesme sayisi = %d, beklenen 1", sayi)
+	// PRECONDITION: the flow completes with the right nonce.
+	env.federationTokens(t, providerGoogle)
+	if count := env.FederatedLinkCount(t); count != 1 {
+		t.Fatalf("dogru nonce ile eslesme sayisi = %d, beklenen 1", count)
 	}
 
-	// TEK DEGISEN: id_token'in nonce'u BU akisa ait degil. Gercek
-	// senaryo, saldirganin kendi akisindan aldigi gecerli bir
-	// id_token'i kurbanin akisina enjekte etmesidir.
-	google.ayarla(func(a *sahteOPAyar) { a.YanlisNonce = "saldirganin-nonce-degeri" })
-	oturum := ortam.YeniTarayici(t)
-	istekID := oturum.AuthorizeBaslat(t)
-	red := oturum.FederasyonAkisiniKostur(t, providerGoogle, istekID)
-	if red.Durum != http.StatusForbidden {
-		t.Errorf("yanlis nonce ile durum = %d, beklenen 403. govde: %s", red.Durum, red.Govde())
+	// THE ONLY CHANGE: the id_token's nonce does not belong to THIS flow. The
+	// real scenario is the attacker injecting a valid id_token from their own
+	// flow into the victim's flow.
+	google.configure(func(a *fakeOPConfig) { a.WrongNonce = "saldirganin-nonce-degeri" })
+	session := env.NewBrowser(t)
+	requestID := session.StartAuthorize(t)
+	red := session.RunFederationFlow(t, providerGoogle, requestID)
+	if red.Status != http.StatusForbidden {
+		t.Errorf("yanlis nonce ile durum = %d, beklenen 403. govde: %s", red.Status, red.Body())
 	}
-	if ortam.IstekTamamlandiMi(t, istekID) {
+	if env.RequestDone(t, requestID) {
 		t.Fatal("yanlis nonce'lu id_token ile istek tamamlandi")
 	}
-	if _, err := oturum.KodDegis(t, istekID); err == nil {
+	if _, err := session.ExchangeCode(t, requestID); err == nil {
 		t.Fatal("yanlis nonce'lu akisin kodu jetona cevrildi")
 	}
 }
 
-// Spec'in ana saldirisi, UCTAN UCA: saldirgan kurbanin adresiyle
-// sifreli hesap acar, kurban Google ile girer. Kurban SALDIRGANIN
-// hesabina DUSMEMELI; baglama sayfasi cikmali ve sifre istenmeli.
+// The spec's main attack, END TO END: the attacker opens an account with a
+// password using the victim's address, the victim logs in with Google. The
+// victim must NOT LAND ON THE ATTACKER's account; the link page must appear
+// and ask for a password.
 //
-// Bu test, yorumla belirtilen digerlerinin KALIBIDIR: onkosulun
-// gercekten kuruldugu once assert edilir, sonra red olculur.
-func TestSaldiriEpostayaDayaliHesapDevralmaEngellenir(t *testing.T) {
-	ortam := akisOrtamiKur(t, sahteOPAyar{
-		Eposta:           "kurban@ornek.com",
-		EpostaDogrulandi: true, // email_verified=true OLSA BILE baglanmamali
-		Sub:              "google-sub-kurban",
+// This test is the PATTERN of the others mentioned in the comment: first it
+// is asserted that the precondition was set up, then the rejection is
+// measured.
+func TestAttack_EmailBasedTakeoverBlocked(t *testing.T) {
+	env := setupFlowEnv(t, fakeOPConfig{
+		Email:         "kurban@ornek.com",
+		EmailVerified: true, // it must not link EVEN IF email_verified=true
+		Sub:           "google-sub-kurban",
 	})
 
-	// 1) Saldirgan kurbanin adresiyle SIFRELI bir hesap acar.
-	const saldirganSifresi = "saldirganin-sifresi-123"
-	ortam.KayitOl(t, "kurban@ornek.com", "Saldirgan", saldirganSifresi)
+	// 1) The attacker opens an account WITH A PASSWORD using the victim's address.
+	const attackerPassword = "saldirganin-sifresi-123"
+	env.SignUp(t, "kurban@ornek.com", "Saldirgan", attackerPassword)
 
-	// POZITIF KONTROL: hesap GERCEKTEN acildi mi? Acilmadiysa 4.
-	// adimdaki red hicbir sey olcmez ve test BOS olur.
-	if jeton := ortam.SifreyleGiris(t, "kurban@ornek.com", saldirganSifresi); jeton == "" {
+	// POSITIVE CONTROL: was the account REALLY opened? If not, the rejection in
+	// step 4 would measure nothing and the test would be EMPTY.
+	if token := env.LoginWithPassword(t, "kurban@ornek.com", attackerPassword); token == "" {
 		t.Fatal("onkosul kurulamadi: saldirganin hesabi acilmamis")
 	}
 
-	// 2) Kurban giris sayfasindan Google'a gider.
-	oturum := ortam.YeniTarayici(t)
-	istekID := oturum.AuthorizeBaslat(t)
-	yanit := oturum.FederasyonAkisiniKostur(t, providerGoogle, istekID)
+	// 2) The victim goes from the login page to Google.
+	session := env.NewBrowser(t)
+	requestID := session.StartAuthorize(t)
+	resp := session.RunFederationFlow(t, providerGoogle, requestID)
 
-	// 3) Baglama sayfasi cikmali: sifre SORULMALI.
-	govde := yanit.Govde()
-	if !strings.Contains(govde, `name="beklemeID"`) {
-		t.Fatalf("baglama formu cikmadi; durum %d, govde: %s", yanit.Durum, govde)
+	// 3) The link page must appear: a password MUST BE ASKED.
+	body := resp.Body()
+	if !strings.Contains(body, `name="beklemeID"`) {
+		t.Fatalf("baglama formu cikmadi; durum %d, govde: %s", resp.Status, body)
 	}
-	if !strings.Contains(govde, `type="password"`) {
+	if !strings.Contains(body, `type="password"`) {
 		t.Error("baglama sayfasi sifre sormuyor")
 	}
 
-	// 4) GIRIS OLMAMALI: istek tamamlanmadigi icin kod uretilmez ve
-	//    access_token alinamaz.
-	if oturum.IstekTamamlandiMi(t, istekID) {
+	// 4) THERE MUST BE NO LOGIN: since the request was not completed no code is
+	// produced and no access_token can be obtained.
+	if session.RequestDone(t, requestID) {
 		t.Fatal("federasyon, sifre sorulmadan istegi tamamladi (hesap devralma)")
 	}
-	if _, err := oturum.KodDegis(t, istekID); err == nil {
+	if _, err := session.ExchangeCode(t, requestID); err == nil {
 		t.Fatal("kod degisimi basarili oldu; giris yapilmis demektir")
 	}
 
-	// 5) Kurban saldirganin sifresini bilmedigi icin akis BURADA durur:
-	//    yanlis sifreyle baglama REDDEDILMELI ve eslesme YAZILMAMALI.
-	red := oturum.BaglamaGonder(t, govde, "kurbanin-kendi-sifresi-123")
-	if red.Durum != http.StatusUnauthorized {
-		t.Errorf("yanlis sifreyle baglama durumu = %d, beklenen 401", red.Durum)
+	// 5) Since the victim does not know the attacker's password the flow stops
+	// HERE: linking with a wrong password must be REJECTED and NO link written.
+	red := session.SubmitLink(t, body, "kurbanin-kendi-sifresi-123")
+	if red.Status != http.StatusUnauthorized {
+		t.Errorf("yanlis sifreyle baglama durumu = %d, beklenen 401", red.Status)
 	}
-	if ortam.FedereEslesmeSayisi(t) != 0 {
+	if env.FederatedLinkCount(t) != 0 {
 		t.Error("yanlis sifreye ragmen federe eslesme yazilmis")
 	}
 }
 
-// PKCE: federasyon yolu Faz 1'in S256 zorunlulugunu ATLAMAMALI.
-// /authorize'a PKCE'siz gelinip federasyon butonuna basilamaz.
-func TestSaldiriFederasyonPKCEyiAtlatmaz(t *testing.T) {
-	ortam := akisOrtamiKur(t, sahteOPAyar{
-		Eposta:           "pkce@ornek.com",
-		EpostaDogrulandi: true,
-		Sub:              "google-sub-pkce",
+// PKCE: the federation path must NOT SKIP Phase 1's S256 requirement. One
+// cannot come to /authorize without PKCE and press the federation button.
+func TestAttack_FederationDoesNotBypassPKCE(t *testing.T) {
+	env := setupFlowEnv(t, fakeOPConfig{
+		Email:         "pkce@ornek.com",
+		EmailVerified: true,
+		Sub:           "google-sub-pkce",
 	})
 
-	// 1) PKCE'siz /authorize REDDEDILIR, yani federasyon butonunun
-	//    uzerinde duracagi bir authRequestID HIC DOGMAZ. Federasyon
-	//    bacagi baglamasiz bir id ile cagrilamaz (bkz. Baslat).
-	c := tarayici(t)
-	pkceRed(t, al(t, c, ortam.authorizeURLKapsamli("", "", fedKapsamlar)))
+	// 1) /authorize without PKCE is REJECTED, i.e. an authRequestID for the
+	// federation button to stand on is NEVER born. The federation leg cannot be
+	// called with an id that has no binding (see Start).
+	c := newBrowser(t)
+	assertPKCERejected(t, mustGet(t, c, env.authorizeURLWithScope("", "", fedScopes)))
 
-	// 2) POZITIF KONTROL: federasyon yolu DOGRU verifier ile calisir.
-	//    (Kod TEK KULLANIMLIK oldugu icin iki ayri tur gerekiyor:
-	//    ayni kodu iki kez denemek, ikinci denemede "invalid code"
-	//    olcerdi ve testin neyi olctugu belirsizlesirdi.)
-	kod, oturum := ortam.federasyonKodu(t, providerGoogle)
-	durum, jeton := ortam.jetonAl(t, kod, oturum.verifier)
-	if durum != http.StatusOK {
-		t.Fatalf("dogru verifier ile token durumu = %d, govde: %v", durum, jeton)
+	// 2) POSITIVE CONTROL: the federation path works with the RIGHT verifier.
+	// (Since the code is SINGLE-USE two separate rounds are needed: trying the
+	// same code twice would measure "invalid code" on the second attempt and it
+	// would be unclear what the test measures.)
+	code, session := env.federationCode(t, providerGoogle)
+	status, token := env.exchangeToken(t, code, session.verifier)
+	if status != http.StatusOK {
+		t.Fatalf("dogru verifier ile token durumu = %d, govde: %v", status, token)
 	}
 
-	// 3) Federasyon yolundan uretilen kod da S256'ya BAGLI kalir:
-	//    dogru verifier olmadan jetona cevrilemez. Bu, federasyonun
-	//    PKCE'yi "atlatan bir yan kapi" olmadiginin olculebilir hali.
-	yanlisKod, _ := ortam.federasyonKodu(t, providerGoogle)
-	yanlisVerifier, _ := pkceS256(t)
-	if durum, govde := ortam.jetonAl(t, yanlisKod, yanlisVerifier); durum == http.StatusOK {
-		t.Fatalf("federasyon kodu YANLIS verifier ile jetona cevrildi: %v", govde)
+	// 3) The code produced by the federation path stays BOUND to S256 too: it
+	// cannot be exchanged for a token without the right verifier. This is the
+	// measurable form of federation not being "a side door that bypasses
+	// PKCE".
+	wrongCode, _ := env.federationCode(t, providerGoogle)
+	wrongVerifier, _ := pkceS256(t)
+	if status, body := env.exchangeToken(t, wrongCode, wrongVerifier); status == http.StatusOK {
+		t.Fatalf("federasyon kodu YANLIS verifier ile jetona cevrildi: %v", body)
 	}
 }

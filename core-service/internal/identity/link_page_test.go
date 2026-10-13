@@ -17,30 +17,29 @@ import (
 )
 
 // ---------------------------------------------------------------------
-// Yardimcilar
+// Helpers
 // ---------------------------------------------------------------------
 
-const testSifre = "cokgizlisifre"
+const testPassword = "cokgizlisifre"
 
-// iddiaKur, dogrulanmis bir yukari akis id_token'inin iddialarini
-// taklit eder. kullaniciCoz'un girdisi tam olarak budur: imza/nonce
-// dogrulamasi ondan ONCE yapilir (bkz. Geri).
-func iddiaKur(sub, eposta string, dogrulandi bool) *auth.Claims {
+// buildClaims imitates the claims of a verified upstream id_token. This is
+// exactly the input of resolveUser: signature/nonce verification is done
+// BEFORE it (see Callback).
+func buildClaims(sub, email string, verified bool) *auth.Claims {
 	return &auth.Claims{
 		UserID:        sub,
-		Email:         eposta,
-		EmailVerified: auth.FlexibleBool(dogrulandi),
+		Email:         email,
+		EmailVerified: auth.FlexibleBool(verified),
 		Name:          "Test Kullanici",
 	}
 }
 
-// oturumBagla, /authorize bacaginin yaptigi isi taklit eder: verilen
-// authRequestID'yi bir tarayiciya baglar ve o tarayicinin oturum
-// cerezini doner. /baglama sayfasi Faz 1'in giris sayfasiyla AYNI
-// oturum baglamasini zorunlu kilar.
-func (o *fedOrtam) oturumBagla(t *testing.T, authReqID string) *http.Cookie {
+// bindSession imitates what the /authorize leg does: it binds the given
+// authRequestID to a browser and returns that browser's session cookie. The
+// /baglama page requires the SAME session binding as Phase 1's login page.
+func (o *fedEnv) bindSession(t *testing.T, authReqID string) *http.Cookie {
 	t.Helper()
-	oturum, err := randomToken()
+	session, err := randomToken()
 	if err != nil {
 		t.Fatalf("oturum degeri uretilemedi: %v", err)
 	}
@@ -48,339 +47,341 @@ func (o *fedOrtam) oturumBagla(t *testing.T, authReqID string) *http.Cookie {
 	if err != nil {
 		t.Fatalf("csrf uretilemedi: %v", err)
 	}
-	var baglama SessionBinding
-	baglama.Add(authReqID, csrf)
-	if err := o.oturumlar.WriteSession(context.Background(), oturum, baglama, time.Minute); err != nil {
+	var binding SessionBinding
+	binding.Add(authReqID, csrf)
+	if err := o.sessions.WriteSession(context.Background(), session, binding, time.Minute); err != nil {
 		t.Fatalf("oturum yazilamadi: %v", err)
 	}
-	return &http.Cookie{Name: cookieNameSession, Value: oturum}
+	return &http.Cookie{Name: cookieNameSession, Value: session}
 }
 
-func (o *fedOrtam) baglamaGetIstek(beklemeID string, cerez *http.Cookie) *httptest.ResponseRecorder {
-	hedef := pathLink
-	if beklemeID != "" {
-		hedef += "?" + url.Values{fieldPendingID: {beklemeID}}.Encode()
+func (o *fedEnv) linkGetRequest(pendingID string, cookie *http.Cookie) *httptest.ResponseRecorder {
+	target := pathLink
+	if pendingID != "" {
+		target += "?" + url.Values{fieldPendingID: {pendingID}}.Encode()
 	}
-	r := httptest.NewRequest(http.MethodGet, hedef, nil)
-	if cerez != nil {
-		r.AddCookie(cerez)
+	r := httptest.NewRequest(http.MethodGet, target, nil)
+	if cookie != nil {
+		r.AddCookie(cookie)
 	}
 	w := httptest.NewRecorder()
 	o.mux.ServeHTTP(w, r)
 	return w
 }
 
-func (o *fedOrtam) baglamaPostIstek(deger url.Values, cerez *http.Cookie) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(http.MethodPost, pathLink, strings.NewReader(deger.Encode()))
+func (o *fedEnv) linkPostRequest(value url.Values, cookie *http.Cookie) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, pathLink, strings.NewReader(value.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if cerez != nil {
-		r.AddCookie(cerez)
+	if cookie != nil {
+		r.AddCookie(cookie)
 	}
 	w := httptest.NewRecorder()
 	o.mux.ServeHTTP(w, r)
 	return w
 }
 
-// beklemeKur, GERCEK federasyon akisini kostur: e-postasi cakisan
-// SIFRELI bir hesap varken Google ile girilir, akis /baglama'ya
-// yonlendirir. Donenler: bekleme kaydinin id'si, formdaki CSRF jetonu,
-// tarayicinin oturum cerezi ve cakisan hesap.
-func (o *fedOrtam) beklemeKur(t *testing.T) (string, string, *http.Cookie, *User) {
+// setupPendingLink runs the REAL federation flow: with an account that has a
+// PASSWORD and a conflicting email, it logs in with Google and the flow
+// redirects to /baglama. Returns: the pending record's id, the CSRF token in
+// the form, the browser's session cookie and the conflicting account.
+func (o *fedEnv) setupPendingLink(t *testing.T) (string, string, *http.Cookie, *User) {
 	t.Helper()
-	o.google.ayarla(func(s *sahteSaglayici) { s.eposta = "cakisan@ornek.com" })
-	mevcut, err := o.kullanici.Create(context.Background(), "cakisan@ornek.com", "Mevcut", testSifre)
+	o.google.configure(func(s *fakeProvider) { s.email = "cakisan@ornek.com" })
+	existing, err := o.users.Create(context.Background(), "cakisan@ornek.com", "Mevcut", testPassword)
 	if err != nil {
 		t.Fatalf("mevcut hesap olusturulamadi: %v", err)
 	}
 
-	w := o.akisKos(t, providerGoogle, false)
+	w := o.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusFound {
 		t.Fatalf("durum = %d, beklenen 302 (/baglama'ya yonlendirme), govde = %q", w.Code, w.Body.String())
 	}
-	konum, err := url.Parse(w.Header().Get("Location"))
+	location, err := url.Parse(w.Header().Get("Location"))
 	if err != nil {
 		t.Fatalf("Location cozumlenemedi: %v", err)
 	}
-	if konum.Path != pathLink {
+	if location.Path != pathLink {
 		t.Fatalf("Location = %q, beklenen %s", w.Header().Get("Location"), pathLink)
 	}
-	beklemeID := konum.Query().Get(fieldPendingID)
-	if beklemeID == "" {
+	pendingID := location.Query().Get(fieldPendingID)
+	if pendingID == "" {
 		t.Fatal("yonlendirmede beklemeID yok")
 	}
-	if o.istekler.subject(o.authReqID) != "" {
+	if o.requests.subject(o.authReqID) != "" {
 		t.Fatal("cakisma varken istek TAMAMLANMAMALI")
 	}
 
-	cerez := o.oturumCerez
-	form := o.baglamaGetIstek(beklemeID, cerez)
+	cookie := o.sessionCookie
+	form := o.linkGetRequest(pendingID, cookie)
 	if form.Code != http.StatusOK {
 		t.Fatalf("baglama formu acilamadi: durum = %d, govde = %q", form.Code, form.Body.String())
 	}
-	esler := csrfDeseni.FindStringSubmatch(form.Body.String())
-	if esler == nil || esler[1] == "" {
+	matches := csrfPattern.FindStringSubmatch(form.Body.String())
+	if matches == nil || matches[1] == "" {
 		t.Fatalf("formda CSRF jetonu yok: %q", form.Body.String())
 	}
 	if !strings.Contains(form.Body.String(), "cakisan@ornek.com") {
 		t.Error("form cakisan e-postayi gostermiyor")
 	}
-	return beklemeID, esler[1], cerez, mevcut
+	return pendingID, matches[1], cookie, existing
 }
 
 // ---------------------------------------------------------------------
-// Step 1: Cozum sirasi testleri
+// Step 1: Resolution order tests
 // ---------------------------------------------------------------------
 
-//  1. Bagli kimlik HER ZAMAN once gelir: kullanicinin Google'daki
-//     e-postasi degismis olabilir ve o zaman e-postaya gore arama
-//     BASKA bir hesabi (ya da hic) bulur.
-func TestCozumBagliKimlikEpostadanOnceGelir(t *testing.T) {
-	o := testFedereSayfalar(t)
+//  1. A linked identity ALWAYS comes first: the user's email at Google may
+//     have changed, and then a lookup by email would find ANOTHER account
+//     (or none).
+func TestResolveUser_LinkedIdentityBeforeEmail(t *testing.T) {
+	o := newTestFederationPages(t)
 	ctx := context.Background()
 
-	a, err := o.kullanici.Create(ctx, "a@ornek.com", "A", testSifre)
+	a, err := o.users.Create(ctx, "a@ornek.com", "A", testPassword)
 	if err != nil {
 		t.Fatalf("A olusturulamadi: %v", err)
 	}
-	if err := o.federe.Link(ctx, providerGoogle, "sub-1", a.ID); err != nil {
+	if err := o.federated.Link(ctx, providerGoogle, "sub-1", a.ID); err != nil {
 		t.Fatalf("A baglanamadi: %v", err)
 	}
-	b, err := o.kullanici.Create(ctx, "yeni@ornek.com", "B", testSifre)
+	b, err := o.users.Create(ctx, "yeni@ornek.com", "B", testPassword)
 	if err != nil {
 		t.Fatalf("B olusturulamadi: %v", err)
 	}
 
-	// id_token: sub=sub-1 (A'ya bagli) ama e-posta B'ye ait.
-	ku, cakisma, err := o.f.resolveUser(ctx, providerGoogle, iddiaKur("sub-1", "yeni@ornek.com", true))
+	// id_token: sub=sub-1 (linked to A) but the email belongs to B.
+	user, conflict, err := o.pages.resolveUser(ctx, providerGoogle, buildClaims("sub-1", "yeni@ornek.com", true))
 	if err != nil {
 		t.Fatalf("kullaniciCoz: %v", err)
 	}
-	if cakisma != nil {
-		t.Fatalf("cakisma dondu: %+v (bagli kimlik e-postadan ONCE gelmeli)", cakisma)
+	if conflict != nil {
+		t.Fatalf("cakisma dondu: %+v (bagli kimlik e-postadan ONCE gelmeli)", conflict)
 	}
-	if ku == nil || ku.ID != a.ID {
-		t.Fatalf("kullanici = %v, beklenen A (%s)", ku, a.ID)
+	if user == nil || user.ID != a.ID {
+		t.Fatalf("kullanici = %v, beklenen A (%s)", user, a.ID)
 	}
-	if ku.ID == b.ID {
+	if user.ID == b.ID {
 		t.Error("e-posta uzerinden B'ye dusuldu")
 	}
 }
 
-//  2. Apple gizli aktarma adresi ASLA baglama icin kullanilmaz.
-//     Bu, spec'in acikca yasakladigi tek durumdur.
-func TestGizliAktarmaAdresiBaglamaTetiklemez(t *testing.T) {
+//  2. The Apple private relay address is NEVER used for linking.
+//     This is the only case the spec explicitly forbids.
+func TestResolveUser_PrivateRelayDoesNotTriggerLink(t *testing.T) {
 	t.Run("adres SIFRELI bir hesapta kayitli: baglama YOK", func(t *testing.T) {
-		o := testFedereSayfalar(t)
+		o := newTestFederationPages(t)
 		ctx := context.Background()
-		// Saldirgan kurbanin relay adresiyle sifreli bir hesap acmis
-		// olabilir.
-		if _, err := o.kullanici.Create(ctx, "abc"+privateRelaySuffix, "Saldirgan", testSifre); err != nil {
+		// The attacker may have created an account with a password using the
+		// victim's relay address.
+		if _, err := o.users.Create(ctx, "abc"+privateRelaySuffix, "Saldirgan", testPassword); err != nil {
 			t.Fatalf("hesap olusturulamadi: %v", err)
 		}
 
-		ku, cakisma, err := o.f.resolveUser(ctx, providerApple, iddiaKur("yeni-sub", "abc"+privateRelaySuffix, true))
+		user, conflict, err := o.pages.resolveUser(ctx, providerApple, buildClaims("yeni-sub", "abc"+privateRelaySuffix, true))
 		if err != nil {
 			t.Fatalf("kullaniciCoz: %v", err)
 		}
-		if ku != nil {
-			t.Fatalf("giris yapildi (%s): gizli aktarma adresi baglama icin kullanilamaz", ku.ID)
+		if user != nil {
+			t.Fatalf("giris yapildi (%s): gizli aktarma adresi baglama icin kullanilamaz", user.ID)
 		}
-		if cakisma == nil {
+		if conflict == nil {
 			t.Fatal("cakisma bekleniyordu")
 		}
-		if cakisma.HasPassword {
+		if conflict.HasPassword {
 			t.Error("SifreliHesap = true: gizli aktarma adresi BAGLAMA sayfasina goturulmemeli")
 		}
-		if cakisma.PendingID != "" {
+		if conflict.PendingID != "" {
 			t.Error("gizli aktarma adresi icin bekleme kaydi acilmamali")
 		}
-		if _, err := o.federe.UserByIdentity(ctx, providerApple, "yeni-sub"); err == nil {
+		if _, err := o.federated.UserByIdentity(ctx, providerApple, "yeni-sub"); err == nil {
 			t.Error("kimlik baglandi: gizli aktarma adresinde baglama YAPILMAMALI")
 		}
 	})
 
 	t.Run("adres kayitli degil: dogrudan yeni hesap", func(t *testing.T) {
-		o := testFedereSayfalar(t)
+		o := newTestFederationPages(t)
 		ctx := context.Background()
-		ku, cakisma, err := o.f.resolveUser(ctx, providerApple, iddiaKur("yeni-sub", "def"+privateRelaySuffix, true))
+		user, conflict, err := o.pages.resolveUser(ctx, providerApple, buildClaims("yeni-sub", "def"+privateRelaySuffix, true))
 		if err != nil {
 			t.Fatalf("kullaniciCoz: %v", err)
 		}
-		if cakisma != nil {
-			t.Fatalf("cakisma dondu: %+v", cakisma)
+		if conflict != nil {
+			t.Fatalf("cakisma dondu: %+v", conflict)
 		}
-		if ku == nil {
+		if user == nil {
 			t.Fatal("yeni hesap acilmadi")
 		}
-		if ku.PasswordHash != "" {
+		if user.PasswordHash != "" {
 			t.Error("federe hesabin sifresi olmamali")
 		}
 	})
 }
 
-// 4. Sifreli hesap: baglama sayfasi.
-func TestEpostaCakismasiSifreliHesapBaglamayaGoturur(t *testing.T) {
-	o := testFedereSayfalar(t)
+// 4. Account with a password: the link page.
+func TestResolveUser_EmailConflictWithPasswordLeadsToLink(t *testing.T) {
+	o := newTestFederationPages(t)
 	ctx := context.Background()
-	mevcut, err := o.kullanici.Create(ctx, "ortak@ornek.com", "Mevcut", testSifre)
+	existing, err := o.users.Create(ctx, "ortak@ornek.com", "Mevcut", testPassword)
 	if err != nil {
 		t.Fatalf("hesap olusturulamadi: %v", err)
 	}
 
-	ku, cakisma, err := o.f.resolveUser(ctx, providerGoogle, iddiaKur("yeni-sub", "ortak@ornek.com", true))
+	user, conflict, err := o.pages.resolveUser(ctx, providerGoogle, buildClaims("yeni-sub", "ortak@ornek.com", true))
 	if err != nil {
 		t.Fatalf("kullaniciCoz: %v", err)
 	}
-	if ku != nil {
-		t.Fatalf("giris yapildi (%s): sifreli hesapta otomatik baglama YOK", ku.ID)
+	if user != nil {
+		t.Fatalf("giris yapildi (%s): sifreli hesapta otomatik baglama YOK", user.ID)
 	}
-	if cakisma == nil {
+	if conflict == nil {
 		t.Fatal("cakisma bekleniyordu")
 	}
-	if !cakisma.HasPassword {
+	if !conflict.HasPassword {
 		t.Error("SifreliHesap = false, beklenen true")
 	}
-	if cakisma.PendingID == "" {
+	if conflict.PendingID == "" {
 		t.Error("BeklemeID bos")
 	}
-	if cakisma.Email != "ortak@ornek.com" {
-		t.Errorf("Eposta = %q", cakisma.Email)
+	if conflict.Email != "ortak@ornek.com" {
+		t.Errorf("Eposta = %q", conflict.Email)
 	}
-	if _, err := o.federe.UserByIdentity(ctx, providerGoogle, "yeni-sub"); err == nil {
+	if _, err := o.federated.UserByIdentity(ctx, providerGoogle, "yeni-sub"); err == nil {
 		t.Error("kimlik baglandi: sifre sorulmadan baglama YAPILMAMALI")
 	}
-	if _, err := o.kullanici.ByID(ctx, mevcut.ID); err != nil {
+	if _, err := o.users.ByID(ctx, existing.ID); err != nil {
 		t.Errorf("mevcut hesap bozuldu: %v", err)
 	}
 }
 
-// 5. K1: sifresiz hesap -> 409, baglama YOK, yeni hesap YOK.
-func TestEpostaCakismasiSifresizHesapEngellenir(t *testing.T) {
-	o := testFedereSayfalar(t)
+// 5. K1: account without a password -> 409, NO link, NO new account.
+func TestResolveUser_EmailConflictWithoutPasswordBlocked(t *testing.T) {
+	o := newTestFederationPages(t)
 	ctx := context.Background()
-	// Google ile acilmis SIFRESIZ hesap.
-	mevcut, err := o.federe.CreateFederatedUser(ctx, providerGoogle, "google-sub", "ortak@ornek.com", "Mevcut", true)
+	// An account opened with Google that has NO PASSWORD.
+	existing, err := o.federated.CreateFederatedUser(ctx, providerGoogle, "google-sub", "ortak@ornek.com", "Mevcut", true)
 	if err != nil {
 		t.Fatalf("federe hesap olusturulamadi: %v", err)
 	}
 
-	// Apple'dan AYNI e-postayla gelinir.
-	ku, cakisma, err := o.f.resolveUser(ctx, providerApple, iddiaKur("apple-sub", "ortak@ornek.com", true))
+	// It comes from Apple with the SAME email.
+	user, conflict, err := o.pages.resolveUser(ctx, providerApple, buildClaims("apple-sub", "ortak@ornek.com", true))
 	if err != nil {
 		t.Fatalf("kullaniciCoz: %v", err)
 	}
-	if ku != nil {
-		t.Fatalf("giris yapildi (%s): K1 sifresiz hesapta baglama YOK", ku.ID)
+	if user != nil {
+		t.Fatalf("giris yapildi (%s): K1 sifresiz hesapta baglama YOK", user.ID)
 	}
-	if cakisma == nil {
+	if conflict == nil {
 		t.Fatal("cakisma bekleniyordu")
 	}
-	if cakisma.HasPassword {
+	if conflict.HasPassword {
 		t.Error("SifreliHesap = true: sifresiz hesapta sorulacak sifre yok")
 	}
-	if !reflect.DeepEqual(cakisma.ExistingProviders, []string{providerGoogle}) {
-		t.Errorf("MevcutSaglayicilar = %v, beklenen [google]", cakisma.ExistingProviders)
+	if !reflect.DeepEqual(conflict.ExistingProviders, []string{providerGoogle}) {
+		t.Errorf("MevcutSaglayicilar = %v, beklenen [google]", conflict.ExistingProviders)
 	}
-	if _, err := o.federe.UserByIdentity(ctx, providerApple, "apple-sub"); err == nil {
+	if _, err := o.federated.UserByIdentity(ctx, providerApple, "apple-sub"); err == nil {
 		t.Error("kimlik baglandi: K1 baglama YASAKLAR")
 	}
-	// YENI KAYIT OLUSMAMALI: ayni e-posta hala ilk hesaba ait.
-	ayni, err := o.kullanici.ByEmail(ctx, "ortak@ornek.com")
+	// A NEW RECORD MUST NOT BE CREATED: the same email still belongs to the first account.
+	same, err := o.users.ByEmail(ctx, "ortak@ornek.com")
 	if err != nil {
 		t.Fatalf("mevcut hesap kayboldu: %v", err)
 	}
-	if ayni.ID != mevcut.ID {
-		t.Errorf("e-posta %q hesabina gecti, beklenen %q (yeni hesap OLUSMAMALI)", ayni.ID, mevcut.ID)
+	if same.ID != existing.ID {
+		t.Errorf("e-posta %q hesabina gecti, beklenen %q (yeni hesap OLUSMAMALI)", same.ID, existing.ID)
 	}
 }
 
-// Spec'in somut saldirisi: saldirgan kurbanin adresiyle sifreli hesap
-// acar; kurban Google ile girer. OTOMATIK BAGLANMAMALI.
-func TestSaldirganinOnceActigiHesabaSessizceBaglanmaz(t *testing.T) {
-	o := testFedereSayfalar(t)
+// The spec's concrete attack: the attacker opens an account with a password
+// using the victim's address; the victim logs in with Google. It must NOT BE
+// LINKED AUTOMATICALLY.
+func TestResolveUser_NoSilentLinkToPrecreatedAccount(t *testing.T) {
+	o := newTestFederationPages(t)
 	ctx := context.Background()
-	// users: kurban@ornek.com, sifre = SALDIRGANIN sifresi.
-	saldirganin, err := o.kullanici.Create(ctx, "kurban@ornek.com", "Kurban", "saldirganin-sifresi")
+	// users: kurban@ornek.com, password = the ATTACKER's password.
+	attackers, err := o.users.Create(ctx, "kurban@ornek.com", "Kurban", "saldirganin-sifresi")
 	if err != nil {
 		t.Fatalf("hesap olusturulamadi: %v", err)
 	}
 
-	// Google: email dogrulanmis olsa BILE baglanmamali -- testin asil
-	// noktasi bu. E-posta dogrulamasini BIZ yapmadigimiz icin
-	// email_verified bu hesabin kurbana ait oldugunu kanitlamaz.
-	ku, cakisma, err := o.f.resolveUser(ctx, providerGoogle, iddiaKur("kurban-google-sub", "kurban@ornek.com", true))
+	// Google: it must not link EVEN IF the email is verified -- this is the
+	// real point of the test. Since WE do not do the email verification,
+	// email_verified does not prove that this account belongs to the victim.
+	user, conflict, err := o.pages.resolveUser(ctx, providerGoogle, buildClaims("kurban-google-sub", "kurban@ornek.com", true))
 	if err != nil {
 		t.Fatalf("kullaniciCoz: %v", err)
 	}
-	if ku != nil {
-		t.Fatalf("GIRIS YAPILDI (%s): sifresi saldirganda olan hesaba otomatik baglandi", ku.ID)
+	if user != nil {
+		t.Fatalf("GIRIS YAPILDI (%s): sifresi saldirganda olan hesaba otomatik baglandi", user.ID)
 	}
-	if cakisma == nil {
+	if conflict == nil {
 		t.Fatal("cakisma bekleniyordu")
 	}
-	if _, err := o.federe.UserByIdentity(ctx, providerGoogle, "kurban-google-sub"); err == nil {
-		t.Errorf("kimlik %s hesabina SESSIZCE baglandi", saldirganin.ID)
+	if _, err := o.federated.UserByIdentity(ctx, providerGoogle, "kurban-google-sub"); err == nil {
+		t.Errorf("kimlik %s hesabina SESSIZCE baglandi", attackers.ID)
 	}
 }
 
 // ---------------------------------------------------------------------
-// Step 2: Gizli aktarma + e-posta tekilligi cakismasi
+// Step 2: Private relay + email uniqueness conflict
 // ---------------------------------------------------------------------
 
-// Gizli aktarma adresi 2. adimda dogrudan yeni hesaba gider, ama
-// UNIQUE (lower(email)) yuzunden adres zaten varsa INSERT
-// ErrEpostaKullanimda doner. Karar: bu durumda da 409 -- asla baglama.
-func TestGizliAktarmaAdresiZatenVarsa409(t *testing.T) {
-	o := testFedereSayfalar(t)
+// The private relay address goes straight to a new account in step 2, but
+// because of UNIQUE (lower(email)) the INSERT returns ErrEmailInUse if the
+// address already exists. Decision: 409 in this case too -- never a link.
+func TestResolveUser_ExistingPrivateRelayReturns409(t *testing.T) {
+	o := newTestFederationPages(t)
 	ctx := context.Background()
 	relay := "abc" + privateRelaySuffix
-	// Adres BASKA bir sub ile zaten kayitli (kullanici hesabini silip
-	// tekrar kaydolmus olabilir; Apple relay adresi ayni kalir).
-	if _, err := o.federe.CreateFederatedUser(ctx, providerApple, "eski-sub", relay, "Eski", true); err != nil {
+	// The address is already registered with ANOTHER sub (the user may have
+	// deleted their account and signed up again; the Apple relay address stays
+	// the same).
+	if _, err := o.federated.CreateFederatedUser(ctx, providerApple, "eski-sub", relay, "Eski", true); err != nil {
 		t.Fatalf("ilk hesap olusturulamadi: %v", err)
 	}
-	o.apple.ayarla(func(s *sahteSaglayici) {
+	o.apple.configure(func(s *fakeProvider) {
 		s.sub = "yeni-sub"
-		s.eposta = relay
+		s.email = relay
 	})
 
-	w := o.akisKos(t, providerApple, true)
+	w := o.runFlow(t, providerApple, true)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("durum = %d, beklenen 409, govde = %q", w.Code, w.Body.String())
 	}
 	if strings.Contains(w.Body.String(), "<form") {
 		t.Error("409 sayfasinda sifre formu var: baglama YOK demek")
 	}
-	if _, err := o.federe.UserByIdentity(ctx, providerApple, "yeni-sub"); err == nil {
+	if _, err := o.federated.UserByIdentity(ctx, providerApple, "yeni-sub"); err == nil {
 		t.Error("kimlik baglandi: baglama YOK")
 	}
-	if o.istekler.subject(o.authReqID) != "" {
+	if o.requests.subject(o.authReqID) != "" {
 		t.Error("istek tamamlandi: giris OLMAMALI")
 	}
 }
 
 // ---------------------------------------------------------------------
-// Step 3: Baglama sayfasi testleri
+// Step 3: Link page tests
 // ---------------------------------------------------------------------
 
-// Faz 1'in C1 dersi: form, baglama YOKSA HIC RENDER EDILMEZ.
-func TestBaglamaGetBaglamasizReddedilir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	beklemeID, _, cerez, _ := o.beklemeKur(t)
+// Phase 1's C1 lesson: if there is NO binding the form is NEVER RENDERED.
+func TestLinkGet_WithoutBindingRejected(t *testing.T) {
+	o := newTestFederationPages(t)
+	pendingID, _, cookie, _ := o.setupPendingLink(t)
 
-	durumlar := []struct {
-		ad    string
-		id    string
-		cerez *http.Cookie
+	statuses := []struct {
+		name   string
+		id     string
+		cookie *http.Cookie
 	}{
-		{"beklemeID yok", "", cerez},
-		{"uydurma beklemeID", "uydurma-bekleme-id", cerez},
-		{"oturum cerezi yok", beklemeID, nil},
-		{"baska bir istege bagli oturum", beklemeID, o.oturumBagla(t, "baska-istek")},
+		{"beklemeID yok", "", cookie},
+		{"uydurma beklemeID", "uydurma-bekleme-id", cookie},
+		{"oturum cerezi yok", pendingID, nil},
+		{"baska bir istege bagli oturum", pendingID, o.bindSession(t, "baska-istek")},
 	}
-	for _, d := range durumlar {
-		t.Run(d.ad, func(t *testing.T) {
-			w := o.baglamaGetIstek(d.id, d.cerez)
+	for _, d := range statuses {
+		t.Run(d.name, func(t *testing.T) {
+			w := o.linkGetRequest(d.id, d.cookie)
 			if w.Code != http.StatusForbidden {
 				t.Errorf("durum = %d, beklenen 403", w.Code)
 			}
@@ -391,295 +392,298 @@ func TestBaglamaGetBaglamasizReddedilir(t *testing.T) {
 	}
 }
 
-func TestBaglamaPostCSRFYanlisReddedilir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	beklemeID, _, cerez, mevcut := o.beklemeKur(t)
+func TestLinkPost_WrongCSRFRejected(t *testing.T) {
+	o := newTestFederationPages(t)
+	pendingID, _, cookie, existing := o.setupPendingLink(t)
 
-	w := o.baglamaPostIstek(url.Values{
-		fieldPendingID: {beklemeID},
+	w := o.linkPostRequest(url.Values{
+		fieldPendingID: {pendingID},
 		fieldCSRF:      {"yanlis-csrf"},
-		"sifre":        {testSifre},
-	}, cerez)
+		"sifre":        {testPassword},
+	}, cookie)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("durum = %d, beklenen 403", w.Code)
 	}
-	if _, err := o.federe.UserByIdentity(context.Background(), providerGoogle, o.google.sub); err == nil {
+	if _, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub); err == nil {
 		t.Error("CSRF yanlisken kimlik baglandi")
 	}
-	if o.istekler.subject(o.authReqID) == mevcut.ID {
+	if o.requests.subject(o.authReqID) == existing.ID {
 		t.Error("CSRF yanlisken giris yapildi")
 	}
 }
 
-func TestBaglamaPostDogruSifreBaglarVeGirisYapar(t *testing.T) {
-	o := testFedereSayfalar(t)
-	beklemeID, csrf, cerez, mevcut := o.beklemeKur(t)
+func TestLinkPost_CorrectPasswordLinksAndLogsIn(t *testing.T) {
+	o := newTestFederationPages(t)
+	pendingID, csrf, cookie, existing := o.setupPendingLink(t)
 
-	w := o.baglamaPostIstek(url.Values{
-		fieldPendingID: {beklemeID},
+	w := o.linkPostRequest(url.Values{
+		fieldPendingID: {pendingID},
 		fieldCSRF:      {csrf},
-		"sifre":        {testSifre},
-	}, cerez)
+		"sifre":        {testPassword},
+	}, cookie)
 	if w.Code != http.StatusFound {
 		t.Fatalf("durum = %d, beklenen 302, govde = %q", w.Code, w.Body.String())
 	}
-	if konum := w.Header().Get("Location"); konum != o.beklenenCallback() {
-		t.Errorf("Location = %q, beklenen %q", konum, o.beklenenCallback())
+	if location := w.Header().Get("Location"); location != o.expectedCallback() {
+		t.Errorf("Location = %q, beklenen %q", location, o.expectedCallback())
 	}
-	bagli, err := o.federe.UserByIdentity(context.Background(), providerGoogle, o.google.sub)
+	linked, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub)
 	if err != nil {
 		t.Fatalf("kimlik baglanmadi: %v", err)
 	}
-	if bagli.ID != mevcut.ID {
-		t.Errorf("kimlik %q hesabina baglandi, beklenen %q", bagli.ID, mevcut.ID)
+	if linked.ID != existing.ID {
+		t.Errorf("kimlik %q hesabina baglandi, beklenen %q", linked.ID, existing.ID)
 	}
-	if s := o.istekler.subject(o.authReqID); s != mevcut.ID {
-		t.Errorf("Subject = %q, beklenen %q", s, mevcut.ID)
+	if s := o.requests.subject(o.authReqID); s != existing.ID {
+		t.Errorf("Subject = %q, beklenen %q", s, existing.ID)
 	}
-	if got := o.istekler.amrOku(o.authReqID); !slices.Equal(got, []string{"fed"}) {
+	if got := o.requests.amrFor(o.authReqID); !slices.Equal(got, []string{"fed"}) {
 		t.Errorf("amr = %v, beklenen [fed]", got)
 	}
 }
 
-func TestBaglamaPostYanlisSifreBaglamaz(t *testing.T) {
-	o := testFedereSayfalar(t)
-	beklemeID, csrf, cerez, _ := o.beklemeKur(t)
+func TestLinkPost_WrongPasswordDoesNotLink(t *testing.T) {
+	o := newTestFederationPages(t)
+	pendingID, csrf, cookie, _ := o.setupPendingLink(t)
 
-	w := o.baglamaPostIstek(url.Values{
-		fieldPendingID: {beklemeID},
+	w := o.linkPostRequest(url.Values{
+		fieldPendingID: {pendingID},
 		fieldCSRF:      {csrf},
 		"sifre":        {"yanlis-sifre-degeri"},
-	}, cerez)
+	}, cookie)
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("durum = %d, beklenen 401", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), msgLoginFailed) {
 		t.Errorf("govde hata metnini tasimiyor: %q", w.Body.String())
 	}
-	if _, err := o.federe.UserByIdentity(context.Background(), providerGoogle, o.google.sub); err == nil {
+	if _, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub); err == nil {
 		t.Error("yanlis sifreyle kimlik BAGLANDI")
 	}
-	if o.istekler.subject(o.authReqID) != "" {
+	if o.requests.subject(o.authReqID) != "" {
 		t.Error("yanlis sifreyle giris yapildi")
 	}
 }
 
-// Baglama beklemesi TEK KULLANIMLIK olmali: dogru sifre girildikten
-// sonra ayni BeklemeID ile ikinci bir baglama yapilamaz.
-func TestBaglamaBeklemesiTekKullanimlik(t *testing.T) {
-	o := testFedereSayfalar(t)
-	beklemeID, csrf, cerez, _ := o.beklemeKur(t)
-	form := url.Values{fieldPendingID: {beklemeID}, fieldCSRF: {csrf}, "sifre": {testSifre}}
+// The pending link must be SINGLE-USE: after the correct password is entered
+// a second link cannot be made with the same PendingID.
+func TestPendingLink_SingleUse(t *testing.T) {
+	o := newTestFederationPages(t)
+	pendingID, csrf, cookie, _ := o.setupPendingLink(t)
+	form := url.Values{fieldPendingID: {pendingID}, fieldCSRF: {csrf}, "sifre": {testPassword}}
 
-	ilk := o.baglamaPostIstek(form, cerez)
-	if ilk.Code != http.StatusFound {
-		t.Fatalf("ilk POST durum = %d, beklenen 302, govde = %q", ilk.Code, ilk.Body.String())
+	first := o.linkPostRequest(form, cookie)
+	if first.Code != http.StatusFound {
+		t.Fatalf("ilk POST durum = %d, beklenen 302, govde = %q", first.Code, first.Body.String())
 	}
-	ikinci := o.baglamaPostIstek(form, cerez)
-	if ikinci.Code != http.StatusForbidden {
-		t.Errorf("ikinci POST durum = %d, beklenen 403 (bekleme tek kullanimlik)", ikinci.Code)
+	second := o.linkPostRequest(form, cookie)
+	if second.Code != http.StatusForbidden {
+		t.Errorf("ikinci POST durum = %d, beklenen 403 (bekleme tek kullanimlik)", second.Code)
 	}
-	// Form da artik acilmamali.
-	if w := o.baglamaGetIstek(beklemeID, cerez); w.Code != http.StatusForbidden {
+	// The form must not open any more either.
+	if w := o.linkGetRequest(pendingID, cookie); w.Code != http.StatusForbidden {
 		t.Errorf("tuketilmis bekleme icin GET durum = %d, beklenen 403", w.Code)
 	}
 }
 
-// Saldirgan BASKA birinin beklemesini kendi tarayicisinda
-// tamamlayamamali.
-func TestBaglamaBaskaTarayicidaTamamlanamaz(t *testing.T) {
-	o := testFedereSayfalar(t)
-	beklemeID, csrf, _, mevcut := o.beklemeKur(t)
-	// Saldirganin tarayicisi: kendi akisina bagli bir oturum cerezi var
-	// ama KURBANIN istegine bagli degil.
-	saldirgan := o.oturumBagla(t, "saldirganin-istegi")
+// The attacker must not be able to complete SOMEONE ELSE's pending link in
+// their own browser.
+func TestLink_CannotCompleteInOtherBrowser(t *testing.T) {
+	o := newTestFederationPages(t)
+	pendingID, csrf, _, existing := o.setupPendingLink(t)
+	// The attacker's browser: it has a session cookie bound to its own flow but
+	// NOT bound to the VICTIM's request.
+	attacker := o.bindSession(t, "saldirganin-istegi")
 
-	w := o.baglamaPostIstek(url.Values{
-		fieldPendingID: {beklemeID},
+	w := o.linkPostRequest(url.Values{
+		fieldPendingID: {pendingID},
 		fieldCSRF:      {csrf},
-		"sifre":        {testSifre},
-	}, saldirgan)
+		"sifre":        {testPassword},
+	}, attacker)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("durum = %d, beklenen 403", w.Code)
 	}
-	if _, err := o.federe.UserByIdentity(context.Background(), providerGoogle, o.google.sub); err == nil {
+	if _, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub); err == nil {
 		t.Error("baska tarayicida baglama TAMAMLANDI")
 	}
-	if o.istekler.subject(o.authReqID) == mevcut.ID {
+	if o.requests.subject(o.authReqID) == existing.ID {
 		t.Error("baska tarayicida giris yapildi")
 	}
 }
 
-// Sifre denemesi SINIRSIZ olmamali: baglama sayfasi, sifre deneme
-// yuzeyinin IKINCISIDIR ve Faz 1'in giris limitinden ayri bir uctur.
-func TestBaglamaHizLimitiUygulanir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	beklemeID, csrf, cerez, _ := o.beklemeKur(t)
+// Password attempts must not be UNLIMITED: the link page is the SECOND
+// surface for password guessing and a separate endpoint from Phase 1's login
+// limit.
+func TestLink_RateLimitApplied(t *testing.T) {
+	o := newTestFederationPages(t)
+	pendingID, csrf, cookie, _ := o.setupPendingLink(t)
 
-	// Ayri bir mux: ayni handler, ama bu kez hiz limitiyle sarili.
-	hiz, err := NewRateLimiter(o.depo.rdb, RateLimitConfig{
+	// A separate mux: the same handler, but this time wrapped with the limiter's limit.
+	limiter, err := NewRateLimiter(o.store.rdb, RateLimitConfig{
 		LoginIPPerMin: 1, LoginEmailPerHour: 100, SignupIPPerHour: 100,
 	}, []byte("test-anahtari"))
 	if err != nil {
 		t.Fatalf("hiz limiti kurulamadi: %v", err)
 	}
 	mux := http.NewServeMux()
-	araci := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
-	o.f.MountLink(mux, araci, hiz)
+	interceptor := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
+	o.pages.MountLink(mux, interceptor, limiter)
 	o.mux = mux
 
-	form := url.Values{fieldPendingID: {beklemeID}, fieldCSRF: {csrf}, "sifre": {"yanlis-sifre-degeri"}}
-	ilk := o.baglamaPostIstek(form, cerez)
-	if ilk.Code == http.StatusTooManyRequests {
+	form := url.Values{fieldPendingID: {pendingID}, fieldCSRF: {csrf}, "sifre": {"yanlis-sifre-degeri"}}
+	first := o.linkPostRequest(form, cookie)
+	if first.Code == http.StatusTooManyRequests {
 		t.Fatalf("ilk deneme 429 aldi; sinir yanlis kurulmus")
 	}
-	ikinci := o.baglamaPostIstek(form, cerez)
-	if ikinci.Code != http.StatusTooManyRequests {
-		t.Errorf("ikinci deneme durum = %d, beklenen 429", ikinci.Code)
+	second := o.linkPostRequest(form, cookie)
+	if second.Code != http.StatusTooManyRequests {
+		t.Errorf("ikinci deneme durum = %d, beklenen 429", second.Code)
 	}
 
-	// Sayac GIRIS ucundan AYRI olmali: giris butcesi tukenmemis olmali.
+	// The counter must be SEPARATE from the login endpoint: the login budget
+	// must not have been used up.
 	ctx := context.Background()
-	anahtarlar, err := o.depo.rdb.Keys(ctx, rateLimitPrefix+":*").Result()
+	keyList, err := o.store.rdb.Keys(ctx, rateLimitPrefix+":*").Result()
 	if err != nil && err != redis.Nil {
 		t.Fatalf("anahtarlar okunamadi: %v", err)
 	}
-	var baglamaVar bool
-	for _, a := range anahtarlar {
+	var hasBinding bool
+	for _, a := range keyList {
 		if strings.Contains(a, ":baglama:") {
-			baglamaVar = true
+			hasBinding = true
 		}
 		if strings.Contains(a, ":giris:") {
 			t.Errorf("baglama denemesi GIRIS sayacini tuketti: %q", a)
 		}
 	}
-	if !baglamaVar {
-		t.Errorf("baglama sayaci olusmadi; anahtarlar: %v", anahtarlar)
+	if !hasBinding {
+		t.Errorf("baglama sayaci olusmadi; anahtarlar: %v", keyList)
 	}
 }
 
-// Sifre denemeleri HESAP BASINA da sinirli olmali: IP sayacini IP
-// degistirerek asan bir saldirgan, her denemede yeni bir bekleme kaydi
-// almak icin federasyon turunu tekrarlayabilir. Tek bir hesaba yonelen
-// deneme sayisini sinirlayan sey hesap sayacidir.
-func TestBaglamaHesapHizLimitiUygulanir(t *testing.T) {
-	o := testFedereSayfalar(t)
-	beklemeID, csrf, cerez, _ := o.beklemeKur(t)
+// Password attempts must be limited PER ACCOUNT too: an attacker who gets
+// past the IP counter by changing IPs can repeat the federation round to
+// get a new pending record on every attempt. What limits the number of
+// attempts aimed at a single account is the account counter.
+func TestLink_AccountRateLimitApplied(t *testing.T) {
+	o := newTestFederationPages(t)
+	pendingID, csrf, cookie, _ := o.setupPendingLink(t)
 
-	// IP siniri BOL (100/dk), hesap siniri 1/saat: reddin TEK sebebi
-	// hesap sayaci olmali.
-	hiz, err := NewRateLimiter(o.depo.rdb, RateLimitConfig{
+	// The IP limit is GENEROUS (100/min), the account limit is 1/hour: the ONLY
+	// reason for rejection must be the account counter.
+	limiter, err := NewRateLimiter(o.store.rdb, RateLimitConfig{
 		LoginIPPerMin: 100, LoginEmailPerHour: 1, SignupIPPerHour: 100,
 	}, []byte("test-anahtari"))
 	if err != nil {
 		t.Fatalf("hiz limiti kurulamadi: %v", err)
 	}
 	mux := http.NewServeMux()
-	araci := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
-	o.f.Mount(mux, araci, hiz)
-	o.f.MountLink(mux, araci, hiz)
+	interceptor := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
+	o.pages.Mount(mux, interceptor, limiter)
+	o.pages.MountLink(mux, interceptor, limiter)
 	o.mux = mux
 
-	ilk := o.baglamaPostIstek(url.Values{
-		fieldPendingID: {beklemeID}, fieldCSRF: {csrf}, "sifre": {"yanlis-sifre-degeri"},
-	}, cerez)
-	if ilk.Code != http.StatusUnauthorized {
-		t.Fatalf("ilk deneme durum = %d, beklenen 401", ilk.Code)
+	first := o.linkPostRequest(url.Values{
+		fieldPendingID: {pendingID}, fieldCSRF: {csrf}, "sifre": {"yanlis-sifre-degeri"},
+	}, cookie)
+	if first.Code != http.StatusUnauthorized {
+		t.Fatalf("ilk deneme durum = %d, beklenen 401", first.Code)
 	}
 
-	// Saldirgan YENI bir bekleme kaydi alir (federasyon turunu
-	// tekrarlar): kaydin tekilligi deneme sayisini sinirlamaz.
-	ikinciAkis := o.akisKos(t, providerGoogle, false)
-	if ikinciAkis.Code != http.StatusFound {
-		t.Fatalf("ikinci akis durum = %d, beklenen 302", ikinciAkis.Code)
+	// The attacker gets a NEW pending record (repeats the federation round):
+	// the uniqueness of the record does not limit the number of attempts.
+	secondFlow := o.runFlow(t, providerGoogle, false)
+	if secondFlow.Code != http.StatusFound {
+		t.Fatalf("ikinci akis durum = %d, beklenen 302", secondFlow.Code)
 	}
-	konum, err := url.Parse(ikinciAkis.Header().Get("Location"))
+	location, err := url.Parse(secondFlow.Header().Get("Location"))
 	if err != nil {
 		t.Fatalf("Location cozumlenemedi: %v", err)
 	}
-	yeniID := konum.Query().Get(fieldPendingID)
-	if yeniID == "" || yeniID == beklemeID {
-		t.Fatalf("yeni bekleme kaydi alinamadi: %q", yeniID)
+	newID := location.Query().Get(fieldPendingID)
+	if newID == "" || newID == pendingID {
+		t.Fatalf("yeni bekleme kaydi alinamadi: %q", newID)
 	}
-	yeniForm := o.baglamaGetIstek(yeniID, cerez)
-	if yeniForm.Code != http.StatusOK {
-		t.Fatalf("yeni form acilamadi: durum = %d", yeniForm.Code)
+	newForm := o.linkGetRequest(newID, cookie)
+	if newForm.Code != http.StatusOK {
+		t.Fatalf("yeni form acilamadi: durum = %d", newForm.Code)
 	}
-	esler := csrfDeseni.FindStringSubmatch(yeniForm.Body.String())
-	if esler == nil {
+	matches := csrfPattern.FindStringSubmatch(newForm.Body.String())
+	if matches == nil {
 		t.Fatal("yeni formda CSRF jetonu yok")
 	}
 
-	ikinci := o.baglamaPostIstek(url.Values{
-		fieldPendingID: {yeniID}, fieldCSRF: {esler[1]}, "sifre": {"yanlis-sifre-degeri"},
-	}, cerez)
-	if ikinci.Code != http.StatusTooManyRequests {
-		t.Errorf("ikinci deneme durum = %d, beklenen 429 (hesap sayaci)", ikinci.Code)
+	second := o.linkPostRequest(url.Values{
+		fieldPendingID: {newID}, fieldCSRF: {matches[1]}, "sifre": {"yanlis-sifre-degeri"},
+	}, cookie)
+	if second.Code != http.StatusTooManyRequests {
+		t.Errorf("ikinci deneme durum = %d, beklenen 429 (hesap sayaci)", second.Code)
 	}
 
-	anahtarlar, err := o.depo.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
+	keyList, err := o.store.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
 	if err != nil {
 		t.Fatalf("anahtarlar okunamadi: %v", err)
 	}
-	var hesapVar bool
-	for _, a := range anahtarlar {
+	var hasAccount bool
+	for _, a := range keyList {
 		if strings.Contains(a, ":baglama-hesap:") {
-			hesapVar = true
+			hasAccount = true
 		}
 	}
-	if !hesapVar {
-		t.Errorf("hesap sayaci olusmadi; anahtarlar: %v", anahtarlar)
+	if !hasAccount {
+		t.Errorf("hesap sayaci olusmadi; anahtarlar: %v", keyList)
 	}
-	// Hesap kimligi Redis anahtarinda DUZ METIN gecmemeli.
-	for _, a := range anahtarlar {
-		if strings.Contains(a, o.google.eposta) {
+	// The account identity must not appear in PLAIN TEXT in the Redis key.
+	for _, a := range keyList {
+		if strings.Contains(a, o.google.email) {
 			t.Errorf("sayac anahtari e-postayi duz metin tasiyor: %q", a)
 		}
 	}
 }
 
-// Bekleme kaydi, DOGRULAMALARDAN ONCE tuketilmemeli: beklemeID'yi
-// ogrenen ucuncu bir taraf, cerezsiz tek bir POST ile kurbanin bekleyen
-// baglamasini YOK EDEMEMELI (yoksa kurban tum federasyon turunu bastan
-// yapmak zorunda kalirdi).
-func TestBaglamaBeklemesiBaglamasizPostlaYokEdilemez(t *testing.T) {
-	o := testFedereSayfalar(t)
-	beklemeID, csrf, cerez, mevcut := o.beklemeKur(t)
+// The pending record must not be consumed BEFORE the validations: a third
+// party who learns the pendingID must not be able to DESTROY the victim's
+// pending link with a single cookieless POST (otherwise the victim would
+// have to redo the whole federation round).
+func TestPendingLink_UnboundPostCannotDestroy(t *testing.T) {
+	o := newTestFederationPages(t)
+	pendingID, csrf, cookie, existing := o.setupPendingLink(t)
 
-	// Saldirgan: cerez YOK, CSRF YOK.
-	saldiri := o.baglamaPostIstek(url.Values{
-		fieldPendingID: {beklemeID}, "sifre": {"herhangi"},
+	// The attacker: NO cookie, NO CSRF.
+	attack := o.linkPostRequest(url.Values{
+		fieldPendingID: {pendingID}, "sifre": {"herhangi"},
 	}, nil)
-	if saldiri.Code != http.StatusForbidden {
-		t.Fatalf("saldiri durum = %d, beklenen 403", saldiri.Code)
+	if attack.Code != http.StatusForbidden {
+		t.Fatalf("saldiri durum = %d, beklenen 403", attack.Code)
 	}
 
-	// Kurban kendi akisini HALA tamamlayabilmeli.
-	w := o.baglamaPostIstek(url.Values{
-		fieldPendingID: {beklemeID}, fieldCSRF: {csrf}, "sifre": {testSifre},
-	}, cerez)
+	// The victim must STILL be able to complete their own flow.
+	w := o.linkPostRequest(url.Values{
+		fieldPendingID: {pendingID}, fieldCSRF: {csrf}, "sifre": {testPassword},
+	}, cookie)
 	if w.Code != http.StatusFound {
 		t.Fatalf("kurbanin beklemesi yok edildi: durum = %d, govde = %q", w.Code, w.Body.String())
 	}
-	if s := o.istekler.subject(o.authReqID); s != mevcut.ID {
-		t.Errorf("Subject = %q, beklenen %q", s, mevcut.ID)
+	if s := o.requests.subject(o.authReqID); s != existing.ID {
+		t.Errorf("Subject = %q, beklenen %q", s, existing.ID)
 	}
-	if got := o.istekler.amrOku(o.authReqID); !slices.Equal(got, []string{"fed"}) {
+	if got := o.requests.amrFor(o.authReqID); !slices.Equal(got, []string{"fed"}) {
 		t.Errorf("amr = %v, beklenen [fed]", got)
 	}
 }
 
-// Sifresiz hesap baglama sayfasina HIC gelmemeli; gelirse 409.
-func TestBaglamaSifresizHesapIcinAcilmaz(t *testing.T) {
-	o := testFedereSayfalar(t)
+// An account without a password must NEVER come to the link page; if it
+// does, 409.
+func TestLink_NotOpenedForPasswordlessAccount(t *testing.T) {
+	o := newTestFederationPages(t)
 	ctx := context.Background()
-	// kullaniciCoz bu kaydi uretmez (K1 dali 409 doner); kayit ELLE
-	// yazilir, yani bu bir derinlemesine savunma testidir.
-	sifresiz, err := o.federe.CreateFederatedUser(ctx, providerGoogle, "google-sub", "sifresiz@ornek.com", "Sifresiz", true)
+	// resolveUser does not produce this record (the K1 branch returns 409); the
+	// record is written BY HAND, so this is a defense-in-depth test.
+	passwordless, err := o.federated.CreateFederatedUser(ctx, providerGoogle, "google-sub", "sifresiz@ornek.com", "Sifresiz", true)
 	if err != nil {
 		t.Fatalf("federe hesap olusturulamadi: %v", err)
 	}
-	beklemeID, err := randomToken()
+	pendingID, err := randomToken()
 	if err != nil {
 		t.Fatalf("id uretilemedi: %v", err)
 	}
@@ -687,54 +691,54 @@ func TestBaglamaSifresizHesapIcinAcilmaz(t *testing.T) {
 	if err != nil {
 		t.Fatalf("csrf uretilemedi: %v", err)
 	}
-	bekleme := PendingLink{
+	pending := PendingLink{
 		AuthRequestID: o.authReqID,
-		UserID:        sifresiz.ID,
+		UserID:        passwordless.ID,
 		Provider:      providerApple,
 		Sub:           "apple-sub",
 		Email:         "sifresiz@ornek.com",
 		CSRF:          csrf,
 	}
-	if err := o.f.flows.WritePendingLink(ctx, beklemeID, bekleme, pendingLinkTTL); err != nil {
+	if err := o.pages.flows.WritePendingLink(ctx, pendingID, pending, pendingLinkTTL); err != nil {
 		t.Fatalf("bekleme yazilamadi: %v", err)
 	}
-	cerez := o.oturumCerez
+	cookie := o.sessionCookie
 
-	w := o.baglamaPostIstek(url.Values{
-		fieldPendingID: {beklemeID},
+	w := o.linkPostRequest(url.Values{
+		fieldPendingID: {pendingID},
 		fieldCSRF:      {csrf},
-		"sifre":        {testSifre},
-	}, cerez)
+		"sifre":        {testPassword},
+	}, cookie)
 	if w.Code != http.StatusConflict {
 		t.Errorf("durum = %d, beklenen 409", w.Code)
 	}
-	if _, err := o.federe.UserByIdentity(ctx, providerApple, "apple-sub"); err == nil {
+	if _, err := o.federated.UserByIdentity(ctx, providerApple, "apple-sub"); err == nil {
 		t.Error("sifresiz hesaba baglama yapildi")
 	}
-	if o.istekler.subject(o.authReqID) != "" {
+	if o.requests.subject(o.authReqID) != "" {
 		t.Error("sifresiz hesapta giris yapildi")
 	}
 }
 
-// I3, baglama bacagi: baglamaBeklemeTTL de istekTTL ile ust uste biniyor
-// ve istek sayaci EN BASTA baslayip hicbir yolda uzatilmadigi icin
-// kullanici sifresini DOGRU girdiginde bile auth istegi dusmus olabilir.
-// Bu siradan bir suresi-dolmadir ve 500 uretmemeli: kullanici ne
-// oldugunu ve uygulamadan yeniden baslamasi gerektigini okumali.
-func TestBaglamaPostIstekTTLIleDustugunde400Doner(t *testing.T) {
-	o := testFedereSayfalar(t)
-	beklemeID, csrf, cerez, _ := o.beklemeKur(t)
+// I3, link leg: pendingLinkTTL also overlaps with the request TTL, and since
+// the request counter starts at the very beginning and is never extended on
+// any path, the auth request may have expired even when the user enters the
+// password CORRECTLY. This is an ordinary expiry and must not produce a 500:
+// the user must read what happened and that they must restart from the app.
+func TestLinkPost_ExpiredRequestReturns400(t *testing.T) {
+	o := newTestFederationPages(t)
+	pendingID, csrf, cookie, _ := o.setupPendingLink(t)
 
-	// Auth istegi TTL ile dustu (TTL degerleri degistirilmedigi icin
-	// kayit elle dusurulur); bekleme kaydi ve oturum baglamasi HALA
-	// gecerli, yani test gercekten SURESI-DOLMA yolunu olcuyor.
-	o.istekler.sil(o.authReqID)
+	// The auth request expired with the TTL (since the TTL values are not
+	// changed, the record is dropped by hand); the pending record and the session
+	// binding are STILL valid, so the test really measures the EXPIRY path.
+	o.requests.drop(o.authReqID)
 
-	w := o.baglamaPostIstek(url.Values{
-		fieldPendingID: {beklemeID},
+	w := o.linkPostRequest(url.Values{
+		fieldPendingID: {pendingID},
 		fieldCSRF:      {csrf},
-		"sifre":        {testSifre},
-	}, cerez)
+		"sifre":        {testPassword},
+	}, cookie)
 	if w.Code == http.StatusInternalServerError {
 		t.Fatalf("siradan bir suresi-dolma 500 uretti: govde = %q", w.Body.String())
 	}
@@ -744,7 +748,7 @@ func TestBaglamaPostIstekTTLIleDustugunde400Doner(t *testing.T) {
 	if !strings.Contains(w.Body.String(), msgRequestExpired) {
 		t.Errorf("kullaniciya ne oldugu soylenmemis: govde = %q", w.Body.String())
 	}
-	if o.istekler.subject(o.authReqID) != "" {
+	if o.requests.subject(o.authReqID) != "" {
 		t.Error("dusmus bir istek TAMAMLANDI")
 	}
 }

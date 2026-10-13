@@ -9,130 +9,130 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/op"
 )
 
-// izlemeTokenStore, KullaniciIptal'in cagrilip cagrilmadigini izler.
-type izlemeTokenStore struct {
+// trackingTokenStore tracks whether RevokeUser was called.
+type trackingTokenStore struct {
 	*FakeTokenStore
-	kullaniciIptalSayisi int
+	revokeUserCalls int
 }
 
-func (s *izlemeTokenStore) RevokeUser(ctx context.Context, userID, clientID string) error {
-	s.kullaniciIptalSayisi++
+func (s *trackingTokenStore) RevokeUser(ctx context.Context, userID, clientID string) error {
+	s.revokeUserCalls++
 	return s.FakeTokenStore.RevokeUser(ctx, userID, clientID)
 }
 
-// testDepoJetonlu, depo_test.go'daki testDepo'nun belirli bir
-// TokenStore ile kurulan surumudur (orada sabit NewSahteTokenStore
-// kullanilir).
-func testDepoJetonlu(t *testing.T, jetonlar TokenStore) *Storage {
+// newTestStorageWithTokens is the variant of newTestStorage in
+// storage_test.go that is built with a given TokenStore (there the fixed
+// NewFakeTokenStore is used).
+func newTestStorageWithTokens(t *testing.T, tokens TokenStore) *Storage {
 	t.Helper()
-	anahtar, err := LoadSigningKey(testPEM(t))
+	key, err := LoadSigningKey(testPEM(t))
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
 	}
-	return NewStorage(testAuthCfg(), NewFakeUserStore(), jetonlar, nil, anahtar)
+	return NewStorage(testAuthCfg(), NewFakeUserStore(), tokens, nil, key)
 }
 
-// M2: parametresiz GET /end_session, bos userID/clientID ile
-// TerminateSession'a dusuyor ve Postgres'e bos dizgeyi uuid olarak
-// gonderiyordu: 500 + "invalid input syntax for type uuid" (SQLSTATE
-// 22P02) + HER istekte bir ERROR log satiri (log kirliligi + kucuk
-// amplifikasyon). Bos kimlikle iptal edilecek jeton zaten yok, bu
-// yuzden erken donmek dogru.
-func TestTerminateSessionBosKimlikleDepoyaDokunmaz(t *testing.T) {
-	izleme := &izlemeTokenStore{FakeTokenStore: NewFakeTokenStore()}
-	d := testDepoJetonlu(t, izleme)
+// M2: a parameterless GET /end_session fell into TerminateSession with
+// an empty userID/clientID and sent the empty string to Postgres as a
+// uuid: 500 + "invalid input syntax for type uuid" (SQLSTATE 22P02) +
+// an ERROR log line on EVERY request (log pollution + small
+// amplification). There is no token to revoke with an empty ID anyway,
+// so returning early is correct.
+func TestStorage_TerminateSessionEmptyIDsSkipStore(t *testing.T) {
+	tracking := &trackingTokenStore{FakeTokenStore: NewFakeTokenStore()}
+	d := newTestStorageWithTokens(t, tracking)
 	ctx := context.Background()
 
-	durumlar := []struct{ userID, clientID string }{
+	statuses := []struct{ userID, clientID string }{
 		{"", ""},
 		{"", "makesinger-mobil"},
 		{"k1", ""},
 	}
-	for _, c := range durumlar {
+	for _, c := range statuses {
 		if err := d.TerminateSession(ctx, c.userID, c.clientID); err != nil {
 			t.Errorf("TerminateSession(%q, %q) = %v, beklenen nil", c.userID, c.clientID, err)
 		}
 	}
-	if izleme.kullaniciIptalSayisi != 0 {
-		t.Errorf("bos kimlikle depo %d kez cagrildi, beklenen 0", izleme.kullaniciIptalSayisi)
+	if tracking.revokeUserCalls != 0 {
+		t.Errorf("bos kimlikle depo %d kez cagrildi, beklenen 0", tracking.revokeUserCalls)
 	}
 
-	// NEGATIF KONTROL: koruma, GECERLI cagriyi da kesmesin.
+	// NEGATIVE CONTROL: the guard must not cut off a VALID call too.
 	if err := d.TerminateSession(ctx, "k1", "makesinger-mobil"); err != nil {
 		t.Fatalf("gecerli TerminateSession = %v", err)
 	}
-	if izleme.kullaniciIptalSayisi != 1 {
-		t.Errorf("gecerli cagri sonrasi sayac = %d, beklenen 1", izleme.kullaniciIptalSayisi)
+	if tracking.revokeUserCalls != 1 {
+		t.Errorf("gecerli cagri sonrasi sayac = %d, beklenen 1", tracking.revokeUserCalls)
 	}
 }
 
-// M7: GetRefreshTokenInfo, ErrJetonTekrar gorunce aileyi IPTAL
-// ETMIYORDU. Somurulebilir degildi (saldirgan /revoke akisinda jeton
-// kazanmiyor), ama mimarinin tamami "yeniden kullanim => aileyi oldur"
-// ilkesine dayaniyorken bir tespit kanali sessizce kayboluyordu.
-func TestGetRefreshTokenInfoYenidenKullanimdaAileyiIptalEder(t *testing.T) {
-	depo := NewFakeTokenStore()
-	d := testDepoJetonlu(t, depo)
+// M7: GetRefreshTokenInfo did NOT REVOKE the family when it saw
+// ErrTokenReused. It was not exploitable (the attacker does not gain a
+// token in the /revoke flow), but while the whole architecture rests on
+// the principle "reuse => kill the family", a detection channel was silently missing.
+func TestStorage_GetRefreshTokenInfoReuseRevokesFamily(t *testing.T) {
+	store := NewFakeTokenStore()
+	d := newTestStorageWithTokens(t, store)
 	ctx := context.Background()
 
-	eski, err := depo.CreateRefresh(ctx, yeniRefresh("k1"))
+	old, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	yeni, err := depo.RotateRefresh(ctx, eski, yeniRefresh("k1"))
+	rotated, err := store.RotateRefresh(ctx, old, newRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshDondur: %v", err)
 	}
-	// Rotasyondan sonra yeni jeton gecerli olmali (aile henuz canli).
-	if _, err := depo.GetRefresh(ctx, yeni); err != nil {
+	// After rotation the new token must be valid (the family is still alive).
+	if _, err := store.GetRefresh(ctx, rotated); err != nil {
 		t.Fatalf("rotasyon sonrasi yeni jeton gecersiz: %v", err)
 	}
 
-	// KULLANILMIS jetonu sun: kutuphane sozlesmesi geregi
-	// op.ErrInvalidRefreshToken donmeli (davranis DEGISMEMELI; /revoke
-	// RFC 7009 §2.2 geregi 200 donmeye devam etsin).
-	if _, _, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", eski); !errors.Is(err, op.ErrInvalidRefreshToken) {
+	// Present the USED token: by the library contract it must return
+	// op.ErrInvalidRefreshToken (the behavior must NOT CHANGE; /revoke
+	// should keep returning 200 per RFC 7009 §2.2).
+	if _, _, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", old); !errors.Is(err, op.ErrInvalidRefreshToken) {
 		t.Fatalf("hata = %v, beklenen op.ErrInvalidRefreshToken", err)
 	}
 
-	// ... ve AILE iptal edilmis olmali: yeni jeton da artik gecersiz.
-	if _, err := depo.GetRefresh(ctx, yeni); err == nil {
+	// ... and the FAMILY must be revoked: the new token is now invalid too.
+	if _, err := store.GetRefresh(ctx, rotated); err == nil {
 		t.Error("yeniden kullanimdan sonra aile iptal edilmedi: yeni jeton hala gecerli")
 	}
 }
 
-// NEGATIF KONTROL: aile iptali YALNIZCA yeniden kullanimda olmali.
-// Bilinmeyen bir jeton icin hicbir aile olmemeli, aksi halde yukaridaki
-// test "her cagri aileyi olduruyor" durumunda da gecerdi.
-func TestGetRefreshTokenInfoBilinmeyenJetonAileyiIptalEtmez(t *testing.T) {
-	depo := NewFakeTokenStore()
-	d := testDepoJetonlu(t, depo)
+// NEGATIVE CONTROL: the family revocation must happen ONLY on reuse.
+// No family must die for an unknown token, otherwise the test above
+// would also pass in the "every call kills the family" case.
+func TestStorage_GetRefreshTokenInfoUnknownTokenNoRevoke(t *testing.T) {
+	store := NewFakeTokenStore()
+	d := newTestStorageWithTokens(t, store)
 	ctx := context.Background()
 
-	gecerli, err := depo.CreateRefresh(ctx, yeniRefresh("k1"))
+	valid, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
 	if _, _, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", "boyle-bir-jeton-yok"); !errors.Is(err, op.ErrInvalidRefreshToken) {
 		t.Fatalf("hata = %v, beklenen op.ErrInvalidRefreshToken", err)
 	}
-	if _, err := depo.GetRefresh(ctx, gecerli); err != nil {
+	if _, err := store.GetRefresh(ctx, valid); err != nil {
 		t.Errorf("bilinmeyen jeton yuzunden gecerli jeton iptal edildi: %v", err)
 	}
 }
 
-// GECERLI bir refresh jetonu icin GetRefreshTokenInfo hala dogru
-// bilgiyi dondurmeli: M7 duzeltmesi mutlu yolu kirmasin.
-func TestGetRefreshTokenInfoGecerliJetonuDondurur(t *testing.T) {
-	depo := NewFakeTokenStore()
-	d := testDepoJetonlu(t, depo)
+// For a VALID refresh token GetRefreshTokenInfo must still return the
+// right info: the M7 fix must not break the happy path.
+func TestStorage_GetRefreshTokenInfoReturnsValidToken(t *testing.T) {
+	store := NewFakeTokenStore()
+	d := newTestStorageWithTokens(t, store)
 	ctx := context.Background()
 
-	jeton, err := depo.CreateRefresh(ctx, yeniRefresh("k1"))
+	token, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	userID, tokenID, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", jeton)
+	userID, tokenID, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", token)
 	if err != nil {
 		t.Fatalf("GetRefreshTokenInfo: %v", err)
 	}
@@ -144,13 +144,13 @@ func TestGetRefreshTokenInfoGecerliJetonuDondurur(t *testing.T) {
 	}
 }
 
-// M3: discovery belgesi YALNIZCA gercekten destekledigimiz akislari
-// ilan etmeli. Kutuphane (v3.51.8) bu alanlari yapilandirmadan okumaz,
-// SABIT uretir; op.Config'de kisitlayan bir alan YOK, bu yuzden belgeyi
-// yayindan once duzeltiyoruz.
-func TestDiscoveryDuzeltDesteklenmeyenAkislariAyiklar(t *testing.T) {
-	// Kutuphanenin urettigi belgeyi taklit et.
-	belge := &oidc.DiscoveryConfiguration{
+// M3: the discovery document must advertise ONLY the flows we really
+// support. The library (v3.51.8) does not read these fields from the
+// configuration, it produces them as CONSTANTS; op.Config has NO field
+// to restrict them, so we fix the document before publishing it.
+func TestTrimDiscovery_RemovesUnsupportedFlows(t *testing.T) {
+	// Imitate the document the library produces.
+	doc := &oidc.DiscoveryConfiguration{
 		ResponseTypesSupported: []string{"code", "id_token", "id_token token"},
 		GrantTypesSupported: []oidc.GrantType{
 			oidc.GrantTypeCode,
@@ -159,37 +159,37 @@ func TestDiscoveryDuzeltDesteklenmeyenAkislariAyiklar(t *testing.T) {
 			oidc.GrantTypeBearer,
 		},
 		DeviceAuthorizationEndpoint: "https://ornek.dev/device_authorization",
-		// Duzeltmenin DOKUNMAMASI gereken bir alan.
+		// A field the fix must NOT touch.
 		CodeChallengeMethodsSupported: []oidc.CodeChallengeMethod{oidc.CodeChallengeMethodS256},
 	}
-	trimDiscovery(belge)
+	trimDiscovery(doc)
 
-	if len(belge.ResponseTypesSupported) != 1 || belge.ResponseTypesSupported[0] != "code" {
-		t.Errorf("response_types_supported = %v, beklenen [code]", belge.ResponseTypesSupported)
+	if len(doc.ResponseTypesSupported) != 1 || doc.ResponseTypesSupported[0] != "code" {
+		t.Errorf("response_types_supported = %v, beklenen [code]", doc.ResponseTypesSupported)
 	}
-	for _, yasak := range []oidc.GrantType{oidc.GrantTypeImplicit, oidc.GrantTypeBearer, oidc.GrantTypeDeviceCode} {
-		for _, g := range belge.GrantTypesSupported {
-			if g == yasak {
-				t.Errorf("grant_types_supported desteklenmeyen %q iceriyor: %v", yasak, belge.GrantTypesSupported)
+	for _, forbidden := range []oidc.GrantType{oidc.GrantTypeImplicit, oidc.GrantTypeBearer, oidc.GrantTypeDeviceCode} {
+		for _, g := range doc.GrantTypesSupported {
+			if g == forbidden {
+				t.Errorf("grant_types_supported desteklenmeyen %q iceriyor: %v", forbidden, doc.GrantTypesSupported)
 			}
 		}
 	}
-	// Destekledigimiz ikisi KALMALI (ayiklama fazla kesmesin).
-	for _, gerekli := range []oidc.GrantType{oidc.GrantTypeCode, oidc.GrantTypeRefreshToken} {
-		bulundu := false
-		for _, g := range belge.GrantTypesSupported {
-			if g == gerekli {
-				bulundu = true
+	// The two we support must REMAIN (the trimming must not cut too much).
+	for _, required := range []oidc.GrantType{oidc.GrantTypeCode, oidc.GrantTypeRefreshToken} {
+		wasFound := false
+		for _, g := range doc.GrantTypesSupported {
+			if g == required {
+				wasFound = true
 			}
 		}
-		if !bulundu {
-			t.Errorf("grant_types_supported %q icermiyor: %v", gerekli, belge.GrantTypesSupported)
+		if !wasFound {
+			t.Errorf("grant_types_supported %q icermiyor: %v", required, doc.GrantTypesSupported)
 		}
 	}
-	if belge.DeviceAuthorizationEndpoint != "" {
-		t.Errorf("device_authorization_endpoint = %q, beklenen bos", belge.DeviceAuthorizationEndpoint)
+	if doc.DeviceAuthorizationEndpoint != "" {
+		t.Errorf("device_authorization_endpoint = %q, beklenen bos", doc.DeviceAuthorizationEndpoint)
 	}
-	if len(belge.CodeChallengeMethodsSupported) != 1 {
-		t.Errorf("code_challenge_methods_supported bozuldu: %v", belge.CodeChallengeMethodsSupported)
+	if len(doc.CodeChallengeMethodsSupported) != 1 {
+		t.Errorf("code_challenge_methods_supported bozuldu: %v", doc.CodeChallengeMethodsSupported)
 	}
 }

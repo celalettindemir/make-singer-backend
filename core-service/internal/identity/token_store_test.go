@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func yeniRefresh(userID string) *RefreshRecord {
+func newRefresh(userID string) *RefreshRecord {
 	return &RefreshRecord{
 		UserID:    userID,
 		ClientID:  "makesinger-mobil",
@@ -21,268 +21,267 @@ func yeniRefresh(userID string) *RefreshRecord {
 	}
 }
 
-func TestRefreshOlusturVeOku(t *testing.T) {
-	depo := NewFakeTokenStore()
+func TestTokenStore_CreateAndGetRefresh(t *testing.T) {
+	store := NewFakeTokenStore()
 	ctx := context.Background()
-	jeton, err := depo.CreateRefresh(ctx, yeniRefresh("k1"))
+	token, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	if jeton == "" {
+	if token == "" {
 		t.Fatal("bos jeton dondu")
 	}
-	kayit, err := depo.GetRefresh(ctx, jeton)
+	record, err := store.GetRefresh(ctx, token)
 	if err != nil {
 		t.Fatalf("RefreshOku: %v", err)
 	}
-	if kayit.UserID != "k1" {
-		t.Errorf("UserID = %q", kayit.UserID)
+	if record.UserID != "k1" {
+		t.Errorf("UserID = %q", record.UserID)
 	}
-	if kayit.FamilyID == "" {
+	if record.FamilyID == "" {
 		t.Error("FamilyID bos")
 	}
 }
 
-// Rotasyon: her kullanim yeni jeton uretir ve eski jeton olur.
-func TestRefreshDonerVeEskisiOlur(t *testing.T) {
-	depo := NewFakeTokenStore()
+// Rotation: every use produces a new token and the old one dies.
+func TestTokenStore_RotateInvalidatesOld(t *testing.T) {
+	store := NewFakeTokenStore()
 	ctx := context.Background()
-	eski, err := depo.CreateRefresh(ctx, yeniRefresh("k1"))
+	old, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	yeni, err := depo.RotateRefresh(ctx, eski, yeniRefresh("k1"))
+	fresh, err := store.RotateRefresh(ctx, old, newRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshDondur: %v", err)
 	}
-	if yeni == eski {
+	if fresh == old {
 		t.Fatal("jeton donmemis, ayni deger geldi")
 	}
-	if _, err := depo.GetRefresh(ctx, yeni); err != nil {
+	if _, err := store.GetRefresh(ctx, fresh); err != nil {
 		t.Errorf("yeni jeton okunamadi: %v", err)
 	}
 }
 
-// Calinti jeton tespiti: kullanilmis bir jeton tekrar sunulursa ailenin
-// TAMAMI iptal olur. Yalnizca sunulan jetonu reddetmek yetmez; saldirgan
-// zaten yeni jetonu almis olabilir.
-func TestKullanilmisJetonAileyiIptalEder(t *testing.T) {
-	depo := NewFakeTokenStore()
+// Stolen-token detection: if a used token is presented again the WHOLE
+// family is revoked. Rejecting only the presented token is not enough; the
+// attacker may already have taken the new token.
+func TestTokenStore_UsedTokenRevokesFamily(t *testing.T) {
+	store := NewFakeTokenStore()
 	ctx := context.Background()
-	birinci, err := depo.CreateRefresh(ctx, yeniRefresh("k1"))
+	firstRecord, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	ikinci, err := depo.RotateRefresh(ctx, birinci, yeniRefresh("k1"))
+	second, err := store.RotateRefresh(ctx, firstRecord, newRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshDondur: %v", err)
 	}
-	// Saldirgan eski jetonu tekrar sunuyor.
-	if _, err := depo.RotateRefresh(ctx, birinci, yeniRefresh("k1")); !errors.Is(err, ErrTokenReused) {
+	// The attacker presents the old token again.
+	if _, err := store.RotateRefresh(ctx, firstRecord, newRefresh("k1")); !errors.Is(err, ErrTokenReused) {
 		t.Fatalf("hata = %v, beklenen ErrJetonTekrar", err)
 	}
-	// Gercek kullanicinin elindeki gecerli jeton da artik olu olmali.
-	if _, err := depo.GetRefresh(ctx, ikinci); !errors.Is(err, ErrTokenNotFound) {
+	// The valid token in the real user's hands must be dead now too.
+	if _, err := store.GetRefresh(ctx, second); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("aile iptal edilmemis, ikinci jeton hala gecerli (err=%v)", err)
 	}
 }
 
-func TestSuresiGecmisRefreshReddedilir(t *testing.T) {
-	depo := NewFakeTokenStore()
+func TestTokenStore_ExpiredRefreshRejected(t *testing.T) {
+	store := NewFakeTokenStore()
 	ctx := context.Background()
-	k := yeniRefresh("k1")
+	k := newRefresh("k1")
 	k.ExpiresAt = time.Now().UTC().Add(-time.Minute)
-	jeton, err := depo.CreateRefresh(ctx, k)
+	token, err := store.CreateRefresh(ctx, k)
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	if _, err := depo.GetRefresh(ctx, jeton); !errors.Is(err, ErrTokenNotFound) {
+	if _, err := store.GetRefresh(ctx, token); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
 	}
 }
 
-func TestOlmayanRefresh(t *testing.T) {
-	depo := NewFakeTokenStore()
-	if _, err := depo.GetRefresh(context.Background(), "uydurma"); !errors.Is(err, ErrTokenNotFound) {
+func TestTokenStore_MissingRefresh(t *testing.T) {
+	store := NewFakeTokenStore()
+	if _, err := store.GetRefresh(context.Background(), "uydurma"); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
 	}
 }
 
-// Cikis: kullanicinin butun refresh jetonlari olur.
-func TestKullaniciIptalHepsiniOldurur(t *testing.T) {
-	depo := NewFakeTokenStore()
+// Logout: all of the user's refresh tokens die.
+func TestTokenStore_RevokeUserRevokesAll(t *testing.T) {
+	store := NewFakeTokenStore()
 	ctx := context.Background()
-	a, _ := depo.CreateRefresh(ctx, yeniRefresh("k1"))
-	b, _ := depo.CreateRefresh(ctx, yeniRefresh("k1"))
-	c, _ := depo.CreateRefresh(ctx, yeniRefresh("k2"))
-	// Ayni kullanici, BASKA istemci: cikis yalnizca o istemcinin
-	// jetonlarini oldurmeli.
-	baskaIstemci := yeniRefresh("k1")
-	baskaIstemci.ClientID = "makesinger-web"
-	d, _ := depo.CreateRefresh(ctx, baskaIstemci)
-	if err := depo.RevokeUser(ctx, "k1", "makesinger-mobil"); err != nil {
+	a, _ := store.CreateRefresh(ctx, newRefresh("k1"))
+	b, _ := store.CreateRefresh(ctx, newRefresh("k1"))
+	c, _ := store.CreateRefresh(ctx, newRefresh("k2"))
+	// The same user, ANOTHER client: logout must kill only that client's
+	// tokens.
+	otherClient := newRefresh("k1")
+	otherClient.ClientID = "makesinger-web"
+	d, _ := store.CreateRefresh(ctx, otherClient)
+	if err := store.RevokeUser(ctx, "k1", "makesinger-mobil"); err != nil {
 		t.Fatalf("KullaniciIptal: %v", err)
 	}
-	for ad, jeton := range map[string]string{"a": a, "b": b} {
-		if _, err := depo.GetRefresh(ctx, jeton); !errors.Is(err, ErrTokenNotFound) {
-			t.Errorf("%s hala gecerli", ad)
+	for name, token := range map[string]string{"a": a, "b": b} {
+		if _, err := store.GetRefresh(ctx, token); !errors.Is(err, ErrTokenNotFound) {
+			t.Errorf("%s hala gecerli", name)
 		}
 	}
-	if _, err := depo.GetRefresh(ctx, c); err != nil {
+	if _, err := store.GetRefresh(ctx, c); err != nil {
 		t.Errorf("baska kullanicinin jetonu iptal edildi: %v", err)
 	}
-	if _, err := depo.GetRefresh(ctx, d); err != nil {
+	if _, err := store.GetRefresh(ctx, d); err != nil {
 		t.Errorf("baska istemcinin jetonu iptal edildi: %v", err)
 	}
 }
 
-// Jetonun kendisi degil ozeti saklanmali.
-func TestJetonDuzMetinSaklanmaz(t *testing.T) {
-	depo := NewFakeTokenStore()
+// The digest of the token must be stored, not the token itself.
+func TestTokenStore_NoPlaintextToken(t *testing.T) {
+	store := NewFakeTokenStore()
 	ctx := context.Background()
-	jeton, err := depo.CreateRefresh(ctx, yeniRefresh("k1"))
+	token, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	for _, kayit := range depo.AllRecords() {
-		if string(kayit.TokenHash) == jeton {
+	for _, record := range store.AllRecords() {
+		if string(record.TokenHash) == token {
 			t.Fatal("jeton duz metin saklanmis")
 		}
 	}
-	// Alan alan bakmak yetmez (sha256 ham baytlari ile base64 dizgesi
-	// hicbir kosulda esit olmaz, o karsilastirma bedavaya geciyor).
-	// Kaydin TAMAMINI serileyip jetonun hicbir alanda gecmedigini
-	// dogruluyoruz.
-	veri, err := json.Marshal(depo.AllRecords())
+	// Looking field by field is not enough (the sha256 raw bytes can never
+	// equal a base64 string, so that comparison passes for free). We serialize
+	// the WHOLE record and verify that the token does not appear in any field.
+	data, err := json.Marshal(store.AllRecords())
 	if err != nil {
 		t.Fatalf("kayitlar serilenemedi: %v", err)
 	}
-	if strings.Contains(string(veri), jeton) {
-		t.Fatalf("jeton kayit icinde bir alanda duz metin gecmis: %s", veri)
+	if strings.Contains(string(data), token) {
+		t.Fatalf("jeton kayit icinde bir alanda duz metin gecmis: %s", data)
 	}
-	// Map anahtarlari da ozet olmali: sahte depo jetonu anahtar olarak
-	// tutarsa duz metin yine bellekte durur.
-	for anahtar := range depo.refresh {
-		if strings.Contains(anahtar, jeton) {
+	// The map keys must be digests too: if the fake store keeps the token as a
+	// key, the plain text still sits in memory.
+	for key := range store.refresh {
+		if strings.Contains(key, token) {
 			t.Fatal("jeton map anahtarinda duz metin saklanmis")
 		}
 	}
 }
 
-// Rotasyon baska bir kullanicinin jetonunu devralmamali: cagiran katmanda
-// bir hata olursa ayni aileye yabanci kayit girmesin.
-func TestRotasyonSahiplikDogrular(t *testing.T) {
-	depo := NewFakeTokenStore()
+// Rotation must not take over another user's token: if there is a bug in
+// the calling layer, no foreign record should enter the same family.
+func TestTokenStore_RotateChecksOwnership(t *testing.T) {
+	store := NewFakeTokenStore()
 	ctx := context.Background()
-	jeton, err := depo.CreateRefresh(ctx, yeniRefresh("k1"))
+	token, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	if _, err := depo.RotateRefresh(ctx, jeton, yeniRefresh("k2")); !errors.Is(err, ErrTokenNotFound) {
+	if _, err := store.RotateRefresh(ctx, token, newRefresh("k2")); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("baska kullanici icin hata = %v, beklenen ErrJetonYok", err)
 	}
-	baskaIstemci := yeniRefresh("k1")
-	baskaIstemci.ClientID = "makesinger-web"
-	if _, err := depo.RotateRefresh(ctx, jeton, baskaIstemci); !errors.Is(err, ErrTokenNotFound) {
+	otherClient := newRefresh("k1")
+	otherClient.ClientID = "makesinger-web"
+	if _, err := store.RotateRefresh(ctx, token, otherClient); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("baska istemci icin hata = %v, beklenen ErrJetonYok", err)
 	}
-	// Reddedilen denemeler jetonu tuketmemis olmali.
-	if _, err := depo.GetRefresh(ctx, jeton); err != nil {
+	// Rejected attempts must not have consumed the token.
+	if _, err := store.GetRefresh(ctx, token); err != nil {
 		t.Errorf("gecerli jeton reddedilen denemeler sonrasi olmus: %v", err)
 	}
 }
 
-// Sahte depo cagirana DAHILI isaretci vermemeli: Postgres her okumada
-// taze satir dondurdugu icin cagiranin mutasyonu veritabanini bozmaz,
-// sahte depo da ayni yalitimi vermeli.
-func TestSahteDepoKopyaDondurur(t *testing.T) {
-	depo := NewFakeTokenStore()
+// The fake store must not hand out an INTERNAL pointer to the caller:
+// Postgres returns a fresh row on every read, so a caller's mutation does not
+// corrupt the database, and the fake store must give the same isolation.
+func TestFakeTokenStore_ReturnsCopies(t *testing.T) {
+	store := NewFakeTokenStore()
 	ctx := context.Background()
-	girdi := yeniRefresh("k1")
-	jeton, err := depo.CreateRefresh(ctx, girdi)
+	input := newRefresh("k1")
+	token, err := store.CreateRefresh(ctx, input)
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	// Cagiranin elindeki dilimi degistirmek depoyu etkilememeli.
-	girdi.Scopes[0] = "BOZULDU"
+	// Changing the slice in the caller's hands must not affect the store.
+	input.Scopes[0] = "BOZULDU"
 
-	kayit, err := depo.GetRefresh(ctx, jeton)
+	record, err := store.GetRefresh(ctx, token)
 	if err != nil {
 		t.Fatalf("RefreshOku: %v", err)
 	}
-	if kayit.Scopes[0] != "openid" {
-		t.Errorf("Scopes cagiranla paylasilmis: %v", kayit.Scopes)
+	if record.Scopes[0] != "openid" {
+		t.Errorf("Scopes cagiranla paylasilmis: %v", record.Scopes)
 	}
-	// Donen kaydi bozmak da depoyu etkilememeli.
-	kayit.Scopes[0] = "BOZULDU"
-	kayit.TokenHash[0] ^= 0xff
-	kayit.UserID = "saldirgan"
-	iptal := time.Now().UTC()
-	kayit.RevokedAt = &iptal
+	// Corrupting the returned record must not affect the store either.
+	record.Scopes[0] = "BOZULDU"
+	record.TokenHash[0] ^= 0xff
+	record.UserID = "saldirgan"
+	cancel := time.Now().UTC()
+	record.RevokedAt = &cancel
 
-	tekrar, err := depo.GetRefresh(ctx, jeton)
+	again, err := store.GetRefresh(ctx, token)
 	if err != nil {
 		t.Fatalf("donen kayit mutasyonu depoyu bozdu: %v", err)
 	}
-	if tekrar.Scopes[0] != "openid" || tekrar.UserID != "k1" || tekrar.RevokedAt != nil {
-		t.Errorf("dahili kayit mutasyona ugradi: %+v", tekrar)
+	if again.Scopes[0] != "openid" || again.UserID != "k1" || again.RevokedAt != nil {
+		t.Errorf("dahili kayit mutasyona ugradi: %+v", again)
 	}
 
-	// Access kaydi icin de ayni yalitim.
-	kapsam := []string{"openid"}
-	if err := depo.SaveAccess(ctx, "at1", "k1", "makesinger-mobil", kapsam, time.Now().UTC().Add(time.Minute)); err != nil {
+	// The same isolation for the access record.
+	scope := []string{"openid"}
+	if err := store.SaveAccess(ctx, "at1", "k1", "makesinger-mobil", scope, time.Now().UTC().Add(time.Minute)); err != nil {
 		t.Fatalf("AccessKaydet: %v", err)
 	}
-	kapsam[0] = "BOZULDU"
-	ak, err := depo.GetAccess(ctx, "at1")
+	scope[0] = "BOZULDU"
+	accessRecord, err := store.GetAccess(ctx, "at1")
 	if err != nil {
 		t.Fatalf("AccessOku: %v", err)
 	}
-	if ak.Scopes[0] != "openid" {
-		t.Errorf("access Scopes cagiranla paylasilmis: %v", ak.Scopes)
+	if accessRecord.Scopes[0] != "openid" {
+		t.Errorf("access Scopes cagiranla paylasilmis: %v", accessRecord.Scopes)
 	}
-	ak.UserID = "saldirgan"
-	if ak2, err := depo.GetAccess(ctx, "at1"); err != nil || ak2.UserID != "k1" {
-		t.Errorf("dahili access kaydi mutasyona ugradi: %+v (err=%v)", ak2, err)
+	accessRecord.UserID = "saldirgan"
+	if accessRecord2, err := store.GetAccess(ctx, "at1"); err != nil || accessRecord2.UserID != "k1" {
+		t.Errorf("dahili access kaydi mutasyona ugradi: %+v (err=%v)", accessRecord2, err)
 	}
 }
 
-// TumKayitlar da kopya dondurmeli.
-func TestTumKayitlarKopyaDondurur(t *testing.T) {
-	depo := NewFakeTokenStore()
+// AllRecords must return a copy too.
+func TestFakeTokenStore_AllRecordsReturnsCopies(t *testing.T) {
+	store := NewFakeTokenStore()
 	ctx := context.Background()
-	jeton, err := depo.CreateRefresh(ctx, yeniRefresh("k1"))
+	token, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
 		t.Fatalf("RefreshOlustur: %v", err)
 	}
-	for _, kayit := range depo.AllRecords() {
-		kayit.UserID = "saldirgan"
-		kayit.Scopes[0] = "BOZULDU"
+	for _, record := range store.AllRecords() {
+		record.UserID = "saldirgan"
+		record.Scopes[0] = "BOZULDU"
 	}
-	kayit, err := depo.GetRefresh(ctx, jeton)
+	record, err := store.GetRefresh(ctx, token)
 	if err != nil {
 		t.Fatalf("RefreshOku: %v", err)
 	}
-	if kayit.UserID != "k1" || kayit.Scopes[0] != "openid" {
-		t.Errorf("TumKayitlar dahili isaretci dondurmus: %+v", kayit)
+	if record.UserID != "k1" || record.Scopes[0] != "openid" {
+		t.Errorf("TumKayitlar dahili isaretci dondurmus: %+v", record)
 	}
 }
 
-func TestAccessKaydetVeOku(t *testing.T) {
-	depo := NewFakeTokenStore()
+func TestTokenStore_SaveAndGetAccess(t *testing.T) {
+	store := NewFakeTokenStore()
 	ctx := context.Background()
-	son := time.Now().UTC().Add(15 * time.Minute)
-	if err := depo.SaveAccess(ctx, "at1", "k1", "makesinger-mobil", []string{"openid"}, son); err != nil {
+	last := time.Now().UTC().Add(15 * time.Minute)
+	if err := store.SaveAccess(ctx, "at1", "k1", "makesinger-mobil", []string{"openid"}, last); err != nil {
 		t.Fatalf("AccessKaydet: %v", err)
 	}
-	kayit, err := depo.GetAccess(ctx, "at1")
+	record, err := store.GetAccess(ctx, "at1")
 	if err != nil {
 		t.Fatalf("AccessOku: %v", err)
 	}
-	if kayit.UserID != "k1" {
-		t.Errorf("UserID = %q", kayit.UserID)
+	if record.UserID != "k1" {
+		t.Errorf("UserID = %q", record.UserID)
 	}
-	if _, err := depo.GetAccess(ctx, "yok"); !errors.Is(err, ErrTokenNotFound) {
+	if _, err := store.GetAccess(ctx, "yok"); !errors.Is(err, ErrTokenNotFound) {
 		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
 	}
 }

@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-func TestSifreHashlenirVeDogrulanir(t *testing.T) {
-	depo := NewFakeUserStore()
-	k, err := depo.Create(context.Background(), "ali@ornek.com", "Ali", "cokGizli123")
+func TestUser_PasswordHashedAndVerified(t *testing.T) {
+	store := NewFakeUserStore()
+	k, err := store.Create(context.Background(), "ali@ornek.com", "Ali", "cokGizli123")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -26,10 +26,10 @@ func TestSifreHashlenirVeDogrulanir(t *testing.T) {
 	}
 }
 
-// Sifresi olmayan kullanici (Faz 2'de yalnizca federe giris) hicbir
-// sifreyi kabul etmemeli. Bos hash ile bos sifre eslesirse, federe
-// hesaplara sifresiz girilir.
-func TestSifresizKullaniciHicbirSifreyiKabulEtmez(t *testing.T) {
+// A user without a password (federated login only since Phase 2) must
+// accept no password at all. If an empty password matched an empty hash,
+// federated accounts could be entered without a password.
+func TestUser_PasswordlessAcceptsNoPassword(t *testing.T) {
 	k := &User{ID: "1", Email: "f@ornek.com", PasswordHash: ""}
 	if k.PasswordMatches("") {
 		t.Error("bos sifre kabul edildi")
@@ -39,16 +39,16 @@ func TestSifresizKullaniciHicbirSifreyiKabulEtmez(t *testing.T) {
 	}
 }
 
-func TestEpostaBuyukKucukDuyarsiz(t *testing.T) {
-	depo := NewFakeUserStore()
+func TestUserStore_EmailCaseInsensitive(t *testing.T) {
+	store := NewFakeUserStore()
 	ctx := context.Background()
-	if _, err := depo.Create(ctx, "Ali@Ornek.com", "Ali", "sifre12345"); err != nil {
+	if _, err := store.Create(ctx, "Ali@Ornek.com", "Ali", "sifre12345"); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := depo.Create(ctx, "ali@ornek.COM", "Ali2", "sifre12345"); !errors.Is(err, ErrEmailInUse) {
+	if _, err := store.Create(ctx, "ali@ornek.COM", "Ali2", "sifre12345"); !errors.Is(err, ErrEmailInUse) {
 		t.Errorf("ikinci kayit hatasi = %v, beklenen ErrEpostaKullanimda", err)
 	}
-	k, err := depo.ByEmail(ctx, "ALI@ORNEK.COM")
+	k, err := store.ByEmail(ctx, "ALI@ORNEK.COM")
 	if err != nil {
 		t.Fatalf("ByEmail: %v", err)
 	}
@@ -57,16 +57,16 @@ func TestEpostaBuyukKucukDuyarsiz(t *testing.T) {
 	}
 }
 
-func TestOlmayanKullanici(t *testing.T) {
-	depo := NewFakeUserStore()
-	if _, err := depo.ByEmail(context.Background(), "yok@ornek.com"); !errors.Is(err, ErrUserNotFound) {
+func TestUserStore_MissingUser(t *testing.T) {
+	store := NewFakeUserStore()
+	if _, err := store.ByEmail(context.Background(), "yok@ornek.com"); !errors.Is(err, ErrUserNotFound) {
 		t.Errorf("hata = %v, beklenen ErrKullaniciYok", err)
 	}
 }
 
-func TestKisaSifreReddedilir(t *testing.T) {
-	depo := NewFakeUserStore()
-	if _, err := depo.Create(context.Background(), "a@ornek.com", "A", "kisa"); !errors.Is(err, ErrPasswordTooShort) {
+func TestUserStore_ShortPasswordRejected(t *testing.T) {
+	store := NewFakeUserStore()
+	if _, err := store.Create(context.Background(), "a@ornek.com", "A", "kisa"); !errors.Is(err, ErrPasswordTooShort) {
 		t.Errorf("hata = %v, beklenen ErrSifreKisa", err)
 	}
 }

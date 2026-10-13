@@ -14,15 +14,15 @@ import (
 
 func testPEM(t *testing.T) string {
 	t.Helper()
-	anahtar, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("anahtar uretilemedi: %v", err)
 	}
-	blok := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(anahtar)}
-	return string(pem.EncodeToMemory(blok))
+	block := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}
+	return string(pem.EncodeToMemory(block))
 }
 
-func TestAnahtarYuklenirVeArayuzleriKarsilar(t *testing.T) {
+func TestLoadSigningKey_SatisfiesInterfaces(t *testing.T) {
 	a, err := LoadSigningKey(testPEM(t))
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
@@ -37,10 +37,10 @@ func TestAnahtarYuklenirVeArayuzleriKarsilar(t *testing.T) {
 	}
 }
 
-// Anahtar ID'si icerikten turetilmeli: ayni PEM her zaman ayni kid
-// vermeli, aksi halde her yeniden baslatmada istemcilerin onbellekledigi
-// JWKS gecersizlesir.
-func TestAnahtarIDKararli(t *testing.T) {
+// The key ID must be derived from the content: the same PEM must always
+// give the same kid, otherwise the JWKS that clients cached becomes
+// invalid on every restart.
+func TestSigningKey_IDStable(t *testing.T) {
 	p := testPEM(t)
 	a1, err := LoadSigningKey(p)
 	if err != nil {
@@ -55,7 +55,7 @@ func TestAnahtarIDKararli(t *testing.T) {
 	}
 }
 
-func TestAnahtarIDFarkliAnahtarlardaFarkli(t *testing.T) {
+func TestSigningKey_IDDiffersPerKey(t *testing.T) {
 	a1, _ := LoadSigningKey(testPEM(t))
 	a2, _ := LoadSigningKey(testPEM(t))
 	if a1.ID() == a2.ID() {
@@ -63,56 +63,56 @@ func TestAnahtarIDFarkliAnahtarlardaFarkli(t *testing.T) {
 	}
 }
 
-func TestBozukPEMReddedilir(t *testing.T) {
-	for ad, girdi := range map[string]string{
+func TestLoadSigningKey_RejectsBadPEM(t *testing.T) {
+	for name, input := range map[string]string{
 		"bos":       "",
 		"cop":       "bu bir PEM degil",
 		"govde yok": "-----BEGIN RSA PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----\n",
 	} {
-		if _, err := LoadSigningKey(girdi); err == nil {
-			t.Errorf("%s: hata beklenirken nil dondu", ad)
+		if _, err := LoadSigningKey(input); err == nil {
+			t.Errorf("%s: hata beklenirken nil dondu", name)
 		}
 	}
 }
 
-// Sifreleme anahtari tam 32 bayt olmali; kisa bir sir sessizce
-// sifirlarla doldurulursa sifreleme zayiflar.
-func TestCryptoAnahtarUzunlugu(t *testing.T) {
+// The encryption key must be exactly 32 bytes; if a short secret were
+// silently padded with zeros, the encryption would be weakened.
+func TestCryptoKey_Length(t *testing.T) {
 	if _, err := CryptoKey(strings.Repeat("a", 31)); err == nil {
 		t.Error("31 baytlik anahtar kabul edildi")
 	}
 	if _, err := CryptoKey(strings.Repeat("a", 33)); err == nil {
 		t.Error("33 baytlik anahtar kabul edildi")
 	}
-	gizli := strings.Repeat("a", 32)
-	b, err := CryptoKey(gizli)
+	secret := strings.Repeat("a", 32)
+	b, err := CryptoKey(secret)
 	if err != nil {
 		t.Fatalf("32 baytlik anahtar reddedildi: %v", err)
 	}
-	// Uzunluk iddiasi bos bir iddiaydi: CryptoAnahtar [32]byte
-	// donduruyor, yani len(b) derleme zamani sabiti 32 ve hicbir
-	// zaman tutmayamaz. Anlamli olan, sirrin bayt bayt kopyalanmasi
-	// -- kopyalama duserse anahtar tamamen sifir olur ve sifreleme
-	// sessizce sabit bir anahtara duser.
-	if string(b[:]) != gizli {
+	// The length assertion was an empty assertion: CryptoKey returns a
+	// [32]byte, so len(b) is the compile-time constant 32 and can never
+	// fail. What matters is that the secret is copied byte by byte -- if
+	// the copy is dropped, the key becomes all zeros and the encryption
+	// silently falls back to a constant key.
+	if string(b[:]) != secret {
 		t.Error("anahtar icerigi girdiyle ayni degil")
 	}
 }
 
-// PKCS#8 formatinda uretilmis RSA anahtarinin kabul edildigini dogrula.
-func TestPKCS8FormatKabulu(t *testing.T) {
-	rsaAnahtar, err := rsa.GenerateKey(rand.Reader, 2048)
+// Check that an RSA key generated in PKCS#8 format is accepted.
+func TestLoadSigningKey_AcceptsPKCS8(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("anahtar uretilemedi: %v", err)
 	}
-	pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(rsaAnahtar)
+	pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(rsaKey)
 	if err != nil {
 		t.Fatalf("PKCS#8 encode hatasi: %v", err)
 	}
-	blok := &pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8Bytes}
-	pemMetni := string(pem.EncodeToMemory(blok))
+	block := &pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8Bytes}
+	pemText := string(pem.EncodeToMemory(block))
 
-	a, err := LoadSigningKey(pemMetni)
+	a, err := LoadSigningKey(pemText)
 	if err != nil {
 		t.Fatalf("PKCS#8 anahtari yuklemedi: %v", err)
 	}
@@ -121,16 +121,16 @@ func TestPKCS8FormatKabulu(t *testing.T) {
 	}
 }
 
-// 1024 bitlik anahtar reddedilmeli; RSA icin en az 2048 bit gerekli.
-func TestKisaBitAnahtariReddedilir(t *testing.T) {
-	rsaAnahtar, err := rsa.GenerateKey(rand.Reader, 1024)
+// A 1024-bit key must be rejected; RSA needs at least 2048 bits.
+func TestLoadSigningKey_RejectsShortKey(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
 		t.Fatalf("anahtar uretilemedi: %v", err)
 	}
-	blok := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(rsaAnahtar)}
-	pemMetni := string(pem.EncodeToMemory(blok))
+	block := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(rsaKey)}
+	pemText := string(pem.EncodeToMemory(block))
 
-	_, err = LoadSigningKey(pemMetni)
+	_, err = LoadSigningKey(pemText)
 	if err == nil {
 		t.Error("1024 bitlik anahtar kabul edildi")
 	}
@@ -139,8 +139,8 @@ func TestKisaBitAnahtariReddedilir(t *testing.T) {
 	}
 }
 
-// JWKS'e ozel anahtar asla girmemeli.
-func TestAcikAnahtarOzelAnahtarSizdirmaz(t *testing.T) {
+// The private key must never appear in the JWKS.
+func TestPublicKey_DoesNotLeakPrivateKey(t *testing.T) {
 	a, err := LoadSigningKey(testPEM(t))
 	if err != nil {
 		t.Fatalf("AnahtarYukle: %v", err)
@@ -148,7 +148,7 @@ func TestAcikAnahtarOzelAnahtarSizdirmaz(t *testing.T) {
 	var _ op.Key = a.PublicKey()
 	switch a.PublicKey().Key().(type) {
 	case *rsa.PublicKey:
-		// dogru
+		// correct
 	default:
 		t.Fatalf("AcikAnahtar().Key() tipi %T, *rsa.PublicKey olmali", a.PublicKey().Key())
 	}

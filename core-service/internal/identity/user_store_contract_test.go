@@ -11,41 +11,41 @@ import (
 	"github.com/google/uuid"
 )
 
-// testPostgresUserStore, yerel Postgres ister. Yoksa test atlanir:
-// birim testler agsiz gecmek zorunda (bkz. testRedis / testPostgres,
-// AYNI kalip). DSN ortam degiskeninden alinir; varsayilan deger tek
-// kullanimlik, TEST-YEREL bir konteyner icindir (uretim sirri DEGILDIR).
+// testPostgresUserStore wants a local Postgres. If there is none the test
+// is skipped: unit tests have to pass without a network (see testRedis /
+// testPostgres, the SAME pattern). The DSN comes from the environment
+// variable; the default value is for a throwaway, TEST-LOCAL container (not a production secret).
 func testPostgresUserStore(t *testing.T) *PostgresUserStore {
 	t.Helper()
 	dsn := os.Getenv("KIMLIK_TEST_DB_URL")
 	if dsn == "" {
 		dsn = "postgres://postgres:kimlik-test-yerel@localhost:55432/postgres?sslmode=disable"
 	}
-	ctx, iptal := context.WithTimeout(context.Background(), 3*time.Second)
-	defer iptal()
-	havuz, err := Connect(ctx, dsn)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pool, err := Connect(ctx, dsn)
 	if err != nil {
 		t.Skip("yerel Postgres yok, atlaniyor")
 	}
-	if err := Migrate(ctx, havuz); err != nil {
-		havuz.Close()
+	if err := Migrate(ctx, pool); err != nil {
+		pool.Close()
 		t.Fatalf("Migrate: %v", err)
 	}
-	t.Cleanup(havuz.Close)
-	return NewPostgresUserStore(havuz)
+	t.Cleanup(pool.Close)
+	return NewPostgresUserStore(pool)
 }
 
-// sozlesmeSonuc, bir UserStore cagrisinin GOZLENEBILIR sonucudur:
-// sahte ile Postgres bu uc degerde BIREBIR ayni olmak zorunda. ID
-// karsilastirilmaz (uuid, her depoda farkli).
-type sozlesmeSonuc struct {
-	bulundu bool
-	eposta  string
-	ad      string
-	hata    string // hatanin TURU ("", "kullanici-yok", "eposta-kullanimda", "sifre-kisa", "diger")
+// contractResult is the OBSERVABLE result of a UserStore call: the fake
+// and Postgres have to be EXACTLY the same in these three values. The ID
+// is not compared (uuid, different in every store).
+type contractResult struct {
+	found bool
+	email string
+	name  string
+	err   string // the KIND of error ("", "user-missing", "email-in-use", "password-short", "other")
 }
 
-func sozlesmeHata(err error) string {
+func contractErr(err error) string {
 	switch {
 	case err == nil:
 		return ""
@@ -60,214 +60,214 @@ func sozlesmeHata(err error) string {
 	}
 }
 
-func sonuc(k *User, err error) sozlesmeSonuc {
-	s := sozlesmeSonuc{hata: sozlesmeHata(err)}
+func result(k *User, err error) contractResult {
+	s := contractResult{err: contractErr(err)}
 	if k != nil {
-		s.bulundu = true
-		s.eposta = k.Email
-		s.ad = k.Name
+		s.found = true
+		s.email = k.Email
+		s.name = k.Name
 	}
 	return s
 }
 
-// SOZLESME TESTI: SahteUserStore ile PostgresUserStore AYNI girdilerde
-// AYNI seyi yapmali. Bu dalda ikisi ayrismisti ve ayrisma gercek bir
-// uretim hatasini (bosluklu e-postayla kayit olan kullanici giris
-// yapamiyor) gizliyordu. Postgres yoksa test ATLANIR; sahte depo
-// tarafi her halde kosar ve beklenen degerlerle karsilastirilir.
-func TestUserStoreSozlesmesi(t *testing.T) {
-	const sifre = "gecerliSifre12"
-	// Her kosuda taze e-posta: Postgres kalicidir, ayni e-posta ikinci
-	// kosuda "kullanimda" cikar ve test kendi kendini kirar.
-	temelEposta := "sozlesme-" + uuid.NewString() + "@ornek.com"
-	bosluklu := "  " + temelEposta + "  "
-	buyuk := strings.ToUpper(temelEposta)
-	yokID := uuid.NewString()
+// CONTRACT TEST: FakeUserStore and PostgresUserStore must do the SAME
+// thing on the SAME inputs. On this branch the two had diverged, and the
+// divergence hid a real production bug (a user who signed up with a
+// padded email could not log in). If there is no Postgres the test is
+// SKIPPED; the fake side runs anyway and is compared to the expected values.
+func TestUserStore_Contract(t *testing.T) {
+	const password = "gecerliSifre12"
+	// A fresh email on every run: Postgres is persistent, the same email
+	// would come out "in use" on the second run and the test would break itself.
+	baseEmail := "sozlesme-" + uuid.NewString() + "@ornek.com"
+	padded := "  " + baseEmail + "  "
+	upper := strings.ToUpper(baseEmail)
+	missingID := uuid.NewString()
 
-	adimlar := []struct {
-		ad       string
-		cagri    func(context.Context, UserStore) sozlesmeSonuc
-		beklenen sozlesmeSonuc
+	steps := []struct {
+		name string
+		call func(context.Context, UserStore) contractResult
+		want contractResult
 	}{
 		{
-			// Bastaki/sondaki bosluklar kirpilarak saklanir.
-			ad: "Create bosluklu e-posta ve ad",
-			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
-				return sonuc(d.Create(ctx, bosluklu, "  Ad Soyad  ", sifre))
+			// Leading/trailing whitespace is trimmed before storing.
+			name: "Create bosluklu e-posta ve ad",
+			call: func(ctx context.Context, d UserStore) contractResult {
+				return result(d.Create(ctx, padded, "  Ad Soyad  ", password))
 			},
-			beklenen: sozlesmeSonuc{bulundu: true, eposta: temelEposta, ad: "Ad Soyad"},
+			want: contractResult{found: true, email: baseEmail, name: "Ad Soyad"},
 		},
 		{
-			// GERCEK URETIM HATASI: kullanici kayit oldugu GIRDIYLE
-			// (bosluklu) giris yapabilmeli.
-			ad: "ByEmail bosluklu girdi ile bulur",
-			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
-				return sonuc(d.ByEmail(ctx, bosluklu))
+			// A REAL PRODUCTION BUG: the user must be able to log in with the SAME
+			// INPUT (padded) they signed up with.
+			name: "ByEmail bosluklu girdi ile bulur",
+			call: func(ctx context.Context, d UserStore) contractResult {
+				return result(d.ByEmail(ctx, padded))
 			},
-			beklenen: sozlesmeSonuc{bulundu: true, eposta: temelEposta, ad: "Ad Soyad"},
+			want: contractResult{found: true, email: baseEmail, name: "Ad Soyad"},
 		},
 		{
-			ad: "ByEmail bosluksuz girdi ile bulur",
-			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
-				return sonuc(d.ByEmail(ctx, temelEposta))
+			name: "ByEmail bosluksuz girdi ile bulur",
+			call: func(ctx context.Context, d UserStore) contractResult {
+				return result(d.ByEmail(ctx, baseEmail))
 			},
-			beklenen: sozlesmeSonuc{bulundu: true, eposta: temelEposta, ad: "Ad Soyad"},
+			want: contractResult{found: true, email: baseEmail, name: "Ad Soyad"},
 		},
 		{
-			// "E-posta buyuk-kucuk harf duyarsiz tekil" baglayici bir
-			// kisit: Postgres'te UNIQUE (lower(email)).
-			ad: "ByEmail buyuk harfli girdi ile bulur",
-			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
-				return sonuc(d.ByEmail(ctx, buyuk))
+			// "Email is unique, case-insensitive" is a binding
+			// constraint: UNIQUE (lower(email)) in Postgres.
+			name: "ByEmail buyuk harfli girdi ile bulur",
+			call: func(ctx context.Context, d UserStore) contractResult {
+				return result(d.ByEmail(ctx, upper))
 			},
-			beklenen: sozlesmeSonuc{bulundu: true, eposta: temelEposta, ad: "Ad Soyad"},
+			want: contractResult{found: true, email: baseEmail, name: "Ad Soyad"},
 		},
 		{
-			// Sahte depo eskiden IKINCI hesabi OLUSTURUYORDU.
-			ad: "Create ayni e-postayi bosluk/harf farkiyla reddeder",
-			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
-				return sonuc(d.Create(ctx, " "+buyuk+" ", "Baska", sifre))
+			// The fake store used to CREATE the SECOND account.
+			name: "Create ayni e-postayi bosluk/harf farkiyla reddeder",
+			call: func(ctx context.Context, d UserStore) contractResult {
+				return result(d.Create(ctx, " "+upper+" ", "Baska", password))
 			},
-			beklenen: sozlesmeSonuc{hata: "eposta-kullanimda"},
+			want: contractResult{err: "eposta-kullanimda"},
 		},
 		{
-			ad: "ByEmail olmayan e-posta",
-			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
-				return sonuc(d.ByEmail(ctx, "yok-"+uuid.NewString()+"@ornek.com"))
+			name: "ByEmail olmayan e-posta",
+			call: func(ctx context.Context, d UserStore) contractResult {
+				return result(d.ByEmail(ctx, "yok-"+uuid.NewString()+"@ornek.com"))
 			},
-			beklenen: sozlesmeSonuc{hata: "kullanici-yok"},
+			want: contractResult{err: "kullanici-yok"},
 		},
 		{
-			ad: "ByID olmayan kimlik",
-			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
-				return sonuc(d.ByID(ctx, yokID))
+			name: "ByID olmayan kimlik",
+			call: func(ctx context.Context, d UserStore) contractResult {
+				return result(d.ByID(ctx, missingID))
 			},
-			beklenen: sozlesmeSonuc{hata: "kullanici-yok"},
+			want: contractResult{err: "kullanici-yok"},
 		},
 		{
-			ad: "Create kisa sifre",
-			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
-				return sonuc(d.Create(ctx, "kisa-"+uuid.NewString()+"@ornek.com", "Ad", "kisa"))
+			name: "Create kisa sifre",
+			call: func(ctx context.Context, d UserStore) contractResult {
+				return result(d.Create(ctx, "kisa-"+uuid.NewString()+"@ornek.com", "Ad", "kisa"))
 			},
-			beklenen: sozlesmeSonuc{hata: "sifre-kisa"},
+			want: contractResult{err: "sifre-kisa"},
 		},
 		{
-			ad: "Sil var olan kullaniciyi siler",
-			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
-				k, err := d.ByEmail(ctx, temelEposta)
+			name: "Sil var olan kullaniciyi siler",
+			call: func(ctx context.Context, d UserStore) contractResult {
+				k, err := d.ByEmail(ctx, baseEmail)
 				if err != nil {
-					return sonuc(nil, err)
+					return result(nil, err)
 				}
-				return sozlesmeSonuc{hata: sozlesmeHata(d.Delete(ctx, k.ID))}
+				return contractResult{err: contractErr(d.Delete(ctx, k.ID))}
 			},
-			beklenen: sozlesmeSonuc{},
+			want: contractResult{},
 		},
 		{
-			ad: "ByEmail silinen kullaniciyi bulamaz",
-			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
-				return sonuc(d.ByEmail(ctx, temelEposta))
+			name: "ByEmail silinen kullaniciyi bulamaz",
+			call: func(ctx context.Context, d UserStore) contractResult {
+				return result(d.ByEmail(ctx, baseEmail))
 			},
-			beklenen: sozlesmeSonuc{hata: "kullanici-yok"},
+			want: contractResult{err: "kullanici-yok"},
 		},
 		{
-			ad: "Sil olmayan kullanici icin ErrKullaniciYok",
-			cagri: func(ctx context.Context, d UserStore) sozlesmeSonuc {
-				return sozlesmeSonuc{hata: sozlesmeHata(d.Delete(ctx, yokID))}
+			name: "Sil olmayan kullanici icin ErrKullaniciYok",
+			call: func(ctx context.Context, d UserStore) contractResult {
+				return contractResult{err: contractErr(d.Delete(ctx, missingID))}
 			},
-			beklenen: sozlesmeSonuc{hata: "kullanici-yok"},
+			want: contractResult{err: "kullanici-yok"},
 		},
 	}
 
-	kos := func(t *testing.T, depo UserStore) {
+	run := func(t *testing.T, store UserStore) {
 		ctx := context.Background()
-		for _, a := range adimlar {
-			got := a.cagri(ctx, depo)
-			if got != a.beklenen {
-				t.Errorf("%s: sonuc = %+v, beklenen %+v", a.ad, got, a.beklenen)
+		for _, a := range steps {
+			got := a.call(ctx, store)
+			if got != a.want {
+				t.Errorf("%s: sonuc = %+v, beklenen %+v", a.name, got, a.want)
 			}
 		}
 	}
 
-	t.Run("sahte", func(t *testing.T) { kos(t, NewFakeUserStore()) })
-	t.Run("postgres", func(t *testing.T) { kos(t, testPostgresUserStore(t)) })
+	t.Run("sahte", func(t *testing.T) { run(t, NewFakeUserStore()) })
+	t.Run("postgres", func(t *testing.T) { run(t, testPostgresUserStore(t)) })
 
-	// Create'in dondurdugu ID ile ByID gercekten bulunabilmeli. Bunu
-	// adimlardan ayri olcuyoruz: ID depolar arasinda karsilastirilamaz.
-	idKos := func(t *testing.T, depo UserStore) {
+	// ByID must really find the ID that Create returned. We measure this
+	// separately from the steps: IDs cannot be compared across stores.
+	idRun := func(t *testing.T, store UserStore) {
 		ctx := context.Background()
-		k, err := depo.Create(ctx, "id-"+uuid.NewString()+"@ornek.com", "Ad", sifre)
+		k, err := store.Create(ctx, "id-"+uuid.NewString()+"@ornek.com", "Ad", password)
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		bulunan, err := depo.ByID(ctx, k.ID)
+		matched, err := store.ByID(ctx, k.ID)
 		if err != nil {
 			t.Fatalf("ByID: %v", err)
 		}
-		if bulunan.ID != k.ID || bulunan.Email != k.Email {
-			t.Errorf("ByID = %+v, beklenen %+v", bulunan, k)
+		if matched.ID != k.ID || matched.Email != k.Email {
+			t.Errorf("ByID = %+v, beklenen %+v", matched, k)
 		}
 	}
-	t.Run("sahte-byid", func(t *testing.T) { idKos(t, NewFakeUserStore()) })
-	t.Run("postgres-byid", func(t *testing.T) { idKos(t, testPostgresUserStore(t)) })
+	t.Run("sahte-byid", func(t *testing.T) { idRun(t, NewFakeUserStore()) })
+	t.Run("postgres-byid", func(t *testing.T) { idRun(t, testPostgresUserStore(t)) })
 }
 
-// SahteUserStore cagirana DAHILI isaretci VERMEMELI. Bu, commit
-// 50e323e'nin SahteTokenStore icin duzelttigi kusurun AYNISI:
-// PostgresUserStore her okumada satiri yeniden tarayarak dogal olarak
-// taze bir yapi doner, sahte deponun ayni yalitimi ELLE saglamasi
-// gerekir. Aksi halde cagiran donen *User'i mutasyona ugratinca depo
-// bozulur ve testler gecerken uretim sasar.
-func TestSahteUserStoreDahiliIsaretciVermez(t *testing.T) {
-	depo := NewFakeUserStore()
+// FakeUserStore must NOT hand out INTERNAL pointers to the caller. This
+// is the SAME flaw that commit 50e323e fixed for FakeTokenStore:
+// PostgresUserStore naturally returns a fresh struct because it rescans
+// the row on every read, while the fake store has to provide the same
+// isolation BY HAND. Otherwise, when the caller mutates the returned
+// *User the store gets corrupted, and tests pass while production fails.
+func TestFakeUserStore_NoInternalPointers(t *testing.T) {
+	store := NewFakeUserStore()
 	ctx := context.Background()
-	k, err := depo.Create(ctx, "kopya@ornek.com", "Ad Soyad", "gecerliSifre12")
+	k, err := store.Create(ctx, "kopya@ornek.com", "Ad Soyad", "gecerliSifre12")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// 1. Create'in dondurdugu kaydi bozmak depoyu bozmamali.
+	// 1. Corrupting the record that Create returned must not corrupt the store.
 	k.Email = "bozuk@ornek.com"
 	k.PasswordHash = ""
 
-	ilk, err := depo.ByEmail(ctx, "kopya@ornek.com")
+	first, err := store.ByEmail(ctx, "kopya@ornek.com")
 	if err != nil {
 		t.Fatalf("ByEmail: %v", err)
 	}
-	if ilk.Email != "kopya@ornek.com" || ilk.PasswordHash == "" {
-		t.Fatalf("Create'in dondurdugu kaydi mutasyona ugratmak depoyu bozdu: %+v", ilk)
+	if first.Email != "kopya@ornek.com" || first.PasswordHash == "" {
+		t.Fatalf("Create'in dondurdugu kaydi mutasyona ugratmak depoyu bozdu: %+v", first)
 	}
 
-	// 2. ByEmail'in dondurdugu kaydi bozmak da depoyu bozmamali.
-	ilk.PasswordHash = ""
-	ilk.Name = "degisti"
-	ikinci, err := depo.ByEmail(ctx, "kopya@ornek.com")
+	// 2. Corrupting the record that ByEmail returned must not corrupt the store either.
+	first.PasswordHash = ""
+	first.Name = "degisti"
+	second, err := store.ByEmail(ctx, "kopya@ornek.com")
 	if err != nil {
 		t.Fatalf("ByEmail (ikinci): %v", err)
 	}
-	if ikinci.PasswordHash == "" || ikinci.Name != "Ad Soyad" {
-		t.Errorf("ByEmail dahili isaretci dondurdu: %+v", ikinci)
+	if second.PasswordHash == "" || second.Name != "Ad Soyad" {
+		t.Errorf("ByEmail dahili isaretci dondurdu: %+v", second)
 	}
 
-	// 3. ByID icin de ayni yalitim.
-	idIle, err := depo.ByID(ctx, ikinci.ID)
+	// 3. The same isolation for ByID.
+	withID, err := store.ByID(ctx, second.ID)
 	if err != nil {
 		t.Fatalf("ByID: %v", err)
 	}
-	idIle.Name = "yine degisti"
-	tekrar, err := depo.ByID(ctx, ikinci.ID)
+	withID.Name = "yine degisti"
+	again, err := store.ByID(ctx, second.ID)
 	if err != nil {
 		t.Fatalf("ByID (ikinci): %v", err)
 	}
-	if tekrar.Name != "Ad Soyad" {
-		t.Errorf("ByID dahili isaretci dondurdu: Name = %q", tekrar.Name)
+	if again.Name != "Ad Soyad" {
+		t.Errorf("ByID dahili isaretci dondurdu: Name = %q", again.Name)
 	}
 }
 
-// epostaNormalize TEK yardimci: Create ve ByEmail ayni yoldan gecmek
-// zorunda. Normalizasyon buyuk/kucuk harfi DEGISTIRMEZ (tekillik
-// Postgres'te lower(email) uzerinden).
-func TestEpostaNormalize(t *testing.T) {
-	durumlar := map[string]string{
+// normalizeEmail is the ONLY helper: Create and ByEmail have to go
+// through the same path. Normalization does NOT change case (uniqueness
+// goes through lower(email) in Postgres).
+func TestNormalizeEmail(t *testing.T) {
+	statuses := map[string]string{
 		"  x@y.com  ":      "x@y.com",
 		"x@y.com":          "x@y.com",
 		"\tx@y.com\n":      "x@y.com",
@@ -276,9 +276,9 @@ func TestEpostaNormalize(t *testing.T) {
 		"a b@y.com":        "a b@y.com",
 		" Ad.Soyad@y.com ": "Ad.Soyad@y.com",
 	}
-	for girdi, beklenen := range durumlar {
-		if got := normalizeEmail(girdi); got != beklenen {
-			t.Errorf("epostaNormalize(%q) = %q, beklenen %q", girdi, got, beklenen)
+	for input, want := range statuses {
+		if got := normalizeEmail(input); got != want {
+			t.Errorf("epostaNormalize(%q) = %q, beklenen %q", input, got, want)
 		}
 	}
 }
