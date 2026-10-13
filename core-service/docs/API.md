@@ -103,6 +103,8 @@ All errors share the same envelope:
 
 `message` is localized. The server picks Turkish or English from `Accept-Language` (highest q value wins, region subtags are ignored, `q=0` and `*` never select a language) and defaults to Turkish (`tr`). Every error response carries `Content-Language: tr|en` and `Vary: Accept-Language`. Clients must branch on `code`, which never changes with the language. Keys in `details` are not localized: validation `details` keys are the Go field names of the request structs (for example `Genre`).
 
+This applies to the JSON error responses of the API only: job `error` and WebSocket error texts are English-only, and the identity hosted pages (login/signup) are Turkish.
+
 ### Error Codes
 
 | Code | HTTP Status | Description |

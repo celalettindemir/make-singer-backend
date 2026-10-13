@@ -37,7 +37,7 @@ type ValidationError struct {
 }
 
 func (e *ValidationError) Error() string {
-	return ErrValidation.Error() + ": " + i18n.Message(i18n.TR, e.Key, e.Args...)
+	return ErrValidation.Error() + ": " + i18n.Message(i18n.EN, e.Key, e.Args...)
 }
 
 func (e *ValidationError) Unwrap() error { return ErrValidation }

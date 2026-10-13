@@ -137,7 +137,7 @@ var catalog = map[Key]texts{
 	KeyJobNotFound:         {"İş bulunamadı.", "Job not found."},
 	KeyJobNotCompleted:     {"İş henüz tamamlanmadı.", "The job has not completed yet."},
 	KeyJobAlreadyCompleted: {"İş zaten tamamlandı.", "The job has already completed."},
-	KeyStemSettingsInvalid: {"Stem ayarları geçersiz: focusInstrument yalnızca focus modunda kullanılır ve aranjmanda bulunmalıdır.", "Invalid stem settings: focusInstrument is only used in focus mode and must be part of the arrangement."},
+	KeyStemSettingsInvalid: {"Geçersiz stem ayarları: mod, odak enstrümanı ve enstrüman listesini kontrol edin.", "Invalid stem settings: check mode, focusInstrument and instrument list."},
 	KeyFileNotFound:        {"Dosya bulunamadı.", "File not found."},
 	KeyInvalidFileURL:      {"Geçersiz dosya adresi.", "Invalid file URL."},
 	KeyURLSignFailed:       {"Dosya adresi üretilemedi.", "Could not generate the file URL."},

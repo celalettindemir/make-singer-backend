@@ -108,7 +108,8 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, payloa
 		w.updateProgress(ctx, jobID, p, step)
 	})
 	if err != nil {
-		w.failJob(ctx, jobID, err.Error())
+		log.Printf("Job %s: render failed: %v", jobID, err)
+		w.failJob(ctx, jobID, "Render failed")
 		return err
 	}
 
@@ -121,7 +122,8 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, payloa
 	// URLs are generated fresh for publishing; the record keeps the key.
 	resp, err := w.renderService.BuildResult(ctx, result)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Could not generate the stem URL: %v", err))
+		log.Printf("Job %s: could not generate the stem URL: %v", jobID, err)
+		w.failJob(ctx, jobID, "Could not generate the stem URL")
 		// Same reason: the paid generation finished and a retry would charge again.
 		return fmt.Errorf("could not generate the stem URL: %w: %w", err, asynq.SkipRetry)
 	}
@@ -315,7 +317,8 @@ func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, payloa
 
 	resp, err := w.renderService.BuildResult(ctx, result)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Could not generate the stem URL: %v", err))
+		log.Printf("Job %s: could not generate the stem URL: %v", jobID, err)
+		w.failJob(ctx, jobID, "Could not generate the stem URL")
 		return err
 	}
 	w.hub.BroadcastComplete(jobID, resp)

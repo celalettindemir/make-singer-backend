@@ -25,9 +25,9 @@ type UploadService struct {
 }
 
 // NewUploadService creates a new upload service with R2 client
-func NewUploadService(r2Client client.StorageClient, r2Cfg *config.R2Config) *UploadService {
+func NewUploadService(storage client.StorageClient, r2Cfg *config.R2Config) *UploadService {
 	return &UploadService{
-		r2Client: r2Client,
+		r2Client: storage,
 		r2Cfg:    r2Cfg,
 	}
 }

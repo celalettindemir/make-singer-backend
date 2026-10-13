@@ -153,11 +153,11 @@ type FederationPages struct {
 // https, false for http:// local development (otherwise the browser would
 // not store a Secure cookie at all and the local flow would break).
 func NewFederationPages(
-	flows map[string]*Upstream,
+	upstreams map[string]*Upstream,
 	verifiers map[string]*auth.UpstreamVerifier,
 	flowStore FlowStore,
 	federatedStore FederatedStore,
-	user UserStore,
+	users UserStore,
 	requests FederationRequestStore,
 	sessions SessionStore,
 	authCallback func(context.Context, string) string,
@@ -165,11 +165,11 @@ func NewFederationPages(
 	cookieSecure bool,
 ) *FederationPages {
 	return &FederationPages{
-		upstreams:    flows,
+		upstreams:    upstreams,
 		verifiers:    verifiers,
 		flows:        flowStore,
 		federated:    federatedStore,
-		users:        user,
+		users:        users,
 		requests:     requests,
 		sessions:     sessions,
 		authCallback: authCallback,

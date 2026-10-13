@@ -14,7 +14,7 @@ const bcryptCost = 12
 var (
 	ErrUserNotFound     = errors.New("user not found")
 	ErrEmailInUse       = errors.New("email in use")
-	ErrPasswordTooShort = errors.New("sifre en az 10 karakter olmali")
+	ErrPasswordTooShort = errors.New("password must be at least 10 characters")
 )
 
 type User struct {

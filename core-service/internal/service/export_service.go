@@ -25,9 +25,9 @@ type ExportService struct {
 }
 
 // NewExportService creates a new export service
-func NewExportService(r2Client client.StorageClient, audioClient client.AudioProcessor, r2Cfg *config.R2Config) *ExportService {
+func NewExportService(storage client.StorageClient, audioClient client.AudioProcessor, r2Cfg *config.R2Config) *ExportService {
 	return &ExportService{
-		r2Client:    r2Client,
+		r2Client:    storage,
 		audioClient: audioClient,
 		r2Cfg:       r2Cfg,
 	}

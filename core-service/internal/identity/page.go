@@ -49,6 +49,10 @@ const msgServerError = "Bir hata olustu, lutfen tekrar deneyin."
 // account with the email they themselves supplied.
 const msgEmailInUse = "Bu e-posta zaten kullaniliyor."
 
+// msgPasswordTooShort is shown when the signup password is shorter than
+// the minimum (ErrPasswordTooShort); the page text is Turkish.
+const msgPasswordTooShort = "sifre en az 10 karakter olmali"
+
 // msgSessionInvalid is returned when the cookie binding or the CSRF
 // verification does not hold. A single generic message: separating which
 // condition failed (no cookie / no binding / id mismatch / wrong csrf)
@@ -127,14 +131,14 @@ type Pages struct {
 // for http:// local development (otherwise the browser would not store the
 // cookie at all and the local flow would break).
 func NewPages(
-	user UserStore,
+	users UserStore,
 	requests RequestCompleter,
 	sessions SessionStore,
 	authCallback func(context.Context, string) string,
 	cookieSecure bool,
 ) *Pages {
 	return &Pages{
-		users:        user,
+		users:        users,
 		requests:     requests,
 		sessions:     sessions,
 		authCallback: authCallback,
@@ -626,7 +630,7 @@ func (s *Pages) signupPost(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, ErrEmailInUse):
 			s.renderSignup(w, http.StatusConflict, id, csrf, email, name, msgEmailInUse)
 		case errors.Is(err, ErrPasswordTooShort):
-			s.renderSignup(w, http.StatusBadRequest, id, csrf, email, name, ErrPasswordTooShort.Error())
+			s.renderSignup(w, http.StatusBadRequest, id, csrf, email, name, msgPasswordTooShort)
 		default:
 			// The email is PII and is not logged here; the error itself is already
 			// enough for diagnosis.

@@ -420,25 +420,27 @@ func startWorkerServer(
 // oversized bodies, panics caught by recover) in the shared error shape
 // with code SERVICE_ERROR and a localized message chosen by status.
 func customErrorHandler(c *fiber.Ctx, err error) error {
-	code := fiber.StatusInternalServerError
-	msg := i18n.KeyInternal
-
-	var e *fiber.Error
-	if errors.As(err, &e) {
-		code = e.Code
-		switch code {
-		case fiber.StatusNotFound:
-			msg = i18n.KeyRouteNotFound
-		case fiber.StatusMethodNotAllowed:
-			msg = i18n.KeyMethodNotAllowed
-		case fiber.StatusRequestEntityTooLarge:
-			msg = i18n.KeyBodyTooLarge
-		case fiber.StatusUpgradeRequired:
-			msg = i18n.KeyUpgradeRequired
-		default:
-			msg = i18n.KeyRequestFailed
-		}
-	}
-
+	code, msg := errorStatusKey(err)
 	return response.Error(c, code, response.CodeServiceError, msg, nil)
+}
+
+// errorStatusKey maps an error that reached Fiber to its HTTP status and
+// message key. Non-Fiber errors are an internal error (500).
+func errorStatusKey(err error) (int, i18n.Key) {
+	var e *fiber.Error
+	if !errors.As(err, &e) {
+		return fiber.StatusInternalServerError, i18n.KeyInternal
+	}
+	switch e.Code {
+	case fiber.StatusNotFound:
+		return e.Code, i18n.KeyRouteNotFound
+	case fiber.StatusMethodNotAllowed:
+		return e.Code, i18n.KeyMethodNotAllowed
+	case fiber.StatusRequestEntityTooLarge:
+		return e.Code, i18n.KeyBodyTooLarge
+	case fiber.StatusUpgradeRequired:
+		return e.Code, i18n.KeyUpgradeRequired
+	default:
+		return e.Code, i18n.KeyRequestFailed
+	}
 }

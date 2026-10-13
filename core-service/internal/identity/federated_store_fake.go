@@ -29,9 +29,9 @@ type FakeFederatedStore struct {
 	links map[string]string // identityKey(provider, sub) -> userID
 }
 
-func NewFakeFederatedStore(user *FakeUserStore) *FakeFederatedStore {
+func NewFakeFederatedStore(users *FakeUserStore) *FakeFederatedStore {
 	return &FakeFederatedStore{
-		users: user,
+		users: users,
 		links: map[string]string{},
 	}
 }

@@ -84,7 +84,8 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	// Step 3: Build vocal takes if present
 	vocalTakes, err := w.buildVocalTakes(payload)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Could not resolve the vocal URL: %v", err))
+		log.Printf("Job %s: could not resolve the vocal URL: %v", jobID, err)
+		w.failJob(ctx, jobID, "Could not resolve the vocal URL")
 		return fmt.Errorf("could not resolve the vocal URL: %w: %w", err, asynq.SkipRetry)
 	}
 
@@ -94,7 +95,8 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	for _, u := range payload.StemURLs {
 		k, err := client.ResolveOwnedKey(u, payload.OwnerID, w.r2Cfg)
 		if err != nil {
-			w.failJob(ctx, jobID, fmt.Sprintf("Could not resolve the stem URL: %v", err))
+			log.Printf("Job %s: could not resolve the stem URL: %v", jobID, err)
+			w.failJob(ctx, jobID, "Could not resolve the stem URL")
 			return fmt.Errorf("could not resolve the stem URL: %w: %w", err, asynq.SkipRetry)
 		}
 		stemKeys = append(stemKeys, k)
@@ -113,10 +115,12 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	// this job's R2 upload. No file is written for a deleted account. Master
 	// is not a paid step: a check error can be retried.
 	if err := ownerCanWrite(ctx, w.deletionChecker, payload.OwnerID); err != nil {
-		w.failJob(ctx, jobID, err.Error())
+		log.Printf("Job %s: owner check failed: %v", jobID, err)
 		if errors.Is(err, errOwnerDeleted) {
+			w.failJob(ctx, jobID, errOwnerDeleted.Error())
 			return fmt.Errorf("master was not written: %w: %w", err, asynq.SkipRetry)
 		}
+		w.failJob(ctx, jobID, "Could not check the account status")
 		return fmt.Errorf("master was not written: %w", err)
 	}
 
@@ -133,7 +137,8 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 
 	masterResp, err := w.audioClient.Master(ctx, masterReq)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Mastering failed: %v", err))
+		log.Printf("Job %s: mastering failed: %v", jobID, err)
+		w.failJob(ctx, jobID, "Mastering failed")
 		return err
 	}
 
@@ -153,7 +158,8 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 
 	fileURL, expiresAt, err := client.ResolveURL(ctx, w.r2Client, w.r2Cfg, outputKey)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Could not generate the master URL: %v", err))
+		log.Printf("Job %s: could not generate the master URL: %v", jobID, err)
+		w.failJob(ctx, jobID, "Could not generate the master URL")
 		return fmt.Errorf("could not generate the master URL: %w", err)
 	}
 
@@ -203,7 +209,8 @@ func (w *MasterWorker) processWithMock(ctx context.Context, jobID string, payloa
 	}
 	fileURL, expiresAt, err := client.ResolveURL(ctx, w.r2Client, w.r2Cfg, record.FileKey)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Could not generate the master URL: %v", err))
+		log.Printf("Job %s: could not generate the master URL: %v", jobID, err)
+		w.failJob(ctx, jobID, "Could not generate the master URL")
 		return fmt.Errorf("could not generate the master URL: %w", err)
 	}
 
