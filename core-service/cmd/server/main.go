@@ -71,41 +71,41 @@ func main() {
 		log.Printf("Warning: Redis not available: %v", err)
 	}
 
-	// Kendi OpenID Provider'imiz: /api/* icin TEK kimlik dogrulama yolu.
-	// Issuer zorunludur; eski legacy HMAC / Zitadel / gateway yollari
-	// kaldirildi, cunku her biri OP'suz bir "yedek" mod olarak yapilandirma
-	// hatasinda /api'yi zayif ya da suresiz jetonlara aciyordu.
+	// Our own OpenID Provider: the ONLY authentication path for /api/*.
+	// The issuer is mandatory; the old legacy HMAC / Zitadel / gateway paths
+	// were removed because each one was an OP-less "fallback" mode that, on a
+	// misconfiguration, opened /api to weak or non-expiring tokens.
 	//
-	// Baslatma hatasi FATALDIR. Her istege 401 donen ama /health'te
-	// saglikli gorunen bir pod sessiz bir kesintidir; CrashLoopBackOff
-	// dogru ve gorunur sinyal, yeniden baslatma da gecici kesinti (orn.
-	// Postgres) icin dogru kurtarma.
+	// A startup failure is FATAL. A pod that answers every request with 401
+	// but looks healthy on /health is a silent outage; CrashLoopBackOff is
+	// the correct, visible signal, and a restart is the correct recovery
+	// from a transient outage (e.g. Postgres).
 	if cfg.Auth.Issuer == "" {
 		log.Fatalf("AUTH_ISSUER zorunlu: kimlik saglayicisi olmadan /api korunamaz")
 	}
-	kimlikSunucu, err := identity.Start(ctx, &cfg.Auth, redisClient, cfg.Server.Env)
+	identityServer, err := identity.Start(ctx, &cfg.Auth, redisClient, cfg.Server.Env)
 	if err != nil {
 		log.Fatalf("Kimlik saglayicisi baslatilamadi, servis baslatilmiyor: %v", err)
 	}
 	log.Printf("Kimlik saglayicisi %s uzerinde, issuer %s", cfg.Auth.Port, cfg.Auth.Issuer)
 	defer func() {
-		kapatCtx, iptal := context.WithTimeout(context.Background(), 10*time.Second)
-		defer iptal()
-		_ = kimlikSunucu.Shutdown(kapatCtx)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = identityServer.Shutdown(shutdownCtx)
 	}()
 
-	// Kesfet (sosyal): kimlikle ayni veritabani, ama kendi havuzu, kendi
-	// semasi (sosyal) ve kendi migration tablosu. Kimlik gibi FATAL:
-	// sosyal tablolari olmayan bir pod her /api/social isteginde 500 doner.
-	sosyalHavuz, err := identity.Connect(ctx, cfg.Auth.DBURL)
+	// Discover (social): same database as identity, but its own pool, its own
+	// schema (sosyal) and its own migration table. FATAL like identity:
+	// a pod without the social tables answers every /api/social request with 500.
+	socialPool, err := identity.Connect(ctx, cfg.Auth.DBURL)
 	if err != nil {
 		log.Fatalf("Sosyal veritabanina baglanilamadi: %v", err)
 	}
-	defer sosyalHavuz.Close()
-	if err := social.Migrate(ctx, sosyalHavuz); err != nil {
+	defer socialPool.Close()
+	if err := social.Migrate(ctx, socialPool); err != nil {
 		log.Fatalf("Sosyal migration basarisiz: %v", err)
 	}
-	sosyalDepo := social.NewPostgresStore(sosyalHavuz)
+	socialStore := social.NewPostgresStore(socialPool)
 
 	// Initialize Asynq client
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{
@@ -139,9 +139,10 @@ func main() {
 		log.Println("Info: R2 storage not configured, using mock storage")
 	}
 
-	// storage: arayuz degiskeni. r2Client nil iken dogrudan arayuze
-	// atamak "tipli nil isaretci" tuzagini kurar (arayuz nil olmaz ama
-	// icindeki isaretci nil'dir); bu yuzden acikca ayiriyoruz.
+	// storage: interface variable. Assigning r2Client directly to the
+	// interface while it is nil sets the "typed nil pointer" trap (the
+	// interface is not nil but the pointer inside it is), so we split the
+	// assignment explicitly.
 	var storage client.StorageClient
 	if r2Client != nil {
 		storage = r2Client
@@ -156,26 +157,26 @@ func main() {
 	fileService := service.NewFileService(storage, &cfg.R2)
 	wsTicketService := service.NewWSTicketService(redisClient)
 
-	// silici: arayuz degiskeni; r2Client nil iken dogrudan atamak tipli
-	// nil tuzagini kurar (bkz. storage).
-	var silici client.PrefixDeleter
+	// prefixDeleter: interface variable; assigning r2Client directly while
+	// it is nil sets the typed-nil trap (see storage).
+	var prefixDeleter client.PrefixDeleter
 	if r2Client != nil {
-		silici = r2Client
+		prefixDeleter = r2Client
 	}
 
-	// Hesap silme: kullanici kaydi kendi OP'mizde tutulur.
-	hesapService := service.NewAccountService(kimlikSunucu, silici, redisClient, asynqClient, sosyalDepo)
-	hesapHandler := handler.NewAccountHandler(hesapService)
+	// Account deletion: the user record is kept in our own OP.
+	accountService := service.NewAccountService(identityServer, prefixDeleter, redisClient, asynqClient, socialStore)
+	accountHandler := handler.NewAccountHandler(accountService)
 
-	// kopyalayici: arayuz degiskeni; r2Client nil iken dogrudan atamak
-	// tipli nil tuzagini kurar (bkz. storage).
-	var kopyalayici client.Copier
+	// copier: interface variable; assigning r2Client directly while it is
+	// nil sets the typed-nil trap (see storage).
+	var copier client.Copier
 	if r2Client != nil {
-		kopyalayici = r2Client
+		copier = r2Client
 	}
-	sosyalHandler := handler.NewSocialHandler(
-		social.NewService(sosyalDepo, asynqClient, storage, &cfg.R2).WithCopier(kopyalayici))
-	sosyalWorker := worker.NewSocialWorker(sosyalDepo, kopyalayici, audioClient, silici, deletionmark.NewRedisChecker(redisClient))
+	socialHandler := handler.NewSocialHandler(
+		social.NewService(socialStore, asynqClient, storage, &cfg.R2).WithCopier(copier))
+	socialWorker := worker.NewSocialWorker(socialStore, copier, audioClient, prefixDeleter, deletionmark.NewRedisChecker(redisClient))
 
 	// Initialize handlers
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
@@ -186,10 +187,10 @@ func main() {
 	fileHandler := handler.NewFileHandler(fileService, validate)
 	wsTicketHandler := handler.NewWSTicketHandler(wsTicketService, validate)
 
-	// /api/* icin tek yol: kendi OP'umuzun RS256 access token'i. Acik
-	// anahtar surec icinden okunur, JWKS ucuna ag uzerinden gidilmez.
+	// The only path for /api/*: our own OP's RS256 access token. The public
+	// key is read in-process; the JWKS endpoint is not fetched over the network.
 	apiAuthMiddleware := middleware.NewOPAuthMiddleware(
-		cfg.Auth.Issuer, cfg.Auth.ClientID, kimlikSunucu.APIPublicKey()).Authenticate()
+		cfg.Auth.Issuer, cfg.Auth.ClientID, identityServer.APIPublicKey()).Authenticate()
 	rateLimiter := middleware.NewRateLimiter(redisClient)
 
 	// Initialize Fiber app
@@ -203,9 +204,9 @@ func main() {
 	isDebug := strings.EqualFold(cfg.Server.LogLevel, "debug")
 	logFormat := "[${time}] ${status} - ${latency} ${method} ${path}\n"
 	if isDebug {
-		// ${reqHeaders} ve ${body} BILINCLI olarak yok: birincisi
-		// Authorization header'ini, ikincisi giris/kayit formlarinin duz
-		// metin sifresini loga kalici hale getirirdi.
+		// ${reqHeaders} and ${body} are deliberately absent: the first would
+		// persist the Authorization header in the log, the second the plain
+		// text password of login/registration forms.
 		logFormat = "[${time}] ${status} - ${latency} ${method} ${path} ${queryParams}\n"
 		log.Println("Debug logging enabled (istek header'lari ve govdesi loglanmaz)")
 	}
@@ -227,30 +228,30 @@ func main() {
 
 	// Health check
 	app.Get("/health", func(c *fiber.Ctx) error {
-		// GERCEK hazirlik: "kimlikSunucu != nil" (yani Start basariyla
-		// dondu mu) YETERLI DEGIL — dinleyici sonradan cokerse pod hala
-		// "saglikli" gorunuyordu. Hazir(), dinleyicinin su an hizmet
-		// verdigini soyler ve nil alici icin de guvenlidir.
-		kimlikHazir := kimlikSunucu.Ready()
+		// REAL readiness: "identityServer != nil" (i.e. Start returned
+		// successfully) is NOT ENOUGH; if the listener crashed later the pod
+		// still looked "healthy". Ready() reports whether the listener is
+		// serving right now and is also safe for a nil receiver.
+		identityReady := identityServer.Ready()
 
-		// OP olmadan servis islevsizdir: her /api/* istegi 401 doner.
-		// Boyle bir pod "ok" demeyi birakmali, yoksa yanlis saglik
-		// sinyali sessiz bir kesintiyi gizler.
-		durum := "ok"
-		if !kimlikHazir {
-			durum = "degraded"
+		// Without the OP the service is non-functional: every /api/* request
+		// gets 401. Such a pod must stop saying "ok"; otherwise a false
+		// health signal hides a silent outage.
+		status := "ok"
+		if !identityReady {
+			status = "degraded"
 			c.Status(fiber.StatusServiceUnavailable)
 		}
 
 		return c.JSON(fiber.Map{
-			"status": durum,
+			"status": status,
 			"services": fiber.Map{
 				"groq":   groqClient.IsConfigured(),
 				"suno":   sunoClient.IsConfigured(),
 				"r2":     r2Client != nil,
 				"audio":  audioClient.IsConfigured(),
-				"auth":   kimlikHazir,
-				"kimlik": kimlikHazir,
+				"auth":   identityReady,
+				"kimlik": identityReady,
 			},
 		})
 	})
@@ -258,12 +259,12 @@ func main() {
 	// Swagger UI
 	app.Get("/swagger/*", fiberSwagger.HandlerDefault)
 
-	// Kesfet herkese acik onizleme (oturumsuz, spec §4.8). /api auth
-	// grubundan ONCE kaydedilir: Fiber rotalari kayit sirasiyla eslestirir
-	// ve bu uc zinciri surdurmez, yani auth ve silinmis-kullanici kapisi
-	// hic calismaz. Sinir istemci IP'si basinadir (X-Real-Ip); web
-	// sunucusu X-Web-Anahtari ile ortak ve daha yuksek sinira gecer.
-	sosyalHandler.PublicRoutes(app.Group("/api/public"),
+	// Discover public preview (no session, spec §4.8). Registered BEFORE the
+	// /api auth group: Fiber matches routes in registration order and this
+	// endpoint does not continue the chain, so the auth and deleted-user
+	// gate never run. The limit is per client IP (X-Real-Ip); the web
+	// server shares one, higher limit via X-Web-Anahtari.
+	socialHandler.PublicRoutes(app.Group("/api/public"),
 		rateLimiter.LimitIP("public", cfg.RateLimit.PublicPerMin, time.Minute,
 			cfg.Social.WebKey, cfg.RateLimit.PublicWebPerMin))
 
@@ -300,17 +301,17 @@ func main() {
 	upload.Post("/vocal", uploadHandler.Vocal)
 	upload.Delete("/vocal/:takeId", uploadHandler.DeleteVocal)
 
-	// WebSocket bileti: kimligi dogrulanmis istekle alinir.
+	// WebSocket ticket: obtained with an authenticated request.
 	api.Post("/ws/ticket", rateLimiter.WSTicketLimit(cfg.RateLimit.WSTicketPerMin), wsTicketHandler.Issue)
 
-	// Kayitli dosya adreslerini tazeler (imza 1 saatte dolar).
+	// Refreshes saved file URLs (the signature expires in 1 hour).
 	api.Post("/files/sign", rateLimiter.SignLimit(cfg.RateLimit.SignPerMin), fileHandler.Sign)
 
-	api.Delete("/account", hesapHandler.Delete)
+	api.Delete("/account", accountHandler.Delete)
 
-	// Kesfet (sosyal) uclari. Limitler yalnizca ilgili uclardadir; yorum
-	// limiti sozlesme geregi 429 yavasla doner.
-	sosyalHandler.Routes(api.Group("/social"), handler.SocialLimits{
+	// Discover (social) endpoints. Limits apply only to the relevant
+	// endpoints; by contract the comment limit returns 429 "yavasla".
+	socialHandler.Routes(api.Group("/social"), handler.SocialLimits{
 		Publication: rateLimiter.Limit("sosyal-yayin", cfg.RateLimit.SocialPublicationPerHour, time.Hour),
 		Comment: rateLimiter.LimitWithCode("sosyal-yorum", cfg.RateLimit.SocialCommentPerMin, time.Minute,
 			"yavasla", "Biraz yavasla"),
@@ -325,14 +326,14 @@ func main() {
 		return fiber.ErrUpgradeRequired
 	})
 
-	// Bilet upgrade'den once tuketilir; bilet yoksa ya da baska isinse 401.
+	// The ticket is consumed before the upgrade; 401 if there is no ticket or it belongs to another job.
 	app.Get("/ws/jobs/:jobId", wsTicketHandler.Gate, websocket.New(func(c *websocket.Conn) {
 		jobID := c.Params("jobId")
 		hub.HandleConnection(c, jobID)
 	}))
 
 	// Start Asynq worker server
-	go startWorkerServer(cfg, redisClient, renderService, masterService, sunoClient, audioClient, storage, hub, hesapService, sosyalWorker)
+	go startWorkerServer(cfg, redisClient, renderService, masterService, sunoClient, audioClient, storage, hub, accountService, socialWorker)
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
@@ -361,10 +362,10 @@ func startWorkerServer(
 	masterService *service.MasterService,
 	sunoClient *client.SunoClient,
 	audioClient *client.AudioClient,
-	r2Client client.StorageClient,
+	storage client.StorageClient,
 	hub *ws.Hub,
-	hesapService *service.AccountService,
-	sosyalWorker *worker.SocialWorker,
+	accountService *service.AccountService,
+	socialWorker *worker.SocialWorker,
 ) {
 	asynqLogLevel := asynq.InfoLevel
 	if strings.EqualFold(cfg.Server.LogLevel, "debug") {
@@ -394,18 +395,18 @@ func startWorkerServer(
 	)
 
 	// Create workers with external clients
-	// Isciler is sahibinin silinmis isaretini ucretli Suno cagrisindan ve
-	// her R2 yazimindan once denetler.
-	hesapDenetci := deletionmark.NewRedisChecker(redisClient)
-	renderWorker := worker.NewRenderWorker(renderService, sunoClient, r2Client, hub, hesapDenetci)
-	masterWorker := worker.NewMasterWorker(redisClient, audioClient, r2Client, masterService, hub, &cfg.R2, hesapDenetci)
+	// Workers check the job owner's deleted mark before the paid Suno call
+	// and before every R2 write.
+	deletionChecker := deletionmark.NewRedisChecker(redisClient)
+	renderWorker := worker.NewRenderWorker(renderService, sunoClient, storage, hub, deletionChecker)
+	masterWorker := worker.NewMasterWorker(redisClient, audioClient, storage, masterService, hub, &cfg.R2, deletionChecker)
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeMaster, masterWorker.ProcessTask)
-	mux.HandleFunc(service.TaskTypeAccountCleanup, worker.NewAccountWorker(hesapService).ProcessTask)
-	mux.HandleFunc(social.TaskTypePrepare, sosyalWorker.Prepare)
-	mux.HandleFunc(social.TaskTypeDeleteFiles, sosyalWorker.DeleteFiles)
+	mux.HandleFunc(service.TaskTypeAccountCleanup, worker.NewAccountWorker(accountService).ProcessTask)
+	mux.HandleFunc(social.TaskTypePrepare, socialWorker.Prepare)
+	mux.HandleFunc(social.TaskTypeDeleteFiles, socialWorker.DeleteFiles)
 
 	if err := srv.Run(mux); err != nil {
 		log.Printf("Asynq worker error: %v", err)

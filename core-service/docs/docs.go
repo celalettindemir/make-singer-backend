@@ -1593,8 +1593,8 @@ const docTemplate = `{
                 "rest"
             ],
             "x-enum-comments": {
-                "InstrumentMix": "tam parca (mix modu)",
-                "InstrumentRest": "secilen enstruman cikarilmis parca (focus modu)"
+                "InstrumentMix": "the full track (mix mode)",
+                "InstrumentRest": "the track with the chosen instrument removed (focus mode)"
             },
             "x-enum-descriptions": [
                 "",
@@ -1609,8 +1609,8 @@ const docTemplate = `{
                 "",
                 "",
                 "",
-                "tam parca (mix modu)",
-                "secilen enstruman cikarilmis parca (focus modu)"
+                "the full track (mix mode)",
+                "the track with the chosen instrument removed (focus mode)"
             ],
             "x-enum-varnames": [
                 "InstrumentDrums",
@@ -2455,7 +2455,7 @@ const docTemplate = `{
                     "type": "number"
                 },
                 "expiresAt": {
-                    "description": "ExpiresAt: fileUrl presigned ve SURELI. Istemci bu adresi onbellege\nalip sonra kirik link gostermesin.",
+                    "description": "ExpiresAt: fileUrl is presigned and EXPIRING. The client must not cache\nthis URL and later show a broken link.",
                     "type": "string"
                 },
                 "fileUrl": {

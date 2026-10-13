@@ -136,7 +136,7 @@ func TestMasterStatus_NotFound(t *testing.T) {
 	}
 }
 
-func TestMasterFinal_YabanciStem404(t *testing.T) {
+func TestMasterFinal_ForeignStem404(t *testing.T) {
 	ta := setupApp(t)
 
 	projectID := uuid.New().String()
@@ -159,7 +159,7 @@ func TestMasterFinal_YabanciStem404(t *testing.T) {
 	assertStatus(t, resp, http.StatusNotFound)
 }
 
-func TestMasterFinal_TaninmayanKonak400(t *testing.T) {
+func TestMasterFinal_UnknownHost400(t *testing.T) {
 	ta := setupApp(t)
 
 	projectID := uuid.New().String()
