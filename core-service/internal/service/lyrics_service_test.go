@@ -96,3 +96,35 @@ func TestLyricsService_GenerateUsesGenerateTemperature(t *testing.T) {
 		t.Errorf("generation temperature = %v, want 0.8", requests[0]["temperature"])
 	}
 }
+
+func userMessage(t *testing.T, body map[string]any) string {
+	t.Helper()
+	msgs, _ := body["messages"].([]any)
+	if len(msgs) < 2 {
+		t.Fatal("no user message in the request")
+	}
+	m, _ := msgs[1].(map[string]any)
+	s, _ := m["content"].(string)
+	return s
+}
+
+func TestLyricsService_UserPromptsDemandRequestedLanguage(t *testing.T) {
+	var requests []map[string]any
+	gen := NewLyricsService(fakeLyricsGroq(t, `{"drafts":[["bir"]]}`, &requests))
+	if _, err := gen.Generate(context.Background(), &model.LyricsGenerateRequest{
+		Genre: model.Genre("pop"), SectionType: model.SectionVerse, Vibes: []string{"happy"}, Language: model.LanguageTR,
+	}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	rew := NewLyricsService(fakeLyricsGroq(t, `{"lines":["bir"]}`, &requests))
+	if _, err := rew.Rewrite(context.Background(), &model.LyricsRewriteRequest{
+		CurrentLyrics: "one", Genre: model.Genre("pop"), SectionType: model.SectionVerse, Vibes: []string{"happy"}, Language: model.LanguageTR,
+	}); err != nil {
+		t.Fatalf("Rewrite: %v", err)
+	}
+	for i, req := range requests {
+		if u := userMessage(t, req); !strings.Contains(u, "Write ALL lyrics in Turkish") {
+			t.Errorf("request %d user prompt must demand Turkish, got: %q", i, u)
+		}
+	}
+}

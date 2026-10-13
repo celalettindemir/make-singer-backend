@@ -72,7 +72,7 @@ func (s *LyricsService) Rewrite(ctx context.Context, req *model.LyricsRewriteReq
 	}
 
 	systemPrompt := s.buildSystemPrompt(language)
-	userPrompt := s.buildRewritePrompt(req)
+	userPrompt := s.buildRewritePrompt(req, language)
 
 	_, temperature := s.groqClient.Temperatures()
 	response, err := s.groqClient.ChatCompletion(ctx, systemPrompt, userPrompt, temperature)
@@ -90,19 +90,21 @@ func (s *LyricsService) Rewrite(ctx context.Context, req *model.LyricsRewriteReq
 	}, nil
 }
 
-func (s *LyricsService) buildSystemPrompt(language model.Language) string {
-	langName := "English"
+func langName(language model.Language) string {
 	switch language {
 	case model.LanguageTR:
-		langName = "Turkish"
+		return "Turkish"
 	case model.LanguageFR:
-		langName = "French"
+		return "French"
 	}
+	return "English"
+}
 
+func (s *LyricsService) buildSystemPrompt(language model.Language) string {
 	return fmt.Sprintf(`You are a professional %s songwriter with expertise in various music genres.
 Your task is to write compelling, emotionally resonant lyrics that match the requested style and mood.
 Always output your response as valid JSON in the exact format requested.
-Do not include any text outside the JSON structure.`, langName)
+Do not include any text outside the JSON structure.`, langName(language))
 }
 
 func (s *LyricsService) buildGeneratePrompt(req *model.LyricsGenerateRequest, language model.Language) string {
@@ -110,7 +112,7 @@ func (s *LyricsService) buildGeneratePrompt(req *model.LyricsGenerateRequest, la
 
 	return fmt.Sprintf(`Generate lyrics for a %s song's %s section.
 Vibes/mood: %s
-Language: %s
+Write ALL lyrics in %s, even if the vibes are given in another language.
 
 Create 2 different draft versions. Each draft should have 4-8 lines that fit the section type.
 For a verse: tell a story or set the scene.
@@ -119,10 +121,10 @@ For a bridge: provide contrast or a new perspective.
 For other sections: follow conventions of that section type.
 
 Output as JSON: {"drafts": [["line1","line2","line3","line4"], ["line1","line2","line3","line4"]]}`,
-		req.Genre, req.SectionType, vibes, language)
+		req.Genre, req.SectionType, vibes, langName(language))
 }
 
-func (s *LyricsService) buildRewritePrompt(req *model.LyricsRewriteRequest) string {
+func (s *LyricsService) buildRewritePrompt(req *model.LyricsRewriteRequest, language model.Language) string {
 	vibes := strings.Join(req.Vibes, ", ")
 
 	instructions := ""
@@ -138,9 +140,10 @@ Current lyrics:
 
 Keep the general meaning but improve the flow, rhyming, and emotional impact.
 Maintain the same number of lines.
+Write ALL lyrics in %s, translating them if the current lyrics are in another language.
 
 Output as JSON: {"lines": ["line1","line2","line3","line4"]}`,
-		req.Genre, req.SectionType, vibes, instructions, req.CurrentLyrics)
+		req.Genre, req.SectionType, vibes, instructions, req.CurrentLyrics, langName(language))
 }
 
 func (s *LyricsService) parseGenerateResponse(response string) ([][]string, error) {
