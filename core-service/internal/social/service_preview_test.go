@@ -29,56 +29,56 @@ func (*sureliDepolama) URLFor(context.Context, string) (string, time.Time, error
 
 func onizlemeDeposu() *sahteDepo {
 	d := yeniSahteDepo()
-	d.onizlemeler = map[string]*OnizlemeKaydi{
+	d.onizlemeler = map[string]*PreviewRecord{
 		"Ab3dEf9h": {
-			Onizleme: Onizleme{Baslik: "Sarki", Sahip: ProfilOzeti{KullaniciAdi: "ali"}, SureSn: 180,
-				DalgaFormu: []float64{0.5}, Tur: "pop"},
-			SahipID: kullaniciA, OnizlemeAnahtari: "sosyal/" + yayinX + "/onizleme.mp3",
+			Preview: Preview{Title: "Sarki", Owner: ProfileSummary{Username: "ali"}, DurationSec: 180,
+				Waveform: []float64{0.5}, Genre: "pop"},
+			OwnerID: kullaniciA, PreviewKey: "sosyal/" + yayinX + "/onizleme.mp3",
 		},
-		"Zz99Zz99": {Onizleme: Onizleme{Baslik: "Onizlemesiz", DalgaFormu: []float64{}}},
+		"Zz99Zz99": {Preview: Preview{Title: "Onizlemesiz", Waveform: []float64{}}},
 	}
 	return d
 }
 
 func TestServis_OnizlemeImzali1Saat(t *testing.T) {
 	dep := &sureliDepolama{}
-	s := NewServis(onizlemeDeposu(), &sahteKuyruk{}, dep, testR2())
-	o, err := s.Onizleme(context.Background(), "Ab3dEf9h")
+	s := NewService(onizlemeDeposu(), &sahteKuyruk{}, dep, testR2())
+	o, err := s.Preview(context.Background(), "Ab3dEf9h")
 	if err != nil {
 		t.Fatalf("Onizleme: %v", err)
 	}
-	if o.OnizlemeURL == nil || *o.OnizlemeURL != "https://imzali.example/sosyal/"+yayinX+"/onizleme.mp3?sure" {
-		t.Fatalf("onizlemeUrl = %v", o.OnizlemeURL)
+	if o.PreviewURL == nil || *o.PreviewURL != "https://imzali.example/sosyal/"+yayinX+"/onizleme.mp3?sure" {
+		t.Fatalf("onizlemeUrl = %v", o.PreviewURL)
 	}
 	if dep.sure != time.Hour {
 		t.Fatalf("imza suresi = %v, beklenen 1 saat", dep.sure)
 	}
-	if o.Baslik != "Sarki" || o.SureSn != 180 || o.Tur != "pop" || o.Sahip.KullaniciAdi != "ali" {
+	if o.Title != "Sarki" || o.DurationSec != 180 || o.Genre != "pop" || o.Owner.Username != "ali" {
 		t.Fatalf("onizleme = %+v", o)
 	}
 
-	yok, err := s.Onizleme(context.Background(), "Zz99Zz99")
-	if err != nil || yok.OnizlemeURL != nil {
+	yok, err := s.Preview(context.Background(), "Zz99Zz99")
+	if err != nil || yok.PreviewURL != nil {
 		t.Fatalf("onizlemesiz yayin = %+v, %v", yok, err)
 	}
 
 	dep.hata = errors.New("imza hatasi")
-	if _, err := s.Onizleme(context.Background(), "Ab3dEf9h"); err == nil || errors.Is(err, ErrNotFound) {
+	if _, err := s.Preview(context.Background(), "Ab3dEf9h"); err == nil || errors.Is(err, ErrNotFound) {
 		t.Fatalf("imza hatasi sunucu hatasi olmali: %v", err)
 	}
 }
 
 func TestServis_OnizlemeR2siz(t *testing.T) {
 	s, _ := testServisi(onizlemeDeposu())
-	o, err := s.Onizleme(context.Background(), "Ab3dEf9h")
-	if err != nil || o.OnizlemeURL == nil || !strings.HasSuffix(*o.OnizlemeURL, "/sosyal/"+yayinX+"/onizleme.mp3") {
+	o, err := s.Preview(context.Background(), "Ab3dEf9h")
+	if err != nil || o.PreviewURL == nil || !strings.HasSuffix(*o.PreviewURL, "/sosyal/"+yayinX+"/onizleme.mp3") {
 		t.Fatalf("R2'siz adres = %+v, %v", o, err)
 	}
 }
 
 func TestServis_OnizlemeBulunamadi(t *testing.T) {
 	s, _ := testServisi(onizlemeDeposu())
-	if _, err := s.Onizleme(context.Background(), "Yok12345"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Preview(context.Background(), "Yok12345"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("bilinmeyen slug: %v, beklenen ErrBulunamadi", err)
 	}
 
@@ -88,7 +88,7 @@ func TestServis_OnizlemeBulunamadi(t *testing.T) {
 	d.hata = errors.New("depo cagrilmamali")
 	s, _ = testServisi(d)
 	for _, slug := range []string{"kisa", "Ab3dEf9h/", "../../xx", ""} {
-		if _, err := s.Onizleme(context.Background(), slug); !errors.Is(err, ErrNotFound) {
+		if _, err := s.Preview(context.Background(), slug); !errors.Is(err, ErrNotFound) {
 			t.Errorf("%q: %v, beklenen ErrBulunamadi (depo cagrilmadan)", slug, err)
 		}
 	}

@@ -9,128 +9,130 @@ import (
 )
 
 const (
-	varsayilanSayfa = 20
-	enBuyukSayfa    = 50
+	defaultPageSize = 20
+	maxPageSize     = 50
 )
 
-// Sayfa, sozlesmenin liste zarfidir. SonrakiImlec son sayfada null
-// olarak GORUNUR; Ogeler hicbir zaman null degildir.
-type Sayfa[T any] struct {
-	Ogeler       []T     `json:"ogeler"`
-	SonrakiImlec *string `json:"sonrakiImlec"`
+// Page is the contract's list envelope. NextCursor is VISIBLE as null on the
+// last page; Items is never null.
+type Page[T any] struct {
+	Items      []T     `json:"ogeler"`
+	NextCursor *string `json:"sonrakiImlec"`
 }
 
-// SayfaBoyutu, ?limit= degerini yorumlar: bos ya da gecersizse 20, en
-// cok 50. Mobil limit gondermez; web gonderebilir.
-func SayfaBoyutu(ham string) int {
-	n, err := strconv.Atoi(ham)
+// PageSize interprets ?limit=: 20 when empty or invalid, at most 50. Mobile
+// sends no limit; web may.
+func PageSize(raw string) int {
+	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 {
-		return varsayilanSayfa
+		return defaultPageSize
 	}
-	if n > enBuyukSayfa {
-		return enBuyukSayfa
+	if n > maxPageSize {
+		return maxPageSize
 	}
 	return n
 }
 
-// ZamanImleci, zamana gore azalan listelerin konumudur.
-type ZamanImleci struct {
+// TimeCursor is the position in lists ordered by time, descending.
+type TimeCursor struct {
 	T  time.Time `json:"t"`
 	ID string    `json:"id"`
 }
 
-// PuanImleci, "senin icin" akisinin konumudur. N, ilk sayfanin referans
-// zamanidir (Unix ms); sonraki sayfalar ayni N ile hesaplanir ki puanlar
-// sayfalar arasinda kaymasin.
-type PuanImleci struct {
-	P  float64 `json:"p"`
-	ID string  `json:"id"`
-	N  int64   `json:"n"`
+// ScoreCursor is the position in the "for you" feed. RefMs (json "n") is the
+// first page's reference time (Unix ms); later pages are computed with the
+// same value so scores do not drift between pages.
+type ScoreCursor struct {
+	Score float64 `json:"p"`
+	ID    string  `json:"id"`
+	RefMs int64   `json:"n"`
 }
 
-func imlecKodla(v any) *string {
+func encodeCursor(v any) *string {
 	b, _ := json.Marshal(v)
 	s := base64.RawURLEncoding.EncodeToString(b)
 	return &s
 }
 
-func imlecCoz(ham string, v any) error {
-	b, err := base64.RawURLEncoding.DecodeString(ham)
+func decodeCursor(raw string, v any) error {
+	b, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil || json.Unmarshal(b, v) != nil {
 		return validationError("imlec gecersiz")
 	}
 	return nil
 }
 
-// zamanImleciCoz, bos dizgede nil doner.
-func zamanImleciCoz(ham string) (*ZamanImleci, error) {
-	if ham == "" {
+// decodeTimeCursor returns nil for an empty string.
+func decodeTimeCursor(raw string) (*TimeCursor, error) {
+	if raw == "" {
 		return nil, nil
 	}
-	var im ZamanImleci
-	if err := imlecCoz(ham, &im); err != nil {
+	var cur TimeCursor
+	if err := decodeCursor(raw, &cur); err != nil {
 		return nil, err
 	}
-	id, ok := kimlikCoz(im.ID)
-	if !ok || im.T.IsZero() {
+	id, ok := parseID(cur.ID)
+	if !ok || cur.T.IsZero() {
 		return nil, validationError("imlec gecersiz")
 	}
-	im.ID = id
-	return &im, nil
+	cur.ID = id
+	return &cur, nil
 }
 
-// puanImleciCoz, bos dizgede nil doner.
-func puanImleciCoz(ham string) (*PuanImleci, error) {
-	if ham == "" {
+// decodeScoreCursor returns nil for an empty string.
+func decodeScoreCursor(raw string) (*ScoreCursor, error) {
+	if raw == "" {
 		return nil, nil
 	}
-	var im PuanImleci
-	if err := imlecCoz(ham, &im); err != nil {
+	var cur ScoreCursor
+	if err := decodeCursor(raw, &cur); err != nil {
 		return nil, err
 	}
-	id, ok := kimlikCoz(im.ID)
-	if !ok || im.N <= 0 {
+	id, ok := parseID(cur.ID)
+	if !ok || cur.RefMs <= 0 {
 		return nil, validationError("imlec gecersiz")
 	}
-	im.ID = id
-	return &im, nil
+	cur.ID = id
+	return &cur, nil
 }
 
-// YorumImleci, yorum listesinin konumudur. Liste iki gruptur: once
-// zamanli yorumlar (G=0; zaman_ms, olusturma, id artan), sonra damgasizlar
-// (G=1; olusturma, id azalan). Z yalnizca G=0'da doludur.
-type YorumImleci struct {
-	G  int       `json:"g"`
-	Z  *int      `json:"z,omitempty"`
-	T  time.Time `json:"t"`
-	ID string    `json:"id"`
+// CommentCursor is the position in the comment list. The list has two
+// groups: timed comments first (Group=0; time_ms, created, id ascending),
+// then untimed ones (Group=1; created, id descending). TimeMs is set only
+// when Group=0.
+type CommentCursor struct {
+	Group  int       `json:"g"`
+	TimeMs *int      `json:"z,omitempty"`
+	T      time.Time `json:"t"`
+	ID     string    `json:"id"`
 }
 
-// yorumImleciCoz, bos dizgede nil doner. z, zaman_ms (integer) sutununa
-// sigmali; MaxInt32'yi asan deger sorguda 500 yerine burada 422'dir.
-func yorumImleciCoz(ham string) (*YorumImleci, error) {
-	if ham == "" {
+// decodeCommentCursor returns nil for an empty string. z must fit the
+// time_ms (integer) column; a value above MaxInt32 is a 422 here instead of
+// a 500 in the query.
+func decodeCommentCursor(raw string) (*CommentCursor, error) {
+	if raw == "" {
 		return nil, nil
 	}
-	var im YorumImleci
-	if err := imlecCoz(ham, &im); err != nil {
+	var cur CommentCursor
+	if err := decodeCursor(raw, &cur); err != nil {
 		return nil, err
 	}
-	id, ok := kimlikCoz(im.ID)
-	gecerli := ok && !im.T.IsZero() &&
-		((im.G == 0 && im.Z != nil && *im.Z >= 0 && *im.Z <= math.MaxInt32) || (im.G == 1 && im.Z == nil))
-	if !gecerli {
+	id, ok := parseID(cur.ID)
+	valid := ok && !cur.T.IsZero() &&
+		((cur.Group == 0 && cur.TimeMs != nil && *cur.TimeMs >= 0 && *cur.TimeMs <= math.MaxInt32) || (cur.Group == 1 && cur.TimeMs == nil))
+	if !valid {
 		return nil, validationError("imlec gecersiz")
 	}
-	im.ID = id
-	return &im, nil
+	cur.ID = id
+	return &cur, nil
 }
 
-// yorumImleci, sayfanin son yorumundan sonraki sayfanin imlecini kurar.
-func yorumImleci(son Yorum) *string {
-	im := YorumImleci{G: 1, T: son.Olusturma, ID: son.ID}
-	if son.ZamanMs != nil {
-		im.G, im.Z = 0, son.ZamanMs
+// commentCursorAfter builds the cursor of the page after the page's last comment.
+func commentCursorAfter(last Comment) *string {
+	cur := CommentCursor{Group: 1, T: last.CreatedAt, ID: last.ID}
+	if last.TimeMs != nil {
+		cur.Group, cur.TimeMs = 0, last.TimeMs
 	}
-	return imlecKodla(im)
+	return encodeCursor(cur)
 }

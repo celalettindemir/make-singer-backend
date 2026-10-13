@@ -11,13 +11,13 @@ import (
 // CommentStore covers the operations on sosyal.yorum (spec §4.5).
 type CommentStore interface {
 	// InsertComment writes the comment and returns it with the author's summary.
-	InsertComment(ctx context.Context, input YeniYorum) (*Yorum, error)
+	InsertComment(ctx context.Context, input CommentInsert) (*Comment, error)
 	// ListComments returns up to limit+1 of the publication's non-deleted
 	// comments in contract order. CanDelete depends on the viewer (the author
 	// or the publication owner).
-	ListComments(ctx context.Context, pubID, viewerID string, cursor *YorumImleci, limit int) ([]Yorum, error)
+	ListComments(ctx context.Context, pubID, viewerID string, cursor *CommentCursor, limit int) ([]Comment, error)
 	// GetComment returns the comment for the delete decision, or ErrNotFound.
-	GetComment(ctx context.Context, id string) (*YorumKaydi, error)
+	GetComment(ctx context.Context, id string) (*CommentRecord, error)
 	// DeleteComment soft-deletes. If missing or already deleted, ErrNotFound.
 	DeleteComment(ctx context.Context, id string) error
 }
@@ -25,22 +25,22 @@ type CommentStore interface {
 // commentColumns are the columns of Comment: c is the comment, p the author's profile.
 const commentColumns = `c.id::text, c.metin, c.zaman_ms, c.olusturma, c.yazar_id::text, p.kullanici_adi, p.gorunen_ad`
 
-func scanComment(row pgx.Row, extra ...any) (*Yorum, error) {
+func scanComment(row pgx.Row, extra ...any) (*Comment, error) {
 	var (
-		comment  Yorum
+		comment  Comment
 		authorID string
 	)
-	dests := append([]any{&comment.ID, &comment.Metin, &comment.ZamanMs, &comment.Olusturma, &authorID,
-		&comment.Yazar.KullaniciAdi, &comment.Yazar.GorunenAd}, extra...)
+	dests := append([]any{&comment.ID, &comment.Text, &comment.TimeMs, &comment.CreatedAt, &authorID,
+		&comment.Author.Username, &comment.Author.DisplayName}, extra...)
 	if err := row.Scan(dests...); err != nil {
 		return nil, err
 	}
-	comment.Yazar.AvatarRengi = AvatarRengi(authorID)
-	comment.Olusturma = comment.Olusturma.UTC()
+	comment.Author.AvatarColor = AvatarColor(authorID)
+	comment.CreatedAt = comment.CreatedAt.UTC()
 	return &comment, nil
 }
 
-func (s *PostgresStore) InsertComment(ctx context.Context, input YeniYorum) (*Yorum, error) {
+func (s *PostgresStore) InsertComment(ctx context.Context, input CommentInsert) (*Comment, error) {
 	comment, err := scanComment(s.pool.QueryRow(ctx, `
 		WITH c AS (
 		  INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin, zaman_ms)
@@ -48,7 +48,7 @@ func (s *PostgresStore) InsertComment(ctx context.Context, input YeniYorum) (*Yo
 		  RETURNING *
 		)
 		SELECT `+commentColumns+` FROM c JOIN sosyal.profil p ON p.kullanici_id = c.yazar_id`,
-		input.ID, input.YayinID, input.YazarID, input.Metin, input.ZamanMs))
+		input.ID, input.PublicationID, input.AuthorID, input.Text, input.TimeMs))
 	if err != nil {
 		return nil, fmt.Errorf("yorum eklenemedi: %w", err)
 	}
@@ -60,12 +60,12 @@ func (s *PostgresStore) InsertComment(ctx context.Context, input YeniYorum) (*Yo
 // (olusturma, id descending). If the cursor group is 0, the remaining timed
 // comments and all untimed ones follow; if it is 1, only the remaining
 // untimed ones do.
-func (s *PostgresStore) ListComments(ctx context.Context, pubID, viewerID string, cursor *YorumImleci, limit int) ([]Yorum, error) {
+func (s *PostgresStore) ListComments(ctx context.Context, pubID, viewerID string, cursor *CommentCursor, limit int) ([]Comment, error) {
 	var group, timeMs, createdAt, id any
 	if cursor != nil {
-		group, createdAt, id = cursor.G, cursor.T, cursor.ID
-		if cursor.Z != nil {
-			timeMs = *cursor.Z
+		group, createdAt, id = cursor.Group, cursor.T, cursor.ID
+		if cursor.TimeMs != nil {
+			timeMs = *cursor.TimeMs
 		}
 	}
 	rows, err := s.pool.Query(ctx, `
@@ -88,25 +88,25 @@ func (s *PostgresStore) ListComments(ctx context.Context, pubID, viewerID string
 		return nil, fmt.Errorf("yorumlar okunamadi: %w", err)
 	}
 	defer rows.Close()
-	comments := []Yorum{}
+	comments := []Comment{}
 	for rows.Next() {
 		var canDelete bool
 		comment, err := scanComment(rows, &canDelete)
 		if err != nil {
 			return nil, fmt.Errorf("yorum okunamadi: %w", err)
 		}
-		comment.SilebilirMiyim = canDelete
+		comment.CanDelete = canDelete
 		comments = append(comments, *comment)
 	}
 	return comments, rows.Err()
 }
 
-func (s *PostgresStore) GetComment(ctx context.Context, id string) (*YorumKaydi, error) {
-	var record YorumKaydi
+func (s *PostgresStore) GetComment(ctx context.Context, id string) (*CommentRecord, error) {
+	var record CommentRecord
 	err := s.pool.QueryRow(ctx, `
 		SELECT c.id::text, c.yayin_id::text, c.yazar_id::text, y.sahip_id::text, c.silinme IS NOT NULL
 		  FROM sosyal.yorum c JOIN sosyal.yayin y ON y.id = c.yayin_id
-		 WHERE c.id = $1`, id).Scan(&record.ID, &record.YayinID, &record.YazarID, &record.YayinSahibiID, &record.Silindi)
+		 WHERE c.id = $1`, id).Scan(&record.ID, &record.PublicationID, &record.AuthorID, &record.PublicationOwnerID, &record.Deleted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

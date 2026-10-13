@@ -9,118 +9,119 @@ import (
 	"github.com/google/uuid"
 )
 
-const yorumEnUzun = 500
+const maxCommentLen = 500
 
-// yorumSayfasiKur, limit+1 yorumdan sayfayi ve sonraki imleci kurar.
-func yorumSayfasiKur(ogeler []Yorum, limit int) *Sayfa[Yorum] {
-	sayfa := &Sayfa[Yorum]{Ogeler: ogeler}
-	if len(ogeler) > limit {
-		sayfa.Ogeler = ogeler[:limit]
-		sayfa.SonrakiImlec = yorumImleci(sayfa.Ogeler[limit-1])
+// buildCommentPage builds the page and the next cursor from limit+1 comments.
+func buildCommentPage(items []Comment, limit int) *Page[Comment] {
+	page := &Page[Comment]{Items: items}
+	if len(items) > limit {
+		page.Items = items[:limit]
+		page.NextCursor = commentCursorAfter(page.Items[limit-1])
 	}
-	if sayfa.Ogeler == nil {
-		sayfa.Ogeler = []Yorum{}
+	if page.Items == nil {
+		page.Items = []Comment{}
 	}
-	return sayfa
+	return page
 }
 
-// Yorumlar, GET /yayinlar/{id}/yorumlar. Yayin gorunmuyorsa
-// ErrBulunamadi, yorumlari kapaliysa (sahibi dahil) ErrYorumKapali.
-func (s *Servis) Yorumlar(ctx context.Context, kullaniciID, yayinID, hamImlec string, limit int) (*Sayfa[Yorum], error) {
-	id, err := kullaniciCoz(kullaniciID)
+// Comments is GET /yayinlar/{id}/yorumlar. ErrNotFound if the publication is
+// not visible, ErrCommentsDisabled if its comments are disabled (owner
+// included).
+func (s *Service) Comments(ctx context.Context, userID, pubID, rawCursor string, limit int) (*Page[Comment], error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	imlec, err := yorumImleciCoz(hamImlec)
+	cursor, err := decodeCommentCursor(rawCursor)
 	if err != nil {
 		return nil, err
 	}
-	k, err := s.gorunurYayin(ctx, id, yayinID)
+	rec, err := s.visiblePublication(ctx, id, pubID)
 	if err != nil {
 		return nil, err
 	}
-	if !k.YorumAcik {
+	if !rec.CommentsEnabled {
 		return nil, ErrCommentsDisabled
 	}
-	ogeler, err := s.depo.ListComments(ctx, k.ID, id, imlec, limit)
+	items, err := s.store.ListComments(ctx, rec.ID, id, cursor, limit)
 	if err != nil {
 		return nil, err
 	}
-	return yorumSayfasiKur(ogeler, limit), nil
+	return buildCommentPage(items, limit), nil
 }
 
-// YorumYaz, POST /yayinlar/{id}/yorumlar (201). Sira: govde (422),
-// gorunurluk (404), yorumAcik (403 yorum_kapali), profil (409
-// profil_yok), zaman araligi (422). metin kirpilir, 1-500 karakter;
-// zamanMs null ya da 0 <= zamanMs <= sureSn*1000.
-func (s *Servis) YorumYaz(ctx context.Context, kullaniciID, yayinID string, g YorumGirdisi) (*Yorum, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// PostComment is POST /yayinlar/{id}/yorumlar (201). Order: body (422),
+// visibility (404), yorumAcik (403 yorum_kapali), profile (409
+// profil_yok), time range (422). metin is trimmed, 1-500 characters;
+// zamanMs is null or 0 <= zamanMs <= sureSn*1000.
+func (s *Service) PostComment(ctx context.Context, userID, pubID string, input CommentInput) (*Comment, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	metin := strings.TrimSpace(g.Metin)
-	if nulIceriyor(metin) {
+	text := strings.TrimSpace(input.Text)
+	if containsNUL(text) {
 		return nil, validationError("metin NUL karakteri iceremez")
 	}
-	if n := utf8.RuneCountInString(metin); n < 1 || n > yorumEnUzun {
+	if n := utf8.RuneCountInString(text); n < 1 || n > maxCommentLen {
 		return nil, validationError("metin 1-500 karakter olmali")
 	}
-	if g.ZamanMs != nil && *g.ZamanMs < 0 {
+	if input.TimeMs != nil && *input.TimeMs < 0 {
 		return nil, validationError("zamanMs negatif olamaz")
 	}
-	// zaman_ms sutunu integer'dir; sureSn ust sinirsiz oldugundan sure
-	// denetimi tek basina INSERT tasmasini (500) onlemez.
-	if g.ZamanMs != nil && *g.ZamanMs > math.MaxInt32 {
+	// The time_ms column is an integer; sureSn has no upper bound, so the
+	// duration check alone does not prevent an INSERT overflow (500).
+	if input.TimeMs != nil && *input.TimeMs > math.MaxInt32 {
 		return nil, validationError("zamanMs cok buyuk")
 	}
-	k, err := s.gorunurYayin(ctx, id, yayinID)
+	rec, err := s.visiblePublication(ctx, id, pubID)
 	if err != nil {
 		return nil, err
 	}
-	if !k.YorumAcik {
+	if !rec.CommentsEnabled {
 		return nil, ErrCommentsDisabled
 	}
-	if _, err := s.depo.GetProfile(ctx, id); err != nil {
+	if _, err := s.store.GetProfile(ctx, id); err != nil {
 		return nil, err
 	}
-	if g.ZamanMs != nil && *g.ZamanMs > k.SureSn*1000 {
+	if input.TimeMs != nil && *input.TimeMs > rec.DurationSec*1000 {
 		return nil, validationError("zamanMs sarkinin suresini asiyor")
 	}
-	y, err := s.depo.InsertComment(ctx, YeniYorum{
-		ID: uuid.NewString(), YayinID: k.ID, YazarID: id, Metin: metin, ZamanMs: g.ZamanMs,
+	inserted, err := s.store.InsertComment(ctx, CommentInsert{
+		ID: uuid.NewString(), PublicationID: rec.ID, AuthorID: id, Text: text, TimeMs: input.TimeMs,
 	})
 	if err != nil {
 		return nil, err
 	}
-	y.SilebilirMiyim = true
-	return y, nil
+	inserted.CanDelete = true
+	return inserted, nil
 }
 
-// YorumSil, DELETE /yorumlar/{id} (204). Yalnizca yazar ya da yayin
-// sahibi siler; baska biri yayini gorebiliyorsa ErrYetki (403),
-// goremiyorsa ErrBulunamadi (varligi sizdirilmaz). Silinmis yorum
-// ErrBulunamadi'dir (tekrar 404).
-func (s *Servis) YorumSil(ctx context.Context, kullaniciID, yorumID string) error {
-	id, err := kullaniciCoz(kullaniciID)
+// DeleteComment is DELETE /yorumlar/{id} (204). Only the author or the
+// publication owner deletes; if someone else can see the publication it is
+// ErrForbidden (403), if they cannot it is ErrNotFound (existence is not
+// leaked). A deleted comment is ErrNotFound (404 again).
+func (s *Service) DeleteComment(ctx context.Context, userID, commentID string) error {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return err
 	}
-	yid, ok := kimlikCoz(yorumID)
+	commentUUID, ok := parseID(commentID)
 	if !ok {
 		return ErrNotFound
 	}
-	k, err := s.depo.GetComment(ctx, yid)
+	rec, err := s.store.GetComment(ctx, commentUUID)
 	if err != nil {
 		return err
 	}
-	if k.Silindi {
+	if rec.Deleted {
 		return ErrNotFound
 	}
-	if k.YazarID != id && k.YayinSahibiID != id {
-		if _, err := s.gorunurYayin(ctx, id, k.YayinID); err != nil {
+	if rec.AuthorID != id && rec.PublicationOwnerID != id {
+		if _, err := s.visiblePublication(ctx, id, rec.PublicationID); err != nil {
 			return err
 		}
 		return ErrForbidden
 	}
-	return s.depo.DeleteComment(ctx, k.ID)
+	return s.store.DeleteComment(ctx, rec.ID)
 }

@@ -13,7 +13,7 @@ func (h *SosyalHandler) Coverlar(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	sayfa, err := h.servis.Coverlar(c.Context(), userID, c.Params("id"), c.Query("imlec"), social.SayfaBoyutu(c.Query("limit")))
+	sayfa, err := h.servis.Covers(c.Context(), userID, c.Params("id"), c.Query("imlec"), social.PageSize(c.Query("limit")))
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -27,7 +27,7 @@ func (h *SosyalHandler) CoverBaslat(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	b, err := h.servis.CoverBaslat(c.Context(), userID, c.Params("id"))
+	b, err := h.servis.StartCover(c.Context(), userID, c.Params("id"))
 	if err != nil {
 		return sosyalHata(c, err)
 	}

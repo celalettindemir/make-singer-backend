@@ -2,59 +2,59 @@ package social
 
 import "context"
 
-// oneriSayisi, GET /oneriler'in en cok kac profil dondurdugu (spec §4.4).
-const oneriSayisi = 10
+// suggestionLimit is the maximum number of profiles GET /oneriler returns (spec §4.4).
+const suggestionLimit = 10
 
-// TakipDurumu, PUT/DELETE /profiller/{ad}/takip yaniti.
-type TakipDurumu struct {
-	Takipci          int  `json:"takipci"`
-	TakipEdiyorMuyum bool `json:"takipEdiyorMuyum"`
+// FollowStatus is the PUT/DELETE /profiller/{ad}/takip response.
+type FollowStatus struct {
+	Followers    int  `json:"takipci"`
+	FollowedByMe bool `json:"takipEdiyorMuyum"`
 }
 
-// Takip, PUT (takip=true) ve DELETE (false) /profiller/{ad}/takip.
-// Tekrari guvenlidir. Kendini takip (ya da birakma) ErrKendiniTakip,
-// olmayan ya da gecersiz bicimli ad ErrBulunamadi'dir. Takip eden icin
-// profil gerekmez (begeni gibi).
-func (s *Servis) Takip(ctx context.Context, kullaniciID, ad string, takip bool) (*TakipDurumu, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// SetFollow is PUT (follow=true) and DELETE (false) /profiller/{ad}/takip.
+// Repeating is safe. Following (or unfollowing) oneself is ErrSelfFollow; a
+// missing or malformed name is ErrNotFound. The follower needs no profile
+// (like liking).
+func (s *Service) SetFollow(ctx context.Context, userID, username string, follow bool) (*FollowStatus, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	if !KullaniciAdiGecerli(ad) {
+	if !ValidUsername(username) {
 		return nil, ErrNotFound
 	}
-	p, err := s.depo.GetProfileByUsername(ctx, ad)
+	p, err := s.store.GetProfileByUsername(ctx, username)
 	if err != nil {
 		return nil, err
 	}
-	if p.KullaniciID == id {
+	if p.UserID == id {
 		return nil, ErrSelfFollow
 	}
-	if takip {
-		err = s.depo.Follow(ctx, id, p.KullaniciID)
+	if follow {
+		err = s.store.Follow(ctx, id, p.UserID)
 	} else {
-		err = s.depo.Unfollow(ctx, id, p.KullaniciID)
+		err = s.store.Unfollow(ctx, id, p.UserID)
 	}
 	if err != nil {
 		return nil, err
 	}
-	return s.depo.FollowStatus(ctx, id, p.KullaniciID)
+	return s.store.FollowStatus(ctx, id, p.UserID)
 }
 
-// Oneriler, GET /oneriler: en cok 10 ProfilOzeti, sayfasiz. Bos liste
-// null degil [] olarak doner.
-func (s *Servis) Oneriler(ctx context.Context, kullaniciID string) ([]ProfilOzeti, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// Suggestions is GET /oneriler: at most 10 ProfileSummary items, unpaged. An
+// empty list is returned as [], not null.
+func (s *Service) Suggestions(ctx context.Context, userID string) ([]ProfileSummary, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	kayitlar, err := s.depo.Suggestions(ctx, id, oneriSayisi)
+	records, err := s.store.Suggestions(ctx, id, suggestionLimit)
 	if err != nil {
 		return nil, err
 	}
-	ozetler := make([]ProfilOzeti, 0, len(kayitlar))
-	for i := range kayitlar {
-		ozetler = append(ozetler, kayitlar[i].ozet())
+	summaries := make([]ProfileSummary, 0, len(records))
+	for i := range records {
+		summaries = append(summaries, records[i].summary())
 	}
-	return ozetler, nil
+	return summaries, nil
 }

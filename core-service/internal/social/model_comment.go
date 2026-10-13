@@ -2,36 +2,36 @@ package social
 
 import "time"
 
-// Yorum, sozlesme §4.1. ZamanMs damgasiz yorumda null olarak GORUNUR.
-type Yorum struct {
-	ID             string      `json:"id"`
-	Yazar          ProfilOzeti `json:"yazar"`
-	Metin          string      `json:"metin"`
-	ZamanMs        *int        `json:"zamanMs"`
-	Olusturma      time.Time   `json:"olusturma"`
-	SilebilirMiyim bool        `json:"silebilirMiyim"`
+// Comment is contract §4.1. TimeMs is VISIBLE as null on an untimed comment.
+type Comment struct {
+	ID        string         `json:"id"`
+	Author    ProfileSummary `json:"yazar"`
+	Text      string         `json:"metin"`
+	TimeMs    *int           `json:"zamanMs"`
+	CreatedAt time.Time      `json:"olusturma"`
+	CanDelete bool           `json:"silebilirMiyim"`
 }
 
-// YorumGirdisi, POST /yayinlar/{id}/yorumlar govdesi.
-type YorumGirdisi struct {
-	Metin   string `json:"metin"`
-	ZamanMs *int   `json:"zamanMs"`
+// CommentInput is the POST /yayinlar/{id}/yorumlar body.
+type CommentInput struct {
+	Text   string `json:"metin"`
+	TimeMs *int   `json:"zamanMs"`
 }
 
-// YeniYorum, depoya yazilacak dogrulanmis yorum.
-type YeniYorum struct {
-	ID      string
-	YayinID string
-	YazarID string
-	Metin   string
-	ZamanMs *int
-}
-
-// YorumKaydi, silme kararinin ihtiyac duydugu satir.
-type YorumKaydi struct {
+// CommentInsert is a validated comment to be written to the store.
+type CommentInsert struct {
 	ID            string
-	YayinID       string
-	YazarID       string
-	YayinSahibiID string
-	Silindi       bool
+	PublicationID string
+	AuthorID      string
+	Text          string
+	TimeMs        *int
+}
+
+// CommentRecord is the row that the delete decision needs.
+type CommentRecord struct {
+	ID                 string
+	PublicationID      string
+	AuthorID           string
+	PublicationOwnerID string
+	Deleted            bool
 }

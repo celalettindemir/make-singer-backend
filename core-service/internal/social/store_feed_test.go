@@ -11,11 +11,11 @@ import (
 
 // tumSayfalar, bir zaman listesini limit'lik sayfalarla sonuna kadar
 // gezer ve id'leri sirayla doner.
-func tumSayfalar(t *testing.T, cek func(*ZamanImleci) ([]YayinOzeti, error), limit int) []string {
+func tumSayfalar(t *testing.T, cek func(*TimeCursor) ([]PublicationSummary, error), limit int) []string {
 	t.Helper()
 	var (
 		idler []string
-		imlec *ZamanImleci
+		imlec *TimeCursor
 	)
 	for sayfa := 0; sayfa < 20; sayfa++ {
 		ogeler, err := cek(imlec)
@@ -33,7 +33,7 @@ func tumSayfalar(t *testing.T, cek func(*ZamanImleci) ([]YayinOzeti, error), lim
 			return idler
 		}
 		son := ogeler[len(ogeler)-1]
-		imlec = &ZamanImleci{T: son.Olusturma, ID: son.ID}
+		imlec = &TimeCursor{T: son.CreatedAt, ID: son.ID}
 	}
 	t.Fatal("sayfalama bitmedi")
 	return nil
@@ -74,14 +74,14 @@ func TestPostgresDepo_AkisYeniVeSayfalama(t *testing.T) {
 	c2 := testYayinEkle(t, havuz, testYayin{ID: "00000000-0000-4000-8000-000000000001", SahipID: takipEdilen, Olusturma: ayniAn})
 	e := testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Olusturma: t0})
 	// Akisa girmeyenler:
-	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Gorunurluk: GorunurlukTakipciler})
-	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Gorunurluk: GorunurlukLink})
-	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Durum: DurumHazirlaniyor})
+	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Gorunurluk: VisibilityFollowers})
+	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Gorunurluk: VisibilityLink})
+	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Durum: StatusPreparing})
 	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Silindi: true})
 
 	beklenen := []string{a, b, c1, c2, e}
 	for _, limit := range []int{1, 2, 5, 50} {
-		got := tumSayfalar(t, func(im *ZamanImleci) ([]YayinOzeti, error) { return d.FeedNew(ctx, ben, im, limit) }, limit)
+		got := tumSayfalar(t, func(im *TimeCursor) ([]PublicationSummary, error) { return d.FeedNew(ctx, ben, im, limit) }, limit)
 		esitSira(t, "yeni", got, beklenen)
 	}
 }
@@ -91,13 +91,13 @@ func TestPostgresDepo_AkisTakip(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Add(-time.Hour)
 	herkes := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Olusturma: t0.Add(2 * time.Minute)})
-	takipcilere := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Gorunurluk: GorunurlukTakipciler, Olusturma: t0.Add(time.Minute)})
-	testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Gorunurluk: GorunurlukLink})
-	testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Durum: DurumHata})
+	takipcilere := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Gorunurluk: VisibilityFollowers, Olusturma: t0.Add(time.Minute)})
+	testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Gorunurluk: VisibilityLink})
+	testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Durum: StatusFailed})
 	testYayinEkle(t, havuz, testYayin{SahipID: yabanci})
 	testYayinEkle(t, havuz, testYayin{SahipID: ben})
 
-	got := tumSayfalar(t, func(im *ZamanImleci) ([]YayinOzeti, error) { return d.FeedFollowing(ctx, ben, im, 20) }, 20)
+	got := tumSayfalar(t, func(im *TimeCursor) ([]PublicationSummary, error) { return d.FeedFollowing(ctx, ben, im, 20) }, 20)
 	esitSira(t, "takip", got, []string{herkes, takipcilere})
 }
 
@@ -106,14 +106,14 @@ func TestPostgresDepo_ProfilYayinlari(t *testing.T) {
 	ctx := context.Background()
 	t0 := time.Now().Add(-time.Hour)
 	herkes := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Olusturma: t0.Add(5 * time.Minute)})
-	takipcilere := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Gorunurluk: GorunurlukTakipciler, Olusturma: t0.Add(4 * time.Minute)})
-	link := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Gorunurluk: GorunurlukLink, Olusturma: t0.Add(3 * time.Minute)})
-	hazirlanan := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Durum: DurumHazirlaniyor, Olusturma: t0.Add(2 * time.Minute)})
+	takipcilere := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Gorunurluk: VisibilityFollowers, Olusturma: t0.Add(4 * time.Minute)})
+	link := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Gorunurluk: VisibilityLink, Olusturma: t0.Add(3 * time.Minute)})
+	hazirlanan := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Durum: StatusPreparing, Olusturma: t0.Add(2 * time.Minute)})
 	testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Silindi: true})
 	cover := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, KaynakID: herkes, Olusturma: t0.Add(time.Minute)})
 
 	liste := func(izleyici string, coverlar bool) []string {
-		return tumSayfalar(t, func(im *ZamanImleci) ([]YayinOzeti, error) {
+		return tumSayfalar(t, func(im *TimeCursor) ([]PublicationSummary, error) {
 			return d.ListProfilePublications(ctx, takipEdilen, izleyici, coverlar, im, 2)
 		}, 2)
 	}
@@ -123,7 +123,7 @@ func TestPostgresDepo_ProfilYayinlari(t *testing.T) {
 	esitSira(t, "coverlar", liste(yabanci, true), []string{cover})
 
 	ogeler, _ := d.ListProfilePublications(ctx, takipEdilen, yabanci, true, nil, 20)
-	if ogeler[0].Kaynak == nil || ogeler[0].Kaynak.YayinID != herkes || ogeler[0].Sahip.KullaniciAdi != "takip_edilen" {
+	if ogeler[0].Source == nil || ogeler[0].Source.PublicationID != herkes || ogeler[0].Owner.Username != "takip_edilen" {
 		t.Fatalf("cover ozeti = %+v", ogeler[0])
 	}
 }
@@ -155,7 +155,7 @@ func TestPostgresDepo_AkisSeninIcinPuanVeSayfalama(t *testing.T) {
 	// Akisa girmeyenler: kendi yayinim, referanstan sonra olusan, herkes olmayan.
 	testYayinEkle(t, havuz, testYayin{SahipID: ben, Olusturma: referans.Add(-time.Hour)})
 	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Olusturma: referans.Add(time.Minute)})
-	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Gorunurluk: GorunurlukLink, Olusturma: referans.Add(-time.Hour)})
+	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Gorunurluk: VisibilityLink, Olusturma: referans.Add(-time.Hour)})
 
 	hepsi, err := d.FeedForYou(ctx, ben, referans, nil, 50)
 	if err != nil {
@@ -174,7 +174,7 @@ func TestPostgresDepo_AkisSeninIcinPuanVeSayfalama(t *testing.T) {
 	// Tek ogelik sayfalarla ayni sira, tekrar yok.
 	var (
 		gezilen []string
-		imlec   *PuanImleci
+		imlec   *ScoreCursor
 	)
 	for i := 0; i < 5; i++ {
 		ogeler, err := d.FeedForYou(ctx, ben, referans, imlec, 1)
@@ -185,7 +185,7 @@ func TestPostgresDepo_AkisSeninIcinPuanVeSayfalama(t *testing.T) {
 		if len(ogeler) == 1 {
 			break
 		}
-		imlec = &PuanImleci{P: ogeler[0].Score, ID: ogeler[0].ID, N: referans.UnixMilli()}
+		imlec = &ScoreCursor{Score: ogeler[0].Score, ID: ogeler[0].ID, RefMs: referans.UnixMilli()}
 	}
 	esitSira(t, "senin icin sayfalari", gezilen, []string{populer, sakin, eski})
 }
@@ -203,8 +203,8 @@ func TestPostgresDepo_Begeni(t *testing.T) {
 		}
 	}
 	k, _ := d.GetPublication(ctx, id, ben)
-	if k.BegeniSayisi != 1 || !k.BegendimMi {
-		t.Fatalf("begeni tekrari guvenli olmali: %d %v", k.BegeniSayisi, k.BegendimMi)
+	if k.LikeCount != 1 || !k.LikedByMe {
+		t.Fatalf("begeni tekrari guvenli olmali: %d %v", k.LikeCount, k.LikedByMe)
 	}
 	for i := 0; i < 2; i++ {
 		if err := d.Unlike(ctx, ben, id); err != nil {
@@ -212,7 +212,7 @@ func TestPostgresDepo_Begeni(t *testing.T) {
 		}
 	}
 	k, _ = d.GetPublication(ctx, id, ben)
-	if k.BegeniSayisi != 0 || k.BegendimMi {
-		t.Fatalf("begeni kaldirilmali: %d %v", k.BegeniSayisi, k.BegendimMi)
+	if k.LikeCount != 0 || k.LikedByMe {
+		t.Fatalf("begeni kaldirilmali: %d %v", k.LikeCount, k.LikedByMe)
 	}
 }

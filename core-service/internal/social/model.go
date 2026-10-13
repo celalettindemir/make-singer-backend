@@ -2,57 +2,58 @@ package social
 
 import "time"
 
-// ProfilOzeti, sozlesme §4.1. avatarRengi saklanmaz, kullanici
-// kimliginden turetilir (AvatarRengi).
-type ProfilOzeti struct {
-	KullaniciAdi string `json:"kullaniciAdi"`
-	GorunenAd    string `json:"gorunenAd"`
-	AvatarRengi  int    `json:"avatarRengi"`
+// ProfileSummary is contract §4.1. avatarRengi is not stored; it is derived
+// from the user ID (AvatarColor).
+type ProfileSummary struct {
+	Username    string `json:"kullaniciAdi"`
+	DisplayName string `json:"gorunenAd"`
+	AvatarColor int    `json:"avatarRengi"`
 }
 
-// Istatistik, profildeki sayaclar. sarki/cover yalnizca izleyicinin
-// gorebildigi, yayinda olan ve silinmemis yayinlari sayar.
-type Istatistik struct {
-	Sarki   int `json:"sarki"`
-	Takipci int `json:"takipci"`
-	Takip   int `json:"takip"`
-	Cover   int `json:"cover"`
+// Stats are the counters on a profile. songs/covers count only publications
+// that the viewer can see, that are published and not deleted.
+type Stats struct {
+	Songs     int `json:"sarki"`
+	Followers int `json:"takipci"`
+	Following int `json:"takip"`
+	Covers    int `json:"cover"`
 }
 
-// Profil, sozlesme §4.1.
-type Profil struct {
-	ProfilOzeti
-	Bio              string     `json:"bio"`
-	Istatistik       Istatistik `json:"istatistik"`
-	TakipEdiyorMuyum bool       `json:"takipEdiyorMuyum"`
-	BenMiyim         bool       `json:"benMiyim"`
-}
-
-// ProfilGirdisi, PUT /profil/ben govdesi.
-type ProfilGirdisi struct {
-	KullaniciAdi string `json:"kullaniciAdi"`
-	GorunenAd    string `json:"gorunenAd"`
+// Profile is contract §4.1.
+type Profile struct {
+	ProfileSummary
 	Bio          string `json:"bio"`
+	Stats        Stats  `json:"istatistik"`
+	FollowedByMe bool   `json:"takipEdiyorMuyum"`
+	IsMe         bool   `json:"benMiyim"`
 }
 
-// AdUygunlugu, GET /profil/kullanici-adi/uygun yaniti. Oneri, ad
-// alinmissa ve uygun bir sayi eki bulunduysa doludur; aksi halde null.
-type AdUygunlugu struct {
-	Uygun bool    `json:"uygun"`
-	Oneri *string `json:"oneri"`
+// ProfileInput is the PUT /profil/ben body.
+type ProfileInput struct {
+	Username    string `json:"kullaniciAdi"`
+	DisplayName string `json:"gorunenAd"`
+	Bio         string `json:"bio"`
 }
 
-// ProfilKaydi, sosyal.profil satiri.
-type ProfilKaydi struct {
-	KullaniciID  string
-	KullaniciAdi string
-	GorunenAd    string
-	Bio          string
-	Olusturma    time.Time
+// UsernameAvailability is the GET /profil/kullanici-adi/uygun response.
+// Suggestion is set when the name is taken and a free numeric suffix was
+// found; otherwise it is null.
+type UsernameAvailability struct {
+	Available  bool    `json:"uygun"`
+	Suggestion *string `json:"oneri"`
 }
 
-// ProfilSayilari, bir profilin izleyiciye gore sayaclari.
-type ProfilSayilari struct {
-	Istatistik       Istatistik
-	TakipEdiyorMuyum bool
+// ProfileRecord is a sosyal.profil row.
+type ProfileRecord struct {
+	UserID      string
+	Username    string
+	DisplayName string
+	Bio         string
+	CreatedAt   time.Time
+}
+
+// ProfileCounts are a profile's counters as seen by the viewer.
+type ProfileCounts struct {
+	Stats        Stats
+	FollowedByMe bool
 }

@@ -16,7 +16,7 @@ func TestSosyal_TakipYaniti(t *testing.T) {
 		yontem string
 		takip  bool
 	}{{http.MethodPut, true}, {http.MethodDelete, false}} {
-		s := &sahteSosyal{takip: &social.TakipDurumu{Takipci: 4, TakipEdiyorMuyum: d.takip}}
+		s := &sahteSosyal{takip: &social.FollowStatus{Followers: 4, FollowedByMe: d.takip}}
 		durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), d.yontem, "/api/social/profiller/ayse/takip", "")
 		if durum != http.StatusOK || govde["takipci"] != float64(4) || govde["takipEdiyorMuyum"] != d.takip {
 			t.Fatalf("%s: durum=%d govde=%v", d.yontem, durum, govde)
@@ -44,13 +44,13 @@ func TestSosyal_TakipProfilYok404(t *testing.T) {
 }
 
 func TestSosyal_OnerilerDizi(t *testing.T) {
-	s := &sahteSosyal{oneriler: []social.ProfilOzeti{{KullaniciAdi: "ayse", GorunenAd: "Ayse", AvatarRengi: 2}}}
+	s := &sahteSosyal{oneriler: []social.ProfileSummary{{Username: "ayse", DisplayName: "Ayse", AvatarColor: 2}}}
 	app := sosyalUygulamasi(s, sosyalKullanici)
 	durum, ham := sosyalHamIstek(t, app, http.MethodGet, "/api/social/oneriler", "")
 	if durum != http.StatusOK || ham != `[{"kullaniciAdi":"ayse","gorunenAd":"Ayse","avatarRengi":2}]` {
 		t.Fatalf("durum=%d govde=%s", durum, ham)
 	}
-	s.oneriler = []social.ProfilOzeti{}
+	s.oneriler = []social.ProfileSummary{}
 	if _, ham := sosyalHamIstek(t, app, http.MethodGet, "/api/social/oneriler", ""); ham != `[]` {
 		t.Fatalf("bos oneri [] olmali: %s", ham)
 	}

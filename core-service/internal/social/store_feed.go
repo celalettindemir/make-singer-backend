@@ -14,14 +14,14 @@ import (
 type FeedStore interface {
 	// ListProfilePublications lists the owner's originals or covers, newest
 	// first, limited to what the viewer may see.
-	ListProfilePublications(ctx context.Context, ownerID, viewerID string, covers bool, cursor *ZamanImleci, limit int) ([]YayinOzeti, error)
+	ListProfilePublications(ctx context.Context, ownerID, viewerID string, covers bool, cursor *TimeCursor, limit int) ([]PublicationSummary, error)
 	// FeedNew: everyone-visible, published, non-deleted; newest first.
-	FeedNew(ctx context.Context, viewerID string, cursor *ZamanImleci, limit int) ([]YayinOzeti, error)
+	FeedNew(ctx context.Context, viewerID string, cursor *TimeCursor, limit int) ([]PublicationSummary, error)
 	// FeedFollowing: the everyone and followers publications of the followees.
-	FeedFollowing(ctx context.Context, viewerID string, cursor *ZamanImleci, limit int) ([]YayinOzeti, error)
+	FeedFollowing(ctx context.Context, viewerID string, cursor *TimeCursor, limit int) ([]PublicationSummary, error)
 	// FeedForYou: everyone-visible publications not owned by the viewer, by
 	// descending score relative to the reference time.
-	FeedForYou(ctx context.Context, viewerID string, reference time.Time, cursor *PuanImleci, limit int) ([]ScoredSummary, error)
+	FeedForYou(ctx context.Context, viewerID string, reference time.Time, cursor *ScoreCursor, limit int) ([]ScoredSummary, error)
 }
 
 // LikeStore covers the operations on sosyal.begeni. Both are safe to repeat.
@@ -32,14 +32,14 @@ type LikeStore interface {
 
 // ScoredSummary is a feed item ordered by score; the score goes into the cursor.
 type ScoredSummary struct {
-	YayinOzeti
+	PublicationSummary
 	Score float64
 }
 
 // timePage fetches a page in descending time order with the given condition
 // and parameters, where $1 is the viewer. The cursor parameters are appended
 // at the end.
-func (s *PostgresStore) timePage(ctx context.Context, condition string, cursor *ZamanImleci, limit int, args ...any) ([]YayinOzeti, error) {
+func (s *PostgresStore) timePage(ctx context.Context, condition string, cursor *TimeCursor, limit int, args ...any) ([]PublicationSummary, error) {
 	var cursorTime, cursorID any
 	if cursor != nil {
 		cursorTime, cursorID = cursor.T, cursor.ID
@@ -58,9 +58,9 @@ func (s *PostgresStore) timePage(ctx context.Context, condition string, cursor *
 	return scanSummaries(rows)
 }
 
-func scanSummaries(rows pgx.Rows) ([]YayinOzeti, error) {
+func scanSummaries(rows pgx.Rows) ([]PublicationSummary, error) {
 	defer rows.Close()
-	items := []YayinOzeti{}
+	items := []PublicationSummary{}
 	for rows.Next() {
 		var sc summaryScanner
 		if err := rows.Scan(sc.targets()...); err != nil {
@@ -71,17 +71,17 @@ func scanSummaries(rows pgx.Rows) ([]YayinOzeti, error) {
 	return items, rows.Err()
 }
 
-func (s *PostgresStore) ListProfilePublications(ctx context.Context, ownerID, viewerID string, covers bool, cursor *ZamanImleci, limit int) ([]YayinOzeti, error) {
-	condition := `y.sahip_id = $2 AND (y.kaynak_yayin_id IS NOT NULL) = $3 AND ` + gorunurlukKosulu("y", "$1", false)
+func (s *PostgresStore) ListProfilePublications(ctx context.Context, ownerID, viewerID string, covers bool, cursor *TimeCursor, limit int) ([]PublicationSummary, error) {
+	condition := `y.sahip_id = $2 AND (y.kaynak_yayin_id IS NOT NULL) = $3 AND ` + visibilityCondition("y", "$1", false)
 	return s.timePage(ctx, condition, cursor, limit, viewerID, ownerID, covers)
 }
 
-func (s *PostgresStore) FeedNew(ctx context.Context, viewerID string, cursor *ZamanImleci, limit int) ([]YayinOzeti, error) {
+func (s *PostgresStore) FeedNew(ctx context.Context, viewerID string, cursor *TimeCursor, limit int) ([]PublicationSummary, error) {
 	condition := `y.gorunurluk = 'herkes' AND y.durum = 'yayinda' AND y.silinme IS NULL`
 	return s.timePage(ctx, condition, cursor, limit, viewerID)
 }
 
-func (s *PostgresStore) FeedFollowing(ctx context.Context, viewerID string, cursor *ZamanImleci, limit int) ([]YayinOzeti, error) {
+func (s *PostgresStore) FeedFollowing(ctx context.Context, viewerID string, cursor *TimeCursor, limit int) ([]PublicationSummary, error) {
 	condition := `y.gorunurluk IN ('herkes', 'takipciler') AND y.durum = 'yayinda' AND y.silinme IS NULL
 		AND EXISTS (SELECT 1 FROM sosyal.takip tk WHERE tk.takipci_id = $1 AND tk.takip_edilen_id = y.sahip_id)`
 	return s.timePage(ctx, condition, cursor, limit, viewerID)
@@ -105,10 +105,10 @@ const scoreExpr = `
 	)::float8
 	/ power(extract(epoch FROM ($2::timestamptz - y.olusturma))::float8 / 3600.0 + 2, 1.5)`
 
-func (s *PostgresStore) FeedForYou(ctx context.Context, viewerID string, reference time.Time, cursor *PuanImleci, limit int) ([]ScoredSummary, error) {
+func (s *PostgresStore) FeedForYou(ctx context.Context, viewerID string, reference time.Time, cursor *ScoreCursor, limit int) ([]ScoredSummary, error) {
 	var cursorScore, cursorID any
 	if cursor != nil {
-		cursorScore, cursorID = cursor.P, cursor.ID
+		cursorScore, cursorID = cursor.Score, cursor.ID
 	}
 	// A publication created after the reference is excluded from this feed
 	// session: its score would be undefined (negative hours) and the pages
@@ -137,7 +137,7 @@ func (s *PostgresStore) FeedForYou(ctx context.Context, viewerID string, referen
 		if err := rows.Scan(append(sc.targets(), &score, &rankID)...); err != nil {
 			return nil, fmt.Errorf("akis ogesi okunamadi: %w", err)
 		}
-		items = append(items, ScoredSummary{YayinOzeti: sc.summary(), Score: score})
+		items = append(items, ScoredSummary{PublicationSummary: sc.summary(), Score: score})
 	}
 	return items, rows.Err()
 }

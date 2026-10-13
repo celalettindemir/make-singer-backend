@@ -12,7 +12,7 @@ func (h *SosyalHandler) Akis(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	sayfa, err := h.servis.Akis(c.Context(), userID, c.Query("sekme"), c.Query("imlec"), social.SayfaBoyutu(c.Query("limit")))
+	sayfa, err := h.servis.Feed(c.Context(), userID, c.Query("sekme"), c.Query("imlec"), social.PageSize(c.Query("limit")))
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -25,8 +25,8 @@ func (h *SosyalHandler) ProfilYayinlari(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	sayfa, err := h.servis.ProfilYayinlari(c.Context(), userID, c.Params("ad"), c.Query("tur"),
-		c.Query("imlec"), social.SayfaBoyutu(c.Query("limit")))
+	sayfa, err := h.servis.ProfilePublications(c.Context(), userID, c.Params("ad"), c.Query("tur"),
+		c.Query("imlec"), social.PageSize(c.Query("limit")))
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -48,7 +48,7 @@ func (h *SosyalHandler) begeni(c *fiber.Ctx, begen bool) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	b, err := h.servis.Begeni(c.Context(), userID, c.Params("id"), begen)
+	b, err := h.servis.SetLike(c.Context(), userID, c.Params("id"), begen)
 	if err != nil {
 		return sosyalHata(c, err)
 	}

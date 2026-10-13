@@ -5,11 +5,11 @@ import "testing"
 func TestSlugUret_BicimVeCesitlilik(t *testing.T) {
 	gorulen := map[string]bool{}
 	for i := 0; i < 200; i++ {
-		s, err := slugUret()
+		s, err := generateSlug()
 		if err != nil {
 			t.Fatalf("slugUret: %v", err)
 		}
-		if !SlugGecerli(s) {
+		if !ValidSlug(s) {
 			t.Fatalf("gecersiz slug %q", s)
 		}
 		gorulen[s] = true
@@ -21,11 +21,11 @@ func TestSlugUret_BicimVeCesitlilik(t *testing.T) {
 
 func TestSlugGecerli(t *testing.T) {
 	for _, s := range []string{"", "abc", "abcdefg!", "abcdefghi", "abcd-efg"} {
-		if SlugGecerli(s) {
+		if ValidSlug(s) {
 			t.Errorf("%q gecersiz olmali", s)
 		}
 	}
-	if !SlugGecerli("Ab3dEf9h") {
+	if !ValidSlug("Ab3dEf9h") {
 		t.Error("Ab3dEf9h gecerli olmali")
 	}
 }

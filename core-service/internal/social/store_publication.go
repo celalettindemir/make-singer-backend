@@ -14,15 +14,15 @@ type PublicationStore interface {
 	// InsertPublication writes the publication in the preparing status. If the
 	// slug belongs to another publication it returns errSlugConflict; the
 	// service retries with a new slug.
-	InsertPublication(ctx context.Context, input YeniYayin) error
+	InsertPublication(ctx context.Context, input PublicationInsert) error
 	// GetPublication and GetPublicationBySlug return the publication with
 	// counters as seen by the viewer. A deleted publication is returned too
 	// (Deleted true); if missing, ErrNotFound.
-	GetPublication(ctx context.Context, id, viewerID string) (*YayinKaydi, error)
-	GetPublicationBySlug(ctx context.Context, slug, viewerID string) (*YayinKaydi, error)
+	GetPublication(ctx context.Context, id, viewerID string) (*PublicationRecord, error)
+	GetPublicationBySlug(ctx context.Context, slug, viewerID string) (*PublicationRecord, error)
 	// UpdatePublication changes only the filled fields of the owner's
 	// non-deleted publication. If there is no row, ErrNotFound.
-	UpdatePublication(ctx context.Context, id, ownerID string, patch YayinYamasi) error
+	UpdatePublication(ctx context.Context, id, ownerID string, patch PublicationPatch) error
 	// DeletePublication soft-deletes (silinme = now()). If there is no row,
 	// the caller is not the owner, or it is already deleted, ErrNotFound.
 	DeletePublication(ctx context.Context, id, ownerID string) error
@@ -38,11 +38,11 @@ type PublicationStore interface {
 // PreparationStore holds the operations used by the sosyal:hazirla job.
 type PreparationStore interface {
 	// GetPreparation returns the row, or ErrNotFound.
-	GetPreparation(ctx context.Context, id string) (*HazirlikKaydi, error)
+	GetPreparation(ctx context.Context, id string) (*PreparationRecord, error)
 	// Publish moves a non-deleted publication in the preparing status to
 	// published with the result. If the status has changed (deleted, already
 	// published) it does nothing.
-	Publish(ctx context.Context, id string, result HazirlikSonucu) error
+	Publish(ctx context.Context, id string, result PreparationResult) error
 	// MarkFailed marks a publication in the preparing status as failed.
 	MarkFailed(ctx context.Context, id string) error
 }
@@ -74,7 +74,7 @@ const summaryFrom = `
 
 // summaryScanner holds the scan destinations of the summarySelect columns.
 type summaryScanner struct {
-	base            YayinOzeti
+	base            PublicationSummary
 	ownerID         string
 	sourceID        *string
 	sourceTitle     string
@@ -90,45 +90,45 @@ type summaryScanner struct {
 
 func (sc *summaryScanner) targets() []any {
 	return []any{
-		&sc.base.ID, &sc.base.Slug, &sc.base.Baslik, &sc.ownerID, &sc.base.Sahip.KullaniciAdi, &sc.base.Sahip.GorunenAd,
-		&sc.base.Tur, &sc.base.Bpm, &sc.tonic, &sc.mode, &sc.base.SureSn, &sc.waveform, &sc.base.AltyapiAcik,
+		&sc.base.ID, &sc.base.Slug, &sc.base.Title, &sc.ownerID, &sc.base.Owner.Username, &sc.base.Owner.DisplayName,
+		&sc.base.Genre, &sc.base.BPM, &sc.tonic, &sc.mode, &sc.base.DurationSec, &sc.waveform, &sc.base.BackingEnabled,
 		&sc.sourceID, &sc.sourceTitle, &sc.sourceUsername, &sc.sourceDeleted,
 		&sc.createdAt, &sc.likes, &sc.comments, &sc.covers, &sc.likedByMe,
 	}
 }
 
-func (sc *summaryScanner) summary() YayinOzeti {
+func (sc *summaryScanner) summary() PublicationSummary {
 	out := sc.base
-	out.Sahip.AvatarRengi = AvatarRengi(sc.ownerID)
-	out.Ton = Ton{Tonik: sc.tonic, Mod: sc.mode}
-	out.DalgaFormu = sc.waveform
-	if out.DalgaFormu == nil {
-		out.DalgaFormu = []float64{}
+	out.Owner.AvatarColor = AvatarColor(sc.ownerID)
+	out.MusicalKey = MusicalKey{Tonic: sc.tonic, Mode: sc.mode}
+	out.Waveform = sc.waveform
+	if out.Waveform == nil {
+		out.Waveform = []float64{}
 	}
-	out.BegeniSayisi, out.YorumSayisi, out.CoverSayisi, out.BegendimMi = sc.likes, sc.comments, sc.covers, sc.likedByMe
-	out.Olusturma = sc.createdAt.UTC()
+	out.LikeCount, out.CommentCount, out.CoverCount, out.LikedByMe = sc.likes, sc.comments, sc.covers, sc.likedByMe
+	out.CreatedAt = sc.createdAt.UTC()
 	if sc.sourceID != nil {
-		out.Kaynak = &KaynakOzeti{
-			YayinID: *sc.sourceID, Baslik: sc.sourceTitle,
-			SahipKullaniciAdi: sc.sourceUsername, Silindi: sc.sourceDeleted,
+		out.Source = &SourceSummary{
+			PublicationID: *sc.sourceID, Title: sc.sourceTitle,
+			OwnerUsername: sc.sourceUsername, Deleted: sc.sourceDeleted,
 		}
 	}
 	return out
 }
 
 // getPublication runs the detail query with the given condition ($2).
-func (s *PostgresStore) getPublication(ctx context.Context, condition, value, viewerID string) (*YayinKaydi, error) {
+func (s *PostgresStore) getPublication(ctx context.Context, condition, value, viewerID string) (*PublicationRecord, error) {
 	var (
 		sc        summaryScanner
-		record    YayinKaydi
-		lyrics    Sozler
-		structure []YapiOgesi
+		record    PublicationRecord
+		lyrics    Lyrics
+		structure []StructureItem
 		master    *string
 		hasStems  bool
 	)
 	dests := append(sc.targets(),
-		&record.Aciklama, &record.YorumAcik, &lyrics, &structure, &record.Durum, &record.Gorunurluk,
-		&record.Silindi, &hasStems, &master, &record.TakipEdiyor)
+		&record.Description, &record.CommentsEnabled, &lyrics, &structure, &record.Status, &record.Visibility,
+		&record.Deleted, &hasStems, &master, &record.ViewerFollows)
 	err := s.pool.QueryRow(ctx, `
 		SELECT `+summarySelect+`,
 		  y.aciklama, y.yorum_acik, y.sozler, y.yapi, y.durum, y.gorunurluk,
@@ -144,47 +144,47 @@ func (s *PostgresStore) getPublication(ctx context.Context, condition, value, vi
 	if err != nil {
 		return nil, fmt.Errorf("yayin okunamadi: %w", err)
 	}
-	record.YayinOzeti = sc.summary()
-	record.SahipID = sc.ownerID
+	record.PublicationSummary = sc.summary()
+	record.OwnerID = sc.ownerID
 	if sc.sourceID != nil {
-		record.KaynakYayinID = *sc.sourceID
+		record.SourcePublicationID = *sc.sourceID
 	}
-	record.Sozler = lyrics
-	if record.Sozler.Bolumler == nil {
-		record.Sozler.Bolumler = []SozBolumu{}
+	record.Lyrics = lyrics
+	if record.Lyrics.Sections == nil {
+		record.Lyrics.Sections = []LyricsSection{}
 	}
-	for i := range record.Sozler.Bolumler {
-		if record.Sozler.Bolumler[i].Satirlar == nil {
-			record.Sozler.Bolumler[i].Satirlar = []string{}
+	for i := range record.Lyrics.Sections {
+		if record.Lyrics.Sections[i].Lines == nil {
+			record.Lyrics.Sections[i].Lines = []string{}
 		}
 	}
-	record.Yapi = structure
-	if record.Yapi == nil {
-		record.Yapi = []YapiOgesi{}
+	record.Structure = structure
+	if record.Structure == nil {
+		record.Structure = []StructureItem{}
 	}
-	record.StemVar = hasStems
+	record.HasStems = hasStems
 	if master != nil {
-		record.MasterAnahtari = *master
+		record.MasterKey = *master
 	}
-	record.BenimMi = record.SahipID == viewerID
+	record.IsMine = record.OwnerID == viewerID
 	return &record, nil
 }
 
-func (s *PostgresStore) GetPublication(ctx context.Context, id, viewerID string) (*YayinKaydi, error) {
+func (s *PostgresStore) GetPublication(ctx context.Context, id, viewerID string) (*PublicationRecord, error) {
 	return s.getPublication(ctx, "y.id", id, viewerID)
 }
 
-func (s *PostgresStore) GetPublicationBySlug(ctx context.Context, slug, viewerID string) (*YayinKaydi, error) {
+func (s *PostgresStore) GetPublicationBySlug(ctx context.Context, slug, viewerID string) (*PublicationRecord, error) {
 	return s.getPublication(ctx, "y.slug", slug, viewerID)
 }
 
-func (s *PostgresStore) InsertPublication(ctx context.Context, input YeniYayin) error {
+func (s *PostgresStore) InsertPublication(ctx context.Context, input PublicationInsert) error {
 	var source any
-	if input.KaynakYayinID != "" {
-		source = input.KaynakYayinID
+	if input.SourcePublicationID != "" {
+		source = input.SourcePublicationID
 	}
-	if input.Hazirlik.Stems == nil {
-		input.Hazirlik.Stems = []HazirlikStemi{}
+	if input.Preparation.Stems == nil {
+		input.Preparation.Stems = []PreparationStem{}
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO sosyal.yayin (id, slug, sahip_id, baslik, aciklama, tur, bpm, ton_tonik, ton_mod,
@@ -192,11 +192,11 @@ func (s *PostgresStore) InsertPublication(ctx context.Context, input YeniYayin) 
 			kaynak_yayin_id, kaynak_baslik, kaynak_sahip_adi, durum)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
 			$17, NULLIF($18, ''), NULLIF($19, ''), 'hazirlaniyor')`,
-		input.ID, input.Slug, input.SahipID, input.Baslik, input.Aciklama, input.Tur, input.Bpm, input.Ton.Tonik, input.Ton.Mod,
-		input.SureSn, input.Gorunurluk, input.AltyapiAcik, input.YorumAcik, input.Sozler, input.Yapi, input.Hazirlik,
-		source, input.KaynakBaslik, input.KaynakSahipAdi)
+		input.ID, input.Slug, input.OwnerID, input.Title, input.Description, input.Genre, input.BPM, input.MusicalKey.Tonic, input.MusicalKey.Mode,
+		input.DurationSec, input.Visibility, input.BackingEnabled, input.CommentsEnabled, input.Lyrics, input.Structure, input.Preparation,
+		source, input.SourceTitle, input.SourceOwnerUsername)
 	if constraint, ok := uniqueViolation(err); ok && constraint == "yayin_slug_key" {
-		return errSlugCakisti
+		return errSlugConflict
 	}
 	if err != nil {
 		return fmt.Errorf("yayin eklenemedi: %w", err)
@@ -204,7 +204,7 @@ func (s *PostgresStore) InsertPublication(ctx context.Context, input YeniYayin) 
 	return nil
 }
 
-func (s *PostgresStore) UpdatePublication(ctx context.Context, id, ownerID string, patch YayinYamasi) error {
+func (s *PostgresStore) UpdatePublication(ctx context.Context, id, ownerID string, patch PublicationPatch) error {
 	result, err := s.pool.Exec(ctx, `
 		UPDATE sosyal.yayin
 		   SET aciklama     = COALESCE($3, aciklama),
@@ -212,7 +212,7 @@ func (s *PostgresStore) UpdatePublication(ctx context.Context, id, ownerID strin
 		       gorunurluk   = COALESCE($5, gorunurluk),
 		       yorum_acik   = COALESCE($6, yorum_acik)
 		 WHERE id = $1 AND sahip_id = $2 AND silinme IS NULL`,
-		id, ownerID, patch.Aciklama, patch.AltyapiAcik, patch.Gorunurluk, patch.YorumAcik)
+		id, ownerID, patch.Description, patch.BackingEnabled, patch.Visibility, patch.CommentsEnabled)
 	if err != nil {
 		return fmt.Errorf("yayin guncellenemedi: %w", err)
 	}
@@ -264,12 +264,12 @@ func (s *PostgresStore) ResetForRetry(ctx context.Context, id, ownerID string) e
 	return ErrNotFound
 }
 
-func (s *PostgresStore) GetPreparation(ctx context.Context, id string) (*HazirlikKaydi, error) {
-	var record HazirlikKaydi
+func (s *PostgresStore) GetPreparation(ctx context.Context, id string) (*PreparationRecord, error) {
+	var record PreparationRecord
 	err := s.pool.QueryRow(ctx, `
 		SELECT id::text, sahip_id::text, durum, silinme IS NOT NULL, hazirlik
 		  FROM sosyal.yayin WHERE id = $1`, id,
-	).Scan(&record.ID, &record.SahipID, &record.Durum, &record.Silindi, &record.Hazirlik)
+	).Scan(&record.ID, &record.OwnerID, &record.Status, &record.Deleted, &record.Preparation)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -279,12 +279,12 @@ func (s *PostgresStore) GetPreparation(ctx context.Context, id string) (*Hazirli
 	return &record, nil
 }
 
-func (s *PostgresStore) Publish(ctx context.Context, id string, result HazirlikSonucu) error {
-	stems := result.StemListesi
+func (s *PostgresStore) Publish(ctx context.Context, id string, result PreparationResult) error {
+	stems := result.Stems
 	if stems == nil {
-		stems = []StemKaydi{}
+		stems = []StemRecord{}
 	}
-	waveform := result.DalgaFormu
+	waveform := result.Waveform
 	if waveform == nil {
 		waveform = []float64{}
 	}
@@ -293,7 +293,7 @@ func (s *PostgresStore) Publish(ctx context.Context, id string, result HazirlikS
 		   SET durum = 'yayinda', master_anahtari = $2, stem_listesi = $3,
 		       dalga_formu = $4, onizleme_anahtari = NULLIF($5, '')
 		 WHERE id = $1 AND durum = 'hazirlaniyor' AND silinme IS NULL`,
-		id, result.MasterAnahtari, stems, waveform, result.OnizlemeAnahtari)
+		id, result.MasterKey, stems, waveform, result.PreviewKey)
 	if err != nil {
 		return fmt.Errorf("yayin yayinlanamadi: %w", err)
 	}

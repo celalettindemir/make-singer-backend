@@ -7,29 +7,29 @@ import (
 	"github.com/makeasinger/api/internal/client"
 )
 
-// uzantiDeseni, segment desenindeki uzanti kuraliyla aynidir.
-var uzantiDeseni = regexp.MustCompile(`^\.[a-z0-9]{1,5}$`)
+// extensionPattern is the same extension rule as the segment pattern.
+var extensionPattern = regexp.MustCompile(`^\.[a-z0-9]{1,5}$`)
 
-// uzanti, kaynak anahtarin uzantisini doner; desene uymuyorsa bos.
-func uzanti(kaynak string) string {
-	u := path.Ext(kaynak)
-	if !uzantiDeseni.MatchString(u) {
+// extension returns the source key's extension, or empty if it does not match the pattern.
+func extension(source string) string {
+	ext := path.Ext(source)
+	if !extensionPattern.MatchString(ext) {
 		return ""
 	}
-	return u
+	return ext
 }
 
-// MasterHedefi, master kopyasinin anahtaridir: sosyal/{id}/master.{ext}.
-func MasterHedefi(yayinID, kaynak string) (string, error) {
-	return client.SocialKey(yayinID, "master"+uzanti(kaynak))
+// MasterDestKey is the key of the master copy: sosyal/{id}/master.{ext}.
+func MasterDestKey(pubID, source string) (string, error) {
+	return client.SocialKey(pubID, "master"+extension(source))
 }
 
-// StemHedefi, stem kopyasinin anahtaridir: sosyal/{id}/stems/{stemId}.{ext}.
-func StemHedefi(yayinID, stemID, kaynak string) (string, error) {
-	return client.SocialKey(yayinID, "stems", stemID+uzanti(kaynak))
+// StemDestKey is the key of a stem copy: sosyal/{id}/stems/{stemId}.{ext}.
+func StemDestKey(pubID, stemID, source string) (string, error) {
+	return client.SocialKey(pubID, "stems", stemID+extension(source))
 }
 
-// OnizlemeHedefi, 30 sn onizlemenin anahtaridir: sosyal/{id}/onizleme.mp3.
-func OnizlemeHedefi(yayinID string) (string, error) {
-	return client.SocialKey(yayinID, "onizleme.mp3")
+// PreviewDestKey is the key of the 30 s preview: sosyal/{id}/onizleme.mp3.
+func PreviewDestKey(pubID string) (string, error) {
+	return client.SocialKey(pubID, "onizleme.mp3")
 }

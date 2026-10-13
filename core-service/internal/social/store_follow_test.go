@@ -35,11 +35,11 @@ func TestPostgresDepo_TakipTekrariGuvenli(t *testing.T) {
 		t.Fatal(err)
 	}
 	durum, err := d.FollowStatus(ctx, a, b)
-	if err != nil || durum.Takipci != 2 || !durum.TakipEdiyorMuyum {
+	if err != nil || durum.Followers != 2 || !durum.FollowedByMe {
 		t.Fatalf("durum = %+v, %v", durum, err)
 	}
 	ters, err := d.FollowStatus(ctx, b, a)
-	if err != nil || ters.Takipci != 0 || ters.TakipEdiyorMuyum {
+	if err != nil || ters.Followers != 0 || ters.FollowedByMe {
 		t.Fatalf("ters yon = %+v, %v", ters, err)
 	}
 	for i := 0; i < 2; i++ {
@@ -48,7 +48,7 @@ func TestPostgresDepo_TakipTekrariGuvenli(t *testing.T) {
 		}
 	}
 	durum, err = d.FollowStatus(ctx, a, b)
-	if err != nil || durum.Takipci != 1 || durum.TakipEdiyorMuyum {
+	if err != nil || durum.Followers != 1 || durum.FollowedByMe {
 		t.Fatalf("birakmadan sonra = %+v, %v", durum, err)
 	}
 	if err := d.Follow(ctx, a, a); err == nil {
@@ -98,10 +98,10 @@ func TestPostgresDepo_Oneriler(t *testing.T) {
 	begen(y, 1, simdi)
 
 	testYayinEkle(t, havuz, testYayin{SahipID: sifir, Olusturma: simdi.Add(-time.Hour)})
-	begen(testYayinEkle(t, havuz, testYayin{SahipID: takipcili, Gorunurluk: GorunurlukTakipciler}), 3, simdi)
-	begen(testYayinEkle(t, havuz, testYayin{SahipID: linkci, Gorunurluk: GorunurlukLink}), 20, simdi)
+	begen(testYayinEkle(t, havuz, testYayin{SahipID: takipcili, Gorunurluk: VisibilityFollowers}), 3, simdi)
+	begen(testYayinEkle(t, havuz, testYayin{SahipID: linkci, Gorunurluk: VisibilityLink}), 20, simdi)
 	begen(testYayinEkle(t, havuz, testYayin{SahipID: silinmis, Silindi: true}), 20, simdi)
-	begen(testYayinEkle(t, havuz, testYayin{SahipID: hazirlanan, Durum: DurumHazirlaniyor}), 20, simdi)
+	begen(testYayinEkle(t, havuz, testYayin{SahipID: hazirlanan, Durum: StatusPreparing}), 20, simdi)
 
 	oneriler, err := d.Suggestions(ctx, ben, 10)
 	if err != nil {
@@ -109,12 +109,12 @@ func TestPostgresDepo_Oneriler(t *testing.T) {
 	}
 	var adlar []string
 	for _, o := range oneriler {
-		adlar = append(adlar, o.KullaniciAdi)
+		adlar = append(adlar, o.Username)
 	}
 	esitSira(t, "oneriler", adlar, []string{"cok_begenilen", "takipcili", "eski_begeniler", "begenisiz"})
 
 	ilk, err := d.Suggestions(ctx, ben, 2)
-	if err != nil || len(ilk) != 2 || ilk[0].KullaniciAdi != "cok_begenilen" {
+	if err != nil || len(ilk) != 2 || ilk[0].Username != "cok_begenilen" {
 		t.Fatalf("limit 2 = %+v, %v", ilk, err)
 	}
 }
@@ -139,7 +139,7 @@ func TestPostgresDepo_OnerilerEsitlikteYeniYayinOnde(t *testing.T) {
 	}
 	var adlar []string
 	for _, o := range oneriler {
-		adlar = append(adlar, o.KullaniciAdi)
+		adlar = append(adlar, o.Username)
 	}
 	esitSira(t, "esitlik", adlar, beklenen)
 }

@@ -16,13 +16,13 @@ func TestPostgresDepo_SikayetTekrariYeniKayitAcmaz(t *testing.T) {
 	yayin := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: "hazirlaniyor"})
 	yorum := testYorumEkle(t, havuz, "", yayin, sahip, nil, time.Now())
 
-	yeni := func(tur, hedef, neden string) YeniSikayet {
-		return YeniSikayet{ID: uuid.NewString(), BildirenID: bildiren, HedefTuru: tur, HedefID: hedef, YayinID: yayin, Neden: neden}
+	yeni := func(tur, hedef, neden string) ReportInsert {
+		return ReportInsert{ID: uuid.NewString(), ReporterID: bildiren, TargetType: tur, TargetID: hedef, PublicationID: yayin, Reason: neden}
 	}
-	for _, s := range []YeniSikayet{
-		yeni(HedefYayin, yayin, "spam"),
-		yeni(HedefYayin, yayin, "telif"), // tekrar: ilk kayit kalir
-		yeni(HedefYorum, yorum, "taciz"),
+	for _, s := range []ReportInsert{
+		yeni(TargetPublication, yayin, "spam"),
+		yeni(TargetPublication, yayin, "telif"), // tekrar: ilk kayit kalir
+		yeni(TargetComment, yorum, "taciz"),
 	} {
 		if err := d.InsertReport(ctx, s); err != nil {
 			t.Fatalf("SikayetEkle: %v", err)

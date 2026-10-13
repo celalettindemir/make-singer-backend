@@ -9,11 +9,11 @@ import (
 )
 
 func TestSosyal_CoverBaslatSozlesme(t *testing.T) {
-	s := &sahteSosyal{cover: &social.CoverBaslangici{
-		Kaynak: social.KaynakOzeti{YayinID: "y1", Baslik: "B", SahipKullaniciAdi: "ali"},
-		Tur:    "pop", Bpm: 120, Ton: social.Ton{Tonik: "A", Mod: "minor"}, SureSn: 180,
-		Yapi: []social.YapiOgesi{}, Sozler: social.Sozler{Bolumler: []social.SozBolumu{}},
-		Stemler: []social.CoverStemi{{ID: "drums", Enstruman: "Davul", FileURL: "https://x/stems/u/k/drums.mp3", Sure: 3}},
+	s := &sahteSosyal{cover: &social.CoverStart{
+		Source: social.SourceSummary{PublicationID: "y1", Title: "B", OwnerUsername: "ali"},
+		Genre:  "pop", BPM: 120, MusicalKey: social.MusicalKey{Tonic: "A", Mode: "minor"}, DurationSec: 180,
+		Structure: []social.StructureItem{}, Lyrics: social.Lyrics{Sections: []social.LyricsSection{}},
+		Stems: []social.CoverStem{{ID: "drums", Instrument: "Davul", FileURL: "https://x/stems/u/k/drums.mp3", Duration: 3}},
 	}}
 	durum, ham := sosyalHamIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPost, "/api/social/yayinlar/y1/cover-baslat", "")
 	beklenen := `{"kaynak":{"yayinId":"y1","baslik":"B","sahipKullaniciAdi":"ali","silindi":false},"tur":"pop","bpm":120,` +
@@ -44,8 +44,8 @@ func TestSosyal_CoverHataKodlari(t *testing.T) {
 
 func TestSosyal_CoverlarSayfasiVeLimit(t *testing.T) {
 	s := &sahteSosyal{
-		sayfa: &social.Sayfa[social.YayinOzeti]{Ogeler: []social.YayinOzeti{}},
-		cover: &social.CoverBaslangici{},
+		sayfa: &social.Page[social.PublicationSummary]{Items: []social.PublicationSummary{}},
+		cover: &social.CoverStart{},
 	}
 	sinir := func(c *fiber.Ctx) error { return c.SendStatus(http.StatusTooManyRequests) }
 	app := sosyalUygulamasiLimitli(s, sosyalKullanici, SosyalLimitleri{Yayin: gecir, Yorum: gecir, Cover: sinir})

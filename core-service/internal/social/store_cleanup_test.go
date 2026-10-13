@@ -73,11 +73,11 @@ func TestPostgresDepo_KullaniciVerisiniSil(t *testing.T) {
 		t.Fatalf("kalan profil silinmemeli: %v", err)
 	}
 	k, err := d.GetPublication(ctx, kalaninYayini, kalan)
-	if err != nil || k.BegeniSayisi != 1 || k.YorumSayisi != 1 {
+	if err != nil || k.LikeCount != 1 || k.CommentCount != 1 {
 		t.Fatalf("kalanin yayini = %+v, %v", k, err)
 	}
 	c, err := d.GetPublication(ctx, cover, kalan)
-	if err != nil || c.Kaynak == nil || !c.Kaynak.Silindi || c.Kaynak.YayinID != canli {
+	if err != nil || c.Source == nil || !c.Source.Deleted || c.Source.PublicationID != canli {
 		t.Fatalf("cover kalmali ve kaynagi silindi olmali: %+v, %v", c, err)
 	}
 	if bos, err := d.ListPublicationIDs(ctx, giden); err != nil || len(bos) != 0 {
@@ -202,17 +202,17 @@ func TestPostgresDepo_KullaniciVerisiniSil_SilinmisYorumVeKalanSikayetler(t *tes
 
 	sikayet := func(bildiren, tur, hedef, yayin string) {
 		t.Helper()
-		if err := d.InsertReport(ctx, YeniSikayet{ID: uuid.NewString(), BildirenID: bildiren, HedefTuru: tur,
-			HedefID: hedef, YayinID: yayin, Neden: "spam"}); err != nil {
+		if err := d.InsertReport(ctx, ReportInsert{ID: uuid.NewString(), ReporterID: bildiren, TargetType: tur,
+			TargetID: hedef, PublicationID: yayin, Reason: "spam"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	sikayet(kalan, HedefYorum, gidenYorumu, kalaninYayini)    // gider
-	sikayet(ucuncu, HedefYorum, silinmisYorum, kalaninYayini) // gider
-	sikayet(kalan, HedefYayin, gidenYayini, gidenYayini)      // cascade ile gider
-	sikayet(ucuncu, HedefYorum, yorumAltinda, gidenYayini)    // cascade ile gider
-	sikayet(ucuncu, HedefYorum, kalanYorumu, kalaninYayini)   // kalir
-	sikayet(ucuncu, HedefYayin, kalaninYayini, kalaninYayini) // kalir
+	sikayet(kalan, TargetComment, gidenYorumu, kalaninYayini)        // gider
+	sikayet(ucuncu, TargetComment, silinmisYorum, kalaninYayini)     // gider
+	sikayet(kalan, TargetPublication, gidenYayini, gidenYayini)      // cascade ile gider
+	sikayet(ucuncu, TargetComment, yorumAltinda, gidenYayini)        // cascade ile gider
+	sikayet(ucuncu, TargetComment, kalanYorumu, kalaninYayini)       // kalir
+	sikayet(ucuncu, TargetPublication, kalaninYayini, kalaninYayini) // kalir
 
 	if err := d.DeleteUserData(ctx, giden); err != nil {
 		t.Fatalf("KullaniciVerisiniSil: %v", err)

@@ -6,41 +6,41 @@ import (
 	"unicode/utf8"
 )
 
-// stemIDDeseni: stem id bir anahtar segmenti olur (stems/{stemId}.{ext});
-// segment deseninin uzantisiz halidir.
-var stemIDDeseni = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+// stemIDPattern: a stem id becomes a key segment (stems/{stemId}.{ext}); it
+// is the segment pattern without the extension.
+var stemIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 const (
-	baslikEnUzun      = 80
-	aciklamaEnUzun    = 300
-	turEnUzun         = 40
-	tonikEnUzun       = 16
-	enstrumanEnUzun   = 40
-	bpmEnAz, bpmEnCok = 20, 300
-	stemEnCok         = 32
-	yapiEnCok         = 200
-	bolumEnCok        = 200
-	satirEnCok        = 200
-	toplamSatirEnCok  = 1000 // tum bolumlerdeki satirlarin toplami
-	satirEnUzun       = 200  // tek bir soz satiri (rune)
-	ogeAlaniEnUzun    = 64   // bolumId, bolum turu, yapi id ve turu (rune)
+	maxTitleLen       = 80
+	maxDescriptionLen = 300
+	maxGenreLen       = 40
+	maxTonicLen       = 16
+	maxInstrumentLen  = 40
+	minBPM, maxBPM    = 20, 300
+	maxStems          = 32
+	maxStructureItems = 200
+	maxLyricsSections = 200
+	maxSectionLines   = 200
+	maxTotalLines     = 1000 // total of the lines in all sections
+	maxLineLen        = 200  // a single lyrics line (runes)
+	maxItemFieldLen   = 64   // sectionId, section type, structure id and type (runes)
 )
 
-// GorunurlukGecerli, degerin uc gorunurlukten biri oldugunu soyler.
-func GorunurlukGecerli(g string) bool {
-	return g == GorunurlukHerkes || g == GorunurlukTakipciler || g == GorunurlukLink
+// ValidVisibility reports whether the value is one of the three visibilities.
+func ValidVisibility(visibility string) bool {
+	return visibility == VisibilityEveryone || visibility == VisibilityFollowers || visibility == VisibilityLink
 }
 
-func runeAraliginda(s string, enAz, enCok int) bool {
+func runeCountInRange(s string, minCount, maxCount int) bool {
 	n := utf8.RuneCountInString(s)
-	return n >= enAz && n <= enCok
+	return n >= minCount && n <= maxCount
 }
 
-// nulIceriyor, degerlerden birinde NUL karakteri olup olmadigini soyler.
-// Postgres metin ve jsonb alanlarinda NUL'u reddeder; istemci 500 yerine
-// 422 almali.
-func nulIceriyor(degerler ...string) bool {
-	for _, d := range degerler {
+// containsNUL reports whether any of the values contains a NUL character.
+// Postgres rejects NUL in text and jsonb fields; the client must get a 422
+// instead of a 500.
+func containsNUL(values ...string) bool {
+	for _, d := range values {
 		if strings.IndexByte(d, 0) >= 0 {
 			return true
 		}
@@ -48,121 +48,121 @@ func nulIceriyor(degerler ...string) bool {
 	return false
 }
 
-// yayinIsteginiDuzenle, istegi kirpar, bos dizileri doldurur ve sozlesme
-// kurallarini uygular. Kaynak (cover) ve URL sahipligi servis tarafinda
-// denetlenir; burada yalnizca bicim vardir.
-func yayinIsteginiDuzenle(ist *YayinIstegi) error {
-	ist.Baslik = strings.TrimSpace(ist.Baslik)
-	ist.Aciklama = strings.TrimSpace(ist.Aciklama)
+// normalizePublicationRequest trims the request, fills empty arrays and
+// applies the contract rules. The source (cover) and URL ownership are
+// checked in the service; only the format is checked here.
+func normalizePublicationRequest(req *PublicationRequest) error {
+	req.Title = strings.TrimSpace(req.Title)
+	req.Description = strings.TrimSpace(req.Description)
 	switch {
-	case nulIceriyor(ist.Baslik, ist.Aciklama, ist.Tur, ist.Ton.Tonik, ist.Ton.Mod, ist.MasterURL):
+	case containsNUL(req.Title, req.Description, req.Genre, req.MusicalKey.Tonic, req.MusicalKey.Mode, req.MasterURL):
 		return validationError("metin alanlari NUL karakteri iceremez")
-	case !runeAraliginda(ist.Baslik, 1, baslikEnUzun):
+	case !runeCountInRange(req.Title, 1, maxTitleLen):
 		return validationError("baslik 1-80 karakter olmali")
-	case !runeAraliginda(ist.Aciklama, 0, aciklamaEnUzun):
+	case !runeCountInRange(req.Description, 0, maxDescriptionLen):
 		return validationError("aciklama en cok 300 karakter olabilir")
-	case !GorunurlukGecerli(ist.Gorunurluk):
+	case !ValidVisibility(req.Visibility):
 		return validationError("gorunurluk herkes, takipciler ya da link olmali")
-	case ist.Ton.Mod != "major" && ist.Ton.Mod != "minor":
+	case req.MusicalKey.Mode != "major" && req.MusicalKey.Mode != "minor":
 		return validationError("ton.mod major ya da minor olmali")
-	case !runeAraliginda(ist.Ton.Tonik, 1, tonikEnUzun):
+	case !runeCountInRange(req.MusicalKey.Tonic, 1, maxTonicLen):
 		return validationError("ton.tonik bos olamaz")
-	case !runeAraliginda(ist.Tur, 1, turEnUzun):
+	case !runeCountInRange(req.Genre, 1, maxGenreLen):
 		return validationError("tur 1-40 karakter olmali")
-	case ist.SureSn <= 0:
+	case req.DurationSec <= 0:
 		return validationError("sureSn sifirdan buyuk olmali")
-	case ist.Bpm < bpmEnAz || ist.Bpm > bpmEnCok:
+	case req.BPM < minBPM || req.BPM > maxBPM:
 		return validationError("bpm 20-300 araliginda olmali")
-	case ist.MasterURL == "":
+	case req.MasterURL == "":
 		return validationError("masterUrl zorunlu")
-	case len(ist.Yapi) > yapiEnCok:
+	case len(req.Structure) > maxStructureItems:
 		return validationError("yapi cok uzun")
-	case len(ist.Sozler.Bolumler) > bolumEnCok:
+	case len(req.Lyrics.Sections) > maxLyricsSections:
 		return validationError("sozler cok uzun")
 	}
-	if ist.Yapi == nil {
-		ist.Yapi = []YapiOgesi{}
+	if req.Structure == nil {
+		req.Structure = []StructureItem{}
 	}
-	for _, o := range ist.Yapi {
-		if o.Olcu < 0 || nulIceriyor(o.ID, o.Tur) ||
-			!runeAraliginda(o.ID, 1, ogeAlaniEnUzun) || !runeAraliginda(o.Tur, 0, ogeAlaniEnUzun) {
+	for _, item := range req.Structure {
+		if item.Bars < 0 || containsNUL(item.ID, item.Type) ||
+			!runeCountInRange(item.ID, 1, maxItemFieldLen) || !runeCountInRange(item.Type, 0, maxItemFieldLen) {
 			return validationError("yapi ogesi gecersiz")
 		}
 	}
-	if ist.Sozler.Bolumler == nil {
-		ist.Sozler.Bolumler = []SozBolumu{}
+	if req.Lyrics.Sections == nil {
+		req.Lyrics.Sections = []LyricsSection{}
 	}
-	toplamSatir := 0
-	for i := range ist.Sozler.Bolumler {
-		b := &ist.Sozler.Bolumler[i]
-		toplamSatir += len(b.Satirlar)
-		if len(b.Satirlar) > satirEnCok || toplamSatir > toplamSatirEnCok {
+	totalLines := 0
+	for i := range req.Lyrics.Sections {
+		section := &req.Lyrics.Sections[i]
+		totalLines += len(section.Lines)
+		if len(section.Lines) > maxSectionLines || totalLines > maxTotalLines {
 			return validationError("sozler cok uzun")
 		}
-		if nulIceriyor(b.BolumID, b.Tur) || !runeAraliginda(b.BolumID, 0, ogeAlaniEnUzun) ||
-			!runeAraliginda(b.Tur, 0, ogeAlaniEnUzun) {
+		if containsNUL(section.SectionID, section.Type) || !runeCountInRange(section.SectionID, 0, maxItemFieldLen) ||
+			!runeCountInRange(section.Type, 0, maxItemFieldLen) {
 			return validationError("soz bolumu gecersiz")
 		}
-		for _, satir := range b.Satirlar {
-			if nulIceriyor(satir) || !runeAraliginda(satir, 0, satirEnUzun) {
+		for _, line := range section.Lines {
+			if containsNUL(line) || !runeCountInRange(line, 0, maxLineLen) {
 				return validationError("soz satiri gecersiz")
 			}
 		}
-		if b.Satirlar == nil {
-			b.Satirlar = []string{}
+		if section.Lines == nil {
+			section.Lines = []string{}
 		}
 	}
 
-	if ist.KaynakYayinID != nil && *ist.KaynakYayinID == "" {
-		ist.KaynakYayinID = nil
+	if req.SourcePublicationID != nil && *req.SourcePublicationID == "" {
+		req.SourcePublicationID = nil
 	}
-	if ist.KaynakYayinID != nil {
-		// Cover'in altyapisi her zaman kapalidir; stem listesi yok sayilir.
-		ist.AltyapiAcik = false
-		ist.Stemler = nil
+	if req.SourcePublicationID != nil {
+		// A cover's backing is always disabled; the stem list is ignored.
+		req.BackingEnabled = false
+		req.Stems = nil
 		return nil
 	}
-	if !ist.AltyapiAcik {
-		// Altyapi kapaliysa stem kopyalanmaz; liste yok sayilir.
-		ist.Stemler = nil
+	if !req.BackingEnabled {
+		// If backing is disabled, no stems are copied; the list is ignored.
+		req.Stems = nil
 		return nil
 	}
-	if len(ist.Stemler) == 0 {
+	if len(req.Stems) == 0 {
 		return validationError("altyapi acikken en az bir stem gerekli")
 	}
-	if len(ist.Stemler) > stemEnCok {
+	if len(req.Stems) > maxStems {
 		return validationError("cok fazla stem")
 	}
-	gorulen := make(map[string]bool, len(ist.Stemler))
-	for _, st := range ist.Stemler {
-		if !stemIDDeseni.MatchString(st.ID) {
+	seen := make(map[string]bool, len(req.Stems))
+	for _, stem := range req.Stems {
+		if !stemIDPattern.MatchString(stem.ID) {
 			return validationError("stem id gecersiz")
 		}
-		if gorulen[st.ID] {
+		if seen[stem.ID] {
 			return validationError("stem id tekrar ediyor")
 		}
-		gorulen[st.ID] = true
-		if st.URL == "" || st.Sure <= 0 || !runeAraliginda(st.Enstruman, 1, enstrumanEnUzun) ||
-			nulIceriyor(st.URL, st.Enstruman) {
+		seen[stem.ID] = true
+		if stem.URL == "" || stem.Duration <= 0 || !runeCountInRange(stem.Instrument, 1, maxInstrumentLen) ||
+			containsNUL(stem.URL, stem.Instrument) {
 			return validationError("stem alanlari gecersiz")
 		}
 	}
 	return nil
 }
 
-// yamayiDuzenle, PATCH govdesini dogrular.
-func yamayiDuzenle(y *YayinYamasi) error {
-	if y.Aciklama != nil {
-		a := strings.TrimSpace(*y.Aciklama)
-		if !runeAraliginda(a, 0, aciklamaEnUzun) {
+// normalizePatch validates the PATCH body.
+func normalizePatch(patch *PublicationPatch) error {
+	if patch.Description != nil {
+		text := strings.TrimSpace(*patch.Description)
+		if !runeCountInRange(text, 0, maxDescriptionLen) {
 			return validationError("aciklama en cok 300 karakter olabilir")
 		}
-		if nulIceriyor(a) {
+		if containsNUL(text) {
 			return validationError("aciklama NUL karakteri iceremez")
 		}
-		y.Aciklama = &a
+		patch.Description = &text
 	}
-	if y.Gorunurluk != nil && !GorunurlukGecerli(*y.Gorunurluk) {
+	if patch.Visibility != nil && !ValidVisibility(*patch.Visibility) {
 		return validationError("gorunurluk herkes, takipciler ya da link olmali")
 	}
 	return nil

@@ -2,72 +2,72 @@ package social
 
 import "fmt"
 
-// Gorunurluk ve durum degerleri (sozlesme §3).
+// Visibility and status values (contract §3).
 const (
-	GorunurlukHerkes     = "herkes"
-	GorunurlukTakipciler = "takipciler"
-	GorunurlukLink       = "link"
+	VisibilityEveryone  = "herkes"
+	VisibilityFollowers = "takipciler"
+	VisibilityLink      = "link"
 
-	DurumHazirlaniyor = "hazirlaniyor"
-	DurumYayinda      = "yayinda"
-	DurumHata         = "hata"
+	StatusPreparing = "hazirlaniyor"
+	StatusPublished = "yayinda"
+	StatusFailed    = "hata"
 )
 
-// GorunurlukGirdisi, bir yayinin bir izleyiciye gorunup gorunmedigine
-// karar vermek icin gereken her sey.
-type GorunurlukGirdisi struct {
-	SahipID     string
-	IzleyiciID  string
-	Gorunurluk  string
-	Durum       string
-	Silindi     bool
-	TakipEdiyor bool // izleyici sahibi takip ediyor mu
+// VisibilityInput is everything needed to decide whether a publication is
+// visible to a viewer.
+type VisibilityInput struct {
+	OwnerID       string
+	ViewerID      string
+	Visibility    string
+	Status        string
+	Deleted       bool
+	ViewerFollows bool // whether the viewer follows the owner
 }
 
-// gorebilir, spec §4.9 tablosunun tek dogruluk kaynagidir:
-//   - silinmis yayini kimse gormez (sahibi dahil; DELETE tekrari 404).
-//   - sahibi kendi yayinini her durumda gorur (hazirlaniyor, hata dahil).
-//   - digerleri yalnizca "yayinda" olani gorur: herkes her zaman,
-//     takipciler yalnizca takip edenler, link yalnizca detayda.
+// canSee is the single source of truth for the spec §4.9 table:
+//   - nobody sees a deleted publication (owner included; repeating DELETE is 404).
+//   - the owner sees their own publication in every status (hazirlaniyor and hata included).
+//   - others see only "yayinda": everyone always, followers only those who
+//     follow, link only in the detail.
 //
-// gorunurlukKosulu ayni kurali SQL'de kurar; ikisinin esitligi canli
-// Postgres testinde tum kombinasyonlarla dogrulanir.
-func gorebilir(g GorunurlukGirdisi, detay bool) bool {
-	if g.Silindi {
+// visibilityCondition builds the same rule in SQL; their equality is checked
+// with all combinations in the live Postgres test.
+func canSee(input VisibilityInput, detail bool) bool {
+	if input.Deleted {
 		return false
 	}
-	if g.IzleyiciID != "" && g.SahipID == g.IzleyiciID {
+	if input.ViewerID != "" && input.OwnerID == input.ViewerID {
 		return true
 	}
-	if g.Durum != DurumYayinda {
+	if input.Status != StatusPublished {
 		return false
 	}
-	switch g.Gorunurluk {
-	case GorunurlukHerkes:
+	switch input.Visibility {
+	case VisibilityEveryone:
 		return true
-	case GorunurlukTakipciler:
-		return g.TakipEdiyor
-	case GorunurlukLink:
-		return detay
+	case VisibilityFollowers:
+		return input.ViewerFollows
+	case VisibilityLink:
+		return detail
 	}
 	return false
 }
 
-// DetayGorebilir, id ya da slug ile acilan detay icin kuraldir.
-func DetayGorebilir(g GorunurlukGirdisi) bool { return gorebilir(g, true) }
+// CanSeeDetail is the rule for a detail opened by id or slug.
+func CanSeeDetail(input VisibilityInput) bool { return canSee(input, true) }
 
-// ListedeGorebilir, profil listeleri ve sayaclar icin kuraldir; link
-// yayinlari yalnizca sahibine listelenir.
-func ListedeGorebilir(g GorunurlukGirdisi) bool { return gorebilir(g, false) }
+// CanSeeInList is the rule for profile lists and counters; link
+// publications are listed only to their owner.
+func CanSeeInList(input VisibilityInput) bool { return canSee(input, false) }
 
-// gorunurlukKosulu, gorebilir'in SQL karsiligidir. a yayin tablosunun
-// takma adi, izleyici izleyici kimliginin parametresidir (orn. "$1").
-// Ikisi de sabit dizgedir; kullanici girdisi buraya girmez.
-func gorunurlukKosulu(a, izleyici string, detay bool) string {
+// visibilityCondition is the SQL counterpart of canSee. alias is the
+// publication table's alias, viewer is the viewer ID parameter (e.g. "$1").
+// Both are constant strings; user input never enters here.
+func visibilityCondition(alias, viewer string, detail bool) string {
 	link := ""
-	if detay {
-		link = fmt.Sprintf(" OR %s.gorunurluk = 'link'", a)
+	if detail {
+		link = fmt.Sprintf(" OR %s.gorunurluk = 'link'", alias)
 	}
 	return fmt.Sprintf(`(%[1]s.silinme IS NULL AND (%[1]s.sahip_id = %[2]s OR (%[1]s.durum = 'yayinda' AND (%[1]s.gorunurluk = 'herkes'%[3]s OR (%[1]s.gorunurluk = 'takipciler' AND EXISTS (SELECT 1 FROM sosyal.takip gt WHERE gt.takipci_id = %[2]s AND gt.takip_edilen_id = %[1]s.sahip_id))))))`,
-		a, izleyici, link)
+		alias, viewer, link)
 }

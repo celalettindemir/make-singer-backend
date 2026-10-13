@@ -12,11 +12,11 @@ type FollowStore interface {
 	Unfollow(ctx context.Context, followerID, followeeID string) error
 	// FollowStatus returns the followee's follower count and whether the
 	// follower follows them.
-	FollowStatus(ctx context.Context, followerID, followeeID string) (*TakipDurumu, error)
+	FollowStatus(ctx context.Context, followerID, followeeID string) (*FollowStatus, error)
 	// Suggestions returns up to limit publishers the viewer does not follow
 	// (excluding themselves), ranked by the likes they received in the last
 	// 30 days.
-	Suggestions(ctx context.Context, viewerID string, limit int) ([]ProfilKaydi, error)
+	Suggestions(ctx context.Context, viewerID string, limit int) ([]ProfileRecord, error)
 }
 
 func (s *PostgresStore) Follow(ctx context.Context, followerID, followeeID string) error {
@@ -37,12 +37,12 @@ func (s *PostgresStore) Unfollow(ctx context.Context, followerID, followeeID str
 	return nil
 }
 
-func (s *PostgresStore) FollowStatus(ctx context.Context, followerID, followeeID string) (*TakipDurumu, error) {
-	var status TakipDurumu
+func (s *PostgresStore) FollowStatus(ctx context.Context, followerID, followeeID string) (*FollowStatus, error) {
+	var status FollowStatus
 	if err := s.pool.QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM sosyal.takip WHERE takip_edilen_id = $2),
 		       EXISTS (SELECT 1 FROM sosyal.takip WHERE takipci_id = $1 AND takip_edilen_id = $2)`,
-		followerID, followeeID).Scan(&status.Takipci, &status.TakipEdiyorMuyum); err != nil {
+		followerID, followeeID).Scan(&status.Followers, &status.FollowedByMe); err != nil {
 		return nil, fmt.Errorf("takip durumu okunamadi: %w", err)
 	}
 	return &status, nil
@@ -54,7 +54,7 @@ func (s *PostgresStore) FollowStatus(ctx context.Context, followerID, followeeID
 // existence). The score is the likes those publications received from others
 // in the last 30 days (the owner's own likes do not count). On a tie, the
 // newer latest publication wins, then the ID.
-func (s *PostgresStore) Suggestions(ctx context.Context, viewerID string, limit int) ([]ProfilKaydi, error) {
+func (s *PostgresStore) Suggestions(ctx context.Context, viewerID string, limit int) ([]ProfileRecord, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+profileColumnsP+`
 		  FROM sosyal.profil p
@@ -75,7 +75,7 @@ func (s *PostgresStore) Suggestions(ctx context.Context, viewerID string, limit 
 		return nil, fmt.Errorf("oneriler okunamadi: %w", err)
 	}
 	defer rows.Close()
-	records := []ProfilKaydi{}
+	records := []ProfileRecord{}
 	for rows.Next() {
 		profile, err := scanProfile(rows)
 		if err != nil {

@@ -13,17 +13,17 @@ import (
 // ProfileStore covers the operations on sosyal.profil.
 type ProfileStore interface {
 	// GetProfile returns the user's profile, or ErrNoProfile if there is none.
-	GetProfile(ctx context.Context, userID string) (*ProfilKaydi, error)
+	GetProfile(ctx context.Context, userID string) (*ProfileRecord, error)
 	// GetProfileByUsername returns the profile with that username, or ErrNotFound.
-	GetProfileByUsername(ctx context.Context, username string) (*ProfilKaydi, error)
+	GetProfileByUsername(ctx context.Context, username string) (*ProfileRecord, error)
 	// UpsertProfile creates or updates the profile. If another user owns the
 	// username, it returns ErrUsernameTaken.
-	UpsertProfile(ctx context.Context, profile ProfilKaydi) (*ProfilKaydi, error)
+	UpsertProfile(ctx context.Context, profile ProfileRecord) (*ProfileRecord, error)
 	// UsernameOwners returns the taken usernames among the given ones as a
 	// username -> user ID map.
 	UsernameOwners(ctx context.Context, usernames []string) (map[string]string, error)
 	// ProfileCounts returns the owner's counters as seen by the viewer.
-	ProfileCounts(ctx context.Context, ownerID, viewerID string) (*ProfilSayilari, error)
+	ProfileCounts(ctx context.Context, ownerID, viewerID string) (*ProfileCounts, error)
 }
 
 // Store is the full set of persistent operations of the social module.
@@ -66,15 +66,15 @@ const profileColumns = `kullanici_id::text, kullanici_adi, gorunen_ad, bio, olus
 // profileColumnsP is profileColumns with the "p" table alias.
 const profileColumnsP = `p.kullanici_id::text, p.kullanici_adi, p.gorunen_ad, p.bio, p.olusturma`
 
-func scanProfile(row pgx.Row) (*ProfilKaydi, error) {
-	var profile ProfilKaydi
-	if err := row.Scan(&profile.KullaniciID, &profile.KullaniciAdi, &profile.GorunenAd, &profile.Bio, &profile.Olusturma); err != nil {
+func scanProfile(row pgx.Row) (*ProfileRecord, error) {
+	var profile ProfileRecord
+	if err := row.Scan(&profile.UserID, &profile.Username, &profile.DisplayName, &profile.Bio, &profile.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &profile, nil
 }
 
-func (s *PostgresStore) GetProfile(ctx context.Context, userID string) (*ProfilKaydi, error) {
+func (s *PostgresStore) GetProfile(ctx context.Context, userID string) (*ProfileRecord, error) {
 	profile, err := scanProfile(s.pool.QueryRow(ctx,
 		`SELECT `+profileColumns+` FROM sosyal.profil WHERE kullanici_id = $1`, userID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -86,7 +86,7 @@ func (s *PostgresStore) GetProfile(ctx context.Context, userID string) (*ProfilK
 	return profile, nil
 }
 
-func (s *PostgresStore) GetProfileByUsername(ctx context.Context, username string) (*ProfilKaydi, error) {
+func (s *PostgresStore) GetProfileByUsername(ctx context.Context, username string) (*ProfileRecord, error) {
 	profile, err := scanProfile(s.pool.QueryRow(ctx,
 		`SELECT `+profileColumns+` FROM sosyal.profil WHERE kullanici_adi = $1`, username))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -98,7 +98,7 @@ func (s *PostgresStore) GetProfileByUsername(ctx context.Context, username strin
 	return profile, nil
 }
 
-func (s *PostgresStore) UpsertProfile(ctx context.Context, profile ProfilKaydi) (*ProfilKaydi, error) {
+func (s *PostgresStore) UpsertProfile(ctx context.Context, profile ProfileRecord) (*ProfileRecord, error) {
 	saved, err := scanProfile(s.pool.QueryRow(ctx, `
 		INSERT INTO sosyal.profil (kullanici_id, kullanici_adi, gorunen_ad, bio)
 		VALUES ($1, $2, $3, $4)
@@ -107,7 +107,7 @@ func (s *PostgresStore) UpsertProfile(ctx context.Context, profile ProfilKaydi) 
 		       gorunen_ad    = EXCLUDED.gorunen_ad,
 		       bio           = EXCLUDED.bio
 		RETURNING `+profileColumns,
-		profile.KullaniciID, profile.KullaniciAdi, profile.GorunenAd, profile.Bio))
+		profile.UserID, profile.Username, profile.DisplayName, profile.Bio))
 	if _, ok := uniqueViolation(err); ok {
 		return nil, ErrUsernameTaken
 	}
@@ -138,9 +138,9 @@ func (s *PostgresStore) UsernameOwners(ctx context.Context, usernames []string) 
 	return owners, rows.Err()
 }
 
-func (s *PostgresStore) ProfileCounts(ctx context.Context, ownerID, viewerID string) (*ProfilSayilari, error) {
-	visible := gorunurlukKosulu("y", "$2", false)
-	var counts ProfilSayilari
+func (s *PostgresStore) ProfileCounts(ctx context.Context, ownerID, viewerID string) (*ProfileCounts, error) {
+	visible := visibilityCondition("y", "$2", false)
+	var counts ProfileCounts
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 		  (SELECT count(*) FROM sosyal.yayin y
@@ -151,7 +151,7 @@ func (s *PostgresStore) ProfileCounts(ctx context.Context, ownerID, viewerID str
 		  (SELECT count(*) FROM sosyal.takip WHERE takipci_id = $1),
 		  EXISTS (SELECT 1 FROM sosyal.takip WHERE takipci_id = $2 AND takip_edilen_id = $1)`,
 		ownerID, viewerID,
-	).Scan(&counts.Istatistik.Sarki, &counts.Istatistik.Cover, &counts.Istatistik.Takipci, &counts.Istatistik.Takip, &counts.TakipEdiyorMuyum)
+	).Scan(&counts.Stats.Songs, &counts.Stats.Covers, &counts.Stats.Followers, &counts.Stats.Following, &counts.FollowedByMe)
 	if err != nil {
 		return nil, fmt.Errorf("profil sayaclari okunamadi: %w", err)
 	}

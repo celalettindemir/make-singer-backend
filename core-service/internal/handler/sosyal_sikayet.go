@@ -13,11 +13,11 @@ func (h *SosyalHandler) Sikayet(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	var g social.SikayetGirdisi
+	var g social.ReportInput
 	if err := c.BodyParser(&g); err != nil {
 		return govdeHatasi(c)
 	}
-	if err := h.servis.Sikayet(c.Context(), userID, g); err != nil {
+	if err := h.servis.Report(c.Context(), userID, g); err != nil {
 		return sosyalHata(c, err)
 	}
 	// SendStatus bos govdeye "Created" yazardi; govde bilerek bos kalir.

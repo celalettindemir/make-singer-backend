@@ -50,11 +50,11 @@ func asynqSonDeneme(ctx context.Context) bool {
 }
 
 func gorevYukunuCoz(t *asynq.Task) (string, error) {
-	var yuk social.GorevYuku
+	var yuk social.TaskPayload
 	if err := json.Unmarshal(t.Payload(), &yuk); err != nil {
 		return "", fmt.Errorf("sosyal gorev yuku cozulemedi: %v: %w", err, asynq.SkipRetry)
 	}
-	id, err := uuid.Parse(yuk.YayinID)
+	id, err := uuid.Parse(yuk.PublicationID)
 	if err != nil {
 		return "", fmt.Errorf("sosyal gorev yukunde gecersiz yayin kimligi: %w", asynq.SkipRetry)
 	}
@@ -76,14 +76,14 @@ func (w *SosyalWorker) Hazirla(ctx context.Context, t *asynq.Task) error {
 	if err != nil {
 		return err
 	}
-	if k.Silindi || k.Durum != social.DurumHazirlaniyor {
+	if k.Deleted || k.Status != social.StatusPreparing {
 		return nil
 	}
 	sonuc, err := w.kopyala(ctx, k)
 	if err != nil {
 		return w.basarisiz(ctx, id, err)
 	}
-	if err := w.sahipDenetle(ctx, k.SahipID); err != nil {
+	if err := w.sahipDenetle(ctx, k.OwnerID); err != nil {
 		return w.basarisiz(ctx, id, err)
 	}
 	w.analizEt(ctx, id, &sonuc)
@@ -124,27 +124,27 @@ func (w *SosyalWorker) basarisiz(ctx context.Context, id string, err error) erro
 
 // kopyala, master ve stem kopyalarini kurar ve sonucun anahtar alanlarini
 // doldurur. Ayni hedefe tekrar kopya zararsizdir; is tekrar denenebilir.
-func (w *SosyalWorker) kopyala(ctx context.Context, k *social.HazirlikKaydi) (social.HazirlikSonucu, error) {
-	var sonuc social.HazirlikSonucu
-	master, err := social.MasterHedefi(k.ID, k.Hazirlik.MasterKey)
+func (w *SosyalWorker) kopyala(ctx context.Context, k *social.PreparationRecord) (social.PreparationResult, error) {
+	var sonuc social.PreparationResult
+	master, err := social.MasterDestKey(k.ID, k.Preparation.MasterKey)
 	if err != nil {
 		return sonuc, fmt.Errorf("master hedefi kurulamadi: %v: %w", err, asynq.SkipRetry)
 	}
-	if err := w.kopyalaBir(ctx, k.SahipID, k.Hazirlik.MasterKey, master); err != nil {
+	if err := w.kopyalaBir(ctx, k.OwnerID, k.Preparation.MasterKey, master); err != nil {
 		return sonuc, fmt.Errorf("master kopyalanamadi: %w", err)
 	}
-	sonuc.MasterAnahtari = master
-	sonuc.StemListesi = make([]social.StemKaydi, 0, len(k.Hazirlik.Stems))
-	for _, st := range k.Hazirlik.Stems {
-		hedef, err := social.StemHedefi(k.ID, st.ID, st.Key)
+	sonuc.MasterKey = master
+	sonuc.Stems = make([]social.StemRecord, 0, len(k.Preparation.Stems))
+	for _, st := range k.Preparation.Stems {
+		hedef, err := social.StemDestKey(k.ID, st.ID, st.Key)
 		if err != nil {
 			return sonuc, fmt.Errorf("stem hedefi kurulamadi: %v: %w", err, asynq.SkipRetry)
 		}
-		if err := w.kopyalaBir(ctx, k.SahipID, st.Key, hedef); err != nil {
+		if err := w.kopyalaBir(ctx, k.OwnerID, st.Key, hedef); err != nil {
 			return sonuc, fmt.Errorf("stem kopyalanamadi: %w", err)
 		}
-		sonuc.StemListesi = append(sonuc.StemListesi, social.StemKaydi{
-			ID: st.ID, Enstruman: st.Enstruman, Sure: st.Sure, Anahtar: hedef,
+		sonuc.Stems = append(sonuc.Stems, social.StemRecord{
+			ID: st.ID, Instrument: st.Instrument, Duration: st.Duration, Key: hedef,
 		})
 	}
 	return sonuc, nil
@@ -162,18 +162,18 @@ func (w *SosyalWorker) kopyalaBir(ctx context.Context, sahipID, kaynak, hedef st
 
 // analizEt, dalga formu ve onizlemeyi uretir. Her hata loglanir ve
 // sonuc bos dalga formuyla, onizlemesiz devam eder (spec §4.3).
-func (w *SosyalWorker) analizEt(ctx context.Context, id string, sonuc *social.HazirlikSonucu) {
-	sonuc.DalgaFormu = []float64{}
+func (w *SosyalWorker) analizEt(ctx context.Context, id string, sonuc *social.PreparationResult) {
+	sonuc.Waveform = []float64{}
 	if w.analizci == nil {
 		return
 	}
-	onizleme, err := social.OnizlemeHedefi(id)
+	onizleme, err := social.PreviewDestKey(id)
 	if err != nil {
 		log.Printf("Uyari: onizleme hedefi kurulamadi (%s): %v", id, err)
 		return
 	}
 	yanit, err := w.analizci.Analyze(ctx, &client.AnalysisRequest{
-		InputKey: sonuc.MasterAnahtari, PreviewKey: onizleme,
+		InputKey: sonuc.MasterKey, PreviewKey: onizleme,
 		PeakCount: dalgaTepeSayisi, PreviewSeconds: onizlemeSaniyesi,
 	})
 	if err != nil {
@@ -191,8 +191,8 @@ func (w *SosyalWorker) analizEt(ctx context.Context, id string, sonuc *social.Ha
 		}
 		dalga[i] = math.Min(1, math.Max(0, p))
 	}
-	sonuc.DalgaFormu = dalga
-	sonuc.OnizlemeAnahtari = onizleme
+	sonuc.Waveform = dalga
+	sonuc.PreviewKey = onizleme
 }
 
 // DosyaSil, silinen yayinin sosyal/{id}/ onekini temizler. Satir hala
@@ -212,7 +212,7 @@ func (w *SosyalWorker) DosyaSil(ctx context.Context, t *asynq.Task) error {
 		// Satir yok (hesap silindi): dosyalar yine de temizlenir.
 	case err != nil:
 		return err
-	case !k.Silindi:
+	case !k.Deleted:
 		return nil
 	}
 	if w.silici == nil {

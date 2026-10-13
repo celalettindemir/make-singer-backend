@@ -13,134 +13,134 @@ import (
 	"github.com/makeasinger/api/internal/client"
 )
 
-// Kuyruk gorevleri. Sabitler is turu adlaridir; main bunlari isleyicilere
-// baglar.
+// Queue tasks. The constants are task type names; main binds them to the
+// handlers.
 const (
-	// TaskTypeHazirla, yayinin dosyalarini kopyalar, analiz eder ve
-	// yayinda yapar (sosyal kuyrugu).
-	TaskTypeHazirla = "sosyal:hazirla"
-	// TaskTypeDosyaSil, silinen yayinin sosyal/{id}/ onekini 24 saat
-	// sonra temizler (bakim kuyrugu).
-	TaskTypeDosyaSil = "sosyal:dosya-sil"
+	// TaskTypePrepare copies the publication's files, analyzes them and
+	// publishes it (social queue).
+	TaskTypePrepare = "sosyal:hazirla"
+	// TaskTypeDeleteFiles cleans the deleted publication's sosyal/{id}/ prefix
+	// after 24 hours (maintenance queue).
+	TaskTypeDeleteFiles = "sosyal:dosya-sil"
 
-	// KuyrukSosyal, hazirlama islerinin asynq kuyrugu.
-	KuyrukSosyal = "sosyal"
+	// QueueSocial is the asynq queue of the prepare tasks.
+	QueueSocial = "sosyal"
 
-	hazirlaDenemesi     = 3
-	hazirlaSaklama      = 24 * time.Hour
-	dosyaSilmeGecikmesi = 24 * time.Hour
-	dosyaSilDenemesi    = 10
-	slugDenemesi        = 5
+	prepareMaxRetry     = 3
+	prepareRetention    = 24 * time.Hour
+	deleteFilesDelay    = 24 * time.Hour
+	deleteFilesMaxRetry = 10
+	slugAttempts        = 5
 )
 
-// GorevYuku, iki sosyal gorevinin yukudur.
-type GorevYuku struct {
-	YayinID string `json:"yayinId"`
+// TaskPayload is the payload of both social tasks.
+type TaskPayload struct {
+	PublicationID string `json:"yayinId"`
 }
 
-func gorevYuku(yayinID string) []byte {
-	b, _ := json.Marshal(GorevYuku{YayinID: yayinID})
-	return b
+func encodeTaskPayload(pubID string) []byte {
+	payload, _ := json.Marshal(TaskPayload{PublicationID: pubID})
+	return payload
 }
 
-func (s *Servis) hazirlamayaKoy(yayinID string) error {
-	_, err := s.kuyruk.Enqueue(asynq.NewTask(TaskTypeHazirla, gorevYuku(yayinID)),
-		asynq.Queue(KuyrukSosyal),
-		asynq.MaxRetry(hazirlaDenemesi),
-		asynq.Retention(hazirlaSaklama),
+func (s *Service) enqueuePrepare(pubID string) error {
+	_, err := s.queue.Enqueue(asynq.NewTask(TaskTypePrepare, encodeTaskPayload(pubID)),
+		asynq.Queue(QueueSocial),
+		asynq.MaxRetry(prepareMaxRetry),
+		asynq.Retention(prepareRetention),
 	)
 	return err
 }
 
-// anahtarCoz, istemcinin gonderdigi adresi (tam URL ya da ciplak anahtar)
-// sahiplik denetimiyle anahtara cevirir. Public bucket'taki (exports/)
-// dosya reddedilir: kopya ayni bucket icinde yapilir.
-func (s *Servis) anahtarCoz(ham, kullaniciID, alan string) (string, error) {
-	key, err := client.ResolveOwnedKeyOrURL(ham, kullaniciID, s.r2)
+// resolveKey turns the address the client sent (a full URL or a bare key)
+// into a key, with an ownership check. A file in the public bucket
+// (exports/) is rejected: the copy is made within the same bucket.
+func (s *Service) resolveKey(raw, userID, field string) (string, error) {
+	key, err := client.ResolveOwnedKeyOrURL(raw, userID, s.r2)
 	switch {
 	case errors.Is(err, client.ErrKeyNotOwned):
 		return "", ErrOwnership
 	case err != nil:
-		return "", validationError(alan + " gecersiz dosya adresi")
+		return "", validationError(field + " gecersiz dosya adresi")
 	case client.IsPublicKey(key):
-		return "", validationError(alan + " ozel bir dosya olmali")
+		return "", validationError(field + " ozel bir dosya olmali")
 	}
 	return key, nil
 }
 
-// kaynakCoz, cover'in orijinalini dogrular: izleyiciye gorunur, yayinda,
-// kendisi cover degil ve altyapisi acik olmali.
-func (s *Servis) kaynakCoz(ctx context.Context, hamID, izleyiciID string) (*YayinKaydi, error) {
-	id, ok := kimlikCoz(hamID)
+// resolveSource validates a cover's original: it must be visible to the
+// viewer, published, not a cover itself and have backing enabled.
+func (s *Service) resolveSource(ctx context.Context, rawID, viewerID string) (*PublicationRecord, error) {
+	id, ok := parseID(rawID)
 	if !ok {
 		return nil, ErrSourceNotFound
 	}
-	k, err := s.depo.GetPublication(ctx, id, izleyiciID)
+	rec, err := s.store.GetPublication(ctx, id, viewerID)
 	if errors.Is(err, ErrNotFound) {
 		return nil, ErrSourceNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	if !DetayGorebilir(k.gorunurlukGirdisi(izleyiciID)) || k.Durum != DurumYayinda || k.KaynakYayinID != "" {
+	if !CanSeeDetail(rec.visibilityInput(viewerID)) || rec.Status != StatusPublished || rec.SourcePublicationID != "" {
 		return nil, ErrSourceNotFound
 	}
-	if !k.AltyapiAcik {
+	if !rec.BackingEnabled {
 		return nil, ErrBackingDisabled
 	}
-	return k, nil
+	return rec, nil
 }
 
-// YayinOlustur, yayini hazirlaniyor durumunda kaydeder ve sosyal:hazirla
-// isini kuyruga koyar (POST /yayinlar, 202).
-func (s *Servis) YayinOlustur(ctx context.Context, kullaniciID string, ist YayinIstegi) (*YayinYaniti, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// CreatePublication saves the publication in the preparing status and
+// enqueues the sosyal:hazirla task (POST /yayinlar, 202).
+func (s *Service) CreatePublication(ctx context.Context, userID string, req PublicationRequest) (*PublicationResponse, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.depo.GetProfile(ctx, id); err != nil {
+	if _, err := s.store.GetProfile(ctx, id); err != nil {
 		return nil, err
 	}
-	if err := yayinIsteginiDuzenle(&ist); err != nil {
+	if err := normalizePublicationRequest(&req); err != nil {
 		return nil, err
 	}
 
-	yeni := YeniYayin{
-		ID: uuid.NewString(), SahipID: id,
-		Baslik: ist.Baslik, Aciklama: ist.Aciklama, Tur: ist.Tur, Bpm: ist.Bpm, Ton: ist.Ton,
-		SureSn: ist.SureSn, Gorunurluk: ist.Gorunurluk, AltyapiAcik: ist.AltyapiAcik,
-		YorumAcik: ist.YorumAcik, Sozler: ist.Sozler, Yapi: ist.Yapi,
-		Hazirlik: Hazirlik{Stems: []HazirlikStemi{}},
+	insert := PublicationInsert{
+		ID: uuid.NewString(), OwnerID: id,
+		Title: req.Title, Description: req.Description, Genre: req.Genre, BPM: req.BPM, MusicalKey: req.MusicalKey,
+		DurationSec: req.DurationSec, Visibility: req.Visibility, BackingEnabled: req.BackingEnabled,
+		CommentsEnabled: req.CommentsEnabled, Lyrics: req.Lyrics, Structure: req.Structure,
+		Preparation: Preparation{Stems: []PreparationStem{}},
 	}
-	if ist.KaynakYayinID != nil {
-		kaynak, err := s.kaynakCoz(ctx, *ist.KaynakYayinID, id)
+	if req.SourcePublicationID != nil {
+		source, err := s.resolveSource(ctx, *req.SourcePublicationID, id)
 		if err != nil {
 			return nil, err
 		}
-		yeni.KaynakYayinID = kaynak.ID
-		yeni.KaynakBaslik = kaynak.Baslik
-		yeni.KaynakSahipAdi = kaynak.Sahip.KullaniciAdi
+		insert.SourcePublicationID = source.ID
+		insert.SourceTitle = source.Title
+		insert.SourceOwnerUsername = source.Owner.Username
 	}
 
-	if yeni.Hazirlik.MasterKey, err = s.anahtarCoz(ist.MasterURL, id, "masterUrl"); err != nil {
+	if insert.Preparation.MasterKey, err = s.resolveKey(req.MasterURL, id, "masterUrl"); err != nil {
 		return nil, err
 	}
-	for _, st := range ist.Stemler {
-		key, err := s.anahtarCoz(st.URL, id, "stem url")
+	for _, stem := range req.Stems {
+		key, err := s.resolveKey(stem.URL, id, "stem url")
 		if err != nil {
 			return nil, err
 		}
-		yeni.Hazirlik.Stems = append(yeni.Hazirlik.Stems, HazirlikStemi{
-			ID: st.ID, Enstruman: st.Enstruman, Sure: st.Sure, Key: key,
+		insert.Preparation.Stems = append(insert.Preparation.Stems, PreparationStem{
+			ID: stem.ID, Instrument: stem.Instrument, Duration: stem.Duration, Key: key,
 		})
 	}
 
-	for deneme := 1; ; deneme++ {
-		if yeni.Slug, err = slugUret(); err != nil {
+	for attempt := 1; ; attempt++ {
+		if insert.Slug, err = generateSlug(); err != nil {
 			return nil, fmt.Errorf("slug uretilemedi: %w", err)
 		}
-		err = s.depo.InsertPublication(ctx, yeni)
-		if !errors.Is(err, errSlugCakisti) || deneme == slugDenemesi {
+		err = s.store.InsertPublication(ctx, insert)
+		if !errors.Is(err, errSlugConflict) || attempt == slugAttempts {
 			break
 		}
 	}
@@ -148,177 +148,180 @@ func (s *Servis) YayinOlustur(ctx context.Context, kullaniciID string, ist Yayin
 		return nil, err
 	}
 
-	if err := s.hazirlamayaKoy(yeni.ID); err != nil {
-		// Kuyruga girmeyen yayin hic hazirlanmaz; sahipsiz bir
-		// "hazirlaniyor" satiri birakmak yerine geri alinir. Istek baglami
-		// (or. kapanista) iptal edilmis olsa da geri alma calismalidir.
-		if kerr := s.depo.RemovePublication(context.WithoutCancel(ctx), yeni.ID); kerr != nil {
-			log.Printf("Uyari: kuyruga girmeyen yayin geri alinamadi (%s): %v", yeni.ID, kerr)
+	if err := s.enqueuePrepare(insert.ID); err != nil {
+		// A publication that is not enqueued is never prepared; it is rolled
+		// back instead of leaving an orphaned "hazirlaniyor" row. The rollback
+		// must run even if the request context was cancelled (e.g. on
+		// shutdown).
+		if rollbackErr := s.store.RemovePublication(context.WithoutCancel(ctx), insert.ID); rollbackErr != nil {
+			log.Printf("Uyari: kuyruga girmeyen yayin geri alinamadi (%s): %v", insert.ID, rollbackErr)
 		}
 		return nil, fmt.Errorf("hazirlama isi kurulamadi: %w", err)
 	}
-	return &YayinYaniti{ID: yeni.ID, Slug: yeni.Slug, Durum: DurumHazirlaniyor}, nil
+	return &PublicationResponse{ID: insert.ID, Slug: insert.Slug, Status: StatusPreparing}, nil
 }
 
-// gorunurYayin, yayini yukler ve detay gorunurlugunu uygular.
-func (s *Servis) gorunurYayin(ctx context.Context, izleyiciID, hamYayinID string) (*YayinKaydi, error) {
-	yayinID, ok := kimlikCoz(hamYayinID)
+// visiblePublication loads the publication and applies detail visibility.
+func (s *Service) visiblePublication(ctx context.Context, viewerID, rawPubID string) (*PublicationRecord, error) {
+	pubID, ok := parseID(rawPubID)
 	if !ok {
 		return nil, ErrNotFound
 	}
-	k, err := s.depo.GetPublication(ctx, yayinID, izleyiciID)
+	rec, err := s.store.GetPublication(ctx, pubID, viewerID)
 	if err != nil {
 		return nil, err
 	}
-	if !DetayGorebilir(k.gorunurlukGirdisi(izleyiciID)) {
+	if !CanSeeDetail(rec.visibilityInput(viewerID)) {
 		return nil, ErrNotFound
 	}
-	return k, nil
+	return rec, nil
 }
 
-// sahibinYayini, yayini yukler ve istegi yapanin sahibi oldugunu, yayinin
-// silinmedigini dogrular. Aksi ErrBulunamadi'dir: baskasinin yayininin
-// varligi da sizdirilmaz.
-func (s *Servis) sahibinYayini(ctx context.Context, sahipID, hamYayinID string) (*YayinKaydi, error) {
-	yayinID, ok := kimlikCoz(hamYayinID)
+// ownedPublication loads the publication and checks that the caller owns it
+// and that it is not deleted. Otherwise it is ErrNotFound: the existence of
+// someone else's publication is not leaked either.
+func (s *Service) ownedPublication(ctx context.Context, ownerID, rawPubID string) (*PublicationRecord, error) {
+	pubID, ok := parseID(rawPubID)
 	if !ok {
 		return nil, ErrNotFound
 	}
-	k, err := s.depo.GetPublication(ctx, yayinID, sahipID)
+	rec, err := s.store.GetPublication(ctx, pubID, ownerID)
 	if err != nil {
 		return nil, err
 	}
-	if k.SahipID != sahipID || k.Silindi {
+	if rec.OwnerID != ownerID || rec.Deleted {
 		return nil, ErrNotFound
 	}
-	return k, nil
+	return rec, nil
 }
 
-// YayinGoster, GET /yayinlar/{id}.
-func (s *Servis) YayinGoster(ctx context.Context, kullaniciID, yayinID string) (*YayinDetayi, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// Publication is GET /yayinlar/{id}.
+func (s *Service) Publication(ctx context.Context, userID, pubID string) (*PublicationDetail, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	k, err := s.gorunurYayin(ctx, id, yayinID)
+	rec, err := s.visiblePublication(ctx, id, pubID)
 	if err != nil {
 		return nil, err
 	}
-	return &k.YayinDetayi, nil
+	return &rec.PublicationDetail, nil
 }
 
-// SlugGoster, GET /s/{slug}.
-func (s *Servis) SlugGoster(ctx context.Context, kullaniciID, slug string) (*YayinDetayi, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// PublicationBySlug is GET /s/{slug}.
+func (s *Service) PublicationBySlug(ctx context.Context, userID, slug string) (*PublicationDetail, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	if !SlugGecerli(slug) {
+	if !ValidSlug(slug) {
 		return nil, ErrNotFound
 	}
-	k, err := s.depo.GetPublicationBySlug(ctx, slug, id)
+	rec, err := s.store.GetPublicationBySlug(ctx, slug, id)
 	if err != nil {
 		return nil, err
 	}
-	if !DetayGorebilir(k.gorunurlukGirdisi(id)) {
+	if !CanSeeDetail(rec.visibilityInput(id)) {
 		return nil, ErrNotFound
 	}
-	return &k.YayinDetayi, nil
+	return &rec.PublicationDetail, nil
 }
 
-// YayinGuncelle, PATCH /yayinlar/{id}. Altyapi yalnizca stem kopyasi olan
-// (yayinlanirken altyapisi acik) orijinallerde yeniden acilabilir.
-func (s *Servis) YayinGuncelle(ctx context.Context, kullaniciID, yayinID string, yama YayinYamasi) (*YayinDetayi, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// UpdatePublication is PATCH /yayinlar/{id}. Backing can be re-enabled only
+// on originals that have stem copies (backing was enabled when they were
+// published).
+func (s *Service) UpdatePublication(ctx context.Context, userID, pubID string, patch PublicationPatch) (*PublicationDetail, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	if err := yamayiDuzenle(&yama); err != nil {
+	if err := normalizePatch(&patch); err != nil {
 		return nil, err
 	}
-	k, err := s.sahibinYayini(ctx, id, yayinID)
+	rec, err := s.ownedPublication(ctx, id, pubID)
 	if err != nil {
 		return nil, err
 	}
-	if yama.AltyapiAcik != nil && *yama.AltyapiAcik && !k.AltyapiAcik && (!k.StemVar || k.KaynakYayinID != "") {
+	if patch.BackingEnabled != nil && *patch.BackingEnabled && !rec.BackingEnabled && (!rec.HasStems || rec.SourcePublicationID != "") {
 		return nil, ErrNoStems
 	}
-	if err := s.depo.UpdatePublication(ctx, k.ID, id, yama); err != nil {
+	if err := s.store.UpdatePublication(ctx, rec.ID, id, patch); err != nil {
 		return nil, err
 	}
-	return s.YayinGoster(ctx, id, k.ID)
+	return s.Publication(ctx, id, rec.ID)
 }
 
-// YayinSil, DELETE /yayinlar/{id}: yumusak siler ve dosya temizligini 24
-// saat sonraya kurar. Kuyruk hatasi loglanir; hesap silme ayni oneki
-// yeniden temizler.
-func (s *Servis) YayinSil(ctx context.Context, kullaniciID, yayinID string) error {
-	id, err := kullaniciCoz(kullaniciID)
+// DeletePublication is DELETE /yayinlar/{id}: it soft-deletes and schedules
+// the file cleanup 24 hours later. A queue error is logged; account deletion
+// cleans the same prefix again.
+func (s *Service) DeletePublication(ctx context.Context, userID, pubID string) error {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return err
 	}
-	yid, ok := kimlikCoz(yayinID)
+	pubUUID, ok := parseID(pubID)
 	if !ok {
 		return ErrNotFound
 	}
-	if err := s.depo.DeletePublication(ctx, yid, id); err != nil {
+	if err := s.store.DeletePublication(ctx, pubUUID, id); err != nil {
 		return err
 	}
-	if _, err := s.kuyruk.Enqueue(asynq.NewTask(TaskTypeDosyaSil, gorevYuku(yid)),
+	if _, err := s.queue.Enqueue(asynq.NewTask(TaskTypeDeleteFiles, encodeTaskPayload(pubUUID)),
 		asynq.Queue("bakim"),
-		asynq.ProcessIn(dosyaSilmeGecikmesi),
-		asynq.MaxRetry(dosyaSilDenemesi),
+		asynq.ProcessIn(deleteFilesDelay),
+		asynq.MaxRetry(deleteFilesMaxRetry),
 	); err != nil {
-		log.Printf("Uyari: yayin dosya temizligi kurulamadi (%s): %v", yid, err)
+		log.Printf("Uyari: yayin dosya temizligi kurulamadi (%s): %v", pubUUID, err)
 	}
 	return nil
 }
 
-// TekrarDene, POST /yayinlar/{id}/tekrar-dene: hata durumundaki yayini
-// yeniden hazirlamaya alir.
-func (s *Servis) TekrarDene(ctx context.Context, kullaniciID, yayinID string) (*YayinYaniti, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// Retry is POST /yayinlar/{id}/tekrar-dene: it puts a publication in the
+// failed status back into preparation.
+func (s *Service) Retry(ctx context.Context, userID, pubID string) (*PublicationResponse, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	k, err := s.sahibinYayini(ctx, id, yayinID)
+	rec, err := s.ownedPublication(ctx, id, pubID)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.depo.ResetForRetry(ctx, k.ID, id); err != nil {
+	if err := s.store.ResetForRetry(ctx, rec.ID, id); err != nil {
 		return nil, err
 	}
-	if err := s.hazirlamayaKoy(k.ID); err != nil {
-		// Iptal edilmis istek baglaminda da yayin "hazirlaniyor"da kalmamali.
-		if herr := s.depo.MarkFailed(context.WithoutCancel(ctx), k.ID); herr != nil {
-			log.Printf("Uyari: kuyruga girmeyen yayin hataya alinamadi (%s): %v", k.ID, herr)
+	if err := s.enqueuePrepare(rec.ID); err != nil {
+		// The publication must not stay in "hazirlaniyor" even when the request
+		// context was cancelled.
+		if failErr := s.store.MarkFailed(context.WithoutCancel(ctx), rec.ID); failErr != nil {
+			log.Printf("Uyari: kuyruga girmeyen yayin hataya alinamadi (%s): %v", rec.ID, failErr)
 		}
 		return nil, fmt.Errorf("hazirlama isi kurulamadi: %w", err)
 	}
-	return &YayinYaniti{ID: k.ID, Slug: k.Slug, Durum: DurumHazirlaniyor}, nil
+	return &PublicationResponse{ID: rec.ID, Slug: rec.Slug, Status: StatusPreparing}, nil
 }
 
-// Dosyalar, POST /yayinlar/{id}/dosyalar: master kopyasi icin imzali
-// dinleme adresi (R2_PRESIGN_TTL, varsayilan 1 saat).
-func (s *Servis) Dosyalar(ctx context.Context, kullaniciID, yayinID string) (*YayinDosyalari, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// Files is POST /yayinlar/{id}/dosyalar: a signed listening address for the
+// master copy (R2_PRESIGN_TTL, default 1 hour).
+func (s *Service) Files(ctx context.Context, userID, pubID string) (*PublicationFiles, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	k, err := s.gorunurYayin(ctx, id, yayinID)
+	rec, err := s.visiblePublication(ctx, id, pubID)
 	if err != nil {
 		return nil, err
 	}
-	if k.Durum != DurumYayinda || k.MasterAnahtari == "" {
+	if rec.Status != StatusPublished || rec.MasterKey == "" {
 		return nil, ErrInvalidStatus
 	}
-	url, bitis, err := client.ResolveURL(ctx, s.depolama, s.r2, k.MasterAnahtari)
+	url, expiresAt, err := client.ResolveURL(ctx, s.storage, s.r2, rec.MasterKey)
 	if err != nil {
 		return nil, fmt.Errorf("dinleme adresi uretilemedi: %w", err)
 	}
-	adres := DosyaAdresi{URL: url}
-	if !bitis.IsZero() {
-		adres.ExpiresAt = &bitis
+	address := FileLink{URL: url}
+	if !expiresAt.IsZero() {
+		address.ExpiresAt = &expiresAt
 	}
-	return &YayinDosyalari{Master: adres}, nil
+	return &PublicationFiles{Master: address}, nil
 }

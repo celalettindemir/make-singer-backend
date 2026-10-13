@@ -9,24 +9,24 @@ import (
 	"github.com/makeasinger/api/internal/social"
 )
 
-func ornekDetay() *social.YayinDetayi {
-	d := &social.YayinDetayi{Durum: social.DurumYayinda, Gorunurluk: social.GorunurlukHerkes}
-	d.ID, d.Slug, d.Baslik = "y1", "Ab3dEf9h", "Gece"
-	d.DalgaFormu = []float64{}
-	d.Yapi = []social.YapiOgesi{}
-	d.Sozler = social.Sozler{Bolumler: []social.SozBolumu{}}
-	d.Olusturma = time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
+func ornekDetay() *social.PublicationDetail {
+	d := &social.PublicationDetail{Status: social.StatusPublished, Visibility: social.VisibilityEveryone}
+	d.ID, d.Slug, d.Title = "y1", "Ab3dEf9h", "Gece"
+	d.Waveform = []float64{}
+	d.Structure = []social.StructureItem{}
+	d.Lyrics = social.Lyrics{Sections: []social.LyricsSection{}}
+	d.CreatedAt = time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
 	return d
 }
 
 func TestSosyal_YayinOlustur202(t *testing.T) {
-	s := &sahteSosyal{yayinYaniti: &social.YayinYaniti{ID: "y1", Slug: "Ab3dEf9h", Durum: social.DurumHazirlaniyor}}
+	s := &sahteSosyal{yayinYaniti: &social.PublicationResponse{ID: "y1", Slug: "Ab3dEf9h", Status: social.StatusPreparing}}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPost, "/api/social/yayinlar",
 		`{"baslik":"Gece","gorunurluk":"herkes","altyapiAcik":true,"masterUrl":"masters/u/p/m.wav","stemler":[{"id":"d","enstruman":"drums","url":"stems/u/p/d.mp3","sure":12.5}],"bpm":120,"sureSn":184,"ton":{"tonik":"A","mod":"minor"},"kaynakYayinId":null}`)
 	if durum != http.StatusAccepted || govde["durum"] != "hazirlaniyor" || govde["id"] != "y1" || govde["slug"] != "Ab3dEf9h" {
 		t.Fatalf("durum=%d govde=%v", durum, govde)
 	}
-	if s.sonIstek.Baslik != "Gece" || len(s.sonIstek.Stemler) != 1 || s.sonIstek.Stemler[0].Sure != 12.5 || s.sonIstek.KaynakYayinID != nil {
+	if s.sonIstek.Title != "Gece" || len(s.sonIstek.Stems) != 1 || s.sonIstek.Stems[0].Duration != 12.5 || s.sonIstek.SourcePublicationID != nil {
 		t.Fatalf("istek = %+v", s.sonIstek)
 	}
 }
@@ -112,7 +112,7 @@ func TestSosyal_YayinGuncelleYalnizcaGonderilenAlanlar(t *testing.T) {
 	if durum != http.StatusOK {
 		t.Fatalf("durum=%d", durum)
 	}
-	if s.sonYama.Gorunurluk == nil || *s.sonYama.Gorunurluk != "link" || s.sonYama.Aciklama != nil || s.sonYama.AltyapiAcik != nil || s.sonYama.YorumAcik != nil {
+	if s.sonYama.Visibility == nil || *s.sonYama.Visibility != "link" || s.sonYama.Description != nil || s.sonYama.BackingEnabled != nil || s.sonYama.CommentsEnabled != nil {
 		t.Fatalf("yama = %+v", s.sonYama)
 	}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(&sahteSosyal{hata: social.ErrNoStems}, sosyalKullanici), http.MethodPatch, "/api/social/yayinlar/y1", `{"altyapiAcik":true}`)
@@ -132,7 +132,7 @@ func TestSosyal_YayinSil204Ve404(t *testing.T) {
 }
 
 func TestSosyal_TekrarDene202Ve409(t *testing.T) {
-	s := &sahteSosyal{yayinYaniti: &social.YayinYaniti{ID: "y1", Slug: "Ab3dEf9h", Durum: social.DurumHazirlaniyor}}
+	s := &sahteSosyal{yayinYaniti: &social.PublicationResponse{ID: "y1", Slug: "Ab3dEf9h", Status: social.StatusPreparing}}
 	if durum, _ := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPost, "/api/social/yayinlar/y1/tekrar-dene", ""); durum != http.StatusAccepted {
 		t.Fatalf("durum=%d", durum)
 	}
@@ -144,7 +144,7 @@ func TestSosyal_TekrarDene202Ve409(t *testing.T) {
 
 func TestSosyal_DosyalarMasterURL(t *testing.T) {
 	bitis := time.Date(2026, 10, 12, 11, 0, 0, 0, time.UTC)
-	s := &sahteSosyal{dosyalar: &social.YayinDosyalari{Master: social.DosyaAdresi{URL: "https://imzali/x", ExpiresAt: &bitis}}}
+	s := &sahteSosyal{dosyalar: &social.PublicationFiles{Master: social.FileLink{URL: "https://imzali/x", ExpiresAt: &bitis}}}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPost, "/api/social/yayinlar/y1/dosyalar", "")
 	master, _ := govde["master"].(map[string]any)
 	if durum != http.StatusOK || master["url"] != "https://imzali/x" || master["expiresAt"] != "2026-10-12T11:00:00Z" {

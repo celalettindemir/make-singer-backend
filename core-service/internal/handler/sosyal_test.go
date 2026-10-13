@@ -21,147 +21,147 @@ const sosyalKullanici = "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
 type sahteSosyal struct {
 	hata error
 
-	profil      *social.Profil
-	adUygunlugu *social.AdUygunlugu
-	yayinYaniti *social.YayinYaniti
-	detay       *social.YayinDetayi
-	dosyalar    *social.YayinDosyalari
-	sayfa       *social.Sayfa[social.YayinOzeti]
-	begeni      *social.BegeniDurumu
-	takip       *social.TakipDurumu
-	oneriler    []social.ProfilOzeti
-	yorum       *social.Yorum
-	yorumSayfa  *social.Sayfa[social.Yorum]
-	cover       *social.CoverBaslangici
-	onizleme    *social.Onizleme
+	profil      *social.Profile
+	adUygunlugu *social.UsernameAvailability
+	yayinYaniti *social.PublicationResponse
+	detay       *social.PublicationDetail
+	dosyalar    *social.PublicationFiles
+	sayfa       *social.Page[social.PublicationSummary]
+	begeni      *social.LikeStatus
+	takip       *social.FollowStatus
+	oneriler    []social.ProfileSummary
+	yorum       *social.Comment
+	yorumSayfa  *social.Page[social.Comment]
+	cover       *social.CoverStart
+	onizleme    *social.Preview
 
 	sonKullanici string
 	sonAd        string
-	sonProfil    social.ProfilGirdisi
+	sonProfil    social.ProfileInput
 	sonYayin     string
-	sonIstek     social.YayinIstegi
-	sonYama      social.YayinYamasi
+	sonIstek     social.PublicationRequest
+	sonYama      social.PublicationPatch
 	sonSekme     string
 	sonTur       string
 	sonImlec     string
 	sonLimit     int
 	sonBegen     bool
 	sonTakip     bool
-	sonYorum     social.YorumGirdisi
-	sonSikayet   social.SikayetGirdisi
+	sonYorum     social.CommentInput
+	sonSikayet   social.ReportInput
 }
 
-func (s *sahteSosyal) ProfilBen(_ context.Context, k string) (*social.Profil, error) {
+func (s *sahteSosyal) MyProfile(_ context.Context, k string) (*social.Profile, error) {
 	s.sonKullanici = k
 	return s.profil, s.hata
 }
 
-func (s *sahteSosyal) ProfilKaydet(_ context.Context, k string, g social.ProfilGirdisi) (*social.Profil, error) {
+func (s *sahteSosyal) SaveProfile(_ context.Context, k string, g social.ProfileInput) (*social.Profile, error) {
 	s.sonKullanici, s.sonProfil = k, g
 	return s.profil, s.hata
 }
 
-func (s *sahteSosyal) AdUygunMu(_ context.Context, k, ad string) (*social.AdUygunlugu, error) {
+func (s *sahteSosyal) CheckUsername(_ context.Context, k, ad string) (*social.UsernameAvailability, error) {
 	s.sonKullanici, s.sonAd = k, ad
 	return s.adUygunlugu, s.hata
 }
 
-func (s *sahteSosyal) ProfilGoster(_ context.Context, k, ad string) (*social.Profil, error) {
+func (s *sahteSosyal) Profile(_ context.Context, k, ad string) (*social.Profile, error) {
 	s.sonKullanici, s.sonAd = k, ad
 	return s.profil, s.hata
 }
 
-func (s *sahteSosyal) YayinOlustur(_ context.Context, k string, ist social.YayinIstegi) (*social.YayinYaniti, error) {
+func (s *sahteSosyal) CreatePublication(_ context.Context, k string, ist social.PublicationRequest) (*social.PublicationResponse, error) {
 	s.sonKullanici, s.sonIstek = k, ist
 	return s.yayinYaniti, s.hata
 }
 
-func (s *sahteSosyal) YayinGoster(_ context.Context, k, id string) (*social.YayinDetayi, error) {
+func (s *sahteSosyal) Publication(_ context.Context, k, id string) (*social.PublicationDetail, error) {
 	s.sonKullanici, s.sonYayin = k, id
 	return s.detay, s.hata
 }
 
-func (s *sahteSosyal) SlugGoster(_ context.Context, k, slug string) (*social.YayinDetayi, error) {
+func (s *sahteSosyal) PublicationBySlug(_ context.Context, k, slug string) (*social.PublicationDetail, error) {
 	s.sonKullanici, s.sonYayin = k, slug
 	return s.detay, s.hata
 }
 
-func (s *sahteSosyal) YayinGuncelle(_ context.Context, k, id string, y social.YayinYamasi) (*social.YayinDetayi, error) {
+func (s *sahteSosyal) UpdatePublication(_ context.Context, k, id string, y social.PublicationPatch) (*social.PublicationDetail, error) {
 	s.sonKullanici, s.sonYayin, s.sonYama = k, id, y
 	return s.detay, s.hata
 }
 
-func (s *sahteSosyal) YayinSil(_ context.Context, k, id string) error {
+func (s *sahteSosyal) DeletePublication(_ context.Context, k, id string) error {
 	s.sonKullanici, s.sonYayin = k, id
 	return s.hata
 }
 
-func (s *sahteSosyal) TekrarDene(_ context.Context, k, id string) (*social.YayinYaniti, error) {
+func (s *sahteSosyal) Retry(_ context.Context, k, id string) (*social.PublicationResponse, error) {
 	s.sonKullanici, s.sonYayin = k, id
 	return s.yayinYaniti, s.hata
 }
 
-func (s *sahteSosyal) Dosyalar(_ context.Context, k, id string) (*social.YayinDosyalari, error) {
+func (s *sahteSosyal) Files(_ context.Context, k, id string) (*social.PublicationFiles, error) {
 	s.sonKullanici, s.sonYayin = k, id
 	return s.dosyalar, s.hata
 }
 
-func (s *sahteSosyal) Akis(_ context.Context, k, sekme, imlec string, limit int) (*social.Sayfa[social.YayinOzeti], error) {
+func (s *sahteSosyal) Feed(_ context.Context, k, sekme, imlec string, limit int) (*social.Page[social.PublicationSummary], error) {
 	s.sonKullanici, s.sonSekme, s.sonImlec, s.sonLimit = k, sekme, imlec, limit
 	return s.sayfa, s.hata
 }
 
-func (s *sahteSosyal) ProfilYayinlari(_ context.Context, k, ad, tur, imlec string, limit int) (*social.Sayfa[social.YayinOzeti], error) {
+func (s *sahteSosyal) ProfilePublications(_ context.Context, k, ad, tur, imlec string, limit int) (*social.Page[social.PublicationSummary], error) {
 	s.sonKullanici, s.sonAd, s.sonTur, s.sonImlec, s.sonLimit = k, ad, tur, imlec, limit
 	return s.sayfa, s.hata
 }
 
-func (s *sahteSosyal) Begeni(_ context.Context, k, id string, begen bool) (*social.BegeniDurumu, error) {
+func (s *sahteSosyal) SetLike(_ context.Context, k, id string, begen bool) (*social.LikeStatus, error) {
 	s.sonKullanici, s.sonYayin, s.sonBegen = k, id, begen
 	return s.begeni, s.hata
 }
 
-func (s *sahteSosyal) Takip(_ context.Context, k, ad string, takip bool) (*social.TakipDurumu, error) {
+func (s *sahteSosyal) SetFollow(_ context.Context, k, ad string, takip bool) (*social.FollowStatus, error) {
 	s.sonKullanici, s.sonAd, s.sonTakip = k, ad, takip
 	return s.takip, s.hata
 }
 
-func (s *sahteSosyal) Oneriler(_ context.Context, k string) ([]social.ProfilOzeti, error) {
+func (s *sahteSosyal) Suggestions(_ context.Context, k string) ([]social.ProfileSummary, error) {
 	s.sonKullanici = k
 	return s.oneriler, s.hata
 }
 
-func (s *sahteSosyal) Yorumlar(_ context.Context, k, id, imlec string, limit int) (*social.Sayfa[social.Yorum], error) {
+func (s *sahteSosyal) Comments(_ context.Context, k, id, imlec string, limit int) (*social.Page[social.Comment], error) {
 	s.sonKullanici, s.sonYayin, s.sonImlec, s.sonLimit = k, id, imlec, limit
 	return s.yorumSayfa, s.hata
 }
 
-func (s *sahteSosyal) YorumYaz(_ context.Context, k, id string, g social.YorumGirdisi) (*social.Yorum, error) {
+func (s *sahteSosyal) PostComment(_ context.Context, k, id string, g social.CommentInput) (*social.Comment, error) {
 	s.sonKullanici, s.sonYayin, s.sonYorum = k, id, g
 	return s.yorum, s.hata
 }
 
-func (s *sahteSosyal) YorumSil(_ context.Context, k, id string) error {
+func (s *sahteSosyal) DeleteComment(_ context.Context, k, id string) error {
 	s.sonKullanici, s.sonYayin = k, id
 	return s.hata
 }
 
-func (s *sahteSosyal) Sikayet(_ context.Context, k string, g social.SikayetGirdisi) error {
+func (s *sahteSosyal) Report(_ context.Context, k string, g social.ReportInput) error {
 	s.sonKullanici, s.sonSikayet = k, g
 	return s.hata
 }
 
-func (s *sahteSosyal) Coverlar(_ context.Context, k, id, imlec string, limit int) (*social.Sayfa[social.YayinOzeti], error) {
+func (s *sahteSosyal) Covers(_ context.Context, k, id, imlec string, limit int) (*social.Page[social.PublicationSummary], error) {
 	s.sonKullanici, s.sonYayin, s.sonImlec, s.sonLimit = k, id, imlec, limit
 	return s.sayfa, s.hata
 }
 
-func (s *sahteSosyal) CoverBaslat(_ context.Context, k, id string) (*social.CoverBaslangici, error) {
+func (s *sahteSosyal) StartCover(_ context.Context, k, id string) (*social.CoverStart, error) {
 	s.sonKullanici, s.sonYayin = k, id
 	return s.cover, s.hata
 }
 
-func (s *sahteSosyal) Onizleme(_ context.Context, slug string) (*social.Onizleme, error) {
+func (s *sahteSosyal) Preview(_ context.Context, slug string) (*social.Preview, error) {
 	s.sonYayin = slug
 	return s.onizleme, s.hata
 }
@@ -225,9 +225,9 @@ func TestSosyal_ProfilBenYoksa404ProfilYok(t *testing.T) {
 }
 
 func TestSosyal_ProfilBenSozlesmeAlanlari(t *testing.T) {
-	s := &sahteSosyal{profil: &social.Profil{
-		ProfilOzeti: social.ProfilOzeti{KullaniciAdi: "ali", GorunenAd: "Ali", AvatarRengi: 3},
-		Bio:         "b", BenMiyim: true,
+	s := &sahteSosyal{profil: &social.Profile{
+		ProfileSummary: social.ProfileSummary{Username: "ali", DisplayName: "Ali", AvatarColor: 3},
+		Bio:            "b", IsMe: true,
 	}}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodGet, "/api/social/profil/ben", "")
 	if durum != http.StatusOK {
@@ -270,10 +270,10 @@ func TestSosyal_ProfilKaydetHataKodlari(t *testing.T) {
 func fmtDogrulama(alan string) error { return errors.Join(social.ErrValidation, errors.New(alan)) }
 
 func TestSosyal_ProfilKaydetGovdeyiIletir(t *testing.T) {
-	s := &sahteSosyal{profil: &social.Profil{}}
+	s := &sahteSosyal{profil: &social.Profile{}}
 	durum, _ := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPut, "/api/social/profil/ben",
 		`{"kullaniciAdi":"ali","gorunenAd":"Ali","bio":"selam"}`)
-	if durum != http.StatusOK || s.sonProfil != (social.ProfilGirdisi{KullaniciAdi: "ali", GorunenAd: "Ali", Bio: "selam"}) {
+	if durum != http.StatusOK || s.sonProfil != (social.ProfileInput{Username: "ali", DisplayName: "Ali", Bio: "selam"}) {
 		t.Fatalf("durum=%d girdi=%+v", durum, s.sonProfil)
 	}
 }
@@ -286,7 +286,7 @@ func TestSosyal_BozukGovde422(t *testing.T) {
 }
 
 func TestSosyal_AdUygunOneriNullVeyaDolu(t *testing.T) {
-	s := &sahteSosyal{adUygunlugu: &social.AdUygunlugu{Uygun: true}}
+	s := &sahteSosyal{adUygunlugu: &social.UsernameAvailability{Available: true}}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodGet, "/api/social/profil/kullanici-adi/uygun?ad=ali", "")
 	if durum != http.StatusOK || govde["uygun"] != true || s.sonAd != "ali" {
 		t.Fatalf("durum=%d govde=%v ad=%q", durum, govde, s.sonAd)

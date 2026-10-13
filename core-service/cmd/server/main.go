@@ -174,7 +174,7 @@ func main() {
 		kopyalayici = r2Client
 	}
 	sosyalHandler := handler.NewSosyalHandler(
-		social.NewServis(sosyalDepo, asynqClient, storage, &cfg.R2).KopyalayiciAyarla(kopyalayici))
+		social.NewService(sosyalDepo, asynqClient, storage, &cfg.R2).WithCopier(kopyalayici))
 	sosyalWorker := worker.NewSosyalWorker(sosyalDepo, kopyalayici, audioClient, silici, deletionmark.NewRedisChecker(redisClient))
 
 	// Initialize handlers
@@ -404,8 +404,8 @@ func startWorkerServer(
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeMaster, masterWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeHesapTemizle, worker.NewHesapWorker(hesapService).ProcessTask)
-	mux.HandleFunc(social.TaskTypeHazirla, sosyalWorker.Hazirla)
-	mux.HandleFunc(social.TaskTypeDosyaSil, sosyalWorker.DosyaSil)
+	mux.HandleFunc(social.TaskTypePrepare, sosyalWorker.Hazirla)
+	mux.HandleFunc(social.TaskTypeDeleteFiles, sosyalWorker.DosyaSil)
 
 	if err := srv.Run(mux); err != nil {
 		log.Printf("Asynq worker error: %v", err)

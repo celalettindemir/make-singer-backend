@@ -8,117 +8,119 @@ import (
 	"github.com/makeasinger/api/internal/client"
 )
 
-// CoverStemi, cover projesine verilen stem: fileUrl, kullanicinin kendi
-// stems/ onekindeki kopyanin adresidir (/api/files/sign yeniden imzalar).
-type CoverStemi struct {
-	ID        string  `json:"id"`
-	Enstruman string  `json:"enstruman"`
-	FileURL   string  `json:"fileUrl"`
-	Sure      float64 `json:"sure"`
+// CoverStem is a stem handed to the cover project: fileUrl is the address of
+// the copy under the user's own stems/ prefix (/api/files/sign re-signs it).
+type CoverStem struct {
+	ID         string  `json:"id"`
+	Instrument string  `json:"enstruman"`
+	FileURL    string  `json:"fileUrl"`
+	Duration   float64 `json:"sure"`
 }
 
-// CoverBaslangici, POST /yayinlar/{id}/cover-baslat yaniti (spec §4.6).
-type CoverBaslangici struct {
-	Kaynak  KaynakOzeti  `json:"kaynak"`
-	Tur     string       `json:"tur"`
-	Bpm     int          `json:"bpm"`
-	Ton     Ton          `json:"ton"`
-	SureSn  int          `json:"sureSn"`
-	Yapi    []YapiOgesi  `json:"yapi"`
-	Sozler  Sozler       `json:"sozler"`
-	Stemler []CoverStemi `json:"stemler"`
+// CoverStart is the POST /yayinlar/{id}/cover-baslat response (spec §4.6).
+type CoverStart struct {
+	Source      SourceSummary   `json:"kaynak"`
+	Genre       string          `json:"tur"`
+	BPM         int             `json:"bpm"`
+	MusicalKey  MusicalKey      `json:"ton"`
+	DurationSec int             `json:"sureSn"`
+	Structure   []StructureItem `json:"yapi"`
+	Lyrics      Lyrics          `json:"sozler"`
+	Stems       []CoverStem     `json:"stemler"`
 }
 
-// KopyalayiciAyarla, cover-baslat'in stem kopyalayicisini baglar ve
-// servisi doner. nil (R2 yapilandirilmamis, dev) ise kopya atlanir ve
-// adresler yine uretilir. main tipli nil tuzagina dusmemek icin yalnizca
-// gercek istemciyi gecirir.
-func (s *Servis) KopyalayiciAyarla(k client.Copier) *Servis {
-	s.kopyalayici = k
+// WithCopier attaches the stem copier of cover-baslat and returns the
+// service. If nil (R2 not configured, dev), copying is skipped and the
+// addresses are still produced. main passes only the real client to avoid
+// the typed-nil trap.
+func (s *Service) WithCopier(copier client.Copier) *Service {
+	s.copier = copier
 	return s
 }
 
-// CoverStemHedefi, cover'a kopyalanan stem'in anahtaridir:
-// stems/{kullaniciId}/{klasor}/{stemId}.{ext}. Render stem duzeniyle
-// aynidir; uzanti kaynak anahtardan gelir.
-func CoverStemHedefi(kullaniciID, klasor, stemID, kaynak string) (string, error) {
-	return client.UserKey("stems", kullaniciID, klasor, stemID+uzanti(kaynak))
+// CoverStemDestKey is the key of a stem copied for a cover:
+// stems/{userId}/{folder}/{stemId}.{ext}. It matches the render stem layout;
+// the extension comes from the source key.
+func CoverStemDestKey(userID, folder, stemID, source string) (string, error) {
+	return client.UserKey("stems", userID, folder, stemID+extension(source))
 }
 
-// Coverlar, GET /yayinlar/{id}/coverlar. Kaynak gorunmuyorsa
-// ErrBulunamadi; altyapisi kapaliysa (cover yayini dahil) bos sayfa.
-func (s *Servis) Coverlar(ctx context.Context, kullaniciID, yayinID, hamImlec string, limit int) (*Sayfa[YayinOzeti], error) {
-	id, err := kullaniciCoz(kullaniciID)
+// Covers is GET /yayinlar/{id}/coverlar. ErrNotFound if the source is not
+// visible; an empty page if its backing is disabled (cover publications
+// included).
+func (s *Service) Covers(ctx context.Context, userID, pubID, rawCursor string, limit int) (*Page[PublicationSummary], error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	imlec, err := zamanImleciCoz(hamImlec)
+	cursor, err := decodeTimeCursor(rawCursor)
 	if err != nil {
 		return nil, err
 	}
-	k, err := s.gorunurYayin(ctx, id, yayinID)
+	rec, err := s.visiblePublication(ctx, id, pubID)
 	if err != nil {
 		return nil, err
 	}
-	if !k.AltyapiAcik {
-		return zamanSayfasiKur(nil, limit), nil
+	if !rec.BackingEnabled {
+		return buildTimePage(nil, limit), nil
 	}
-	ogeler, err := s.depo.ListCovers(ctx, k.ID, id, imlec, limit)
+	items, err := s.store.ListCovers(ctx, rec.ID, id, cursor, limit)
 	if err != nil {
 		return nil, err
 	}
-	return zamanSayfasiKur(ogeler, limit), nil
+	return buildTimePage(items, limit), nil
 }
 
-// CoverBaslat, POST /yayinlar/{id}/cover-baslat: yayinin stem'lerini
-// istegi yapanin stems/ onekine es zamanli kopyalar ve cover projesinin
-// baslangicini doner. Gorunmeyen yayin ErrBulunamadi; cover yayini,
-// altyapisi kapali ya da stem kopyasi olmayan yayin ErrAltyapiKapali;
-// sahibinin henuz yayinda olmayan yayini ErrDurum.
-func (s *Servis) CoverBaslat(ctx context.Context, kullaniciID, yayinID string) (*CoverBaslangici, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// StartCover is POST /yayinlar/{id}/cover-baslat: it copies the
+// publication's stems concurrently to the caller's stems/ prefix and returns
+// the start of the cover project. A publication that is not visible is
+// ErrNotFound; a cover publication, one with backing disabled or one without
+// stem copies is ErrBackingDisabled; the owner's own publication that is not
+// yet published is ErrInvalidStatus.
+func (s *Service) StartCover(ctx context.Context, userID, pubID string) (*CoverStart, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	k, err := s.gorunurYayin(ctx, id, yayinID)
+	rec, err := s.visiblePublication(ctx, id, pubID)
 	if err != nil {
 		return nil, err
 	}
-	if k.KaynakYayinID != "" || !k.AltyapiAcik {
+	if rec.SourcePublicationID != "" || !rec.BackingEnabled {
 		return nil, ErrBackingDisabled
 	}
-	if k.Durum != DurumYayinda {
+	if rec.Status != StatusPublished {
 		return nil, ErrInvalidStatus
 	}
-	kaynakStemler, err := s.depo.ListStems(ctx, k.ID)
+	sourceStems, err := s.store.ListStems(ctx, rec.ID)
 	if err != nil {
 		return nil, err
 	}
-	if len(kaynakStemler) == 0 {
+	if len(sourceStems) == 0 {
 		return nil, ErrBackingDisabled
 	}
 
-	klasor := uuid.NewString()
-	stemler := make([]CoverStemi, 0, len(kaynakStemler))
-	for _, st := range kaynakStemler {
-		hedef, err := CoverStemHedefi(id, klasor, st.ID, st.Anahtar)
+	folder := uuid.NewString()
+	stems := make([]CoverStem, 0, len(sourceStems))
+	for _, stem := range sourceStems {
+		dest, err := CoverStemDestKey(id, folder, stem.ID, stem.Key)
 		if err != nil {
 			return nil, fmt.Errorf("cover stem anahtari kurulamadi: %w", err)
 		}
-		if s.kopyalayici != nil {
-			if err := s.kopyalayici.Copy(ctx, st.Anahtar, hedef); err != nil {
+		if s.copier != nil {
+			if err := s.copier.Copy(ctx, stem.Key, dest); err != nil {
 				return nil, fmt.Errorf("cover stem kopyalanamadi: %w", err)
 			}
 		}
-		url, _, err := client.ResolveURL(ctx, s.depolama, s.r2, hedef)
+		url, _, err := client.ResolveURL(ctx, s.storage, s.r2, dest)
 		if err != nil {
 			return nil, fmt.Errorf("cover stem adresi uretilemedi: %w", err)
 		}
-		stemler = append(stemler, CoverStemi{ID: st.ID, Enstruman: st.Enstruman, FileURL: url, Sure: st.Sure})
+		stems = append(stems, CoverStem{ID: stem.ID, Instrument: stem.Instrument, FileURL: url, Duration: stem.Duration})
 	}
-	return &CoverBaslangici{
-		Kaynak: KaynakOzeti{YayinID: k.ID, Baslik: k.Baslik, SahipKullaniciAdi: k.Sahip.KullaniciAdi},
-		Tur:    k.Tur, Bpm: k.Bpm, Ton: k.Ton, SureSn: k.SureSn,
-		Yapi: k.Yapi, Sozler: k.Sozler, Stemler: stemler,
+	return &CoverStart{
+		Source: SourceSummary{PublicationID: rec.ID, Title: rec.Title, OwnerUsername: rec.Owner.Username},
+		Genre:  rec.Genre, BPM: rec.BPM, MusicalKey: rec.MusicalKey, DurationSec: rec.DurationSec,
+		Structure: rec.Structure, Lyrics: rec.Lyrics, Stems: stems,
 	}, nil
 }

@@ -5,154 +5,155 @@ import (
 	"time"
 )
 
-// Akis sekmeleri (GET /akis?sekme=).
+// Feed tabs (GET /akis?sekme=).
 const (
-	SekmeSeninIcin = "senin-icin"
-	SekmeTakip     = "takip"
-	SekmeYeni      = "yeni"
+	TabForYou    = "senin-icin"
+	TabFollowing = "takip"
+	TabNew       = "yeni"
 )
 
-// BegeniDurumu, PUT/DELETE /yayinlar/{id}/begeni yaniti.
-type BegeniDurumu struct {
-	BegendimMi   bool `json:"begendimMi"`
-	BegeniSayisi int  `json:"begeniSayisi"`
+// LikeStatus is the PUT/DELETE /yayinlar/{id}/begeni response.
+type LikeStatus struct {
+	LikedByMe bool `json:"begendimMi"`
+	LikeCount int  `json:"begeniSayisi"`
 }
 
-// zamanSayfasiKur, limit+1 ogeden sayfayi ve sonraki imleci kurar.
-func zamanSayfasiKur(ogeler []YayinOzeti, limit int) *Sayfa[YayinOzeti] {
-	sayfa := &Sayfa[YayinOzeti]{Ogeler: ogeler}
-	if len(ogeler) > limit {
-		sayfa.Ogeler = ogeler[:limit]
-		son := sayfa.Ogeler[limit-1]
-		sayfa.SonrakiImlec = imlecKodla(ZamanImleci{T: son.Olusturma, ID: son.ID})
+// buildTimePage builds the page and the next cursor from limit+1 items.
+func buildTimePage(items []PublicationSummary, limit int) *Page[PublicationSummary] {
+	page := &Page[PublicationSummary]{Items: items}
+	if len(items) > limit {
+		page.Items = items[:limit]
+		last := page.Items[limit-1]
+		page.NextCursor = encodeCursor(TimeCursor{T: last.CreatedAt, ID: last.ID})
 	}
-	if sayfa.Ogeler == nil {
-		sayfa.Ogeler = []YayinOzeti{}
+	if page.Items == nil {
+		page.Items = []PublicationSummary{}
 	}
-	return sayfa
+	return page
 }
 
-// Akis, GET /akis. Gecersiz sekme ya da imlec ErrDogrulama'dir.
-func (s *Servis) Akis(ctx context.Context, kullaniciID, sekme, hamImlec string, limit int) (*Sayfa[YayinOzeti], error) {
-	id, err := kullaniciCoz(kullaniciID)
+// Feed is GET /akis. An invalid tab or cursor is ErrValidation.
+func (s *Service) Feed(ctx context.Context, userID, tab, rawCursor string, limit int) (*Page[PublicationSummary], error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	switch sekme {
-	case SekmeYeni, SekmeTakip:
-		imlec, err := zamanImleciCoz(hamImlec)
+	switch tab {
+	case TabNew, TabFollowing:
+		cursor, err := decodeTimeCursor(rawCursor)
 		if err != nil {
 			return nil, err
 		}
-		cek := s.depo.FeedNew
-		if sekme == SekmeTakip {
-			cek = s.depo.FeedFollowing
+		fetch := s.store.FeedNew
+		if tab == TabFollowing {
+			fetch = s.store.FeedFollowing
 		}
-		ogeler, err := cek(ctx, id, imlec, limit)
+		items, err := fetch(ctx, id, cursor, limit)
 		if err != nil {
 			return nil, err
 		}
-		return zamanSayfasiKur(ogeler, limit), nil
-	case SekmeSeninIcin:
-		return s.seninIcin(ctx, id, hamImlec, limit)
+		return buildTimePage(items, limit), nil
+	case TabForYou:
+		return s.forYou(ctx, id, rawCursor, limit)
 	}
 	return nil, validationError("sekme senin-icin, takip ya da yeni olmali")
 }
 
-// referansPayi, uygulama ve veritabani saatleri arasindaki farka taninan paydir.
-const referansPayi = time.Second
+// referenceSkew is the allowance for the difference between the application and database clocks.
+const referenceSkew = time.Second
 
-// seninIcin, puanli akisi ceker. Ilk sayfa referans zamanini "simdi"
-// alir; sonraki sayfalar imlecteki ayni referansi kullanir.
-func (s *Servis) seninIcin(ctx context.Context, id, hamImlec string, limit int) (*Sayfa[YayinOzeti], error) {
-	imlec, err := puanImleciCoz(hamImlec)
+// forYou fetches the scored feed. The first page takes "now" as the
+// reference time; later pages use the same reference from the cursor.
+func (s *Service) forYou(ctx context.Context, id, rawCursor string, limit int) (*Page[PublicationSummary], error) {
+	cursor, err := decodeScoreCursor(rawCursor)
 	if err != nil {
 		return nil, err
 	}
-	// Referans bir saat payi kadar ileri alinir ve milisaniyeye yukari
-	// yuvarlanir: yayinin olusturma zamani veritabani saatinden gelir, uygulama
-	// saati biraz geride kalirsa ya da kesme milisaniyenin altini atarsa yeni
-	// yayin ilk sayfadan dusmesin.
-	simdi := s.simdi().Add(referansPayi).Truncate(time.Millisecond)
-	referans := simdi
-	if imlec != nil {
-		referans = time.UnixMilli(imlec.N)
+	// The reference is moved forward by a clock allowance and rounded up to
+	// the millisecond: the publication's creation time comes from the database
+	// clock, so a new publication must not drop off the first page if the
+	// application clock runs slightly behind or truncation discards the
+	// sub-millisecond part.
+	now := s.now().Add(referenceSkew).Truncate(time.Millisecond)
+	reference := now
+	if cursor != nil {
+		reference = time.UnixMilli(cursor.RefMs)
 	}
-	// Gelecekteki bir referans puanlamayi kaydirmasin diye simdiye kirpilir.
-	if referans.After(simdi) {
-		referans = simdi
+	// Clamped to now so that a future reference does not shift the scoring.
+	if reference.After(now) {
+		reference = now
 	}
-	ogeler, err := s.depo.FeedForYou(ctx, id, referans, imlec, limit)
+	items, err := s.store.FeedForYou(ctx, id, reference, cursor, limit)
 	if err != nil {
 		return nil, err
 	}
-	sayfa := &Sayfa[YayinOzeti]{Ogeler: make([]YayinOzeti, 0, len(ogeler))}
-	for i, o := range ogeler {
+	page := &Page[PublicationSummary]{Items: make([]PublicationSummary, 0, len(items))}
+	for i, item := range items {
 		if i == limit {
-			son := ogeler[limit-1]
-			sayfa.SonrakiImlec = imlecKodla(PuanImleci{P: son.Score, ID: son.ID, N: referans.UnixMilli()})
+			last := items[limit-1]
+			page.NextCursor = encodeCursor(ScoreCursor{Score: last.Score, ID: last.ID, RefMs: reference.UnixMilli()})
 			break
 		}
-		sayfa.Ogeler = append(sayfa.Ogeler, o.YayinOzeti)
+		page.Items = append(page.Items, item.PublicationSummary)
 	}
-	return sayfa, nil
+	return page, nil
 }
 
-// ProfilYayinlari, GET /profiller/{ad}/yayinlar?tur=sarkilar|coverlar.
-// tur bossa sarkilar'dir.
-func (s *Servis) ProfilYayinlari(ctx context.Context, izleyiciID, ad, tur, hamImlec string, limit int) (*Sayfa[YayinOzeti], error) {
-	id, err := kullaniciCoz(izleyiciID)
+// ProfilePublications is GET /profiller/{ad}/yayinlar?tur=sarkilar|coverlar.
+// An empty tur means sarkilar.
+func (s *Service) ProfilePublications(ctx context.Context, viewerID, username, kind, rawCursor string, limit int) (*Page[PublicationSummary], error) {
+	id, err := parseUserID(viewerID)
 	if err != nil {
 		return nil, err
 	}
-	var coverlar bool
-	switch tur {
+	var covers bool
+	switch kind {
 	case "", "sarkilar":
 	case "coverlar":
-		coverlar = true
+		covers = true
 	default:
 		return nil, validationError("tur sarkilar ya da coverlar olmali")
 	}
-	imlec, err := zamanImleciCoz(hamImlec)
+	cursor, err := decodeTimeCursor(rawCursor)
 	if err != nil {
 		return nil, err
 	}
-	if !KullaniciAdiGecerli(ad) {
+	if !ValidUsername(username) {
 		return nil, ErrNotFound
 	}
-	p, err := s.depo.GetProfileByUsername(ctx, ad)
+	p, err := s.store.GetProfileByUsername(ctx, username)
 	if err != nil {
 		return nil, err
 	}
-	ogeler, err := s.depo.ListProfilePublications(ctx, p.KullaniciID, id, coverlar, imlec, limit)
+	items, err := s.store.ListProfilePublications(ctx, p.UserID, id, covers, cursor, limit)
 	if err != nil {
 		return nil, err
 	}
-	return zamanSayfasiKur(ogeler, limit), nil
+	return buildTimePage(items, limit), nil
 }
 
-// Begeni, PUT (begen=true) ve DELETE (false) /yayinlar/{id}/begeni.
-// Tekrari guvenlidir; yalnizca gorulebilen yayin begenilir.
-func (s *Servis) Begeni(ctx context.Context, kullaniciID, yayinID string, begen bool) (*BegeniDurumu, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// SetLike is PUT (like=true) and DELETE (false) /yayinlar/{id}/begeni.
+// Repeating is safe; only a visible publication can be liked.
+func (s *Service) SetLike(ctx context.Context, userID, pubID string, like bool) (*LikeStatus, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	k, err := s.gorunurYayin(ctx, id, yayinID)
+	rec, err := s.visiblePublication(ctx, id, pubID)
 	if err != nil {
 		return nil, err
 	}
-	if begen {
-		err = s.depo.Like(ctx, id, k.ID)
+	if like {
+		err = s.store.Like(ctx, id, rec.ID)
 	} else {
-		err = s.depo.Unlike(ctx, id, k.ID)
+		err = s.store.Unlike(ctx, id, rec.ID)
 	}
 	if err != nil {
 		return nil, err
 	}
-	guncel, err := s.depo.GetPublication(ctx, k.ID, id)
+	updated, err := s.store.GetPublication(ctx, rec.ID, id)
 	if err != nil {
 		return nil, err
 	}
-	return &BegeniDurumu{BegendimMi: guncel.BegendimMi, BegeniSayisi: guncel.BegeniSayisi}, nil
+	return &LikeStatus{LikedByMe: updated.LikedByMe, LikeCount: updated.LikeCount}, nil
 }

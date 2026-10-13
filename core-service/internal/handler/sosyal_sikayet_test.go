@@ -14,12 +14,12 @@ func TestSosyal_Sikayet201Govdesiz(t *testing.T) {
 	if durum != http.StatusCreated || ham != "" {
 		t.Fatalf("durum=%d govde=%q", durum, ham)
 	}
-	if s.sonSikayet != (social.SikayetGirdisi{HedefTuru: "yorum", HedefID: "c1", Neden: "spam", Aciklama: "x"}) {
+	if s.sonSikayet != (social.ReportInput{TargetType: "yorum", TargetID: "c1", Reason: "spam", Description: "x"}) {
 		t.Fatalf("iletilen = %+v", s.sonSikayet)
 	}
 	// aciklama istege bagli.
 	if durum, _ := sosyalHamIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPost, "/api/social/sikayetler",
-		`{"hedefTuru":"yayin","hedefId":"y1","neden":"diger"}`); durum != http.StatusCreated || s.sonSikayet.Aciklama != "" {
+		`{"hedefTuru":"yayin","hedefId":"y1","neden":"diger"}`); durum != http.StatusCreated || s.sonSikayet.Description != "" {
 		t.Fatalf("aciklamasiz: durum=%d %+v", durum, s.sonSikayet)
 	}
 }

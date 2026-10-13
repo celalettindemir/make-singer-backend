@@ -26,23 +26,23 @@ func testYorumEkle(t *testing.T, havuz *pgxpool.Pool, id, yayin, yazar string, z
 
 // tumYorumSayfalari, yorum listesini limit'lik sayfalarla gezer; her
 // sayfanin imlecini servisin kurdugu gibi (son ogeden) kurar.
-func tumYorumSayfalari(t *testing.T, d *PostgresStore, yayin, izleyici string, limit int) []Yorum {
+func tumYorumSayfalari(t *testing.T, d *PostgresStore, yayin, izleyici string, limit int) []Comment {
 	t.Helper()
 	var (
-		hepsi []Yorum
-		imlec *YorumImleci
+		hepsi []Comment
+		imlec *CommentCursor
 	)
 	for sayfa := 0; sayfa < 20; sayfa++ {
 		ogeler, err := d.ListComments(context.Background(), yayin, izleyici, imlec, limit)
 		if err != nil {
 			t.Fatalf("sayfa %d: %v", sayfa, err)
 		}
-		s := yorumSayfasiKur(ogeler, limit)
-		hepsi = append(hepsi, s.Ogeler...)
-		if s.SonrakiImlec == nil {
+		s := buildCommentPage(ogeler, limit)
+		hepsi = append(hepsi, s.Items...)
+		if s.NextCursor == nil {
 			return hepsi
 		}
-		if imlec, err = yorumImleciCoz(*s.SonrakiImlec); err != nil {
+		if imlec, err = decodeCommentCursor(*s.NextCursor); err != nil {
 			t.Fatalf("imlec cozulemedi: %v", err)
 		}
 	}
@@ -91,7 +91,7 @@ func TestPostgresDepo_YorumSirasiVeSayfalama(t *testing.T) {
 	for izleyiciID, beklenenSilebilir := range map[string]int{izleyici: 0, yazar: 7, sahip: 9} {
 		n := 0
 		for _, y := range tumYorumSayfalari(t, d, yayin, izleyiciID, 50) {
-			if y.SilebilirMiyim {
+			if y.CanDelete {
 				n++
 			}
 		}
@@ -102,8 +102,8 @@ func TestPostgresDepo_YorumSirasiVeSayfalama(t *testing.T) {
 
 	// yorumSayisi silinmisi saymaz.
 	k, err := d.GetPublication(context.Background(), yayin, izleyici)
-	if err != nil || k.YorumSayisi != 9 {
-		t.Fatalf("yorumSayisi = %d, %v; beklenen 9", k.YorumSayisi, err)
+	if err != nil || k.CommentCount != 9 {
+		t.Fatalf("yorumSayisi = %d, %v; beklenen 9", k.CommentCount, err)
 	}
 }
 
@@ -117,21 +117,21 @@ func TestPostgresDepo_YorumEkleGetirSil(t *testing.T) {
 	yayin := testYayinEkle(t, havuz, testYayin{SahipID: sahip})
 
 	id := uuid.NewString()
-	y, err := d.InsertComment(ctx, YeniYorum{ID: id, YayinID: yayin, YazarID: yazar, Metin: "selam", ZamanMs: intp(1200)})
+	y, err := d.InsertComment(ctx, CommentInsert{ID: id, PublicationID: yayin, AuthorID: yazar, Text: "selam", TimeMs: intp(1200)})
 	if err != nil {
 		t.Fatalf("YorumEkle: %v", err)
 	}
-	if y.ID != id || y.Metin != "selam" || *y.ZamanMs != 1200 || y.Yazar.KullaniciAdi != "yazar" ||
-		y.Yazar.AvatarRengi != AvatarRengi(yazar) || y.Olusturma.IsZero() || y.Olusturma.Location() != time.UTC {
+	if y.ID != id || y.Text != "selam" || *y.TimeMs != 1200 || y.Author.Username != "yazar" ||
+		y.Author.AvatarColor != AvatarColor(yazar) || y.CreatedAt.IsZero() || y.CreatedAt.Location() != time.UTC {
 		t.Fatalf("yorum = %+v", y)
 	}
-	damgasiz, err := d.InsertComment(ctx, YeniYorum{ID: uuid.NewString(), YayinID: yayin, YazarID: yazar, Metin: "a"})
-	if err != nil || damgasiz.ZamanMs != nil {
+	damgasiz, err := d.InsertComment(ctx, CommentInsert{ID: uuid.NewString(), PublicationID: yayin, AuthorID: yazar, Text: "a"})
+	if err != nil || damgasiz.TimeMs != nil {
 		t.Fatalf("damgasiz = %+v, %v", damgasiz, err)
 	}
 
 	k, err := d.GetComment(ctx, id)
-	if err != nil || k.YayinID != yayin || k.YazarID != yazar || k.YayinSahibiID != sahip || k.Silindi {
+	if err != nil || k.PublicationID != yayin || k.AuthorID != yazar || k.PublicationOwnerID != sahip || k.Deleted {
 		t.Fatalf("kayit = %+v, %v", k, err)
 	}
 	if err := d.DeleteComment(ctx, id); err != nil {
@@ -140,13 +140,13 @@ func TestPostgresDepo_YorumEkleGetirSil(t *testing.T) {
 	if err := d.DeleteComment(ctx, id); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("tekrar silme: %v", err)
 	}
-	if k, err := d.GetComment(ctx, id); err != nil || !k.Silindi {
+	if k, err := d.GetComment(ctx, id); err != nil || !k.Deleted {
 		t.Fatalf("silinmis kayit = %+v, %v", k, err)
 	}
 	if _, err := d.GetComment(ctx, uuid.NewString()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("olmayan yorum: %v", err)
 	}
-	if _, err := d.InsertComment(ctx, YeniYorum{ID: uuid.NewString(), YayinID: yayin, YazarID: yazar, Metin: "x", ZamanMs: intp(-1)}); err == nil {
+	if _, err := d.InsertComment(ctx, CommentInsert{ID: uuid.NewString(), PublicationID: yayin, AuthorID: yazar, Text: "x", TimeMs: intp(-1)}); err == nil {
 		t.Fatal("negatif zaman_ms CHECK kisitina takilmali")
 	}
 }

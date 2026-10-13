@@ -11,9 +11,9 @@ import (
 )
 
 func TestSosyal_YorumYaz201VeSozlesme(t *testing.T) {
-	s := &sahteSosyal{yorum: &social.Yorum{
-		ID: "y1", Yazar: social.ProfilOzeti{KullaniciAdi: "ali", GorunenAd: "Ali", AvatarRengi: 1},
-		Metin: "guzel", Olusturma: time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC), SilebilirMiyim: true,
+	s := &sahteSosyal{yorum: &social.Comment{
+		ID: "y1", Author: social.ProfileSummary{Username: "ali", DisplayName: "Ali", AvatarColor: 1},
+		Text: "guzel", CreatedAt: time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC), CanDelete: true,
 	}}
 	durum, ham := sosyalHamIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPost,
 		"/api/social/yayinlar/abc/yorumlar", `{"metin":"guzel","zamanMs":null}`)
@@ -21,13 +21,13 @@ func TestSosyal_YorumYaz201VeSozlesme(t *testing.T) {
 	if durum != http.StatusCreated || ham != beklenen {
 		t.Fatalf("durum=%d govde=%s", durum, ham)
 	}
-	if s.sonYayin != "abc" || s.sonYorum.Metin != "guzel" || s.sonYorum.ZamanMs != nil {
+	if s.sonYayin != "abc" || s.sonYorum.Text != "guzel" || s.sonYorum.TimeMs != nil {
 		t.Fatalf("iletilen = %q %+v", s.sonYayin, s.sonYorum)
 	}
 
 	sosyalHamIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodPost,
 		"/api/social/yayinlar/abc/yorumlar", `{"metin":"an","zamanMs":1500}`)
-	if s.sonYorum.ZamanMs == nil || *s.sonYorum.ZamanMs != 1500 {
+	if s.sonYorum.TimeMs == nil || *s.sonYorum.TimeMs != 1500 {
 		t.Fatalf("zamanMs iletilmedi: %+v", s.sonYorum)
 	}
 }
@@ -64,7 +64,7 @@ func TestSosyal_YorumHataKodlari(t *testing.T) {
 }
 
 func TestSosyal_YorumlarSayfasi(t *testing.T) {
-	s := &sahteSosyal{yorumSayfa: &social.Sayfa[social.Yorum]{Ogeler: []social.Yorum{}}}
+	s := &sahteSosyal{yorumSayfa: &social.Page[social.Comment]{Items: []social.Comment{}}}
 	durum, govde := sosyalIstek(t, sosyalUygulamasi(s, sosyalKullanici), http.MethodGet,
 		"/api/social/yayinlar/abc/yorumlar?imlec=xyz", "")
 	if durum != http.StatusOK || s.sonImlec != "xyz" || s.sonLimit != 20 || s.sonYayin != "abc" {
@@ -94,8 +94,8 @@ func TestSosyal_YorumLimitiYalnizcaYazmada(t *testing.T) {
 		return response.Error(c, fiber.StatusTooManyRequests, "yavasla", "Biraz yavasla", nil)
 	}
 	s := &sahteSosyal{
-		yorumSayfa:  &social.Sayfa[social.Yorum]{Ogeler: []social.Yorum{}},
-		yayinYaniti: &social.YayinYaniti{},
+		yorumSayfa:  &social.Page[social.Comment]{Items: []social.Comment{}},
+		yayinYaniti: &social.PublicationResponse{},
 	}
 	app := sosyalUygulamasiLimitli(s, sosyalKullanici, SosyalLimitleri{Yayin: gecir, Yorum: yavasla, Cover: gecir})
 	durum, govde := sosyalIstek(t, app, http.MethodPost, "/api/social/yayinlar/abc/yorumlar", `{"metin":"x","zamanMs":null}`)

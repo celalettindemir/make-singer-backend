@@ -14,39 +14,39 @@ import (
 // (*sosyal.Servis uygular). Arayuz, handler testlerinin servisi elle
 // yazilmis bir sahteyle degistirebilmesi icindir.
 type SosyalServisi interface {
-	ProfilBen(ctx context.Context, kullaniciID string) (*social.Profil, error)
-	ProfilKaydet(ctx context.Context, kullaniciID string, g social.ProfilGirdisi) (*social.Profil, error)
-	AdUygunMu(ctx context.Context, kullaniciID, ad string) (*social.AdUygunlugu, error)
-	ProfilGoster(ctx context.Context, izleyiciID, ad string) (*social.Profil, error)
+	MyProfile(ctx context.Context, kullaniciID string) (*social.Profile, error)
+	SaveProfile(ctx context.Context, kullaniciID string, g social.ProfileInput) (*social.Profile, error)
+	CheckUsername(ctx context.Context, kullaniciID, ad string) (*social.UsernameAvailability, error)
+	Profile(ctx context.Context, izleyiciID, ad string) (*social.Profile, error)
 
-	YayinOlustur(ctx context.Context, kullaniciID string, ist social.YayinIstegi) (*social.YayinYaniti, error)
-	YayinGoster(ctx context.Context, kullaniciID, yayinID string) (*social.YayinDetayi, error)
-	SlugGoster(ctx context.Context, kullaniciID, slug string) (*social.YayinDetayi, error)
-	YayinGuncelle(ctx context.Context, kullaniciID, yayinID string, yama social.YayinYamasi) (*social.YayinDetayi, error)
-	YayinSil(ctx context.Context, kullaniciID, yayinID string) error
-	TekrarDene(ctx context.Context, kullaniciID, yayinID string) (*social.YayinYaniti, error)
-	Dosyalar(ctx context.Context, kullaniciID, yayinID string) (*social.YayinDosyalari, error)
+	CreatePublication(ctx context.Context, kullaniciID string, ist social.PublicationRequest) (*social.PublicationResponse, error)
+	Publication(ctx context.Context, kullaniciID, yayinID string) (*social.PublicationDetail, error)
+	PublicationBySlug(ctx context.Context, kullaniciID, slug string) (*social.PublicationDetail, error)
+	UpdatePublication(ctx context.Context, kullaniciID, yayinID string, yama social.PublicationPatch) (*social.PublicationDetail, error)
+	DeletePublication(ctx context.Context, kullaniciID, yayinID string) error
+	Retry(ctx context.Context, kullaniciID, yayinID string) (*social.PublicationResponse, error)
+	Files(ctx context.Context, kullaniciID, yayinID string) (*social.PublicationFiles, error)
 
-	Akis(ctx context.Context, kullaniciID, sekme, imlec string, limit int) (*social.Sayfa[social.YayinOzeti], error)
-	ProfilYayinlari(ctx context.Context, izleyiciID, ad, tur, imlec string, limit int) (*social.Sayfa[social.YayinOzeti], error)
-	Begeni(ctx context.Context, kullaniciID, yayinID string, begen bool) (*social.BegeniDurumu, error)
+	Feed(ctx context.Context, kullaniciID, sekme, imlec string, limit int) (*social.Page[social.PublicationSummary], error)
+	ProfilePublications(ctx context.Context, izleyiciID, ad, tur, imlec string, limit int) (*social.Page[social.PublicationSummary], error)
+	SetLike(ctx context.Context, kullaniciID, yayinID string, begen bool) (*social.LikeStatus, error)
 
-	Takip(ctx context.Context, kullaniciID, ad string, takip bool) (*social.TakipDurumu, error)
-	Oneriler(ctx context.Context, kullaniciID string) ([]social.ProfilOzeti, error)
+	SetFollow(ctx context.Context, kullaniciID, ad string, takip bool) (*social.FollowStatus, error)
+	Suggestions(ctx context.Context, kullaniciID string) ([]social.ProfileSummary, error)
 
-	Yorumlar(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*social.Sayfa[social.Yorum], error)
-	YorumYaz(ctx context.Context, kullaniciID, yayinID string, g social.YorumGirdisi) (*social.Yorum, error)
-	YorumSil(ctx context.Context, kullaniciID, yorumID string) error
+	Comments(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*social.Page[social.Comment], error)
+	PostComment(ctx context.Context, kullaniciID, yayinID string, g social.CommentInput) (*social.Comment, error)
+	DeleteComment(ctx context.Context, kullaniciID, yorumID string) error
 
-	Sikayet(ctx context.Context, kullaniciID string, g social.SikayetGirdisi) error
+	Report(ctx context.Context, kullaniciID string, g social.ReportInput) error
 
-	Coverlar(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*social.Sayfa[social.YayinOzeti], error)
-	CoverBaslat(ctx context.Context, kullaniciID, yayinID string) (*social.CoverBaslangici, error)
+	Covers(ctx context.Context, kullaniciID, yayinID, imlec string, limit int) (*social.Page[social.PublicationSummary], error)
+	StartCover(ctx context.Context, kullaniciID, yayinID string) (*social.CoverStart, error)
 
-	Onizleme(ctx context.Context, slug string) (*social.Onizleme, error)
+	Preview(ctx context.Context, slug string) (*social.Preview, error)
 }
 
-var _ SosyalServisi = (*social.Servis)(nil)
+var _ SosyalServisi = (*social.Service)(nil)
 
 // SosyalHandler, /api/social altindaki uclardir.
 type SosyalHandler struct {

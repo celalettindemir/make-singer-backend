@@ -13,11 +13,11 @@ func (h *SosyalHandler) YayinOlustur(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	var ist social.YayinIstegi
+	var ist social.PublicationRequest
 	if err := c.BodyParser(&ist); err != nil {
 		return govdeHatasi(c)
 	}
-	y, err := h.servis.YayinOlustur(c.Context(), userID, ist)
+	y, err := h.servis.CreatePublication(c.Context(), userID, ist)
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -30,7 +30,7 @@ func (h *SosyalHandler) Yayin(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	y, err := h.servis.YayinGoster(c.Context(), userID, c.Params("id"))
+	y, err := h.servis.Publication(c.Context(), userID, c.Params("id"))
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -43,7 +43,7 @@ func (h *SosyalHandler) Slug(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	y, err := h.servis.SlugGoster(c.Context(), userID, c.Params("slug"))
+	y, err := h.servis.PublicationBySlug(c.Context(), userID, c.Params("slug"))
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -56,11 +56,11 @@ func (h *SosyalHandler) YayinGuncelle(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	var yama social.YayinYamasi
+	var yama social.PublicationPatch
 	if err := c.BodyParser(&yama); err != nil {
 		return govdeHatasi(c)
 	}
-	y, err := h.servis.YayinGuncelle(c.Context(), userID, c.Params("id"), yama)
+	y, err := h.servis.UpdatePublication(c.Context(), userID, c.Params("id"), yama)
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -73,7 +73,7 @@ func (h *SosyalHandler) YayinSil(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	if err := h.servis.YayinSil(c.Context(), userID, c.Params("id")); err != nil {
+	if err := h.servis.DeletePublication(c.Context(), userID, c.Params("id")); err != nil {
 		return sosyalHata(c, err)
 	}
 	return response.NoContent(c)
@@ -85,7 +85,7 @@ func (h *SosyalHandler) TekrarDene(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	y, err := h.servis.TekrarDene(c.Context(), userID, c.Params("id"))
+	y, err := h.servis.Retry(c.Context(), userID, c.Params("id"))
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -98,7 +98,7 @@ func (h *SosyalHandler) Dosyalar(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	d, err := h.servis.Dosyalar(c.Context(), userID, c.Params("id"))
+	d, err := h.servis.Files(c.Context(), userID, c.Params("id"))
 	if err != nil {
 		return sosyalHata(c, err)
 	}

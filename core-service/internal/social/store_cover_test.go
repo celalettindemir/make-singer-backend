@@ -17,26 +17,26 @@ func TestPostgresDepo_CoverlarGorunurlukVeSira(t *testing.T) {
 	baska := testYayinEkle(t, havuz, testYayin{SahipID: yabanci, AltyapiAcik: true})
 
 	c1 := testYayinEkle(t, havuz, testYayin{SahipID: yabanci, KaynakID: kaynak, Olusturma: t0.Add(4 * time.Minute)})
-	c2 := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, KaynakID: kaynak, Gorunurluk: GorunurlukTakipciler, Olusturma: t0.Add(3 * time.Minute)})
-	c3 := testYayinEkle(t, havuz, testYayin{SahipID: ben, KaynakID: kaynak, Gorunurluk: GorunurlukLink, Olusturma: t0.Add(2 * time.Minute)})
+	c2 := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, KaynakID: kaynak, Gorunurluk: VisibilityFollowers, Olusturma: t0.Add(3 * time.Minute)})
+	c3 := testYayinEkle(t, havuz, testYayin{SahipID: ben, KaynakID: kaynak, Gorunurluk: VisibilityLink, Olusturma: t0.Add(2 * time.Minute)})
 	c4 := testYayinEkle(t, havuz, testYayin{SahipID: yabanci, KaynakID: kaynak, Olusturma: t0.Add(time.Minute)})
 	// Girmeyenler: yabancinin takipciler ve link cover'i, hazirlanan
 	// (sahibine bile), silinmis, baska kaynagin cover'i.
-	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, KaynakID: kaynak, Gorunurluk: GorunurlukTakipciler})
-	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, KaynakID: kaynak, Gorunurluk: GorunurlukLink})
-	testYayinEkle(t, havuz, testYayin{SahipID: ben, KaynakID: kaynak, Durum: DurumHazirlaniyor})
+	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, KaynakID: kaynak, Gorunurluk: VisibilityFollowers})
+	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, KaynakID: kaynak, Gorunurluk: VisibilityLink})
+	testYayinEkle(t, havuz, testYayin{SahipID: ben, KaynakID: kaynak, Durum: StatusPreparing})
 	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, KaynakID: kaynak, Silindi: true})
 	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, KaynakID: baska})
 
-	cek := func(izleyici string) func(*ZamanImleci) ([]YayinOzeti, error) {
-		return func(im *ZamanImleci) ([]YayinOzeti, error) { return d.ListCovers(ctx, kaynak, izleyici, im, 2) }
+	cek := func(izleyici string) func(*TimeCursor) ([]PublicationSummary, error) {
+		return func(im *TimeCursor) ([]PublicationSummary, error) { return d.ListCovers(ctx, kaynak, izleyici, im, 2) }
 	}
 	esitSira(t, "ben", tumSayfalar(t, cek(ben), 2), []string{c1, c2, c3, c4})
 	esitSira(t, "yabanci izleyici", tumSayfalar(t, cek(uuid.NewString()), 2), []string{c1, c4})
 
 	// Kaynak ozeti cover'larda doludur.
 	ogeler, err := d.ListCovers(ctx, kaynak, ben, nil, 1)
-	if err != nil || ogeler[0].Kaynak == nil || ogeler[0].Kaynak.YayinID != kaynak || ogeler[0].Kaynak.Silindi {
+	if err != nil || ogeler[0].Source == nil || ogeler[0].Source.PublicationID != kaynak || ogeler[0].Source.Deleted {
 		t.Fatalf("kaynak ozeti = %+v, %v", ogeler, err)
 	}
 }
@@ -51,7 +51,7 @@ func TestPostgresDepo_StemListesi(t *testing.T) {
 	if err != nil || bos == nil || len(bos) != 0 {
 		t.Fatalf("bos liste = %#v, %v", bos, err)
 	}
-	beklenen := []StemKaydi{{ID: "drums", Enstruman: "Davul", Sure: 12.5, Anahtar: "sosyal/" + id + "/stems/drums.mp3"}}
+	beklenen := []StemRecord{{ID: "drums", Instrument: "Davul", Duration: 12.5, Key: "sosyal/" + id + "/stems/drums.mp3"}}
 	if _, err := havuz.Exec(ctx, `UPDATE sosyal.yayin SET stem_listesi = $2 WHERE id = $1`, id, beklenen); err != nil {
 		t.Fatal(err)
 	}

@@ -28,7 +28,7 @@ func noStore(c *fiber.Ctx) error {
 // link yayinlari; digerleri 404 bulunamadi. Yanit imzali bir adres
 // tasidigi icin ara bellege alinmaz (Cache-Control rotadaki noStore'dan).
 func (h *SosyalHandler) Onizleme(c *fiber.Ctx) error {
-	o, err := h.servis.Onizleme(c.Context(), c.Params("slug"))
+	o, err := h.servis.Preview(c.Context(), c.Params("slug"))
 	if err != nil {
 		return sosyalHata(c, err)
 	}

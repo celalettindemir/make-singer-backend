@@ -37,63 +37,63 @@ func testR2() *config.R2Config {
 }
 
 // testServisi, sahte depo ve kuyrukla, R2 istemcisi olmadan servis kurar.
-func testServisi(d *sahteDepo) (*Servis, *sahteKuyruk) {
+func testServisi(d *sahteDepo) (*Service, *sahteKuyruk) {
 	q := &sahteKuyruk{}
-	return NewServis(d, q, nil, testR2()), q
+	return NewService(d, q, nil, testR2()), q
 }
 
 // sahteDepo, servis testleri icin bellek ici Depo'dur. Yalnizca servisin
 // kararlarini sinamaya yetecek kadar davranir; SQL davranisi canli
 // Postgres testlerinde sinanir.
 type sahteDepo struct {
-	profiller map[string]*ProfilKaydi // kullanici id -> kayit
-	sayilar   ProfilSayilari
+	profiller map[string]*ProfileRecord // kullanici id -> kayit
+	sayilar   ProfileCounts
 	hata      error // dolu ise her cagri bu hatayla doner
 
-	yayinlar      map[string]*YayinKaydi // yayin id -> kayit
-	eklenen       []YeniYayin
+	yayinlar      map[string]*PublicationRecord // yayin id -> kayit
+	eklenen       []PublicationInsert
 	slugCakismasi int // ilk n YayinEkle errSlugCakisti doner
-	yamalar       []YayinYamasi
+	yamalar       []PublicationPatch
 	kaldirilan    []string
 
-	hazirliklar map[string]*HazirlikKaydi
-	yayinlanan  map[string]HazirlikSonucu
+	hazirliklar map[string]*PreparationRecord
+	yayinlanan  map[string]PreparationResult
 	hataYapilan []string
 
-	akisOgeleri []YayinOzeti
+	akisOgeleri []PublicationSummary
 	sonAkis     akisCagrisi
 
 	takipler      map[[2]string]bool // {takipci, takip edilen}
-	oneriKayitlar []ProfilKaydi
+	oneriKayitlar []ProfileRecord
 	sonOneri      [2]any // {izleyici, limit}
 
-	yorumKayitlari  map[string]*YorumKaydi
-	yorumOgeleri    []Yorum
-	eklenenYorumlar []YeniYorum
+	yorumKayitlari  map[string]*CommentRecord
+	yorumOgeleri    []Comment
+	eklenenYorumlar []CommentInsert
 	silinenYorumlar []string
-	sonYorumImleci  *YorumImleci
+	sonYorumImleci  *CommentCursor
 	sonYorumLimiti  int
 
-	sikayetler []YeniSikayet
+	sikayetler []ReportInsert
 
-	stemListeleri map[string][]StemKaydi
+	stemListeleri map[string][]StemRecord
 
-	onizlemeler map[string]*OnizlemeKaydi // slug -> kayit
+	onizlemeler map[string]*PreviewRecord // slug -> kayit
 }
 
 func yeniSahteDepo() *sahteDepo {
 	return &sahteDepo{
-		profiller:   map[string]*ProfilKaydi{},
-		yayinlar:    map[string]*YayinKaydi{},
-		hazirliklar: map[string]*HazirlikKaydi{},
-		yayinlanan:  map[string]HazirlikSonucu{},
+		profiller:   map[string]*ProfileRecord{},
+		yayinlar:    map[string]*PublicationRecord{},
+		hazirliklar: map[string]*PreparationRecord{},
+		yayinlanan:  map[string]PreparationResult{},
 		takipler:    map[[2]string]bool{},
 
-		yorumKayitlari: map[string]*YorumKaydi{},
+		yorumKayitlari: map[string]*CommentRecord{},
 	}
 }
 
-func (d *sahteDepo) GetProfile(_ context.Context, id string) (*ProfilKaydi, error) {
+func (d *sahteDepo) GetProfile(_ context.Context, id string) (*ProfileRecord, error) {
 	if d.hata != nil {
 		return nil, d.hata
 	}
@@ -104,29 +104,29 @@ func (d *sahteDepo) GetProfile(_ context.Context, id string) (*ProfilKaydi, erro
 	return k, nil
 }
 
-func (d *sahteDepo) GetProfileByUsername(_ context.Context, ad string) (*ProfilKaydi, error) {
+func (d *sahteDepo) GetProfileByUsername(_ context.Context, ad string) (*ProfileRecord, error) {
 	if d.hata != nil {
 		return nil, d.hata
 	}
 	for _, k := range d.profiller {
-		if k.KullaniciAdi == ad {
+		if k.Username == ad {
 			return k, nil
 		}
 	}
 	return nil, ErrNotFound
 }
 
-func (d *sahteDepo) UpsertProfile(_ context.Context, k ProfilKaydi) (*ProfilKaydi, error) {
+func (d *sahteDepo) UpsertProfile(_ context.Context, k ProfileRecord) (*ProfileRecord, error) {
 	if d.hata != nil {
 		return nil, d.hata
 	}
 	for id, v := range d.profiller {
-		if v.KullaniciAdi == k.KullaniciAdi && id != k.KullaniciID {
+		if v.Username == k.Username && id != k.UserID {
 			return nil, ErrUsernameTaken
 		}
 	}
-	k.Olusturma = time.Now()
-	d.profiller[k.KullaniciID] = &k
+	k.CreatedAt = time.Now()
+	d.profiller[k.UserID] = &k
 	return &k, nil
 }
 
@@ -137,7 +137,7 @@ func (d *sahteDepo) UsernameOwners(_ context.Context, adlar []string) (map[strin
 	m := map[string]string{}
 	for _, ad := range adlar {
 		for id, k := range d.profiller {
-			if k.KullaniciAdi == ad {
+			if k.Username == ad {
 				m[ad] = id
 			}
 		}
@@ -145,7 +145,7 @@ func (d *sahteDepo) UsernameOwners(_ context.Context, adlar []string) (map[strin
 	return m, nil
 }
 
-func (d *sahteDepo) ProfileCounts(context.Context, string, string) (*ProfilSayilari, error) {
+func (d *sahteDepo) ProfileCounts(context.Context, string, string) (*ProfileCounts, error) {
 	if d.hata != nil {
 		return nil, d.hata
 	}
@@ -153,13 +153,13 @@ func (d *sahteDepo) ProfileCounts(context.Context, string, string) (*ProfilSayil
 	return &s, nil
 }
 
-func (d *sahteDepo) InsertPublication(_ context.Context, y YeniYayin) error {
+func (d *sahteDepo) InsertPublication(_ context.Context, y PublicationInsert) error {
 	if d.hata != nil {
 		return d.hata
 	}
 	if d.slugCakismasi > 0 {
 		d.slugCakismasi--
-		return errSlugCakisti
+		return errSlugConflict
 	}
 	d.eklenen = append(d.eklenen, y)
 	return nil
@@ -167,13 +167,13 @@ func (d *sahteDepo) InsertPublication(_ context.Context, y YeniYayin) error {
 
 // kopya, kaydin izleyiciye gore bir kopyasini doner (depo BenimMi'yi
 // doldurur).
-func (d *sahteDepo) kopya(k *YayinKaydi, izleyiciID string) *YayinKaydi {
+func (d *sahteDepo) kopya(k *PublicationRecord, izleyiciID string) *PublicationRecord {
 	c := *k
-	c.BenimMi = c.SahipID == izleyiciID
+	c.IsMine = c.OwnerID == izleyiciID
 	return &c
 }
 
-func (d *sahteDepo) GetPublication(_ context.Context, id, izleyiciID string) (*YayinKaydi, error) {
+func (d *sahteDepo) GetPublication(_ context.Context, id, izleyiciID string) (*PublicationRecord, error) {
 	if d.hata != nil {
 		return nil, d.hata
 	}
@@ -184,7 +184,7 @@ func (d *sahteDepo) GetPublication(_ context.Context, id, izleyiciID string) (*Y
 	return d.kopya(k, izleyiciID), nil
 }
 
-func (d *sahteDepo) GetPublicationBySlug(_ context.Context, slug, izleyiciID string) (*YayinKaydi, error) {
+func (d *sahteDepo) GetPublicationBySlug(_ context.Context, slug, izleyiciID string) (*PublicationRecord, error) {
 	if d.hata != nil {
 		return nil, d.hata
 	}
@@ -197,15 +197,15 @@ func (d *sahteDepo) GetPublicationBySlug(_ context.Context, slug, izleyiciID str
 }
 
 // sahibinCanliYayini, sahibin silinmemis yayinini bulur.
-func (d *sahteDepo) sahibinCanliYayini(id, sahipID string) (*YayinKaydi, bool) {
+func (d *sahteDepo) sahibinCanliYayini(id, sahipID string) (*PublicationRecord, bool) {
 	k, ok := d.yayinlar[id]
-	if !ok || k.SahipID != sahipID || k.Silindi {
+	if !ok || k.OwnerID != sahipID || k.Deleted {
 		return nil, false
 	}
 	return k, true
 }
 
-func (d *sahteDepo) UpdatePublication(_ context.Context, id, sahipID string, yama YayinYamasi) error {
+func (d *sahteDepo) UpdatePublication(_ context.Context, id, sahipID string, yama PublicationPatch) error {
 	if d.hata != nil {
 		return d.hata
 	}
@@ -214,17 +214,17 @@ func (d *sahteDepo) UpdatePublication(_ context.Context, id, sahipID string, yam
 		return ErrNotFound
 	}
 	d.yamalar = append(d.yamalar, yama)
-	if yama.Aciklama != nil {
-		k.Aciklama = *yama.Aciklama
+	if yama.Description != nil {
+		k.Description = *yama.Description
 	}
-	if yama.AltyapiAcik != nil {
-		k.AltyapiAcik = *yama.AltyapiAcik
+	if yama.BackingEnabled != nil {
+		k.BackingEnabled = *yama.BackingEnabled
 	}
-	if yama.Gorunurluk != nil {
-		k.Gorunurluk = *yama.Gorunurluk
+	if yama.Visibility != nil {
+		k.Visibility = *yama.Visibility
 	}
-	if yama.YorumAcik != nil {
-		k.YorumAcik = *yama.YorumAcik
+	if yama.CommentsEnabled != nil {
+		k.CommentsEnabled = *yama.CommentsEnabled
 	}
 	return nil
 }
@@ -237,7 +237,7 @@ func (d *sahteDepo) DeletePublication(_ context.Context, id, sahipID string) err
 	if !ok {
 		return ErrNotFound
 	}
-	k.Silindi = true
+	k.Deleted = true
 	return nil
 }
 
@@ -257,14 +257,14 @@ func (d *sahteDepo) ResetForRetry(_ context.Context, id, sahipID string) error {
 	if !ok {
 		return ErrNotFound
 	}
-	if k.Durum != DurumHata {
+	if k.Status != StatusFailed {
 		return ErrInvalidStatus
 	}
-	k.Durum = DurumHazirlaniyor
+	k.Status = StatusPreparing
 	return nil
 }
 
-func (d *sahteDepo) GetPreparation(_ context.Context, id string) (*HazirlikKaydi, error) {
+func (d *sahteDepo) GetPreparation(_ context.Context, id string) (*PreparationRecord, error) {
 	if d.hata != nil {
 		return nil, d.hata
 	}
@@ -275,7 +275,7 @@ func (d *sahteDepo) GetPreparation(_ context.Context, id string) (*HazirlikKaydi
 	return k, nil
 }
 
-func (d *sahteDepo) Publish(_ context.Context, id string, s HazirlikSonucu) error {
+func (d *sahteDepo) Publish(_ context.Context, id string, s PreparationResult) error {
 	if d.hata != nil {
 		return d.hata
 	}
@@ -288,8 +288,8 @@ func (d *sahteDepo) MarkFailed(ctx context.Context, id string) error {
 		return err // gercek havuz da olu baglamda sorgu calistirmaz
 	}
 	d.hataYapilan = append(d.hataYapilan, id)
-	if k, ok := d.yayinlar[id]; ok && k.Durum == DurumHazirlaniyor {
-		k.Durum = DurumHata
+	if k, ok := d.yayinlar[id]; ok && k.Status == StatusPreparing {
+		k.Status = StatusFailed
 	}
 	return d.hata
 }
@@ -300,13 +300,13 @@ type akisCagrisi struct {
 	izleyici string
 	sahip    string
 	coverlar bool
-	zaman    *ZamanImleci
-	puan     *PuanImleci
+	zaman    *TimeCursor
+	puan     *ScoreCursor
 	referans time.Time
 	limit    int
 }
 
-func (d *sahteDepo) zamanListesi(c akisCagrisi) ([]YayinOzeti, error) {
+func (d *sahteDepo) zamanListesi(c akisCagrisi) ([]PublicationSummary, error) {
 	d.sonAkis = c
 	if d.hata != nil {
 		return nil, d.hata
@@ -318,19 +318,19 @@ func (d *sahteDepo) zamanListesi(c akisCagrisi) ([]YayinOzeti, error) {
 	return d.akisOgeleri[:n], nil
 }
 
-func (d *sahteDepo) ListProfilePublications(_ context.Context, sahipID, izleyiciID string, coverlar bool, imlec *ZamanImleci, limit int) ([]YayinOzeti, error) {
+func (d *sahteDepo) ListProfilePublications(_ context.Context, sahipID, izleyiciID string, coverlar bool, imlec *TimeCursor, limit int) ([]PublicationSummary, error) {
 	return d.zamanListesi(akisCagrisi{tur: "profil", izleyici: izleyiciID, sahip: sahipID, coverlar: coverlar, zaman: imlec, limit: limit})
 }
 
-func (d *sahteDepo) FeedNew(_ context.Context, izleyiciID string, imlec *ZamanImleci, limit int) ([]YayinOzeti, error) {
+func (d *sahteDepo) FeedNew(_ context.Context, izleyiciID string, imlec *TimeCursor, limit int) ([]PublicationSummary, error) {
 	return d.zamanListesi(akisCagrisi{tur: "yeni", izleyici: izleyiciID, zaman: imlec, limit: limit})
 }
 
-func (d *sahteDepo) FeedFollowing(_ context.Context, izleyiciID string, imlec *ZamanImleci, limit int) ([]YayinOzeti, error) {
+func (d *sahteDepo) FeedFollowing(_ context.Context, izleyiciID string, imlec *TimeCursor, limit int) ([]PublicationSummary, error) {
 	return d.zamanListesi(akisCagrisi{tur: "takip", izleyici: izleyiciID, zaman: imlec, limit: limit})
 }
 
-func (d *sahteDepo) FeedForYou(_ context.Context, izleyiciID string, referans time.Time, imlec *PuanImleci, limit int) ([]ScoredSummary, error) {
+func (d *sahteDepo) FeedForYou(_ context.Context, izleyiciID string, referans time.Time, imlec *ScoreCursor, limit int) ([]ScoredSummary, error) {
 	d.sonAkis = akisCagrisi{tur: "senin-icin", izleyici: izleyiciID, puan: imlec, referans: referans, limit: limit}
 	if d.hata != nil {
 		return nil, d.hata
@@ -340,7 +340,7 @@ func (d *sahteDepo) FeedForYou(_ context.Context, izleyiciID string, referans ti
 		if i > limit {
 			break
 		}
-		ogeler = append(ogeler, ScoredSummary{YayinOzeti: o, Score: float64(100 - i)})
+		ogeler = append(ogeler, ScoredSummary{PublicationSummary: o, Score: float64(100 - i)})
 	}
 	return ogeler, nil
 }
@@ -349,9 +349,9 @@ func (d *sahteDepo) Like(_ context.Context, kullaniciID, yayinID string) error {
 	if d.hata != nil {
 		return d.hata
 	}
-	if k, ok := d.yayinlar[yayinID]; ok && !k.BegendimMi {
-		k.BegendimMi = true
-		k.BegeniSayisi++
+	if k, ok := d.yayinlar[yayinID]; ok && !k.LikedByMe {
+		k.LikedByMe = true
+		k.LikeCount++
 	}
 	return nil
 }
@@ -360,9 +360,9 @@ func (d *sahteDepo) Unlike(_ context.Context, kullaniciID, yayinID string) error
 	if d.hata != nil {
 		return d.hata
 	}
-	if k, ok := d.yayinlar[yayinID]; ok && k.BegendimMi {
-		k.BegendimMi = false
-		k.BegeniSayisi--
+	if k, ok := d.yayinlar[yayinID]; ok && k.LikedByMe {
+		k.LikedByMe = false
+		k.LikeCount--
 	}
 	return nil
 }
@@ -383,20 +383,20 @@ func (d *sahteDepo) Unfollow(_ context.Context, takipci, edilen string) error {
 	return nil
 }
 
-func (d *sahteDepo) FollowStatus(_ context.Context, takipci, edilen string) (*TakipDurumu, error) {
+func (d *sahteDepo) FollowStatus(_ context.Context, takipci, edilen string) (*FollowStatus, error) {
 	if d.hata != nil {
 		return nil, d.hata
 	}
-	t := &TakipDurumu{TakipEdiyorMuyum: d.takipler[[2]string{takipci, edilen}]}
+	t := &FollowStatus{FollowedByMe: d.takipler[[2]string{takipci, edilen}]}
 	for k := range d.takipler {
 		if k[1] == edilen {
-			t.Takipci++
+			t.Followers++
 		}
 	}
 	return t, nil
 }
 
-func (d *sahteDepo) Suggestions(_ context.Context, izleyiciID string, limit int) ([]ProfilKaydi, error) {
+func (d *sahteDepo) Suggestions(_ context.Context, izleyiciID string, limit int) ([]ProfileRecord, error) {
 	d.sonOneri = [2]any{izleyiciID, limit}
 	if d.hata != nil {
 		return nil, d.hata
@@ -404,16 +404,16 @@ func (d *sahteDepo) Suggestions(_ context.Context, izleyiciID string, limit int)
 	return d.oneriKayitlar, nil
 }
 
-func (d *sahteDepo) InsertComment(_ context.Context, y YeniYorum) (*Yorum, error) {
+func (d *sahteDepo) InsertComment(_ context.Context, y CommentInsert) (*Comment, error) {
 	if d.hata != nil {
 		return nil, d.hata
 	}
 	d.eklenenYorumlar = append(d.eklenenYorumlar, y)
-	p := d.profiller[y.YazarID]
-	return &Yorum{ID: y.ID, Yazar: p.ozet(), Metin: y.Metin, ZamanMs: y.ZamanMs, Olusturma: time.Now()}, nil
+	p := d.profiller[y.AuthorID]
+	return &Comment{ID: y.ID, Author: p.summary(), Text: y.Text, TimeMs: y.TimeMs, CreatedAt: time.Now()}, nil
 }
 
-func (d *sahteDepo) ListComments(_ context.Context, _, _ string, imlec *YorumImleci, limit int) ([]Yorum, error) {
+func (d *sahteDepo) ListComments(_ context.Context, _, _ string, imlec *CommentCursor, limit int) ([]Comment, error) {
 	d.sonYorumImleci, d.sonYorumLimiti = imlec, limit
 	if d.hata != nil {
 		return nil, d.hata
@@ -425,7 +425,7 @@ func (d *sahteDepo) ListComments(_ context.Context, _, _ string, imlec *YorumIml
 	return d.yorumOgeleri[:n], nil
 }
 
-func (d *sahteDepo) GetComment(_ context.Context, id string) (*YorumKaydi, error) {
+func (d *sahteDepo) GetComment(_ context.Context, id string) (*CommentRecord, error) {
 	if d.hata != nil {
 		return nil, d.hata
 	}
@@ -442,15 +442,15 @@ func (d *sahteDepo) DeleteComment(_ context.Context, id string) error {
 		return d.hata
 	}
 	k, ok := d.yorumKayitlari[id]
-	if !ok || k.Silindi {
+	if !ok || k.Deleted {
 		return ErrNotFound
 	}
-	k.Silindi = true
+	k.Deleted = true
 	d.silinenYorumlar = append(d.silinenYorumlar, id)
 	return nil
 }
 
-func (d *sahteDepo) InsertReport(_ context.Context, s YeniSikayet) error {
+func (d *sahteDepo) InsertReport(_ context.Context, s ReportInsert) error {
 	if d.hata != nil {
 		return d.hata
 	}
@@ -458,18 +458,18 @@ func (d *sahteDepo) InsertReport(_ context.Context, s YeniSikayet) error {
 	return nil
 }
 
-func (d *sahteDepo) ListCovers(_ context.Context, kaynakID, izleyiciID string, imlec *ZamanImleci, limit int) ([]YayinOzeti, error) {
+func (d *sahteDepo) ListCovers(_ context.Context, kaynakID, izleyiciID string, imlec *TimeCursor, limit int) ([]PublicationSummary, error) {
 	return d.zamanListesi(akisCagrisi{tur: "cover", izleyici: izleyiciID, sahip: kaynakID, zaman: imlec, limit: limit})
 }
 
-func (d *sahteDepo) ListStems(_ context.Context, yayinID string) ([]StemKaydi, error) {
+func (d *sahteDepo) ListStems(_ context.Context, yayinID string) ([]StemRecord, error) {
 	if d.hata != nil {
 		return nil, d.hata
 	}
 	return d.stemListeleri[yayinID], nil
 }
 
-func (d *sahteDepo) GetPreview(_ context.Context, slug string) (*OnizlemeKaydi, error) {
+func (d *sahteDepo) GetPreview(_ context.Context, slug string) (*PreviewRecord, error) {
 	if d.hata != nil {
 		return nil, d.hata
 	}

@@ -20,7 +20,7 @@ func (h *SosyalHandler) takip(c *fiber.Ctx, takip bool) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	d, err := h.servis.Takip(c.Context(), userID, c.Params("ad"), takip)
+	d, err := h.servis.SetFollow(c.Context(), userID, c.Params("ad"), takip)
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -33,7 +33,7 @@ func (h *SosyalHandler) Oneriler(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	o, err := h.servis.Oneriler(c.Context(), userID)
+	o, err := h.servis.Suggestions(c.Context(), userID)
 	if err != nil {
 		return sosyalHata(c, err)
 	}

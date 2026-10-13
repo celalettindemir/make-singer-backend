@@ -19,13 +19,13 @@ const (
 )
 
 type sahteHazirlikDeposu struct {
-	kayit       *social.HazirlikKaydi
+	kayit       *social.PreparationRecord
 	okumaHata   error
-	yayinlanan  *social.HazirlikSonucu
+	yayinlanan  *social.PreparationResult
 	hataYapildi bool
 }
 
-func (d *sahteHazirlikDeposu) GetPreparation(context.Context, string) (*social.HazirlikKaydi, error) {
+func (d *sahteHazirlikDeposu) GetPreparation(context.Context, string) (*social.PreparationRecord, error) {
 	if d.okumaHata != nil {
 		return nil, d.okumaHata
 	}
@@ -35,7 +35,7 @@ func (d *sahteHazirlikDeposu) GetPreparation(context.Context, string) (*social.H
 	return d.kayit, nil
 }
 
-func (d *sahteHazirlikDeposu) Publish(_ context.Context, _ string, s social.HazirlikSonucu) error {
+func (d *sahteHazirlikDeposu) Publish(_ context.Context, _ string, s social.PreparationResult) error {
 	d.yayinlanan = &s
 	return nil
 }
@@ -82,14 +82,14 @@ func tepeler(n int, deger float64) []float64 {
 	return p
 }
 
-func hazirKayit() *social.HazirlikKaydi {
-	return &social.HazirlikKaydi{
-		ID: sYayin, SahipID: sSahip, Durum: social.DurumHazirlaniyor,
-		Hazirlik: social.Hazirlik{
+func hazirKayit() *social.PreparationRecord {
+	return &social.PreparationRecord{
+		ID: sYayin, OwnerID: sSahip, Status: social.StatusPreparing,
+		Preparation: social.Preparation{
 			MasterKey: "masters/" + sSahip + "/p1/m1.wav",
-			Stems: []social.HazirlikStemi{
-				{ID: "drums", Enstruman: "drums", Sure: 184, Key: "stems/" + sSahip + "/p1/drums.mp3"},
-				{ID: "bass", Enstruman: "bass", Sure: 184, Key: "stems/" + sSahip + "/p1/bass.mp3"},
+			Stems: []social.PreparationStem{
+				{ID: "drums", Instrument: "drums", Duration: 184, Key: "stems/" + sSahip + "/p1/drums.mp3"},
+				{ID: "bass", Instrument: "bass", Duration: 184, Key: "stems/" + sSahip + "/p1/bass.mp3"},
 			},
 		},
 	}
@@ -102,7 +102,7 @@ type sosyalKurulum struct {
 	w      *SosyalWorker
 }
 
-func sosyalTestWorker(kayit *social.HazirlikKaydi, denetci deletionmark.Checker) *sosyalKurulum {
+func sosyalTestWorker(kayit *social.PreparationRecord, denetci deletionmark.Checker) *sosyalKurulum {
 	k := &sosyalKurulum{
 		depo:   &sahteHazirlikDeposu{kayit: kayit},
 		kopya:  &sahteKopyalayici{},
@@ -113,7 +113,7 @@ func sosyalTestWorker(kayit *social.HazirlikKaydi, denetci deletionmark.Checker)
 }
 
 func hazirlaGorevi() *asynq.Task {
-	return asynq.NewTask(social.TaskTypeHazirla, []byte(`{"yayinId":"`+sYayin+`"}`))
+	return asynq.NewTask(social.TaskTypePrepare, []byte(`{"yayinId":"`+sYayin+`"}`))
 }
 
 func TestSosyalWorker_KopyalarAnalizEderYayinlar(t *testing.T) {
@@ -138,11 +138,11 @@ func TestSosyalWorker_KopyalarAnalizEderYayinlar(t *testing.T) {
 		t.Fatalf("analiz istegi = %+v", *k.analiz.istek)
 	}
 	s := k.depo.yayinlanan
-	if s == nil || s.MasterAnahtari != "sosyal/"+sYayin+"/master.wav" || len(s.DalgaFormu) != 64 || s.OnizlemeAnahtari != "sosyal/"+sYayin+"/onizleme.mp3" {
+	if s == nil || s.MasterKey != "sosyal/"+sYayin+"/master.wav" || len(s.Waveform) != 64 || s.PreviewKey != "sosyal/"+sYayin+"/onizleme.mp3" {
 		t.Fatalf("sonuc = %+v", s)
 	}
-	if len(s.StemListesi) != 2 || s.StemListesi[1] != (social.StemKaydi{ID: "bass", Enstruman: "bass", Sure: 184, Anahtar: "sosyal/" + sYayin + "/stems/bass.mp3"}) {
-		t.Fatalf("stem listesi = %+v", s.StemListesi)
+	if len(s.Stems) != 2 || s.Stems[1] != (social.StemRecord{ID: "bass", Instrument: "bass", Duration: 184, Key: "sosyal/" + sYayin + "/stems/bass.mp3"}) {
+		t.Fatalf("stem listesi = %+v", s.Stems)
 	}
 	if k.depo.hataYapildi {
 		t.Fatal("basarili is hata yapmamali")
@@ -151,10 +151,10 @@ func TestSosyalWorker_KopyalarAnalizEderYayinlar(t *testing.T) {
 
 func TestSosyalWorker_YokSilinmisYaDaHazirOlanAtlanir(t *testing.T) {
 	silinmis := hazirKayit()
-	silinmis.Silindi = true
+	silinmis.Deleted = true
 	yayinda := hazirKayit()
-	yayinda.Durum = social.DurumYayinda
-	for ad, kayit := range map[string]*social.HazirlikKaydi{"yok": nil, "silinmis": silinmis, "yayinda": yayinda} {
+	yayinda.Status = social.StatusPublished
+	for ad, kayit := range map[string]*social.PreparationRecord{"yok": nil, "silinmis": silinmis, "yayinda": yayinda} {
 		k := sosyalTestWorker(kayit, nil)
 		if err := k.w.Hazirla(context.Background(), hazirlaGorevi()); err != nil {
 			t.Errorf("%s: hata donmemeli: %v", ad, err)
@@ -251,7 +251,7 @@ func TestSosyalWorker_AnalizHatasiYayiniDurdurmaz(t *testing.T) {
 		t.Fatalf("analiz hatasi isi bozmamali: %v", err)
 	}
 	s := k.depo.yayinlanan
-	if s == nil || s.DalgaFormu == nil || len(s.DalgaFormu) != 0 || s.OnizlemeAnahtari != "" {
+	if s == nil || s.Waveform == nil || len(s.Waveform) != 0 || s.PreviewKey != "" {
 		t.Fatalf("bos dalga formu, onizlemesiz yayinlanmali: %+v", s)
 	}
 }
@@ -262,8 +262,8 @@ func TestSosyalWorker_AnalizCiktisiDenetlenir(t *testing.T) {
 	if err := k.w.Hazirla(context.Background(), hazirlaGorevi()); err != nil {
 		t.Fatalf("Hazirla: %v", err)
 	}
-	if len(k.depo.yayinlanan.DalgaFormu) != 0 {
-		t.Fatalf("64 olmayan tepe dizisi atilmali: %v", k.depo.yayinlanan.DalgaFormu)
+	if len(k.depo.yayinlanan.Waveform) != 0 {
+		t.Fatalf("64 olmayan tepe dizisi atilmali: %v", k.depo.yayinlanan.Waveform)
 	}
 
 	k = sosyalTestWorker(hazirKayit(), nil)
@@ -273,7 +273,7 @@ func TestSosyalWorker_AnalizCiktisiDenetlenir(t *testing.T) {
 	if err := k.w.Hazirla(context.Background(), hazirlaGorevi()); err != nil {
 		t.Fatalf("Hazirla: %v", err)
 	}
-	d := k.depo.yayinlanan.DalgaFormu
+	d := k.depo.yayinlanan.Waveform
 	if d[0] != 0 || d[1] != 1 || d[2] != 0 || d[3] != 0.5 {
 		t.Fatalf("degerler 0-1'e kenetlenmeli: %v", d[:4])
 	}
@@ -285,7 +285,7 @@ func TestSosyalWorker_R2VeAnalizYokken(t *testing.T) {
 	if err := w.Hazirla(context.Background(), hazirlaGorevi()); err != nil {
 		t.Fatalf("Hazirla: %v", err)
 	}
-	if d.yayinlanan == nil || d.yayinlanan.MasterAnahtari != "sosyal/"+sYayin+"/master.wav" || len(d.yayinlanan.DalgaFormu) != 0 {
+	if d.yayinlanan == nil || d.yayinlanan.MasterKey != "sosyal/"+sYayin+"/master.wav" || len(d.yayinlanan.Waveform) != 0 {
 		t.Fatalf("sonuc = %+v", d.yayinlanan)
 	}
 }
@@ -293,10 +293,10 @@ func TestSosyalWorker_R2VeAnalizYokken(t *testing.T) {
 func TestSosyalWorker_BozukYukTekrarlanmaz(t *testing.T) {
 	k := sosyalTestWorker(hazirKayit(), nil)
 	for _, yuk := range []string{"{", `{"yayinId":"../x"}`} {
-		if err := k.w.Hazirla(context.Background(), asynq.NewTask(social.TaskTypeHazirla, []byte(yuk))); !errors.Is(err, asynq.SkipRetry) {
+		if err := k.w.Hazirla(context.Background(), asynq.NewTask(social.TaskTypePrepare, []byte(yuk))); !errors.Is(err, asynq.SkipRetry) {
 			t.Errorf("%s: SkipRetry bekleniyordu: %v", yuk, err)
 		}
-		if err := k.w.DosyaSil(context.Background(), asynq.NewTask(social.TaskTypeDosyaSil, []byte(yuk))); !errors.Is(err, asynq.SkipRetry) {
+		if err := k.w.DosyaSil(context.Background(), asynq.NewTask(social.TaskTypeDeleteFiles, []byte(yuk))); !errors.Is(err, asynq.SkipRetry) {
 			t.Errorf("%s: DosyaSil SkipRetry bekleniyordu: %v", yuk, err)
 		}
 	}
@@ -313,13 +313,13 @@ func (s *sosyalSilici) DeletePrefix(_ context.Context, onek string) (int, error)
 }
 
 func TestSosyalWorker_DosyaSil(t *testing.T) {
-	gorev := asynq.NewTask(social.TaskTypeDosyaSil, []byte(`{"yayinId":"`+sYayin+`"}`))
+	gorev := asynq.NewTask(social.TaskTypeDeleteFiles, []byte(`{"yayinId":"`+sYayin+`"}`))
 	silinmis := hazirKayit()
-	silinmis.Silindi = true
+	silinmis.Deleted = true
 
 	durumlar := []struct {
 		ad      string
-		kayit   *social.HazirlikKaydi
+		kayit   *social.PreparationRecord
 		silinir bool
 	}{
 		{"silinmis", silinmis, true},

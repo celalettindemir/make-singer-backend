@@ -15,7 +15,7 @@ func (h *SosyalHandler) ProfilBen(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	p, err := h.servis.ProfilBen(c.Context(), userID)
+	p, err := h.servis.MyProfile(c.Context(), userID)
 	if errors.Is(err, social.ErrNoProfile) {
 		return response.Error(c, fiber.StatusNotFound, "profil_yok", err.Error(), nil)
 	}
@@ -31,11 +31,11 @@ func (h *SosyalHandler) ProfilKaydet(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	var g social.ProfilGirdisi
+	var g social.ProfileInput
 	if err := c.BodyParser(&g); err != nil {
 		return govdeHatasi(c)
 	}
-	p, err := h.servis.ProfilKaydet(c.Context(), userID, g)
+	p, err := h.servis.SaveProfile(c.Context(), userID, g)
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -48,7 +48,7 @@ func (h *SosyalHandler) AdUygun(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	u, err := h.servis.AdUygunMu(c.Context(), userID, c.Query("ad"))
+	u, err := h.servis.CheckUsername(c.Context(), userID, c.Query("ad"))
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -61,7 +61,7 @@ func (h *SosyalHandler) Profil(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	p, err := h.servis.ProfilGoster(c.Context(), userID, c.Params("ad"))
+	p, err := h.servis.Profile(c.Context(), userID, c.Params("ad"))
 	if err != nil {
 		return sosyalHata(c, err)
 	}

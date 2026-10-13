@@ -12,7 +12,7 @@ func (h *SosyalHandler) Yorumlar(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	sayfa, err := h.servis.Yorumlar(c.Context(), userID, c.Params("id"), c.Query("imlec"), social.SayfaBoyutu(c.Query("limit")))
+	sayfa, err := h.servis.Comments(c.Context(), userID, c.Params("id"), c.Query("imlec"), social.PageSize(c.Query("limit")))
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -26,11 +26,11 @@ func (h *SosyalHandler) YorumYaz(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	var g social.YorumGirdisi
+	var g social.CommentInput
 	if err := c.BodyParser(&g); err != nil {
 		return govdeHatasi(c)
 	}
-	y, err := h.servis.YorumYaz(c.Context(), userID, c.Params("id"), g)
+	y, err := h.servis.PostComment(c.Context(), userID, c.Params("id"), g)
 	if err != nil {
 		return sosyalHata(c, err)
 	}
@@ -43,7 +43,7 @@ func (h *SosyalHandler) YorumSil(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	if err := h.servis.YorumSil(c.Context(), userID, c.Params("id")); err != nil {
+	if err := h.servis.DeleteComment(c.Context(), userID, c.Params("id")); err != nil {
 		return sosyalHata(c, err)
 	}
 	return response.NoContent(c)

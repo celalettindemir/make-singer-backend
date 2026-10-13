@@ -16,22 +16,22 @@ func TestPostgresDepo_ProfilKaydetVeGetir(t *testing.T) {
 	if _, err := d.GetProfile(ctx, id); !errors.Is(err, ErrNoProfile) {
 		t.Fatalf("profil yokken ErrProfilYok bekleniyordu: %v", err)
 	}
-	k, err := d.UpsertProfile(ctx, ProfilKaydi{KullaniciID: id, KullaniciAdi: "ali", GorunenAd: "Ali", Bio: "b"})
-	if err != nil || k.KullaniciAdi != "ali" || k.Olusturma.IsZero() {
+	k, err := d.UpsertProfile(ctx, ProfileRecord{UserID: id, Username: "ali", DisplayName: "Ali", Bio: "b"})
+	if err != nil || k.Username != "ali" || k.CreatedAt.IsZero() {
 		t.Fatalf("kaydet = %+v, %v", k, err)
 	}
 	// Ikinci kayit gunceller (PUT hem olusturur hem gunceller).
-	if _, err := d.UpsertProfile(ctx, ProfilKaydi{KullaniciID: id, KullaniciAdi: "ali2", GorunenAd: "Ali Veli", Bio: ""}); err != nil {
+	if _, err := d.UpsertProfile(ctx, ProfileRecord{UserID: id, Username: "ali2", DisplayName: "Ali Veli", Bio: ""}); err != nil {
 		t.Fatalf("guncelle: %v", err)
 	}
 	k, err = d.GetProfile(ctx, id)
-	if err != nil || k.KullaniciAdi != "ali2" || k.GorunenAd != "Ali Veli" || k.Bio != "" {
+	if err != nil || k.Username != "ali2" || k.DisplayName != "Ali Veli" || k.Bio != "" {
 		t.Fatalf("getir = %+v, %v", k, err)
 	}
 	if _, err := d.GetProfileByUsername(ctx, "ali"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("eski ad bulunmamali: %v", err)
 	}
-	if k, err := d.GetProfileByUsername(ctx, "ali2"); err != nil || k.KullaniciID != id {
+	if k, err := d.GetProfileByUsername(ctx, "ali2"); err != nil || k.UserID != id {
 		t.Fatalf("adla getir = %+v, %v", k, err)
 	}
 }
@@ -41,7 +41,7 @@ func TestPostgresDepo_AlinmisAd(t *testing.T) {
 	ctx := context.Background()
 	a, b := uuid.NewString(), uuid.NewString()
 	testProfilEkle(t, d, a, "ayse")
-	_, err := d.UpsertProfile(ctx, ProfilKaydi{KullaniciID: b, KullaniciAdi: "ayse", GorunenAd: "Ayse"})
+	_, err := d.UpsertProfile(ctx, ProfileRecord{UserID: b, Username: "ayse", DisplayName: "Ayse"})
 	if !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("ErrKullaniciAdiAlinmis bekleniyordu: %v", err)
 	}
@@ -61,11 +61,11 @@ func TestPostgresDepo_ProfilSayilari(t *testing.T) {
 	ctx := context.Background()
 	sahip, takipci, yabanci := uuid.NewString(), uuid.NewString(), uuid.NewString()
 
-	orijinal := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Gorunurluk: GorunurlukHerkes})
-	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Gorunurluk: GorunurlukTakipciler})
-	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Gorunurluk: GorunurlukLink})
-	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: DurumHazirlaniyor})
-	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: DurumHata})
+	orijinal := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Gorunurluk: VisibilityEveryone})
+	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Gorunurluk: VisibilityFollowers})
+	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Gorunurluk: VisibilityLink})
+	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: StatusPreparing})
+	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: StatusFailed})
 	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Silindi: true})
 	testYayinEkle(t, havuz, testYayin{SahipID: sahip, KaynakID: orijinal})
 	testTakipEkle(t, havuz, takipci, sahip)
@@ -87,11 +87,11 @@ func TestPostgresDepo_ProfilSayilari(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", dr.ad, err)
 		}
-		if s.Istatistik.Sarki != dr.sarki || s.Istatistik.Cover != dr.cover || s.TakipEdiyorMuyum != dr.takipEder {
+		if s.Stats.Songs != dr.sarki || s.Stats.Covers != dr.cover || s.FollowedByMe != dr.takipEder {
 			t.Errorf("%s: %+v", dr.ad, s)
 		}
-		if s.Istatistik.Takipci != 1 || s.Istatistik.Takip != 1 {
-			t.Errorf("%s takip sayaclari: %+v", dr.ad, s.Istatistik)
+		if s.Stats.Followers != 1 || s.Stats.Following != 1 {
+			t.Errorf("%s takip sayaclari: %+v", dr.ad, s.Stats)
 		}
 	}
 }

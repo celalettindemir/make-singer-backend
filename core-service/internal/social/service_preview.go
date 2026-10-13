@@ -8,57 +8,58 @@ import (
 	"github.com/makeasinger/api/internal/client"
 )
 
-// onizlemeOmru, onizlemeUrl imzasinin gecerlilik suresi (spec §4.8: 1
-// saat). R2_PRESIGN_TTL'den bagimsizdir: sozlesme sabit 1 saat der.
-const onizlemeOmru = time.Hour
+// previewURLTTL is the validity of the onizlemeUrl signature (spec §4.8: 1
+// hour). It is independent of R2_PRESIGN_TTL: the contract says a fixed
+// 1 hour.
+const previewURLTTL = time.Hour
 
-// Onizleme, GET /api/public/s/{slug} yaniti. OnizlemeURL onizleme
-// uretilemediyse null olarak GORUNUR; DalgaFormu hicbir zaman null
-// degildir.
-type Onizleme struct {
-	Baslik      string      `json:"baslik"`
-	Sahip       ProfilOzeti `json:"sahip"`
-	SureSn      int         `json:"sureSn"`
-	DalgaFormu  []float64   `json:"dalgaFormu"`
-	OnizlemeURL *string     `json:"onizlemeUrl"`
-	Tur         string      `json:"tur"`
+// Preview is the GET /api/public/s/{slug} response. PreviewURL is VISIBLE as
+// null when no preview could be produced; Waveform is never null.
+type Preview struct {
+	Title       string         `json:"baslik"`
+	Owner       ProfileSummary `json:"sahip"`
+	DurationSec int            `json:"sureSn"`
+	Waveform    []float64      `json:"dalgaFormu"`
+	PreviewURL  *string        `json:"onizlemeUrl"`
+	Genre       string         `json:"tur"`
 }
 
-// OnizlemeKaydi, depodan okunan onizleme ve ic alanlari.
-type OnizlemeKaydi struct {
-	Onizleme
-	SahipID          string
-	OnizlemeAnahtari string // "" ise onizleme yok
+// PreviewRecord is the preview read from the store plus its internal fields.
+type PreviewRecord struct {
+	Preview
+	OwnerID    string
+	PreviewKey string // "" means no preview
 }
 
-// Onizleme, kimliksiz onizlemeyi doner. Gecersiz bicimli slug, takipciler
-// yayini, hazirlanan, hatali ya da silinmis yayin ErrBulunamadi'dir.
-func (s *Servis) Onizleme(ctx context.Context, slug string) (*Onizleme, error) {
-	if !SlugGecerli(slug) {
+// Preview returns the unauthenticated preview. A malformed slug, a
+// followers-only publication, or a publication that is being prepared,
+// failed or deleted is ErrNotFound.
+func (s *Service) Preview(ctx context.Context, slug string) (*Preview, error) {
+	if !ValidSlug(slug) {
 		return nil, ErrNotFound
 	}
-	k, err := s.depo.GetPreview(ctx, slug)
+	rec, err := s.store.GetPreview(ctx, slug)
 	if err != nil {
 		return nil, err
 	}
-	o := k.Onizleme
-	if k.OnizlemeAnahtari != "" {
-		url, err := s.onizlemeAdresi(ctx, k.OnizlemeAnahtari)
+	preview := rec.Preview
+	if rec.PreviewKey != "" {
+		url, err := s.previewURL(ctx, rec.PreviewKey)
 		if err != nil {
 			return nil, err
 		}
-		o.OnizlemeURL = &url
+		preview.PreviewURL = &url
 	}
-	return &o, nil
+	return &preview, nil
 }
 
-// onizlemeAdresi, 1 saat gecerli imzali adres uretir; R2 yoksa (dev)
-// imzasiz adres doner.
-func (s *Servis) onizlemeAdresi(ctx context.Context, key string) (string, error) {
-	if s.depolama == nil {
+// previewURL produces a signed address valid for 1 hour; without R2 (dev)
+// it returns an unsigned address.
+func (s *Service) previewURL(ctx context.Context, key string) (string, error) {
+	if s.storage == nil {
 		return client.UnsignedURL(key, s.r2), nil
 	}
-	url, err := s.depolama.GetSignedURL(ctx, key, onizlemeOmru)
+	url, err := s.storage.GetSignedURL(ctx, key, previewURLTTL)
 	if err != nil {
 		return "", fmt.Errorf("onizleme adresi imzalanamadi: %w", err)
 	}

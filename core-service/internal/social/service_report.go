@@ -8,82 +8,84 @@ import (
 	"github.com/google/uuid"
 )
 
-// Sikayet hedefleri ve nedenleri (spec §3 sikayet).
+// Report targets and reasons (spec §3 sikayet).
 const (
-	HedefYayin = "yayin"
-	HedefYorum = "yorum"
+	TargetPublication = "yayin"
+	TargetComment     = "yorum"
 
-	sikayetAciklamaEnUzun = 300
+	maxReportDescriptionLen = 300
 )
 
-var sikayetNedenleri = map[string]bool{
+var reportReasons = map[string]bool{
 	"spam": true, "taciz": true, "telif": true, "uygunsuz": true, "diger": true,
 }
 
-// SikayetGirdisi, POST /sikayetler govdesi. aciklama istege baglidir.
-type SikayetGirdisi struct {
-	HedefTuru string `json:"hedefTuru"`
-	HedefID   string `json:"hedefId"`
-	Neden     string `json:"neden"`
-	Aciklama  string `json:"aciklama"`
+// ReportInput is the POST /sikayetler body. aciklama is optional.
+type ReportInput struct {
+	TargetType  string `json:"hedefTuru"`
+	TargetID    string `json:"hedefId"`
+	Reason      string `json:"neden"`
+	Description string `json:"aciklama"`
 }
 
-// YeniSikayet, depoya yazilacak dogrulanmis sikayet. YayinID hedefin ait
-// oldugu yayindir (hedef yorumsa yorumun yayini).
-type YeniSikayet struct {
-	ID         string
-	BildirenID string
-	HedefTuru  string
-	HedefID    string
-	YayinID    string
-	Neden      string
-	Aciklama   string
+// ReportInsert is a validated report to be written to the store.
+// PublicationID is the publication the target belongs to (for a comment
+// target, the comment's publication).
+type ReportInsert struct {
+	ID            string
+	ReporterID    string
+	TargetType    string
+	TargetID      string
+	PublicationID string
+	Reason        string
+	Description   string
 }
 
-// Sikayet, POST /sikayetler (201). Hedef bildirene gorunur olmalidir:
-// yayin detay kuralina gore, yorum silinmemis ve yayini gorunur. Aksi ya
-// da bozuk kimlik ErrBulunamadi'dir. Tekrar sikayet hata degildir.
-// Profil gerekmez; kendi icerigini sikayet etmek reddedilmez.
-func (s *Servis) Sikayet(ctx context.Context, kullaniciID string, g SikayetGirdisi) error {
-	id, err := kullaniciCoz(kullaniciID)
+// Report is POST /sikayetler (201). The target must be visible to the
+// reporter: a publication by the detail rule, a comment that is not deleted
+// and whose publication is visible. Otherwise, or with a malformed ID, it is
+// ErrNotFound. Reporting again is not an error. No profile is needed;
+// reporting one's own content is not rejected.
+func (s *Service) Report(ctx context.Context, userID string, input ReportInput) error {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return err
 	}
-	if g.HedefTuru != HedefYayin && g.HedefTuru != HedefYorum {
+	if input.TargetType != TargetPublication && input.TargetType != TargetComment {
 		return validationError("hedefTuru yayin ya da yorum olmali")
 	}
-	if !sikayetNedenleri[g.Neden] {
+	if !reportReasons[input.Reason] {
 		return validationError("neden spam, taciz, telif, uygunsuz ya da diger olmali")
 	}
-	aciklama := strings.TrimSpace(g.Aciklama)
-	if utf8.RuneCountInString(aciklama) > sikayetAciklamaEnUzun {
+	description := strings.TrimSpace(input.Description)
+	if utf8.RuneCountInString(description) > maxReportDescriptionLen {
 		return validationError("aciklama en cok 300 karakter olabilir")
 	}
-	if nulIceriyor(aciklama) {
+	if containsNUL(description) {
 		return validationError("aciklama gecersiz karakter iceriyor")
 	}
-	hedefID, ok := kimlikCoz(g.HedefID)
+	targetID, ok := parseID(input.TargetID)
 	if !ok {
 		return ErrNotFound
 	}
 
-	yayinID := hedefID
-	if g.HedefTuru == HedefYorum {
-		y, err := s.depo.GetComment(ctx, hedefID)
+	pubID := targetID
+	if input.TargetType == TargetComment {
+		comment, err := s.store.GetComment(ctx, targetID)
 		if err != nil {
 			return err
 		}
-		if y.Silindi {
+		if comment.Deleted {
 			return ErrNotFound
 		}
-		yayinID = y.YayinID
+		pubID = comment.PublicationID
 	}
-	k, err := s.gorunurYayin(ctx, id, yayinID)
+	rec, err := s.visiblePublication(ctx, id, pubID)
 	if err != nil {
 		return err
 	}
-	return s.depo.InsertReport(ctx, YeniSikayet{
-		ID: uuid.NewString(), BildirenID: id, HedefTuru: g.HedefTuru, HedefID: hedefID,
-		YayinID: k.ID, Neden: g.Neden, Aciklama: aciklama,
+	return s.store.InsertReport(ctx, ReportInsert{
+		ID: uuid.NewString(), ReporterID: id, TargetType: input.TargetType, TargetID: targetID,
+		PublicationID: rec.ID, Reason: input.Reason, Description: description,
 	})
 }

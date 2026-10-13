@@ -42,10 +42,10 @@ func testYayinEkle(t *testing.T, havuz *pgxpool.Pool, y testYayin) string {
 		y.Baslik = "Baslik"
 	}
 	if y.Gorunurluk == "" {
-		y.Gorunurluk = GorunurlukHerkes
+		y.Gorunurluk = VisibilityEveryone
 	}
 	if y.Durum == "" {
-		y.Durum = DurumYayinda
+		y.Durum = StatusPublished
 	}
 	if y.Olusturma.IsZero() {
 		y.Olusturma = time.Now()
@@ -85,7 +85,7 @@ func testTakipEkle(t *testing.T, havuz *pgxpool.Pool, takipci, takipEdilen strin
 
 func testProfilEkle(t *testing.T, d *PostgresStore, id, ad string) {
 	t.Helper()
-	if _, err := d.UpsertProfile(context.Background(), ProfilKaydi{KullaniciID: id, KullaniciAdi: ad, GorunenAd: ad}); err != nil {
+	if _, err := d.UpsertProfile(context.Background(), ProfileRecord{UserID: id, Username: ad, DisplayName: ad}); err != nil {
 		t.Fatalf("profil eklenemedi: %v", err)
 	}
 }

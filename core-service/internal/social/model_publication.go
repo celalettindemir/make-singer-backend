@@ -2,204 +2,204 @@ package social
 
 import "time"
 
-// Ton, sozlesme §4.1: { tonik, mod }.
-type Ton struct {
-	Tonik string `json:"tonik"`
-	Mod   string `json:"mod"`
+// MusicalKey is contract §4.1: { tonik, mod }.
+type MusicalKey struct {
+	Tonic string `json:"tonik"`
+	Mode  string `json:"mod"`
 }
 
-// YapiOgesi, sarki yapisinin bir bolumu.
-type YapiOgesi struct {
+// StructureItem is one section of the song structure.
+type StructureItem struct {
 	ID   string  `json:"id"`
-	Tur  string  `json:"tur"`
-	Olcu float64 `json:"olcu"`
+	Type string  `json:"tur"`
+	Bars float64 `json:"olcu"`
 }
 
-// SozBolumu ve Sozler, sozlesme §4.1 Sozler.
-type SozBolumu struct {
-	BolumID  string   `json:"bolumId"`
-	Tur      string   `json:"tur"`
-	Satirlar []string `json:"satirlar"`
+// LyricsSection and Lyrics are contract §4.1 Sozler.
+type LyricsSection struct {
+	SectionID string   `json:"bolumId"`
+	Type      string   `json:"tur"`
+	Lines     []string `json:"satirlar"`
 }
 
-type Sozler struct {
-	Bolumler []SozBolumu `json:"bolumler"`
+type Lyrics struct {
+	Sections []LyricsSection `json:"bolumler"`
 }
 
-// KaynakOzeti, cover'in orijinali. Orijinal silinmisse Silindi true ve
-// diger alanlar son bilinen degerlerdir.
-type KaynakOzeti struct {
-	YayinID           string `json:"yayinId"`
-	Baslik            string `json:"baslik"`
-	SahipKullaniciAdi string `json:"sahipKullaniciAdi"`
-	Silindi           bool   `json:"silindi"`
+// SourceSummary is a cover's original. If the original was deleted, Deleted
+// is true and the other fields hold the last known values.
+type SourceSummary struct {
+	PublicationID string `json:"yayinId"`
+	Title         string `json:"baslik"`
+	OwnerUsername string `json:"sahipKullaniciAdi"`
+	Deleted       bool   `json:"silindi"`
 }
 
-// YayinOzeti, sozlesme §4.1. Kaynak cover olmayan yayinda null olarak
-// GORUNUR (omitempty yok); DalgaFormu hicbir zaman null degildir.
-type YayinOzeti struct {
-	ID           string       `json:"id"`
-	Slug         string       `json:"slug"`
-	Baslik       string       `json:"baslik"`
-	Sahip        ProfilOzeti  `json:"sahip"`
-	Tur          string       `json:"tur"`
-	Bpm          int          `json:"bpm"`
-	Ton          Ton          `json:"ton"`
-	SureSn       int          `json:"sureSn"`
-	DalgaFormu   []float64    `json:"dalgaFormu"`
-	BegeniSayisi int          `json:"begeniSayisi"`
-	YorumSayisi  int          `json:"yorumSayisi"`
-	CoverSayisi  int          `json:"coverSayisi"`
-	BegendimMi   bool         `json:"begendimMi"`
-	AltyapiAcik  bool         `json:"altyapiAcik"`
-	Kaynak       *KaynakOzeti `json:"kaynak"`
-	Olusturma    time.Time    `json:"olusturma"`
+// PublicationSummary is contract §4.1. Source is VISIBLE as null on a
+// publication that is not a cover (no omitempty); Waveform is never null.
+type PublicationSummary struct {
+	ID             string         `json:"id"`
+	Slug           string         `json:"slug"`
+	Title          string         `json:"baslik"`
+	Owner          ProfileSummary `json:"sahip"`
+	Genre          string         `json:"tur"`
+	BPM            int            `json:"bpm"`
+	MusicalKey     MusicalKey     `json:"ton"`
+	DurationSec    int            `json:"sureSn"`
+	Waveform       []float64      `json:"dalgaFormu"`
+	LikeCount      int            `json:"begeniSayisi"`
+	CommentCount   int            `json:"yorumSayisi"`
+	CoverCount     int            `json:"coverSayisi"`
+	LikedByMe      bool           `json:"begendimMi"`
+	BackingEnabled bool           `json:"altyapiAcik"`
+	Source         *SourceSummary `json:"kaynak"`
+	CreatedAt      time.Time      `json:"olusturma"`
 }
 
-// YayinDetayi, sozlesme §4.1. Gorunurluk her zaman gonderilir.
-type YayinDetayi struct {
-	YayinOzeti
-	Aciklama   string      `json:"aciklama"`
-	YorumAcik  bool        `json:"yorumAcik"`
-	Sozler     Sozler      `json:"sozler"`
-	Yapi       []YapiOgesi `json:"yapi"`
-	Durum      string      `json:"durum"`
-	BenimMi    bool        `json:"benimMi"`
-	Gorunurluk string      `json:"gorunurluk"`
+// PublicationDetail is contract §4.1. Visibility is always sent.
+type PublicationDetail struct {
+	PublicationSummary
+	Description     string          `json:"aciklama"`
+	CommentsEnabled bool            `json:"yorumAcik"`
+	Lyrics          Lyrics          `json:"sozler"`
+	Structure       []StructureItem `json:"yapi"`
+	Status          string          `json:"durum"`
+	IsMine          bool            `json:"benimMi"`
+	Visibility      string          `json:"gorunurluk"`
 }
 
-// StemGirdisi, yayin isteginde bir stem. URL render sonucunun fileUrl'i
-// (tam adres ya da ciplak anahtar).
-type StemGirdisi struct {
-	ID        string  `json:"id"`
-	Enstruman string  `json:"enstruman"`
-	URL       string  `json:"url"`
-	Sure      float64 `json:"sure"`
+// StemInput is one stem in a publication request. URL is the render
+// result's fileUrl (a full address or a bare key).
+type StemInput struct {
+	ID         string  `json:"id"`
+	Instrument string  `json:"enstruman"`
+	URL        string  `json:"url"`
+	Duration   float64 `json:"sure"`
 }
 
-// YayinIstegi, POST /yayinlar govdesi (mobil PublishInput).
-type YayinIstegi struct {
-	Baslik        string        `json:"baslik"`
-	Aciklama      string        `json:"aciklama"`
-	Gorunurluk    string        `json:"gorunurluk"`
-	AltyapiAcik   bool          `json:"altyapiAcik"`
-	YorumAcik     bool          `json:"yorumAcik"`
-	MasterURL     string        `json:"masterUrl"`
-	Stemler       []StemGirdisi `json:"stemler"`
-	Sozler        Sozler        `json:"sozler"`
-	Yapi          []YapiOgesi   `json:"yapi"`
-	Tur           string        `json:"tur"`
-	Bpm           int           `json:"bpm"`
-	Ton           Ton           `json:"ton"`
-	SureSn        int           `json:"sureSn"`
-	KaynakYayinID *string       `json:"kaynakYayinId"`
+// PublicationRequest is the POST /yayinlar body (mobile PublishInput).
+type PublicationRequest struct {
+	Title               string          `json:"baslik"`
+	Description         string          `json:"aciklama"`
+	Visibility          string          `json:"gorunurluk"`
+	BackingEnabled      bool            `json:"altyapiAcik"`
+	CommentsEnabled     bool            `json:"yorumAcik"`
+	MasterURL           string          `json:"masterUrl"`
+	Stems               []StemInput     `json:"stemler"`
+	Lyrics              Lyrics          `json:"sozler"`
+	Structure           []StructureItem `json:"yapi"`
+	Genre               string          `json:"tur"`
+	BPM                 int             `json:"bpm"`
+	MusicalKey          MusicalKey      `json:"ton"`
+	DurationSec         int             `json:"sureSn"`
+	SourcePublicationID *string         `json:"kaynakYayinId"`
 }
 
-// YayinYaniti, POST /yayinlar 202 govdesi.
-type YayinYaniti struct {
-	ID    string `json:"id"`
-	Slug  string `json:"slug"`
-	Durum string `json:"durum"`
+// PublicationResponse is the POST /yayinlar 202 body.
+type PublicationResponse struct {
+	ID     string `json:"id"`
+	Slug   string `json:"slug"`
+	Status string `json:"durum"`
 }
 
-// YayinYamasi, PATCH /yayinlar/{id}; yalnizca gonderilen alanlar degisir.
-type YayinYamasi struct {
-	Aciklama    *string `json:"aciklama"`
-	AltyapiAcik *bool   `json:"altyapiAcik"`
-	Gorunurluk  *string `json:"gorunurluk"`
-	YorumAcik   *bool   `json:"yorumAcik"`
+// PublicationPatch is PATCH /yayinlar/{id}; only the fields that are sent change.
+type PublicationPatch struct {
+	Description     *string `json:"aciklama"`
+	BackingEnabled  *bool   `json:"altyapiAcik"`
+	Visibility      *string `json:"gorunurluk"`
+	CommentsEnabled *bool   `json:"yorumAcik"`
 }
 
-// DosyaAdresi ve YayinDosyalari, POST /yayinlar/{id}/dosyalar yaniti.
-type DosyaAdresi struct {
+// FileLink and PublicationFiles are the POST /yayinlar/{id}/dosyalar response.
+type FileLink struct {
 	URL       string     `json:"url"`
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 
-type YayinDosyalari struct {
-	Master DosyaAdresi `json:"master"`
+type PublicationFiles struct {
+	Master FileLink `json:"master"`
 }
 
-// HazirlikStemi ve Hazirlik, yayin.hazirlik kolonu: kopyalanacak kaynak
-// anahtarlar. tekrar-dene ayni girdiyle yeniden kosabilsin diye satirda
-// durur; disari verilmez.
-type HazirlikStemi struct {
-	ID        string  `json:"id"`
-	Enstruman string  `json:"enstruman"`
-	Sure      float64 `json:"sure"`
-	Key       string  `json:"key"`
+// PreparationStem and Preparation are the yayin.hazirlik column: the source
+// keys to copy. They stay on the row so that retry can run again with the
+// same input; they are never returned to clients.
+type PreparationStem struct {
+	ID         string  `json:"id"`
+	Instrument string  `json:"enstruman"`
+	Duration   float64 `json:"sure"`
+	Key        string  `json:"key"`
 }
 
-type Hazirlik struct {
-	MasterKey string          `json:"masterKey"`
-	Stems     []HazirlikStemi `json:"stems"`
+type Preparation struct {
+	MasterKey string            `json:"masterKey"`
+	Stems     []PreparationStem `json:"stems"`
 }
 
-// StemKaydi, yayin.stem_listesi ogesi: kopyalanmis stem. Anahtar,
-// sosyal/{yayinId}/stems/{stemId}.{ext} kopyasidir.
-type StemKaydi struct {
-	ID        string  `json:"id"`
-	Enstruman string  `json:"enstruman"`
-	Sure      float64 `json:"sure"`
-	Anahtar   string  `json:"anahtar"`
+// StemRecord is an item of yayin.stem_listesi: a copied stem. Key is the
+// sosyal/{pubId}/stems/{stemId}.{ext} copy.
+type StemRecord struct {
+	ID         string  `json:"id"`
+	Instrument string  `json:"enstruman"`
+	Duration   float64 `json:"sure"`
+	Key        string  `json:"anahtar"`
 }
 
-// YeniYayin, depoya yazilacak dogrulanmis yayin.
-type YeniYayin struct {
-	ID             string
-	Slug           string
-	SahipID        string
-	Baslik         string
-	Aciklama       string
-	Tur            string
-	Bpm            int
-	Ton            Ton
-	SureSn         int
-	Gorunurluk     string
-	AltyapiAcik    bool
-	YorumAcik      bool
-	Sozler         Sozler
-	Yapi           []YapiOgesi
-	Hazirlik       Hazirlik
-	KaynakYayinID  string // "" orijinal
-	KaynakBaslik   string
-	KaynakSahipAdi string
+// PublicationInsert is a validated publication to be written to the store.
+type PublicationInsert struct {
+	ID                  string
+	Slug                string
+	OwnerID             string
+	Title               string
+	Description         string
+	Genre               string
+	BPM                 int
+	MusicalKey          MusicalKey
+	DurationSec         int
+	Visibility          string
+	BackingEnabled      bool
+	CommentsEnabled     bool
+	Lyrics              Lyrics
+	Structure           []StructureItem
+	Preparation         Preparation
+	SourcePublicationID string // "" means original
+	SourceTitle         string
+	SourceOwnerUsername string
 }
 
-// YayinKaydi, depodan okunan detay ve servisin karar icin ihtiyac
-// duydugu ic alanlar. Silinmis yayinlar da doner (Silindi true);
-// gorunurlugu servis DetayGorebilir ile uygular.
-type YayinKaydi struct {
-	YayinDetayi
-	SahipID        string
-	KaynakYayinID  string
-	StemVar        bool // hazirlikta stem var: altyapi sonradan acilabilir
-	MasterAnahtari string
-	Silindi        bool
-	TakipEdiyor    bool // izleyici sahibi takip ediyor
+// PublicationRecord is the detail read from the store plus the internal
+// fields the service needs for decisions. Deleted publications are returned
+// too (Deleted true); the service applies visibility with CanSeeDetail.
+type PublicationRecord struct {
+	PublicationDetail
+	OwnerID             string
+	SourcePublicationID string
+	HasStems            bool // the preparation has stems: backing can be enabled later
+	MasterKey           string
+	Deleted             bool
+	ViewerFollows       bool // the viewer follows the owner
 }
 
-// gorunurlukGirdisi, kaydi izleyiciye gore gorunurluk girdisine cevirir.
-func (k *YayinKaydi) gorunurlukGirdisi(izleyiciID string) GorunurlukGirdisi {
-	return GorunurlukGirdisi{
-		SahipID: k.SahipID, IzleyiciID: izleyiciID, Gorunurluk: k.Gorunurluk,
-		Durum: k.Durum, Silindi: k.Silindi, TakipEdiyor: k.TakipEdiyor,
+// visibilityInput turns the record into a visibility input for the viewer.
+func (r *PublicationRecord) visibilityInput(viewerID string) VisibilityInput {
+	return VisibilityInput{
+		OwnerID: r.OwnerID, ViewerID: viewerID, Visibility: r.Visibility,
+		Status: r.Status, Deleted: r.Deleted, ViewerFollows: r.ViewerFollows,
 	}
 }
 
-// HazirlikKaydi, sosyal:hazirla isinin okudugu satir.
-type HazirlikKaydi struct {
-	ID       string
-	SahipID  string
-	Durum    string
-	Silindi  bool
-	Hazirlik Hazirlik
+// PreparationRecord is the row that the sosyal:hazirla task reads.
+type PreparationRecord struct {
+	ID          string
+	OwnerID     string
+	Status      string
+	Deleted     bool
+	Preparation Preparation
 }
 
-// HazirlikSonucu, isin basariyla bitince satira yazdiklari.
-type HazirlikSonucu struct {
-	MasterAnahtari   string
-	StemListesi      []StemKaydi
-	DalgaFormu       []float64
-	OnizlemeAnahtari string // "" ise onizleme yok
+// PreparationResult is what the task writes to the row when it finishes successfully.
+type PreparationResult struct {
+	MasterKey  string
+	Stems      []StemRecord
+	Waveform   []float64
+	PreviewKey string // "" means no preview
 }

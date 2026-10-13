@@ -10,143 +10,145 @@ import (
 	"github.com/makeasinger/api/internal/config"
 )
 
-// Kuyruk, *asynq.Client'in burada kullanilan yuzu.
-type Kuyruk interface {
+// Enqueuer is the part of *asynq.Client that is used here.
+type Enqueuer interface {
 	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
 }
 
-// Servis, Kesfet uclarinin is kurallarini uygular. Gorunurluk detayda
-// burada (DetayGorebilir), listelerde depoda (gorunurlukKosulu) uygulanir.
-type Servis struct {
-	depo     Store
-	kuyruk   Kuyruk
-	depolama client.StorageClient // nil: R2 yok, imzasiz adres uretilir
-	r2       *config.R2Config
-	simdi    func() time.Time
+// Service applies the business rules of the Discover endpoints. Visibility
+// is applied here for details (CanSeeDetail) and in the store for lists
+// (visibilityCondition).
+type Service struct {
+	store   Store
+	queue   Enqueuer
+	storage client.StorageClient // nil: no R2, unsigned addresses are produced
+	r2      *config.R2Config
+	now     func() time.Time
 
-	// kopyalayici, cover-baslat'in stem kopyalayicisi (KopyalayiciAyarla);
-	// nil: R2 yok, kopya atlanir.
-	kopyalayici client.Copier
+	// copier is the stem copier of cover-baslat (WithCopier);
+	// nil: no R2, the copy is skipped.
+	copier client.Copier
 }
 
-// NewServis kurar. depolama nil olabilir (R2 yapilandirilmamis); main
-// tipli nil tuzagina dusmemek icin yalnizca gercek istemciyi gecirir.
-func NewServis(depo Store, kuyruk Kuyruk, depolama client.StorageClient, r2 *config.R2Config) *Servis {
-	return &Servis{depo: depo, kuyruk: kuyruk, depolama: depolama, r2: r2, simdi: time.Now}
+// NewService builds the service. storage may be nil (R2 not configured);
+// main passes only the real client to avoid the typed-nil trap.
+func NewService(store Store, queue Enqueuer, storage client.StorageClient, r2 *config.R2Config) *Service {
+	return &Service{store: store, queue: queue, storage: storage, r2: r2, now: time.Now}
 }
 
-// kullaniciCoz, istegi yapanin kimligini dogrular. Auth middleware her
-// zaman uuid yazar; aksi bir yapilandirma hatasidir ve 401'e doner.
-func kullaniciCoz(ham string) (string, error) {
-	id, ok := kimlikCoz(ham)
+// parseUserID validates the caller's identity. The auth middleware always
+// writes a uuid; anything else is a configuration error and returns 401.
+func parseUserID(raw string) (string, error) {
+	id, ok := parseID(raw)
 	if !ok {
 		return "", ErrInvalidIdentity
 	}
 	return id, nil
 }
 
-// ozet, kaydi ProfilOzeti'ne cevirir.
-func (k *ProfilKaydi) ozet() ProfilOzeti {
-	return ProfilOzeti{
-		KullaniciAdi: k.KullaniciAdi,
-		GorunenAd:    k.GorunenAd,
-		AvatarRengi:  AvatarRengi(k.KullaniciID),
+// summary turns the record into a ProfileSummary.
+func (r *ProfileRecord) summary() ProfileSummary {
+	return ProfileSummary{
+		Username:    r.Username,
+		DisplayName: r.DisplayName,
+		AvatarColor: AvatarColor(r.UserID),
 	}
 }
 
-// profilKur, kaydi izleyiciye gore tam Profil'e cevirir.
-func (s *Servis) profilKur(ctx context.Context, k *ProfilKaydi, izleyiciID string) (*Profil, error) {
-	sayilar, err := s.depo.ProfileCounts(ctx, k.KullaniciID, izleyiciID)
+// buildProfile turns the record into a full Profile for the viewer.
+func (s *Service) buildProfile(ctx context.Context, rec *ProfileRecord, viewerID string) (*Profile, error) {
+	counts, err := s.store.ProfileCounts(ctx, rec.UserID, viewerID)
 	if err != nil {
 		return nil, err
 	}
-	return &Profil{
-		ProfilOzeti:      k.ozet(),
-		Bio:              k.Bio,
-		Istatistik:       sayilar.Istatistik,
-		TakipEdiyorMuyum: sayilar.TakipEdiyorMuyum,
-		BenMiyim:         k.KullaniciID == izleyiciID,
+	return &Profile{
+		ProfileSummary: rec.summary(),
+		Bio:            rec.Bio,
+		Stats:          counts.Stats,
+		FollowedByMe:   counts.FollowedByMe,
+		IsMe:           rec.UserID == viewerID,
 	}, nil
 }
 
-// ProfilBen, istegi yapanin profilini doner; yoksa ErrProfilYok.
-func (s *Servis) ProfilBen(ctx context.Context, kullaniciID string) (*Profil, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// MyProfile returns the caller's profile, or ErrNoProfile if there is none.
+func (s *Service) MyProfile(ctx context.Context, userID string) (*Profile, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	k, err := s.depo.GetProfile(ctx, id)
+	rec, err := s.store.GetProfile(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return s.profilKur(ctx, k, id)
+	return s.buildProfile(ctx, rec, id)
 }
 
-// ProfilKaydet, profili olusturur ya da gunceller (PUT /profil/ben).
-func (s *Servis) ProfilKaydet(ctx context.Context, kullaniciID string, g ProfilGirdisi) (*Profil, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// SaveProfile creates or updates the profile (PUT /profil/ben).
+func (s *Service) SaveProfile(ctx context.Context, userID string, input ProfileInput) (*Profile, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	g, err = profilGirdisiniDuzenle(g)
+	input, err = normalizeProfileInput(input)
 	if err != nil {
 		return nil, err
 	}
-	k, err := s.depo.UpsertProfile(ctx, ProfilKaydi{
-		KullaniciID: id, KullaniciAdi: g.KullaniciAdi, GorunenAd: g.GorunenAd, Bio: g.Bio,
+	rec, err := s.store.UpsertProfile(ctx, ProfileRecord{
+		UserID: id, Username: input.Username, DisplayName: input.DisplayName, Bio: input.Bio,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return s.profilKur(ctx, k, id)
+	return s.buildProfile(ctx, rec, id)
 }
 
-// AdUygunMu, adin istegi yapan icin alinabilir olup olmadigini soyler.
-// Kendi adi uygundur. Alinmissa ad2..ad99 arasindan ilk bos olani onerir.
-func (s *Servis) AdUygunMu(ctx context.Context, kullaniciID, ad string) (*AdUygunlugu, error) {
-	id, err := kullaniciCoz(kullaniciID)
+// CheckUsername reports whether the name is available to the caller. Their
+// own name is available. If it is taken, it suggests the first free one among
+// name2..name99.
+func (s *Service) CheckUsername(ctx context.Context, userID, username string) (*UsernameAvailability, error) {
+	id, err := parseUserID(userID)
 	if err != nil {
 		return nil, err
 	}
-	if !KullaniciAdiGecerli(ad) {
+	if !ValidUsername(username) {
 		return nil, ErrInvalidUsername
 	}
-	sahipler, err := s.depo.UsernameOwners(ctx, []string{ad})
+	owners, err := s.store.UsernameOwners(ctx, []string{username})
 	if err != nil {
 		return nil, err
 	}
-	if sahip, alinmis := sahipler[ad]; !alinmis || sahip == id {
-		return &AdUygunlugu{Uygun: true}, nil
+	if owner, taken := owners[username]; !taken || owner == id {
+		return &UsernameAvailability{Available: true}, nil
 	}
-	adaylar := adAdaylari(ad)
-	sahipler, err = s.depo.UsernameOwners(ctx, adaylar)
+	candidates := usernameCandidates(username)
+	owners, err = s.store.UsernameOwners(ctx, candidates)
 	if err != nil {
 		return nil, err
 	}
-	for _, aday := range adaylar {
-		if sahip, alinmis := sahipler[aday]; !alinmis || sahip == id {
-			return &AdUygunlugu{Uygun: false, Oneri: &aday}, nil
+	for _, candidate := range candidates {
+		if owner, taken := owners[candidate]; !taken || owner == id {
+			return &UsernameAvailability{Available: false, Suggestion: &candidate}, nil
 		}
 	}
-	return &AdUygunlugu{Uygun: false}, nil
+	return &UsernameAvailability{Available: false}, nil
 }
 
-// ProfilGoster, kullanici adiyla bir profili izleyiciye gore doner.
-// Gecersiz bicimli ad ErrBulunamadi'dir: boyle bir profil olamaz.
-func (s *Servis) ProfilGoster(ctx context.Context, izleyiciID, ad string) (*Profil, error) {
-	id, err := kullaniciCoz(izleyiciID)
+// Profile returns a profile by username as the viewer sees it. A malformed
+// name is ErrNotFound: no such profile can exist.
+func (s *Service) Profile(ctx context.Context, viewerID, username string) (*Profile, error) {
+	id, err := parseUserID(viewerID)
 	if err != nil {
 		return nil, err
 	}
-	if !KullaniciAdiGecerli(ad) {
+	if !ValidUsername(username) {
 		return nil, ErrNotFound
 	}
-	k, err := s.depo.GetProfileByUsername(ctx, ad)
+	rec, err := s.store.GetProfileByUsername(ctx, username)
 	if err != nil {
 		if errors.Is(err, ErrNoProfile) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
-	return s.profilKur(ctx, k, id)
+	return s.buildProfile(ctx, rec, id)
 }
