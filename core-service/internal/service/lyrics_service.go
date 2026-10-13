@@ -120,7 +120,8 @@ For a chorus: create a memorable, singable hook.
 For a bridge: provide contrast or a new perspective.
 For other sections: follow conventions of that section type.
 
-Output as JSON: {"drafts": [["line1","line2","line3","line4"], ["line1","line2","line3","line4"]]}`,
+Output a single JSON object with exactly one key, "drafts". Its value is an array of exactly 2 drafts; each draft is an array of 4-8 plain strings (one string per lyric line). Use only plain strings: no nested objects, no extra keys, no line numbers. Escape any double quote inside a line as \" or avoid it.
+Example shape: {"drafts": [["line1","line2","line3","line4"], ["line1","line2","line3","line4"]]}`,
 		req.Genre, req.SectionType, vibes, langName(language))
 }
 

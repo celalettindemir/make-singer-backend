@@ -22,7 +22,19 @@ type GroqClient struct {
 
 	temperatureGenerate float64
 	temperatureRewrite  float64
+
+	// retryDelay is the pause between attempts after a json_validate_failed.
+	retryDelay time.Duration
 }
+
+const (
+	// groqJSONValidateFailed is the error code Groq returns with HTTP 400 when
+	// the model's JSON-mode output failed Groq's own validation. It is a
+	// sampling flake, so the same request usually succeeds on a retry.
+	groqJSONValidateFailed = "json_validate_failed"
+	// groqJSONRetries is the number of extra attempts after json_validate_failed.
+	groqJSONRetries = 2
+)
 
 // ChatMessage represents a message in the chat completion request
 type ChatMessage struct {
@@ -79,6 +91,7 @@ func NewGroqClient(cfg *config.GroqConfig) *GroqClient {
 		maxTokens:           cfg.MaxTokens,
 		temperatureGenerate: cfg.TemperatureGenerate,
 		temperatureRewrite:  cfg.TemperatureRewrite,
+		retryDelay:          300 * time.Millisecond,
 	}
 }
 
@@ -87,8 +100,48 @@ func (c *GroqClient) Temperatures() (generate, rewrite float64) {
 	return c.temperatureGenerate, c.temperatureRewrite
 }
 
-// ChatCompletion sends a chat completion request to Groq in JSON mode
+// isJSONValidateFailed reports whether a Groq error body carries the
+// json_validate_failed code.
+func isJSONValidateFailed(status int, body []byte) bool {
+	if status != http.StatusBadRequest {
+		return false
+	}
+	var e struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	return json.Unmarshal(body, &e) == nil && e.Error.Code == groqJSONValidateFailed
+}
+
+// ChatCompletion sends a chat completion request to Groq in JSON mode. A 400
+// json_validate_failed (the model produced output Groq could not validate) is
+// retried up to groqJSONRetries more times; any other failure returns at once.
+// The raw Groq body, including failed_generation, is only ever part of the
+// returned error, which handlers map to a generic i18n message.
 func (c *GroqClient) ChatCompletion(ctx context.Context, system, user string, temperature float64) (string, error) {
+	var lastErr error
+	for attempt := 0; attempt <= groqJSONRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(c.retryDelay):
+			}
+		}
+		out, retry, err := c.chatCompletionOnce(ctx, system, user, temperature)
+		if err == nil {
+			return out, nil
+		}
+		lastErr = err
+		if !retry {
+			break
+		}
+	}
+	return "", lastErr
+}
+
+func (c *GroqClient) chatCompletionOnce(ctx context.Context, system, user string, temperature float64) (content string, retry bool, err error) {
 	messages := []ChatMessage{
 		{Role: "system", Content: system},
 		{Role: "user", Content: user},
@@ -104,12 +157,12 @@ func (c *GroqClient) ChatCompletion(ctx context.Context, system, user string, te
 
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal request: %w", err)
+		return "", false, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(bodyBytes))
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return "", false, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -117,29 +170,29 @@ func (c *GroqClient) ChatCompletion(ctx context.Context, system, user string, te
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to send request: %w", err)
+		return "", false, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+		return "", false, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("groq API error (status %d): %s", resp.StatusCode, string(respBody))
+		return "", isJSONValidateFailed(resp.StatusCode, respBody), fmt.Errorf("groq API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	var chatResp ChatCompletionResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", fmt.Errorf("failed to unmarshal response: %w", err)
+		return "", false, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
 	if len(chatResp.Choices) == 0 {
-		return "", fmt.Errorf("no choices in response")
+		return "", false, fmt.Errorf("no choices in response")
 	}
 
-	return chatResp.Choices[0].Message.Content, nil
+	return chatResp.Choices[0].Message.Content, false, nil
 }
 
 // IsConfigured returns true if the client has valid configuration
