@@ -366,7 +366,7 @@ func TestLoad_SocialPublicationLimit(t *testing.T) {
 func TestLoad_SocialLimitsDefault(t *testing.T) {
 	for _, name := range []string{
 		"RATELIMIT_SOSYAL_YORUM_PER_MIN", "RATELIMIT_SOSYAL_COVER_PER_HOUR",
-		"RATELIMIT_PUBLIC_PER_MIN", "RATELIMIT_PUBLIC_WEB_PER_MIN",
+		"RATELIMIT_PUBLIC_PER_MIN", "RATELIMIT_PUBLIC_WEB_PER_MIN", "RATELIMIT_PUBLIC_WEB_VISITOR_PER_MIN",
 		"SOSYAL_WEB_ANAHTARI", "SOSYAL_WEB_ANAHTARI_FILE",
 	} {
 		os.Unsetenv(name)
@@ -380,6 +380,9 @@ func TestLoad_SocialLimitsDefault(t *testing.T) {
 		t.Errorf("defaults = comment %d, cover %d, public %d, web %d; want 10, 20, 30, 600",
 			r.SocialCommentPerMin, r.SocialCoverPerHour, r.PublicPerMin, r.PublicWebPerMin)
 	}
+	if r.PublicWebVisitorPerMin != 30 {
+		t.Errorf("PublicWebVisitorPerMin default = %d, want 30", r.PublicWebVisitorPerMin)
+	}
 	if cfg.Social.WebKey != "" {
 		t.Errorf("WebKey default must be empty: %q", cfg.Social.WebKey)
 	}
@@ -390,13 +393,14 @@ func TestLoad_SocialLimitsFromEnv(t *testing.T) {
 	t.Setenv("RATELIMIT_SOSYAL_COVER_PER_HOUR", "4")
 	t.Setenv("RATELIMIT_PUBLIC_PER_MIN", "5")
 	t.Setenv("RATELIMIT_PUBLIC_WEB_PER_MIN", "6")
+	t.Setenv("RATELIMIT_PUBLIC_WEB_VISITOR_PER_MIN", "7")
 	t.Setenv("SOSYAL_WEB_ANAHTARI", "dogrudan-deger")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
 	r := cfg.RateLimit
-	if r.SocialCommentPerMin != 3 || r.SocialCoverPerHour != 4 || r.PublicPerMin != 5 || r.PublicWebPerMin != 6 {
+	if r.SocialCommentPerMin != 3 || r.SocialCoverPerHour != 4 || r.PublicPerMin != 5 || r.PublicWebPerMin != 6 || r.PublicWebVisitorPerMin != 7 {
 		t.Errorf("environment values were not read: %+v", r)
 	}
 	if cfg.Social.WebKey != "dogrudan-deger" {

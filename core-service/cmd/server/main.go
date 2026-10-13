@@ -269,7 +269,7 @@ func main() {
 	// server shares one, higher limit via X-Web-Anahtari.
 	socialHandler.PublicRoutes(app.Group("/api/public"),
 		rateLimiter.LimitIP("public", cfg.RateLimit.PublicPerMin, time.Minute,
-			cfg.Social.WebKey, cfg.RateLimit.PublicWebPerMin))
+			cfg.Social.WebKey, cfg.RateLimit.PublicWebPerMin, cfg.RateLimit.PublicWebVisitorPerMin))
 
 	// API routes
 	api := app.Group("/api", apiAuthMiddleware, middleware.DeletedUserGate(deletionmark.NewRedisChecker(redisClient)))

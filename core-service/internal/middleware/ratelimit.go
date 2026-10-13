@@ -62,21 +62,39 @@ func (rl *RateLimiter) perUser(keyPrefix string, maxRequests int, window time.Du
 // a few visitors per minute.
 const WebKeyHeader = "X-Web-Anahtari"
 
+// VisitorIPHeader carries the real visitor's IP on requests from the web
+// server (make-singer-frontend). It is only trusted together with a valid
+// X-Web-Anahtari; without the key it is ignored entirely.
+const VisitorIPHeader = "X-Ziyaretci-Ip"
+
 // LimitIP is a fixed-window limit per client IP for unauthenticated
 // endpoints; the key is ratelimit:<prefix>:ip:<ip>. If webKey is set and
 // the request carries the same value in the X-Web-Anahtari header, the
-// request is counted against webMax under the shared
-// ratelimit:<prefix>:web key instead of the IP. A wrong or empty key is
-// not a 401, it just gets the normal IP limit. The comparison is
-// constant-time (SHA-256 first, so the length does not leak either). If
-// webKey is empty the web path is completely disabled.
-func (rl *RateLimiter) LimitIP(keyPrefix string, maxRequests int, window time.Duration, webKey string, webMax int) fiber.Handler {
+// request skips the per-IP bucket (the peer is the web server, shared by
+// every visitor) and is counted against webMax under the shared
+// ratelimit:<prefix>:web key. When such a request also carries a
+// parseable X-Ziyaretci-Ip and webVisitorMax > 0, it must additionally fit
+// the per-visitor bucket ratelimit:<prefix>:web:ip:<ip>, which is checked
+// first so one visitor cannot exhaust the shared bucket. webVisitorMax <= 0
+// disables the per-visitor bucket. A wrong or empty key is not a 401, it
+// just gets the normal IP limit and the visitor header is never read. The
+// comparison is constant-time (SHA-256 first, so the length does not leak
+// either). If webKey is empty the web path is completely disabled.
+func (rl *RateLimiter) LimitIP(keyPrefix string, maxRequests int, window time.Duration, webKey string, webMax, webVisitorMax int) fiber.Handler {
 	webDigest := sha256.Sum256([]byte(webKey))
 	return func(c *fiber.Ctx) error {
 		if webKey != "" {
 			if provided := c.Get(WebKeyHeader); provided != "" {
 				providedDigest := sha256.Sum256([]byte(provided))
 				if subtle.ConstantTimeCompare(providedDigest[:], webDigest[:]) == 1 {
+					if webVisitorMax > 0 {
+						if visitor := net.ParseIP(strings.TrimSpace(c.Get(VisitorIPHeader))); visitor != nil {
+							key := fmt.Sprintf("ratelimit:%s:web:ip:%s", keyPrefix, ipKey(visitor.String()))
+							if done, err := rl.count(c, key, webVisitorMax, window, response.RateLimited); done {
+								return err
+							}
+						}
+					}
 					return rl.hit(c, fmt.Sprintf("ratelimit:%s:web", keyPrefix), webMax, window, response.RateLimited)
 				}
 			}
@@ -126,6 +144,17 @@ func ipKey(raw string) string {
 // exceeded it returns the overflow response, otherwise it continues the
 // chain.
 func (rl *RateLimiter) hit(c *fiber.Ctx, key string, maxRequests int, window time.Duration, overflow fiber.Handler) error {
+	if done, err := rl.count(c, key, maxRequests, window, overflow); done {
+		return err
+	}
+	return c.Next()
+}
+
+// count increments the key's counter and reports whether the request was
+// answered here (done == true: a 429 or 503 response was written and err is
+// its result). When done is false the request is within the limit and the
+// caller decides whether to continue the chain.
+func (rl *RateLimiter) count(c *fiber.Ctx, key string, maxRequests int, window time.Duration, overflow fiber.Handler) (done bool, err error) {
 	ctx := context.Background()
 
 	// Incrementing the counter and setting the TTL happen in ONE
@@ -147,13 +176,13 @@ func (rl *RateLimiter) hit(c *fiber.Ctx, key string, maxRequests int, window tim
 		// down. The error text is not logged (the connection string may
 		// carry a secret).
 		c.Set("Retry-After", "5")
-		return response.Error(c, fiber.StatusServiceUnavailable,
+		return true, response.Error(c, fiber.StatusServiceUnavailable,
 			response.CodeServiceError, i18n.KeyRateLimitUnavailable, nil)
 	}
 	count, err := incr.Result()
 	if err != nil {
 		c.Set("Retry-After", "5")
-		return response.Error(c, fiber.StatusServiceUnavailable,
+		return true, response.Error(c, fiber.StatusServiceUnavailable,
 			response.CodeServiceError, i18n.KeyRateLimitUnavailable, nil)
 	}
 
@@ -181,14 +210,14 @@ func (rl *RateLimiter) hit(c *fiber.Ctx, key string, maxRequests int, window tim
 			seconds = 1
 		}
 		c.Set("Retry-After", fmt.Sprintf("%d", seconds))
-		return overflow(c)
+		return true, overflow(c)
 	}
 
 	// Add rate limit headers
 	c.Set("X-RateLimit-Limit", fmt.Sprintf("%d", maxRequests))
 	c.Set("X-RateLimit-Remaining", fmt.Sprintf("%d", maxRequests-int(count)))
 
-	return c.Next()
+	return false, nil
 }
 
 // LyricsLimit returns a rate limiter for lyrics endpoints (30 req/min)

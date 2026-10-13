@@ -1,5 +1,5 @@
-FILE	config-yaml	18a41447ae71ae4d34246a3b9693a69ae16b98da2e2c26a0b190959041043701
-FILE	env-example	f866147fca3595ddb8d9570a85f8eb1487ecbcc63a932963dd51604405c456bf
+FILE	config-yaml	4ec622b238a266bd9b59f4cc875b073f645a3d046851d88addca8a84c6468876
+FILE	env-example	268e1f012f85bf2fc0f6793115e536002acf4257c8298e67db22c525ba249141
 FILE	kimlik-migration-001	805c4a7704084d815a950e8fb3c14ca36de2cfc52e668355def91a7da38c024c
 FILE	kimlik-migration-002	1c8915357fd9a37ca07ca364f134e352d6e8afbabc5520df35d8a70163adfd9f
 FILE	kimlik-migration-003	fc96a44b344fe3e5f359fc07890bb62f09f6515ce2c23f49391391f0bc501401
@@ -838,6 +838,7 @@ STR	"RATELIMIT_CLOUDFLARE_RANGES"
 STR	"RATELIMIT_CLOUDFLARE_RANGES"
 STR	"RATELIMIT_PUBLIC_PER_MIN"
 STR	"RATELIMIT_PUBLIC_WEB_PER_MIN"
+STR	"RATELIMIT_PUBLIC_WEB_VISITOR_PER_MIN"
 STR	"RATELIMIT_SOSYAL_COVER_PER_HOUR"
 STR	"RATELIMIT_SOSYAL_YAYIN_PER_HOUR"
 STR	"RATELIMIT_SOSYAL_YORUM_PER_MIN"
@@ -968,6 +969,7 @@ STR	"X-RateLimit-Limit"
 STR	"X-RateLimit-Remaining"
 STR	"X-Real-Ip"
 STR	"X-Web-Anahtari"
+STR	"X-Ziyaretci-Ip"
 STR	"Yapay zekâ servisi şu anda yanıt veremiyor, lütfen tekrar deneyin."
 STR	"Yayın bu işlem için uygun durumda değil."
 STR	"Yayının stem kopyası yok."
@@ -1550,6 +1552,9 @@ STR	"ratelimit.public_per_min"
 STR	"ratelimit.public_web_per_min"
 STR	"ratelimit.public_web_per_min"
 STR	"ratelimit.public_web_per_min"
+STR	"ratelimit.public_web_visitor_per_min"
+STR	"ratelimit.public_web_visitor_per_min"
+STR	"ratelimit.public_web_visitor_per_min"
 STR	"ratelimit.render_per_hour"
 STR	"ratelimit.render_per_hour"
 STR	"ratelimit.sign_per_min"
@@ -1570,6 +1575,7 @@ STR	"ratelimit.ws_ticket_per_min"
 STR	"ratelimit:%s:%s"
 STR	"ratelimit:%s:ip:%s"
 STR	"ratelimit:%s:web"
+STR	"ratelimit:%s:web:ip:%s"
 STR	"redirect_uri"
 STR	"redirect_uri"
 STR	"redis.addr"

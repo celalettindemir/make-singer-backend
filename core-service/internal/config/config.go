@@ -78,6 +78,10 @@ type RateLimitConfig struct {
 	// PublicWebPerMin is the shared per-minute limit across ALL requests
 	// to the same endpoint that carry X-Web-Anahtari (the web server).
 	PublicWebPerMin int
+	// PublicWebVisitorPerMin is the per-visitor per-minute limit for web
+	// server requests (X-Web-Anahtari + X-Ziyaretci-Ip), applied in
+	// addition to PublicWebPerMin. <= 0 disables the per-visitor bucket.
+	PublicWebVisitorPerMin int
 	// Cloudflare is the parsed ratelimit.cloudflare_ranges list: the edge
 	// networks whose CF-Connecting-IP header is trusted for per-IP limits
 	// (see internal/clientip). Empty disables the header.
@@ -272,6 +276,7 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("ratelimit.sosyal_cover_per_hour", "RATELIMIT_SOSYAL_COVER_PER_HOUR")
 	_ = viper.BindEnv("ratelimit.public_per_min", "RATELIMIT_PUBLIC_PER_MIN")
 	_ = viper.BindEnv("ratelimit.public_web_per_min", "RATELIMIT_PUBLIC_WEB_PER_MIN")
+	_ = viper.BindEnv("ratelimit.public_web_visitor_per_min", "RATELIMIT_PUBLIC_WEB_VISITOR_PER_MIN")
 	_ = viper.BindEnv("ratelimit.cloudflare_ranges", "RATELIMIT_CLOUDFLARE_RANGES")
 	_ = viper.BindEnv("sosyal.web_anahtari", "SOSYAL_WEB_ANAHTARI")
 
@@ -294,6 +299,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("ratelimit.sosyal_cover_per_hour", 20)
 	viper.SetDefault("ratelimit.public_per_min", 30)
 	viper.SetDefault("ratelimit.public_web_per_min", 600)
+	viper.SetDefault("ratelimit.public_web_visitor_per_min", 30)
 	viper.SetDefault("ratelimit.cloudflare_ranges", strings.Join(clientip.DefaultCloudflareRanges, ","))
 
 	// Groq defaults
@@ -391,6 +397,7 @@ func Load() (*Config, error) {
 			SocialCoverPerHour:       viper.GetInt("ratelimit.sosyal_cover_per_hour"),
 			PublicPerMin:             viper.GetInt("ratelimit.public_per_min"),
 			PublicWebPerMin:          viper.GetInt("ratelimit.public_web_per_min"),
+			PublicWebVisitorPerMin:   viper.GetInt("ratelimit.public_web_visitor_per_min"),
 		},
 		Groq: GroqConfig{
 			APIKey:  viper.GetString("groq.api_key"),
