@@ -95,6 +95,12 @@ type SocialConfig struct {
 	// web server is subject to the per-IP limit as well. The secret comes
 	// from SOSYAL_WEB_ANAHTARI or SOSYAL_WEB_ANAHTARI_FILE.
 	WebKey string
+	// StalePreparationAfter is how long a publication may stay in the
+	// preparing status before the sweep marks it failed.
+	StalePreparationAfter time.Duration
+	// StaleSweepInterval is how often the sweep runs; <= 0 disables the
+	// scheduler.
+	StaleSweepInterval time.Duration
 }
 
 type GroqConfig struct {
@@ -279,6 +285,8 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("ratelimit.public_web_visitor_per_min", "RATELIMIT_PUBLIC_WEB_VISITOR_PER_MIN")
 	_ = viper.BindEnv("ratelimit.cloudflare_ranges", "RATELIMIT_CLOUDFLARE_RANGES")
 	_ = viper.BindEnv("sosyal.web_anahtari", "SOSYAL_WEB_ANAHTARI")
+	_ = viper.BindEnv("sosyal.stale_preparation_after", "SOCIAL_STALE_PREPARATION_AFTER")
+	_ = viper.BindEnv("sosyal.stale_sweep_interval", "SOCIAL_STALE_SWEEP_INTERVAL")
 
 	// Defaults
 	viper.SetDefault("server.port", "8000")
@@ -300,6 +308,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("ratelimit.public_per_min", 30)
 	viper.SetDefault("ratelimit.public_web_per_min", 600)
 	viper.SetDefault("ratelimit.public_web_visitor_per_min", 30)
+	viper.SetDefault("sosyal.stale_preparation_after", "1h")
+	viper.SetDefault("sosyal.stale_sweep_interval", "15m")
 	viper.SetDefault("ratelimit.cloudflare_ranges", strings.Join(clientip.DefaultCloudflareRanges, ","))
 
 	// Groq defaults
@@ -446,7 +456,9 @@ func Load() (*Config, error) {
 			Federation: buildFederationClients(),
 		},
 		Social: SocialConfig{
-			WebKey: viper.GetString("sosyal.web_anahtari"),
+			WebKey:                viper.GetString("sosyal.web_anahtari"),
+			StalePreparationAfter: viper.GetDuration("sosyal.stale_preparation_after"),
+			StaleSweepInterval:    viper.GetDuration("sosyal.stale_sweep_interval"),
 		},
 	}
 

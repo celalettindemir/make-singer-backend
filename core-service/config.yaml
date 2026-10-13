@@ -29,6 +29,8 @@ ratelimit:
 # Discover (social)
 sosyal:
   web_anahtari: "" # Set via SOSYAL_WEB_ANAHTARI (or _FILE). Empty = web bypass disabled.
+  stale_preparation_after: 1h # SOCIAL_STALE_PREPARATION_AFTER: preparing longer than this -> failed
+  stale_sweep_interval: 15m # SOCIAL_STALE_SWEEP_INTERVAL: sweep period; <= 0 disables the scheduler
 
 # Groq AI Configuration
 groq:

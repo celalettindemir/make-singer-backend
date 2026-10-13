@@ -24,6 +24,10 @@ const (
 	// after 24 hours (maintenance queue).
 	TaskTypeDeleteFiles = "sosyal:dosya-sil"
 
+	// TaskTypeSweepStale fails publications stuck in the preparing status
+	// (social queue, scheduled periodically).
+	TaskTypeSweepStale = "sosyal:bayat-tara"
+
 	// QueueSocial is the asynq queue of the prepare tasks.
 	QueueSocial = "sosyal"
 

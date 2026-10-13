@@ -347,3 +347,43 @@ func TestSocialWorker_DeleteFiles(t *testing.T) {
 		t.Fatal("a read error must be returned")
 	}
 }
+
+type fakeStaleSweeper struct {
+	calls     int
+	olderThan time.Duration
+	n         int64
+	err       error
+}
+
+func (f *fakeStaleSweeper) MarkStalePreparations(_ context.Context, olderThan time.Duration) (int64, error) {
+	f.calls++
+	f.olderThan = olderThan
+	return f.n, f.err
+}
+
+func TestSocialWorker_SweepStale(t *testing.T) {
+	sweeper := &fakeStaleSweeper{n: 2}
+	w := newSocialTestWorker(nil, nil).w.WithStaleSweep(sweeper, 90*time.Minute)
+	if err := w.SweepStale(context.Background(), asynq.NewTask(social.TaskTypeSweepStale, nil)); err != nil {
+		t.Fatalf("SweepStale: %v", err)
+	}
+	if sweeper.calls != 1 || sweeper.olderThan != 90*time.Minute {
+		t.Fatalf("sweeper calls = %d, threshold = %v", sweeper.calls, sweeper.olderThan)
+	}
+}
+
+func TestSocialWorker_SweepStaleStoreErrorRetriesNever(t *testing.T) {
+	boom := errors.New("db down")
+	sweeper := &fakeStaleSweeper{err: boom}
+	w := newSocialTestWorker(nil, nil).w.WithStaleSweep(sweeper, time.Hour)
+	if err := w.SweepStale(context.Background(), asynq.NewTask(social.TaskTypeSweepStale, nil)); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want the store error", err)
+	}
+}
+
+func TestSocialWorker_SweepStaleWithoutSweeperIsNoop(t *testing.T) {
+	w := newSocialTestWorker(nil, nil).w
+	if err := w.SweepStale(context.Background(), asynq.NewTask(social.TaskTypeSweepStale, nil)); err != nil {
+		t.Fatalf("SweepStale: %v", err)
+	}
+}

@@ -1,5 +1,5 @@
-FILE	config-yaml	4ec622b238a266bd9b59f4cc875b073f645a3d046851d88addca8a84c6468876
-FILE	env-example	268e1f012f85bf2fc0f6793115e536002acf4257c8298e67db22c525ba249141
+FILE	config-yaml	4e2e9d962e47769e6f7c46a87a70ed83b803d05cf6394c85fc2a1ea5b4426e59
+FILE	env-example	c4372e14692c2ddcdcdba029a8ff426c0f96e4b3d1a0156547d0f11d8fe56ea4
 FILE	kimlik-migration-001	805c4a7704084d815a950e8fb3c14ca36de2cfc52e668355def91a7da38c024c
 FILE	kimlik-migration-002	1c8915357fd9a37ca07ca364f134e352d6e8afbabc5520df35d8a70163adfd9f
 FILE	kimlik-migration-003	fc96a44b344fe3e5f359fc07890bb62f09f6515ce2c23f49391391f0bc501401
@@ -8,6 +8,7 @@ FILE	kimlik-template-cakisma	961da13a2f0437ff24e0c132daeb1018030c5ab355343b87e14
 FILE	kimlik-template-giris	e33d4301873e55984131125f547c70e0c4d8475ddec6137caba26252853d6007
 FILE	kimlik-template-kayit	489c424030faaf73e5abbb2eaa5941bd8df6da40e8411ebf0c8715a3a5323cb6
 FILE	sosyal-migration-001	0cffcd1498596f72b1165c70a297b30bdab4b3d2262551d3c5b05b5e8c6d3a34
+FILE	sosyal-migration-002	2516985e441c61869256d4cd778935c947b3b4c2ec7275498506130aa917f0fc
 ROUTE	DELETE /account
 ROUTE	DELETE /profiller/:ad/takip
 ROUTE	DELETE /vocal/:takeId
@@ -537,6 +538,7 @@ STR	"131.0.72.0/22"
 STR	"141.101.64.0/18"
 STR	"1440h"
 STR	"15m"
+STR	"15m"
 STR	"162.158.0.0/15"
 STR	"172.64.0.0/13"
 STR	"173.245.48.0/20"
@@ -544,6 +546,7 @@ STR	"188.114.96.0/20"
 STR	"190.93.240.0/20"
 STR	"197.234.240.0/22"
 STR	"198.41.128.0/17"
+STR	"1h"
 STR	"1h"
 STR	"23505"
 STR	"23505"
@@ -575,6 +578,7 @@ STR	"?"
 STR	"?"
 STR	"?"
 STR	"?authRequestID="
+STR	"@every "
 STR	"@privaterelay.appleid.com"
 STR	"A file is required."
 STR	"A"
@@ -883,6 +887,8 @@ STR	"SENSITIVE_WORD_ERROR"
 STR	"SERVER_ENV"
 STR	"SERVER_PORT"
 STR	"SERVICE_ERROR"
+STR	"SOCIAL_STALE_PREPARATION_AFTER"
+STR	"SOCIAL_STALE_SWEEP_INTERVAL"
 STR	"SOSYAL_WEB_ANAHTARI"
 STR	"SOSYAL_WEB_ANAHTARI"
 STR	"SUCCESS"
@@ -1005,7 +1011,8 @@ STR	"\n\t\tSELECT s.* FROM (\n\t\t  SELECT "
 STR	"\n\t\tSELECT y.baslik, y.sahip_id::text, p.kullanici_adi, p.gorunen_ad, y.sure_sn, y.dalga_formu,\n\t\t       y.onizleme_anahtari, y.tur\n\t\t  FROM sosyal.yayin y JOIN sosyal.profil p ON p.kullanici_id = y.sahip_id\n\t\t WHERE y.slug = $1 AND "
 STR	"\n\t\tSELECT\n\t\t  (SELECT count(*) FROM sosyal.yayin y\n\t\t    WHERE y.sahip_id = $1 AND y.kaynak_yayin_id IS NULL AND y.durum = 'yayinda' AND "
 STR	"\n\t\tUPDATE sosyal.yayin SET durum = 'hata' WHERE id = $1 AND durum = 'hazirlaniyor' AND silinme IS NULL"
-STR	"\n\t\tUPDATE sosyal.yayin SET durum = 'hazirlaniyor'\n\t\t WHERE id = $1 AND sahip_id = $2 AND silinme IS NULL AND durum = 'hata'"
+STR	"\n\t\tUPDATE sosyal.yayin SET durum = 'hata'\n\t\t WHERE durum = 'hazirlaniyor' AND silinme IS NULL\n\t\t   AND hazirlik_baslangic < now() - $1::interval"
+STR	"\n\t\tUPDATE sosyal.yayin SET durum = 'hazirlaniyor', hazirlik_baslangic = now()\n\t\t WHERE id = $1 AND sahip_id = $2 AND silinme IS NULL AND durum = 'hata'"
 STR	"\n\t\tUPDATE sosyal.yayin SET silinme = now()\n\t\t WHERE id = $1 AND sahip_id = $2 AND silinme IS NULL"
 STR	"\n\t\tUPDATE sosyal.yayin\n\t\t   SET aciklama     = COALESCE($3, aciklama),\n\t\t       altyapi_acik = COALESCE($4, altyapi_acik),\n\t\t       gorunurluk   = COALESCE($5, gorunurluk),\n\t\t       yorum_acik   = COALESCE($6, yorum_acik)\n\t\t WHERE id = $1 AND sahip_id = $2 AND silinme IS NULL"
 STR	"\n\t\tUPDATE sosyal.yayin\n\t\t   SET durum = 'yayinda', master_anahtari = $2, stem_listesi = $3,\n\t\t       dalga_formu = $4, onizleme_anahtari = NULLIF($5, '')\n\t\t WHERE id = $1 AND durum = 'hazirlaniyor' AND silinme IS NULL"
@@ -1668,8 +1675,15 @@ STR	"sosyal"
 STR	"sosyal-cover"
 STR	"sosyal-yayin"
 STR	"sosyal-yorum"
+STR	"sosyal.stale_preparation_after"
+STR	"sosyal.stale_preparation_after"
+STR	"sosyal.stale_preparation_after"
+STR	"sosyal.stale_sweep_interval"
+STR	"sosyal.stale_sweep_interval"
+STR	"sosyal.stale_sweep_interval"
 STR	"sosyal.web_anahtari"
 STR	"sosyal.web_anahtari"
+STR	"sosyal:bayat-tara"
 STR	"sosyal:dosya-sil"
 STR	"sosyal:hazirla"
 STR	"source publication backing track is disabled"

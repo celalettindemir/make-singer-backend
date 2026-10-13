@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
@@ -29,6 +30,8 @@ type SocialWorker struct {
 	prefixDeleter   client.PrefixDeleter // nil: no R2
 	deletionChecker deletionmark.Checker // nil: no deletion check
 	isLastAttempt   func(context.Context) bool
+	sweeper         social.StaleSweeper // nil: the stale sweep is a no-op
+	staleAfter      time.Duration
 }
 
 // NewSocialWorker builds the worker. Interface parameters may be nil; main
@@ -39,6 +42,29 @@ func NewSocialWorker(store social.PreparationStore, copier client.Copier, analyz
 		store: store, copier: copier, analyzer: analyzer, prefixDeleter: prefixDeleter, deletionChecker: deletionChecker,
 		isLastAttempt: asynqIsLastAttempt,
 	}
+}
+
+// WithStaleSweep enables the sosyal:bayat-tara handler: publications that
+// stayed in the preparing status for longer than staleAfter are failed.
+func (w *SocialWorker) WithStaleSweep(sweeper social.StaleSweeper, staleAfter time.Duration) *SocialWorker {
+	w.sweeper, w.staleAfter = sweeper, staleAfter
+	return w
+}
+
+// SweepStale fails publications whose prepare job was lost, so their owners
+// can retry. It logs the count only when something changed.
+func (w *SocialWorker) SweepStale(ctx context.Context, _ *asynq.Task) error {
+	if w.sweeper == nil || w.staleAfter <= 0 {
+		return nil
+	}
+	n, err := w.sweeper.MarkStalePreparations(ctx, w.staleAfter)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		log.Printf("social: marked %d stale preparing publication(s) as failed", n)
+	}
+	return nil
 }
 
 // asynqIsLastAttempt reports whether this attempt is the job's last one.

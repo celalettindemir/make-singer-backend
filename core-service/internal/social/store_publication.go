@@ -47,6 +47,14 @@ type PreparationStore interface {
 	MarkFailed(ctx context.Context, id string) error
 }
 
+// StaleSweeper holds the operation used by the sosyal:bayat-tara job.
+type StaleSweeper interface {
+	// MarkStalePreparations marks non-deleted publications that have been in
+	// the preparing status for longer than olderThan as failed (their prepare
+	// job was lost) and returns how many rows changed.
+	MarkStalePreparations(ctx context.Context, olderThan time.Duration) (int64, error)
+}
+
 // summarySelect are the columns of PublicationSummary. $1 is always the
 // viewer. The owner profile is an INNER JOIN: a publication cannot exist
 // without a profile, and account deletion removes both together. The source
@@ -244,7 +252,7 @@ func (s *PostgresStore) RemovePublication(ctx context.Context, id string) error 
 
 func (s *PostgresStore) ResetForRetry(ctx context.Context, id, ownerID string) error {
 	result, err := s.pool.Exec(ctx, `
-		UPDATE sosyal.yayin SET durum = 'hazirlaniyor'
+		UPDATE sosyal.yayin SET durum = 'hazirlaniyor', hazirlik_baslangic = now()
 		 WHERE id = $1 AND sahip_id = $2 AND silinme IS NULL AND durum = 'hata'`, id, ownerID)
 	if err != nil {
 		return fmt.Errorf("could not queue the publication for retry: %w", err)
@@ -307,4 +315,15 @@ func (s *PostgresStore) MarkFailed(ctx context.Context, id string) error {
 		return fmt.Errorf("could not mark the publication as failed: %w", err)
 	}
 	return nil
+}
+
+func (s *PostgresStore) MarkStalePreparations(ctx context.Context, olderThan time.Duration) (int64, error) {
+	result, err := s.pool.Exec(ctx, `
+		UPDATE sosyal.yayin SET durum = 'hata'
+		 WHERE durum = 'hazirlaniyor' AND silinme IS NULL
+		   AND hazirlik_baslangic < now() - $1::interval`, olderThan)
+	if err != nil {
+		return 0, fmt.Errorf("could not mark stale preparations: %w", err)
+	}
+	return result.RowsAffected(), nil
 }

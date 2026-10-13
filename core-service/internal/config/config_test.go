@@ -454,3 +454,22 @@ func TestLoad_CloudflareRanges(t *testing.T) {
 		t.Fatal("an invalid entry must be a startup error")
 	}
 }
+
+func TestLoad_SocialStaleSweep(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Social.StalePreparationAfter != time.Hour || cfg.Social.StaleSweepInterval != 15*time.Minute {
+		t.Errorf("defaults = %v / %v, want 1h / 15m", cfg.Social.StalePreparationAfter, cfg.Social.StaleSweepInterval)
+	}
+	t.Setenv("SOCIAL_STALE_PREPARATION_AFTER", "90m")
+	t.Setenv("SOCIAL_STALE_SWEEP_INTERVAL", "0s")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Social.StalePreparationAfter != 90*time.Minute || cfg.Social.StaleSweepInterval != 0 {
+		t.Errorf("env values = %v / %v", cfg.Social.StalePreparationAfter, cfg.Social.StaleSweepInterval)
+	}
+}
