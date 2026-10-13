@@ -20,11 +20,11 @@ func testR2Cfg() *config.R2Config {
 	}
 }
 
-// TestMasterWorker_MockCiktisiCozulebilir: mock/dev yolunun urettigi adres
-// istemciden geri geldiginde KeyFromURL ile cozulebilmeli. Eski sabit
-// "https://cdn.makeasinger.com/masters/..." adresi cozulemiyor ve opak bir
-// 500 uretiyordu.
-func TestMasterWorker_MockCiktisiCozulebilir(t *testing.T) {
+// TestMasterWorker_MockOutputResolvable: the URL produced by the mock/dev
+// path must be resolvable with KeyFromURL when it comes back from the
+// client. The old fixed "https://cdn.makeasinger.com/masters/..." URL could
+// not be resolved and produced an opaque 500.
+func TestMasterWorker_MockOutputResolvable(t *testing.T) {
 	cfg := testR2Cfg()
 	w := &MasterWorker{r2Cfg: cfg}
 
@@ -52,8 +52,8 @@ func TestMasterWorker_MockCiktisiCozulebilir(t *testing.T) {
 	}
 }
 
-// TestRenderWorker_MockStemAdresiCozulebilir: ayni kural stem'ler icin.
-func TestRenderWorker_MockStemAdresiCozulebilir(t *testing.T) {
+// TestRenderWorker_MockStemURLResolvable: the same rule for stems.
+func TestRenderWorker_MockStemURLResolvable(t *testing.T) {
 	cfg := testR2Cfg()
 	w := &RenderWorker{}
 
@@ -81,13 +81,13 @@ func TestRenderWorker_MockStemAdresiCozulebilir(t *testing.T) {
 	}
 }
 
-// TestBuildMixSettings_AdresTasimaz: mix kanallari artik hicbir adres
-// alani tasimaz; imzali URL Python istek govdesine ve loglara dusmez.
-func TestBuildMixSettings_AdresTasimaz(t *testing.T) {
+// TestMasterWorker_BuildMixSettingsCarriesNoURL: mix channels no longer carry
+// any URL field; a signed URL does not reach the Python request body or logs.
+func TestMasterWorker_BuildMixSettingsCarriesNoURL(t *testing.T) {
 	w := &MasterWorker{r2Cfg: testR2Cfg()}
-	imzali := "https://makeasinger-private.hesap123.r2.cloudflarestorage.com/stems/p1/s1.wav?X-Amz-Signature=GIZLI"
+	signed := "https://makeasinger-private.hesap123.r2.cloudflarestorage.com/stems/p1/s1.wav?X-Amz-Signature=GIZLI"
 
-	payload := &model.MasterJobPayload{StemURLs: []string{imzali}}
+	payload := &model.MasterJobPayload{StemURLs: []string{signed}}
 	settings := w.buildMixSettings(payload)
 	if len(settings) != 1 {
 		t.Fatalf("kanal sayisi = %d", len(settings))
@@ -97,42 +97,42 @@ func TestBuildMixSettings_AdresTasimaz(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	govde := string(b)
-	if strings.Contains(govde, "X-Amz-Signature") || strings.Contains(govde, "stem_url") || strings.Contains(govde, "GIZLI") {
-		t.Errorf("mix ayarlarinda adres/imza var: %s", govde)
+	body := string(b)
+	if strings.Contains(body, "X-Amz-Signature") || strings.Contains(body, "stem_url") || strings.Contains(body, "GIZLI") {
+		t.Errorf("mix ayarlarinda adres/imza var: %s", body)
 	}
 }
 
-func TestRenderWorker_MockModlari(t *testing.T) {
+func TestRenderWorker_MockModes(t *testing.T) {
 	w := &RenderWorker{}
-	davul := model.InstrumentDrums
-	durumlar := []struct {
-		mod      model.StemMode
-		odak     *model.Instrument
-		beklenen []model.Instrument
+	drums := model.InstrumentDrums
+	cases := []struct {
+		mode  model.StemMode
+		focus *model.Instrument
+		want  []model.Instrument
 	}{
 		{model.StemModeMix, nil, []model.Instrument{model.InstrumentMix}},
 		{"", nil, []model.Instrument{model.InstrumentMix}},
-		{model.StemModeFocus, &davul, []model.Instrument{model.InstrumentDrums, model.InstrumentRest}},
+		{model.StemModeFocus, &drums, []model.Instrument{model.InstrumentDrums, model.InstrumentRest}},
 		{model.StemModeStems, nil, []model.Instrument{model.InstrumentDrums, model.InstrumentBass}},
 	}
-	for _, d := range durumlar {
-		p := &model.RenderJobPayload{OwnerID: "kullanici-a", ProjectID: "p1", StemMode: d.mod, FocusInstrument: d.odak}
+	for _, d := range cases {
+		p := &model.RenderJobPayload{OwnerID: "kullanici-a", ProjectID: "p1", StemMode: d.mode, FocusInstrument: d.focus}
 		p.Arrangement.Instruments = []model.Instrument{model.InstrumentDrums, model.InstrumentBass}
 		rec, err := w.generateMockResult(p)
 		if err != nil {
-			t.Fatalf("%q: %v", d.mod, err)
+			t.Fatalf("%q: %v", d.mode, err)
 		}
 		var got []model.Instrument
 		for _, s := range rec.Stems {
 			got = append(got, s.Instrument)
 		}
-		if len(got) != len(d.beklenen) {
-			t.Fatalf("%q: stemler = %v, beklenen %v", d.mod, got, d.beklenen)
+		if len(got) != len(d.want) {
+			t.Fatalf("%q: stemler = %v, beklenen %v", d.mode, got, d.want)
 		}
 		for i := range got {
-			if got[i] != d.beklenen[i] {
-				t.Errorf("%q: stemler = %v, beklenen %v", d.mod, got, d.beklenen)
+			if got[i] != d.want[i] {
+				t.Errorf("%q: stemler = %v, beklenen %v", d.mode, got, d.want)
 			}
 		}
 	}

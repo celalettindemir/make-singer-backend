@@ -8,45 +8,45 @@ import (
 	"github.com/makeasinger/api/internal/model"
 )
 
-// styleTavani: Suno V6 style alani siniri (karakter). Bayt olarak kesmek
-// her zaman bu sinirin altinda kalir.
-const styleTavani = 1000
+// maxStyleLen: Suno V6 style field limit (characters). Cutting by bytes
+// always stays under this limit.
+const maxStyleLen = 1000
 
-// buildMusicStyle, brief ve arrangement'tan Suno style metnini uretir.
-// Degeri olmayan alanlar yazilmaz; BPM/key yoksa Suno kendisi secer.
+// buildMusicStyle builds the Suno style text from the brief and arrangement.
+// Fields without a value are omitted; if BPM/key is missing Suno picks its own.
 func buildMusicStyle(p *model.RenderJobPayload) string {
-	parcalar := []string{string(p.Brief.Genre), "instrumental"}
+	parts := []string{string(p.Brief.Genre), "instrumental"}
 
 	if v := p.Brief.BPM.Value; v != nil {
-		parcalar = append(parcalar, fmt.Sprintf("%d BPM", *v))
+		parts = append(parts, fmt.Sprintf("%d BPM", *v))
 	}
 	if k := p.Brief.Key; k.Tonic != nil && k.Scale != nil {
-		parcalar = append(parcalar, fmt.Sprintf("%s %s", *k.Tonic, *k.Scale))
+		parts = append(parts, fmt.Sprintf("%s %s", *k.Tonic, *k.Scale))
 	}
 	for _, v := range p.Brief.Vibes {
 		if v = strings.TrimSpace(v); v != "" {
-			parcalar = append(parcalar, v)
+			parts = append(parts, v)
 		}
 	}
 	if d := p.Arrangement.Density; d != "" {
-		parcalar = append(parcalar, fmt.Sprintf("%s arrangement", d))
+		parts = append(parts, fmt.Sprintf("%s arrangement", d))
 	}
 	if g := p.Arrangement.Groove; g != "" {
-		parcalar = append(parcalar, strings.ReplaceAll(string(g), "_", " ")+" groove")
+		parts = append(parts, strings.ReplaceAll(string(g), "_", " ")+" groove")
 	}
 	if len(p.Arrangement.Instruments) > 0 {
-		adlar := make([]string, len(p.Arrangement.Instruments))
+		names := make([]string, len(p.Arrangement.Instruments))
 		for i, in := range p.Arrangement.Instruments {
-			adlar[i] = string(in)
+			names[i] = string(in)
 		}
-		parcalar = append(parcalar, "featuring "+strings.Join(adlar, ", "))
+		parts = append(parts, "featuring "+strings.Join(names, ", "))
 	}
 
-	return kes(strings.Join(parcalar, ", "), styleTavani)
+	return truncate(strings.Join(parts, ", "), maxStyleLen)
 }
 
-// kes, s'yi en fazla n bayta rune sinirinda keser.
-func kes(s string, n int) string {
+// truncate cuts s to at most n bytes, on a rune boundary.
+func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}

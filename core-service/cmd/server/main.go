@@ -403,7 +403,7 @@ func startWorkerServer(
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeMaster, masterWorker.ProcessTask)
-	mux.HandleFunc(service.TaskTypeAccountCleanup, worker.NewHesapWorker(hesapService).ProcessTask)
+	mux.HandleFunc(service.TaskTypeAccountCleanup, worker.NewAccountWorker(hesapService).ProcessTask)
 	mux.HandleFunc(social.TaskTypePrepare, sosyalWorker.Hazirla)
 	mux.HandleFunc(social.TaskTypeDeleteFiles, sosyalWorker.DosyaSil)
 

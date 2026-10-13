@@ -166,7 +166,7 @@ func TestSosyalWorker_YokSilinmisYaDaHazirOlanAtlanir(t *testing.T) {
 }
 
 func TestSosyalWorker_SilinmisSahipKopyalanmazHataOlur(t *testing.T) {
-	k := sosyalTestWorker(hazirKayit(), &sahteDenetci{yanit: hepSilinmis})
+	k := sosyalTestWorker(hazirKayit(), &fakeChecker{answer: alwaysDeleted})
 	err := k.w.Hazirla(context.Background(), hazirlaGorevi())
 	if !errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("SkipRetry bekleniyordu: %v", err)
@@ -179,7 +179,7 @@ func TestSosyalWorker_SilinmisSahipKopyalanmazHataOlur(t *testing.T) {
 // Hesap kopyalarin ortasinda silinirse kalan kopyalar yapilmaz.
 func TestSosyalWorker_SahipIsinOrtasindaSilinirse(t *testing.T) {
 	ikinciDenetimdeSilinmis := func(n int) (bool, error) { return n >= 1, nil }
-	k := sosyalTestWorker(hazirKayit(), &sahteDenetci{yanit: ikinciDenetimdeSilinmis})
+	k := sosyalTestWorker(hazirKayit(), &fakeChecker{answer: ikinciDenetimdeSilinmis})
 	if err := k.w.Hazirla(context.Background(), hazirlaGorevi()); !errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("SkipRetry bekleniyordu: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestSosyalWorker_SahipIsinOrtasindaSilinirse(t *testing.T) {
 }
 
 func TestSosyalWorker_DenetimHatasiTekrarDenenir(t *testing.T) {
-	k := sosyalTestWorker(hazirKayit(), &sahteDenetci{yanit: func(int) (bool, error) { return false, errors.New("redis kapali") }})
+	k := sosyalTestWorker(hazirKayit(), &fakeChecker{answer: func(int) (bool, error) { return false, errors.New("redis kapali") }})
 	err := k.w.Hazirla(context.Background(), hazirlaGorevi())
 	if err == nil || errors.Is(err, asynq.SkipRetry) || k.depo.hataYapildi {
 		t.Fatalf("tekrar denenebilir hata bekleniyordu: %v hata=%v", err, k.depo.hataYapildi)

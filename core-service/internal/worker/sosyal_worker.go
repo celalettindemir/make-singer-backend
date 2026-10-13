@@ -96,8 +96,8 @@ func (w *SosyalWorker) Hazirla(ctx context.Context, t *asynq.Task) error {
 // sahipDenetle, her R2 yazimindan once is sahibinin silinmedigini dogrular.
 // Silinmisse kalici hatadir (SkipRetry); denetim hatasi tekrar denenir.
 func (w *SosyalWorker) sahipDenetle(ctx context.Context, sahipID string) error {
-	if err := sahipYazabilir(ctx, w.hesap, sahipID); err != nil {
-		if errors.Is(err, errSahipSilindi) {
+	if err := ownerCanWrite(ctx, w.hesap, sahipID); err != nil {
+		if errors.Is(err, errOwnerDeleted) {
 			return fmt.Errorf("yayin hazirlanmadi: %w: %w", err, asynq.SkipRetry)
 		}
 		return err
