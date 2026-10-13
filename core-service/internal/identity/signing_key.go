@@ -31,9 +31,9 @@ func LoadSigningKey(pemText string) (*SigningKey, error) {
 	if k, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
 		private = k
 	} else {
-		anyKey, err8 := x509.ParsePKCS8PrivateKey(block.Bytes)
-		if err8 != nil {
-			return nil, fmt.Errorf("could not parse the RSA private key (PKCS#1: %v, PKCS#8: %w)", err, err8)
+		anyKey, pkcs8Err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if pkcs8Err != nil {
+			return nil, fmt.Errorf("could not parse the RSA private key (PKCS#1: %v, PKCS#8: %w)", err, pkcs8Err)
 		}
 		rsaKey, ok := anyKey.(*rsa.PrivateKey)
 		if !ok {

@@ -419,10 +419,10 @@ func TestAttack_FlowFromOtherBrowserCannotComplete(t *testing.T) {
 	// The attacker has that address opened in the victim's browser: the victim
 	// HAS a cookie but its VALUE does not match the one in the attacker's state
 	// record, so it must be rejected.
-	red := victim.do(t, http.MethodGet, callbackURL, nil, ctxCrossSiteGet)
-	if red.Status != http.StatusForbidden {
+	rejected := victim.do(t, http.MethodGet, callbackURL, nil, ctxCrossSiteGet)
+	if rejected.Status != http.StatusForbidden {
 		t.Errorf("callback status in another browser = %d, want 403. body: %s",
-			red.Status, red.Body())
+			rejected.Status, rejected.Body())
 	}
 	if env.RequestDone(t, attackerRequest) {
 		t.Fatal("ACCOUNT TAKEOVER: the attacker's request was completed in the victim's browser")
@@ -467,9 +467,9 @@ func TestAttack_CallbackWithoutCookieRejected(t *testing.T) {
 
 	// The cookie is DELETED: this is the only thing that changes.
 	session.jar.deleteCookie(cookieNameFederation)
-	red := session.do(t, http.MethodGet, callbackURL, nil, ctxCrossSiteGet)
-	if red.Status != http.StatusForbidden {
-		t.Errorf("callback status without cookie = %d, want 403. body: %s", red.Status, red.Body())
+	rejected := session.do(t, http.MethodGet, callbackURL, nil, ctxCrossSiteGet)
+	if rejected.Status != http.StatusForbidden {
+		t.Errorf("callback status without cookie = %d, want 403. body: %s", rejected.Status, rejected.Body())
 	}
 	if env.RequestDone(t, requestID) {
 		t.Fatal("callback without cookie completed the request")
@@ -550,11 +550,11 @@ func TestAttack_OtherAppTokenRejected(t *testing.T) {
 	google.configure(func(a *fakeOPConfig) { a.WrongAudience = "baska-uygulama" })
 	session := env.NewBrowser(t)
 	requestID := session.StartAuthorize(t)
-	red := session.RunFederationFlow(t, providerGoogle, requestID)
-	if red.Status != http.StatusForbidden {
-		t.Errorf("status with wrong aud = %d, want 403. body: %s", red.Status, red.Body())
+	rejected := session.RunFederationFlow(t, providerGoogle, requestID)
+	if rejected.Status != http.StatusForbidden {
+		t.Errorf("status with wrong aud = %d, want 403. body: %s", rejected.Status, rejected.Body())
 	}
-	if red.LocationCode() != "" {
+	if rejected.LocationCode() != "" {
 		t.Fatal("a code was issued with an id_token with the wrong aud")
 	}
 	if env.RequestDone(t, requestID) {
@@ -586,9 +586,9 @@ func TestAttack_NonceInjectionRejected(t *testing.T) {
 	google.configure(func(a *fakeOPConfig) { a.WrongNonce = "saldirganin-nonce-degeri" })
 	session := env.NewBrowser(t)
 	requestID := session.StartAuthorize(t)
-	red := session.RunFederationFlow(t, providerGoogle, requestID)
-	if red.Status != http.StatusForbidden {
-		t.Errorf("status with wrong nonce = %d, want 403. body: %s", red.Status, red.Body())
+	rejected := session.RunFederationFlow(t, providerGoogle, requestID)
+	if rejected.Status != http.StatusForbidden {
+		t.Errorf("status with wrong nonce = %d, want 403. body: %s", rejected.Status, rejected.Body())
 	}
 	if env.RequestDone(t, requestID) {
 		t.Fatal("the request was completed with an id_token with the wrong nonce")
@@ -648,9 +648,9 @@ func TestAttack_EmailBasedTakeoverBlocked(t *testing.T) {
 
 	// 5) Since the victim does not know the attacker's password the flow stops
 	// HERE: linking with a wrong password must be REJECTED and NO link written.
-	red := session.SubmitLink(t, body, "kurbanin-kendi-sifresi-123")
-	if red.Status != http.StatusUnauthorized {
-		t.Errorf("link status with wrong password = %d, want 401", red.Status)
+	rejected := session.SubmitLink(t, body, "kurbanin-kendi-sifresi-123")
+	if rejected.Status != http.StatusUnauthorized {
+		t.Errorf("link status with wrong password = %d, want 401", rejected.Status)
 	}
 	if env.FederatedLinkCount(t) != 0 {
 		t.Error("federated match was written despite the wrong password")

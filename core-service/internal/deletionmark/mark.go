@@ -10,7 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// A key under prefix marks a user whose account has been deleted.
+// prefix is the Redis key prefix of the deleted-account marker.
 const prefix = "kimlik:silindi:"
 
 // TTL is the marker's lifetime, equal to the job record (job:{id}) lifetime.

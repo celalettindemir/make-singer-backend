@@ -105,9 +105,9 @@ func (b SessionBinding) CSRFFor(id string) (string, bool) {
 	if id == "" {
 		return "", false
 	}
-	for _, k := range b.Entries {
-		if k.AuthRequestID == id {
-			return k.CSRF, true
+	for _, entry := range b.Entries {
+		if entry.AuthRequestID == id {
+			return entry.CSRF, true
 		}
 	}
 	return "", false

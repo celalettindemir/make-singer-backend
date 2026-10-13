@@ -329,22 +329,22 @@ func newTestFederationPages(t *testing.T) *fedEnv {
 	f.Mount(mux, interceptor, nil)
 	f.MountLink(mux, interceptor, nil)
 
-	o := &fedEnv{
+	env := &fedEnv{
 		pages: f, mux: mux, store: store, users: users, federated: federated,
 		sessions: sessionList, requests: reqLog, google: google, apple: apple,
 		authReqID: "istek-1",
 	}
-	reqLog.add(o.authReqID)
-	o.sessionCookie = o.bindSession(t, o.authReqID)
-	return o
+	reqLog.add(env.authReqID)
+	env.sessionCookie = env.bindSession(t, env.authReqID)
+	return env
 }
 
 // peekState reads the state record in Redis WITHOUT CONSUMING it (so the test
 // can learn the nonce without disturbing the flow). The production path is
 // TakeState and it uses GETDEL.
-func (o *fedEnv) peekState(t *testing.T, state string) FederationState {
+func (env *fedEnv) peekState(t *testing.T, state string) FederationState {
 	t.Helper()
-	data, err := o.store.rdb.Get(context.Background(), stateKey(state)).Bytes()
+	data, err := env.store.rdb.Get(context.Background(), stateKey(state)).Bytes()
 	if err != nil {
 		t.Fatalf("could not read state record: %v", err)
 	}
@@ -357,7 +357,7 @@ func (o *fedEnv) peekState(t *testing.T, state string) FederationState {
 
 // startRaw calls the start endpoint with the GIVEN session cookie and request.
 // If crossSite=true it sends Sec-Fetch-Site: cross-site.
-func (o *fedEnv) startRaw(provider, authReqID string, cookie *http.Cookie, crossSite bool) *httptest.ResponseRecorder {
+func (env *fedEnv) startRaw(provider, authReqID string, cookie *http.Cookie, crossSite bool) *httptest.ResponseRecorder {
 	target := "/federasyon/" + provider + "/baslat?" + url.Values{"authRequestID": {authReqID}}.Encode()
 	r := httptest.NewRequest(http.MethodGet, target, nil)
 	if cookie != nil {
@@ -367,15 +367,15 @@ func (o *fedEnv) startRaw(provider, authReqID string, cookie *http.Cookie, cross
 		r.Header.Set(headerFetchSite, fetchSiteCrossSite)
 	}
 	w := httptest.NewRecorder()
-	o.mux.ServeHTTP(w, r)
+	env.mux.ServeHTTP(w, r)
 	return w
 }
 
 // stateCount returns how many federation state records are in Redis: the
 // proof of the claim "a rejected start wrote NO record".
-func (o *fedEnv) stateCount(t *testing.T) int {
+func (env *fedEnv) stateCount(t *testing.T) int {
 	t.Helper()
-	keyList, err := o.store.rdb.Keys(context.Background(), stateKey("*")).Result()
+	keyList, err := env.store.rdb.Keys(context.Background(), stateKey("*")).Result()
 	if err != nil {
 		t.Fatalf("could not read state keys: %v", err)
 	}
@@ -395,9 +395,9 @@ func hasFedCookie(w *httptest.ResponseRecorder) bool {
 // start calls GET /federasyon/<provider>/baslat and returns (state, fed
 // cookie, response). The session cookie of the browser that STARTED the
 // request is SENT: Start requires it (C1).
-func (o *fedEnv) start(t *testing.T, provider, authReqID string) (string, *http.Cookie, *httptest.ResponseRecorder) {
+func (env *fedEnv) start(t *testing.T, provider, authReqID string) (string, *http.Cookie, *httptest.ResponseRecorder) {
 	t.Helper()
-	w := o.startRaw(provider, authReqID, o.sessionCookie, false)
+	w := env.startRaw(provider, authReqID, env.sessionCookie, false)
 	if w.Code != http.StatusFound {
 		return "", nil, w
 	}
@@ -417,7 +417,7 @@ func (o *fedEnv) start(t *testing.T, provider, authReqID string) (string, *http.
 
 // callback calls the callback return endpoint. If post=true it imitates
 // Apple's form_post return (a CROSS-SITE POST).
-func (o *fedEnv) callback(provider, state, code string, cookie *http.Cookie, post bool) *httptest.ResponseRecorder {
+func (env *fedEnv) callback(provider, state, code string, cookie *http.Cookie, post bool) *httptest.ResponseRecorder {
 	path := "/federasyon/" + provider + "/geri"
 	value := url.Values{"state": {state}, "code": {code}}
 	var r *http.Request
@@ -433,28 +433,28 @@ func (o *fedEnv) callback(provider, state, code string, cookie *http.Cookie, pos
 		r.AddCookie(cookie)
 	}
 	w := httptest.NewRecorder()
-	o.mux.ServeHTTP(w, r)
+	env.mux.ServeHTTP(w, r)
 	return w
 }
 
 // runFlow runs the whole happy path: start -> (give the nonce to the fake
 // provider) -> callback. The returned response is the response of the last step.
-func (o *fedEnv) runFlow(t *testing.T, provider string, post bool) *httptest.ResponseRecorder {
+func (env *fedEnv) runFlow(t *testing.T, provider string, post bool) *httptest.ResponseRecorder {
 	t.Helper()
-	state, cookie, w := o.start(t, provider, o.authReqID)
+	state, cookie, w := env.start(t, provider, env.authReqID)
 	if state == "" {
 		t.Fatalf("start failed: status = %d", w.Code)
 	}
-	d := o.peekState(t, state)
-	o.provider(provider).configure(func(s *fakeProvider) { s.nonce = d.Nonce })
-	return o.callback(provider, state, "kod-1", cookie, post)
+	d := env.peekState(t, state)
+	env.provider(provider).configure(func(s *fakeProvider) { s.nonce = d.Nonce })
+	return env.callback(provider, state, "kod-1", cookie, post)
 }
 
-func (o *fedEnv) provider(name string) *fakeProvider {
+func (env *fedEnv) provider(name string) *fakeProvider {
 	if name == providerApple {
-		return o.apple
+		return env.apple
 	}
-	return o.google
+	return env.google
 }
 
 // ---------------------------------------------------------------------
@@ -464,8 +464,8 @@ func (o *fedEnv) provider(name string) *fakeProvider {
 // Start must bind the request to the browser that STARTED it: so that the
 // federation side does not reopen Phase 1's C1 (account takeover) hole.
 func TestFederationStart_SetsCookieAndWritesState(t *testing.T) {
-	o := newTestFederationPages(t)
-	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
+	env := newTestFederationPages(t)
+	state, cookie, w := env.start(t, providerGoogle, env.authReqID)
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302", w.Code)
 	}
@@ -479,11 +479,11 @@ func TestFederationStart_SetsCookieAndWritesState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("could not parse Location: %v", err)
 	}
-	if !strings.HasPrefix(w.Header().Get("Location"), o.google.server.URL+"/authorize") {
+	if !strings.HasPrefix(w.Header().Get("Location"), env.google.server.URL+"/authorize") {
 		t.Errorf("Location is not the upstream authorize address")
 	}
 	q := location.Query()
-	if q.Get("client_id") != o.google.clientID {
+	if q.Get("client_id") != env.google.clientID {
 		t.Errorf("client_id = %q", q.Get("client_id"))
 	}
 	if q.Get("nonce") == "" {
@@ -497,11 +497,11 @@ func TestFederationStart_SetsCookieAndWritesState(t *testing.T) {
 		t.Errorf("redirect_uri = %q, want %q", q.Get("redirect_uri"), wantCallback)
 	}
 
-	d := o.peekState(t, state)
+	d := env.peekState(t, state)
 	if d.Cookie != cookie.Value {
 		t.Error("the cookie value in the state record differs from the cookie in the response")
 	}
-	if d.AuthRequestID != o.authReqID {
+	if d.AuthRequestID != env.authReqID {
 		t.Errorf("AuthRequestID = %q", d.AuthRequestID)
 	}
 	if d.Provider != providerGoogle {
@@ -523,8 +523,8 @@ func TestFederationStart_SetsCookieAndWritesState(t *testing.T) {
 // SENT on that POST. That is why the federation cookie must be None -- but
 // HttpOnly and Secure CANNOT be given up.
 func TestFederationCookie_SameSiteNone(t *testing.T) {
-	o := newTestFederationPages(t)
-	_, cookie, _ := o.start(t, providerApple, o.authReqID)
+	env := newTestFederationPages(t)
+	_, cookie, _ := env.start(t, providerApple, env.authReqID)
 	if cookie == nil {
 		t.Fatal("federation cookie was not set")
 	}
@@ -545,8 +545,8 @@ func TestFederationCookie_SameSiteNone(t *testing.T) {
 // The session cookie must NOT CHANGE: turning it into SameSite=None would
 // weaken Phase 1's login-CSRF protection.
 func TestFederationStart_LeavesSessionCookie(t *testing.T) {
-	o := newTestFederationPages(t)
-	_, _, w := o.start(t, providerGoogle, o.authReqID)
+	env := newTestFederationPages(t)
+	_, _, w := env.start(t, providerGoogle, env.authReqID)
 	for _, c := range w.Result().Cookies() {
 		if c.Name == cookieNameSession {
 			t.Fatalf("start touched the session cookie: %+v", c)
@@ -555,28 +555,28 @@ func TestFederationStart_LeavesSessionCookie(t *testing.T) {
 }
 
 func TestFederationStart_UnknownProvider404(t *testing.T) {
-	o := newTestFederationPages(t)
-	_, _, w := o.start(t, "facebook", o.authReqID)
+	env := newTestFederationPages(t)
+	_, _, w := env.start(t, "facebook", env.authReqID)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
 	}
 }
 
 func TestFederationStart_InvalidAuthRequestIDRejected(t *testing.T) {
-	o := newTestFederationPages(t)
+	env := newTestFederationPages(t)
 	// A session binding IS SET UP for the "nonexistent id": otherwise the test
 	// stops at 403 and never measures the "does the request exist" check.
-	missingCookie := o.bindSession(t, "yok-boyle-bir-istek")
+	missingCookie := env.bindSession(t, "yok-boyle-bir-istek")
 	for _, d := range []struct {
 		name   string
 		id     string
 		cookie *http.Cookie
 	}{
-		{"empty id", "", o.sessionCookie},
+		{"empty id", "", env.sessionCookie},
 		{"nonexistent id", "yok-boyle-bir-istek", missingCookie},
 	} {
 		t.Run(d.name, func(t *testing.T) {
-			w := o.startRaw(providerGoogle, d.id, d.cookie, false)
+			w := env.startRaw(providerGoogle, d.id, d.cookie, false)
 			if w.Code != http.StatusBadRequest {
 				t.Errorf("status = %d, want 400", w.Code)
 			}
@@ -598,28 +598,28 @@ func TestFederationStart_InvalidAuthRequestIDRejected(t *testing.T) {
 func TestFederationStart_SessionBindingRequired(t *testing.T) {
 	for _, d := range []struct {
 		name   string
-		cookie func(o *fedEnv, t *testing.T) *http.Cookie
+		cookie func(env *fedEnv, t *testing.T) *http.Cookie
 	}{
 		{"no session cookie", func(*fedEnv, *testing.T) *http.Cookie { return nil }},
 		{"made-up session cookie", func(*fedEnv, *testing.T) *http.Cookie {
 			return &http.Cookie{Name: cookieNameSession, Value: "saldirganin-uydurdugu-deger"}
 		}},
-		{"session bound to ANOTHER request", func(o *fedEnv, t *testing.T) *http.Cookie {
-			return o.bindSession(t, "saldirganin-kendi-istegi")
+		{"session bound to ANOTHER request", func(env *fedEnv, t *testing.T) *http.Cookie {
+			return env.bindSession(t, "saldirganin-kendi-istegi")
 		}},
 	} {
 		t.Run(d.name, func(t *testing.T) {
-			o := newTestFederationPages(t)
-			previousRecord := o.stateCount(t)
+			env := newTestFederationPages(t)
+			previousRecord := env.stateCount(t)
 
-			w := o.startRaw(providerGoogle, o.authReqID, d.cookie(o, t), false)
+			w := env.startRaw(providerGoogle, env.authReqID, d.cookie(env, t), false)
 			if w.Code != http.StatusForbidden {
 				t.Errorf("status = %d, want 403", w.Code)
 			}
 			if hasFedCookie(w) {
 				t.Error("a request without a binding must NOT get the federation cookie")
 			}
-			if after := o.stateCount(t); after != previousRecord {
+			if after := env.stateCount(t); after != previousRecord {
 				t.Errorf("state record was written (%d -> %d); a request without a binding must produce NO record",
 					previousRecord, after)
 			}
@@ -635,19 +635,19 @@ func TestFederationStart_SessionBindingRequired(t *testing.T) {
 // its cross-site branch only works if ALL completion paths look for a
 // binding.
 func TestFederationStart_CrossSiteRejected(t *testing.T) {
-	o := newTestFederationPages(t)
-	previousRecord := o.stateCount(t)
+	env := newTestFederationPages(t)
+	previousRecord := env.stateCount(t)
 
 	// The session cookie is VALID: the ONLY reason for the rejection must be
 	// cross-site.
-	w := o.startRaw(providerGoogle, o.authReqID, o.sessionCookie, true)
+	w := env.startRaw(providerGoogle, env.authReqID, env.sessionCookie, true)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", w.Code)
 	}
 	if hasFedCookie(w) {
 		t.Error("a cross-site request must NOT get the federation cookie")
 	}
-	if after := o.stateCount(t); after != previousRecord {
+	if after := env.stateCount(t); after != previousRecord {
 		t.Errorf("state record was written (%d -> %d)", previousRecord, after)
 	}
 }
@@ -658,13 +658,13 @@ func TestFederationStart_CrossSiteRejected(t *testing.T) {
 // CANNOT BE COMPLETED". The federation leg must NOT BREAK that assumption:
 // a request without a binding cannot be completed via federation either.
 func TestFederationStart_UnboundRequestCannotComplete(t *testing.T) {
-	o := newTestFederationPages(t)
+	env := newTestFederationPages(t)
 	// The state WrapAuthorize leaves behind: the request EXISTS, the binding
 	// does NOT.
 	unbound := "baglamasiz-istek"
-	o.requests.add(unbound)
+	env.requests.add(unbound)
 
-	w := o.startRaw(providerGoogle, unbound, nil, false)
+	w := env.startRaw(providerGoogle, unbound, nil, false)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", w.Code)
 	}
@@ -672,11 +672,11 @@ func TestFederationStart_UnboundRequestCannotComplete(t *testing.T) {
 	if hasFedCookie(w) {
 		t.Error("federation cookie was set")
 	}
-	if n := o.stateCount(t); n != 0 {
+	if n := env.stateCount(t); n != 0 {
 		t.Errorf("state record count = %d, want 0", n)
 	}
 	// And the request was NOT BOUND to any user.
-	if s := o.requests.subject(unbound); s != "" {
+	if s := env.requests.subject(unbound); s != "" {
 		t.Errorf("Subject = %q, want empty (MarkDone must NOT be reached)", s)
 	}
 }
@@ -684,10 +684,10 @@ func TestFederationStart_UnboundRequestCannotComplete(t *testing.T) {
 // Since the button of an unconfigured provider never shows, we should not
 // arrive here; if we do, 404, not "500".
 func TestFederationStart_UnconfiguredProvider404(t *testing.T) {
-	o := newTestFederationPages(t)
+	env := newTestFederationPages(t)
 	// Imitate a setup where Apple is not configured.
-	delete(o.pages.upstreams, providerApple)
-	_, _, w := o.start(t, providerApple, o.authReqID)
+	delete(env.pages.upstreams, providerApple)
+	_, _, w := env.start(t, providerApple, env.authReqID)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
 	}
@@ -698,66 +698,66 @@ func TestFederationStart_UnconfiguredProvider404(t *testing.T) {
 // ---------------------------------------------------------------------
 
 // expectedCallback is the redirect address expected on the happy path.
-func (o *fedEnv) expectedCallback() string {
-	return "/authorize/callback?" + url.Values{"id": {o.authReqID}}.Encode()
+func (env *fedEnv) expectedCallback() string {
+	return "/authorize/callback?" + url.Values{"id": {env.authReqID}}.Encode()
 }
 
 // Happy path: known (provider, sub) -> login as that user.
 func TestFederationCallback_KnownIdentityLogsIn(t *testing.T) {
-	o := newTestFederationPages(t)
-	existing, err := o.users.Create(context.Background(), "bagli@ornek.com", "Bagli", "cokgizlisifre")
+	env := newTestFederationPages(t)
+	existing, err := env.users.Create(context.Background(), "bagli@ornek.com", "Bagli", "cokgizlisifre")
 	if err != nil {
 		t.Fatalf("could not create user: %v", err)
 	}
-	if err := o.federated.Link(context.Background(), providerGoogle, o.google.sub, existing.ID); err != nil {
+	if err := env.federated.Link(context.Background(), providerGoogle, env.google.sub, existing.ID); err != nil {
 		t.Fatalf("could not link identity: %v", err)
 	}
 
-	w := o.runFlow(t, providerGoogle, false)
+	w := env.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302, body = %q", w.Code, w.Body.String())
 	}
-	if location := w.Header().Get("Location"); location != o.expectedCallback() {
-		t.Errorf("Location = %q, want %q", location, o.expectedCallback())
+	if location := w.Header().Get("Location"); location != env.expectedCallback() {
+		t.Errorf("Location = %q, want %q", location, env.expectedCallback())
 	}
-	if s := o.requests.subject(o.authReqID); s != existing.ID {
+	if s := env.requests.subject(env.authReqID); s != existing.ID {
 		t.Errorf("Subject = %q, want %q", s, existing.ID)
 	}
-	if got := o.requests.amrFor(o.authReqID); !slices.Equal(got, []string{"fed"}) {
+	if got := env.requests.amrFor(env.authReqID); !slices.Equal(got, []string{"fed"}) {
 		t.Errorf("amr = %v, want [fed]", got)
 	}
-	if o.google.counts() != 1 {
-		t.Errorf("token endpoint called %d times, want 1", o.google.counts())
+	if env.google.counts() != 1 {
+		t.Errorf("token endpoint called %d times, want 1", env.google.counts())
 	}
 }
 
 // New identity -> the account is created and the user logs in.
 func TestFederationCallback_NewIdentityCreatesAccount(t *testing.T) {
-	o := newTestFederationPages(t)
-	o.google.configure(func(s *fakeProvider) { s.email = "yeni@ornek.com" })
+	env := newTestFederationPages(t)
+	env.google.configure(func(s *fakeProvider) { s.email = "yeni@ornek.com" })
 
-	w := o.runFlow(t, providerGoogle, false)
+	w := env.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302, body = %q", w.Code, w.Body.String())
 	}
-	fresh, err := o.users.ByEmail(context.Background(), "yeni@ornek.com")
+	fresh, err := env.users.ByEmail(context.Background(), "yeni@ornek.com")
 	if err != nil {
 		t.Fatalf("could not find the new user: %v", err)
 	}
 	if fresh.PasswordHash != "" {
 		t.Error("a federated account must not have a password")
 	}
-	linked, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub)
+	linked, err := env.federated.UserByIdentity(context.Background(), providerGoogle, env.google.sub)
 	if err != nil {
 		t.Fatalf("federated identity was not written: %v", err)
 	}
 	if linked.ID != fresh.ID {
 		t.Errorf("identity is linked to user %q, want %q", linked.ID, fresh.ID)
 	}
-	if s := o.requests.subject(o.authReqID); s != fresh.ID {
+	if s := env.requests.subject(env.authReqID); s != fresh.ID {
 		t.Errorf("Subject = %q, want %q", s, fresh.ID)
 	}
-	if got := o.requests.amrFor(o.authReqID); !slices.Equal(got, []string{"fed"}) {
+	if got := env.requests.amrFor(env.authReqID); !slices.Equal(got, []string{"fed"}) {
 		t.Errorf("amr = %v, want [fed]", got)
 	}
 }
@@ -765,12 +765,12 @@ func TestFederationCallback_NewIdentityCreatesAccount(t *testing.T) {
 // Apple's form_post return is a CROSS-SITE POST (K2/K3): the POST must be
 // accepted AND Sec-Fetch-Site: cross-site must NOT be REJECTED.
 func TestFederationCallback_CrossSitePostAccepted(t *testing.T) {
-	o := newTestFederationPages(t)
-	w := o.runFlow(t, providerApple, true)
+	env := newTestFederationPages(t)
+	w := env.runFlow(t, providerApple, true)
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302, body = %q", w.Code, w.Body.String())
 	}
-	if o.requests.subject(o.authReqID) == "" {
+	if env.requests.subject(env.authReqID) == "" {
 		t.Error("request was not completed")
 	}
 }
@@ -780,7 +780,7 @@ func TestFederationCallback_CrossSitePostAccepted(t *testing.T) {
 // state missing or unknown: the flow must stop. This is the first attempt of
 // an attacker who tries to guess the callback and complete the victim's request.
 func TestFederationCallback_UnknownStateRejected(t *testing.T) {
-	o := newTestFederationPages(t)
+	env := newTestFederationPages(t)
 	for _, d := range []struct {
 		name  string
 		state string
@@ -789,14 +789,14 @@ func TestFederationCallback_UnknownStateRejected(t *testing.T) {
 		{"made-up state", "uydurma-state-degeri"},
 	} {
 		t.Run(d.name, func(t *testing.T) {
-			w := o.callback(providerGoogle, d.state, "kod-1", &http.Cookie{Name: cookieNameFederation, Value: "herhangi"}, false)
+			w := env.callback(providerGoogle, d.state, "kod-1", &http.Cookie{Name: cookieNameFederation, Value: "herhangi"}, false)
 			if w.Code != http.StatusForbidden {
 				t.Errorf("status = %d, want 403", w.Code)
 			}
-			if o.requests.subject(o.authReqID) != "" {
+			if env.requests.subject(env.authReqID) != "" {
 				t.Error("request must NOT be completed")
 			}
-			if o.google.counts() != 0 {
+			if env.google.counts() != 0 {
 				t.Error("token exchange must NOT happen at all")
 			}
 		})
@@ -805,26 +805,26 @@ func TestFederationCallback_UnknownStateRejected(t *testing.T) {
 
 // state is SINGLE-USE: the same callback cannot be replayed twice.
 func TestFederationCallback_StateReplayRejected(t *testing.T) {
-	o := newTestFederationPages(t)
-	o.google.configure(func(s *fakeProvider) { s.email = "tekrar@ornek.com" })
+	env := newTestFederationPages(t)
+	env.google.configure(func(s *fakeProvider) { s.email = "tekrar@ornek.com" })
 
-	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
+	state, cookie, w := env.start(t, providerGoogle, env.authReqID)
 	if state == "" {
 		t.Fatalf("start failed: status = %d", w.Code)
 	}
-	d := o.peekState(t, state)
-	o.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
+	d := env.peekState(t, state)
+	env.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
 
-	first := o.callback(providerGoogle, state, "kod-1", cookie, false)
+	first := env.callback(providerGoogle, state, "kod-1", cookie, false)
 	if first.Code != http.StatusFound {
 		t.Fatalf("first return status = %d, want 302, body = %q", first.Code, first.Body.String())
 	}
-	second := o.callback(providerGoogle, state, "kod-1", cookie, false)
+	second := env.callback(providerGoogle, state, "kod-1", cookie, false)
 	if second.Code != http.StatusForbidden {
 		t.Errorf("second return status = %d, want 403 (state is single-use)", second.Code)
 	}
-	if o.google.counts() != 1 {
-		t.Errorf("token endpoint called %d times, want 1 (a replay must NOT reach the token exchange)", o.google.counts())
+	if env.google.counts() != 1 {
+		t.Errorf("token endpoint called %d times, want 1 (a replay must NOT reach the token exchange)", env.google.counts())
 	}
 }
 
@@ -846,24 +846,24 @@ func TestFederationCallback_CookieMismatchRejected(t *testing.T) {
 		}},
 	} {
 		t.Run(d.name, func(t *testing.T) {
-			o := newTestFederationPages(t)
+			env := newTestFederationPages(t)
 			// 1) The attacker gets a valid state in their own browser.
-			state, validCookie, w := o.start(t, providerGoogle, o.authReqID)
+			state, validCookie, w := env.start(t, providerGoogle, env.authReqID)
 			if state == "" {
 				t.Fatalf("start failed: status = %d", w.Code)
 			}
-			status := o.peekState(t, state)
-			o.google.configure(func(s *fakeProvider) { s.nonce = status.Nonce })
+			status := env.peekState(t, state)
+			env.google.configure(func(s *fakeProvider) { s.nonce = status.Nonce })
 
 			// 2) It arrives with the same state from the victim's browser (cookie missing/wrong).
-			resp := o.callback(providerGoogle, state, "kod-1", d.makeCookie(validCookie), false)
+			resp := env.callback(providerGoogle, state, "kod-1", d.makeCookie(validCookie), false)
 			if resp.Code != http.StatusForbidden {
 				t.Errorf("status = %d, want 403", resp.Code)
 			}
-			if o.requests.subject(o.authReqID) != "" {
+			if env.requests.subject(env.authReqID) != "" {
 				t.Error("request must NOT be completed (Subject must stay empty)")
 			}
-			if o.google.counts() != 0 {
+			if env.google.counts() != 0 {
 				t.Error("token exchange must NOT happen at all")
 			}
 		})
@@ -873,39 +873,39 @@ func TestFederationCallback_CookieMismatchRejected(t *testing.T) {
 // nonce: the proof that Task 2's VerifyWithNonce really gets called in the
 // flow. If the upstream returns an id_token with ANOTHER nonce the flow must stop.
 func TestFederationCallback_NonceMismatchRejected(t *testing.T) {
-	o := newTestFederationPages(t)
-	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
+	env := newTestFederationPages(t)
+	state, cookie, w := env.start(t, providerGoogle, env.authReqID)
 	if state == "" {
 		t.Fatalf("start failed: status = %d", w.Code)
 	}
 	// The provider signs with ANOTHER nonce: the scenario where an attacker
 	// injects a valid (signature/iss/aud correct) id_token obtained from their
 	// own authorization into the victim's flow.
-	o.google.configure(func(s *fakeProvider) { s.nonce = "saldirganin-nonce-degeri" })
+	env.google.configure(func(s *fakeProvider) { s.nonce = "saldirganin-nonce-degeri" })
 
-	resp := o.callback(providerGoogle, state, "kod-1", cookie, false)
+	resp := env.callback(providerGoogle, state, "kod-1", cookie, false)
 	if resp.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", resp.Code)
 	}
-	if o.requests.subject(o.authReqID) != "" {
+	if env.requests.subject(env.authReqID) != "" {
 		t.Error("request must NOT be completed")
 	}
-	if _, err := o.users.ByEmail(context.Background(), o.google.email); err == nil {
+	if _, err := env.users.ByEmail(context.Background(), env.google.email); err == nil {
 		t.Error("no account must be CREATED when the nonce does not match")
 	}
 }
 
 // An id_token with an invalid signature, or signed with another key, must be rejected.
 func TestFederationCallback_InvalidSignatureRejected(t *testing.T) {
-	o := newTestFederationPages(t)
+	env := newTestFederationPages(t)
 	// Sign with ANOTHER key that is not published in the JWKS.
-	o.google.configure(func(s *fakeProvider) { s.signingKey = fedRSAKey(t) })
+	env.google.configure(func(s *fakeProvider) { s.signingKey = fedRSAKey(t) })
 
-	w := o.runFlow(t, providerGoogle, false)
+	w := env.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", w.Code)
 	}
-	if o.requests.subject(o.authReqID) != "" {
+	if env.requests.subject(env.authReqID) != "" {
 		t.Error("request must NOT be completed")
 	}
 }
@@ -913,14 +913,14 @@ func TestFederationCallback_InvalidSignatureRejected(t *testing.T) {
 // If the upstream returns an id_token whose aud was issued to ANOTHER client
 // it must be rejected (login with another app's token).
 func TestFederationCallback_WrongAudienceRejected(t *testing.T) {
-	o := newTestFederationPages(t)
-	o.google.configure(func(s *fakeProvider) { s.forceAud = "baska-uygulama" })
+	env := newTestFederationPages(t)
+	env.google.configure(func(s *fakeProvider) { s.forceAud = "baska-uygulama" })
 
-	w := o.runFlow(t, providerGoogle, false)
+	w := env.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", w.Code)
 	}
-	if o.requests.subject(o.authReqID) != "" {
+	if env.requests.subject(env.authReqID) != "" {
 		t.Error("request must NOT be completed")
 	}
 }
@@ -929,18 +929,18 @@ func TestFederationCallback_WrongAudienceRejected(t *testing.T) {
 // rejected through the ErrRequestAlreadyCompleted path (Phase 1's rule also
 // applies to federation).
 func TestFederationCallback_CompletedRequestOtherUserRejected(t *testing.T) {
-	o := newTestFederationPages(t)
-	if err := o.requests.MarkDone(context.Background(), o.authReqID, "baska-kullanici", []string{amrFederation}); err != nil {
+	env := newTestFederationPages(t)
+	if err := env.requests.MarkDone(context.Background(), env.authReqID, "baska-kullanici", []string{amrFederation}); err != nil {
 		t.Fatalf("pre-completion: %v", err)
 	}
-	w := o.runFlow(t, providerGoogle, false)
+	w := env.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), msgRequestAlreadyUsed) {
 		t.Errorf("body = %q", w.Body.String())
 	}
-	if s := o.requests.subject(o.authReqID); s != "baska-kullanici" {
+	if s := env.requests.subject(env.authReqID); s != "baska-kullanici" {
 		t.Errorf("Subject was overwritten: %q", s)
 	}
 }
@@ -949,29 +949,29 @@ func TestFederationCallback_CompletedRequestOtherUserRejected(t *testing.T) {
 // attacker could bring a flow started at Google to /federasyon/apple/geri and
 // confuse the verifier selection.
 func TestFederationCallback_ProviderReadFromState(t *testing.T) {
-	o := newTestFederationPages(t)
-	o.google.configure(func(s *fakeProvider) { s.email = "kayittan@ornek.com" })
+	env := newTestFederationPages(t)
+	env.google.configure(func(s *fakeProvider) { s.email = "kayittan@ornek.com" })
 
-	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
+	state, cookie, w := env.start(t, providerGoogle, env.authReqID)
 	if state == "" {
 		t.Fatalf("start failed: status = %d", w.Code)
 	}
-	d := o.peekState(t, state)
-	o.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
+	d := env.peekState(t, state)
+	env.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
 
 	// A flow started at Google comes back through the APPLE path.
-	resp := o.callback(providerApple, state, "kod-1", cookie, false)
+	resp := env.callback(providerApple, state, "kod-1", cookie, false)
 	if resp.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302 (the flow must run with the GOOGLE in the record), body = %q",
 			resp.Code, resp.Body.String())
 	}
-	if o.google.counts() != 1 {
-		t.Errorf("google token endpoint called %d times, want 1", o.google.counts())
+	if env.google.counts() != 1 {
+		t.Errorf("google token endpoint called %d times, want 1", env.google.counts())
 	}
-	if o.apple.counts() != 0 {
-		t.Errorf("apple token endpoint called %d times, want 0 (the path value must not be used)", o.apple.counts())
+	if env.apple.counts() != 0 {
+		t.Errorf("apple token endpoint called %d times, want 0 (the path value must not be used)", env.apple.counts())
 	}
-	linked, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub)
+	linked, err := env.federated.UserByIdentity(context.Background(), providerGoogle, env.google.sub)
 	if err != nil {
 		t.Fatalf("identity was not written as GOOGLE: %v", err)
 	}
@@ -984,8 +984,8 @@ func TestFederationCallback_ProviderReadFromState(t *testing.T) {
 // Redis read (and, with a valid state, an HTTP call to the upstream); the
 // limit must be kept in a counter SEPARATE from the LOGIN and LINK endpoints.
 func TestFederationCallback_RateLimitApplied(t *testing.T) {
-	o := newTestFederationPages(t)
-	limiter, err := NewRateLimiter(o.store.rdb, RateLimitConfig{
+	env := newTestFederationPages(t)
+	limiter, err := NewRateLimiter(env.store.rdb, RateLimitConfig{
 		LoginIPPerMin: 1, LoginEmailPerHour: 100, SignupIPPerHour: 100,
 	}, []byte("test-anahtari"))
 	if err != nil {
@@ -993,18 +993,18 @@ func TestFederationCallback_RateLimitApplied(t *testing.T) {
 	}
 	mux := http.NewServeMux()
 	interceptor := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
-	o.pages.Mount(mux, interceptor, limiter)
-	o.mux = mux
+	env.pages.Mount(mux, interceptor, limiter)
+	env.mux = mux
 
-	first := o.callback(providerGoogle, "uydurma-state", "kod-1", nil, false)
+	first := env.callback(providerGoogle, "uydurma-state", "kod-1", nil, false)
 	if first.Code == http.StatusTooManyRequests {
 		t.Fatal("first attempt got 429; the limit is set up wrong")
 	}
-	second := o.callback(providerGoogle, "uydurma-state", "kod-1", nil, false)
+	second := env.callback(providerGoogle, "uydurma-state", "kod-1", nil, false)
 	if second.Code != http.StatusTooManyRequests {
 		t.Errorf("second attempt status = %d, want 429", second.Code)
 	}
-	keyList, err := o.store.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
+	keyList, err := env.store.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
 	if err != nil {
 		t.Fatalf("could not read keys: %v", err)
 	}
@@ -1027,8 +1027,8 @@ func TestFederationCallback_RateLimitApplied(t *testing.T) {
 // attempts would use up the password attempt budget and a legitimate user
 // would lock their own login flow.
 func TestFederationStart_RateLimitCountedSeparately(t *testing.T) {
-	o := newTestFederationPages(t)
-	limiter, err := NewRateLimiter(o.store.rdb, RateLimitConfig{
+	env := newTestFederationPages(t)
+	limiter, err := NewRateLimiter(env.store.rdb, RateLimitConfig{
 		LoginIPPerMin: 1, LoginEmailPerHour: 100, SignupIPPerHour: 100,
 	}, []byte("test-anahtari"))
 	if err != nil {
@@ -1036,19 +1036,19 @@ func TestFederationStart_RateLimitCountedSeparately(t *testing.T) {
 	}
 	mux := http.NewServeMux()
 	interceptor := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
-	o.pages.Mount(mux, interceptor, limiter)
-	o.mux = mux
+	env.pages.Mount(mux, interceptor, limiter)
+	env.mux = mux
 
-	first := o.startRaw(providerGoogle, o.authReqID, o.sessionCookie, false)
+	first := env.startRaw(providerGoogle, env.authReqID, env.sessionCookie, false)
 	if first.Code == http.StatusTooManyRequests {
 		t.Fatal("first start got 429; the limit is set up wrong")
 	}
-	second := o.startRaw(providerGoogle, o.authReqID, o.sessionCookie, false)
+	second := env.startRaw(providerGoogle, env.authReqID, env.sessionCookie, false)
 	if second.Code != http.StatusTooManyRequests {
 		t.Errorf("second start status = %d, want 429", second.Code)
 	}
 
-	keyList, err := o.store.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
+	keyList, err := env.store.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
 	if err != nil {
 		t.Fatalf("could not read keys: %v", err)
 	}
@@ -1073,8 +1073,8 @@ func TestFederationStart_RateLimitCountedSeparately(t *testing.T) {
 // NO log line may contain state, code, id_token, cookie or email. In Phase 1
 // this was a Critical.
 func TestFederationCallback_LogsDoNotLeak(t *testing.T) {
-	o := newTestFederationPages(t)
-	o.google.configure(func(s *fakeProvider) { s.email = "sizmasin@ornek.com" })
+	env := newTestFederationPages(t)
+	env.google.configure(func(s *fakeProvider) { s.email = "sizmasin@ornek.com" })
 
 	var buf strings.Builder
 	oldOutput := log.Writer()
@@ -1087,20 +1087,20 @@ func TestFederationCallback_LogsDoNotLeak(t *testing.T) {
 	})
 
 	// 1) Happy path.
-	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
+	state, cookie, w := env.start(t, providerGoogle, env.authReqID)
 	if state == "" {
 		t.Fatalf("start failed: status = %d", w.Code)
 	}
-	d := o.peekState(t, state)
-	o.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
-	o.callback(providerGoogle, state, "gizli-kod-degeri", cookie, false)
+	d := env.peekState(t, state)
+	env.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
+	env.callback(providerGoogle, state, "gizli-kod-degeri", cookie, false)
 
 	// 2) Faulty paths: unknown state, cookie mismatch, nonce mismatch, replay.
-	o.callback(providerGoogle, "uydurma-state", "gizli-kod-degeri", cookie, false)
-	o.callback(providerGoogle, state, "gizli-kod-degeri", nil, false)
-	state2, cookie2, _ := o.start(t, providerGoogle, o.authReqID)
-	o.google.configure(func(s *fakeProvider) { s.nonce = "yanlis-nonce" })
-	o.callback(providerGoogle, state2, "gizli-kod-degeri", cookie2, false)
+	env.callback(providerGoogle, "uydurma-state", "gizli-kod-degeri", cookie, false)
+	env.callback(providerGoogle, state, "gizli-kod-degeri", nil, false)
+	state2, cookie2, _ := env.start(t, providerGoogle, env.authReqID)
+	env.google.configure(func(s *fakeProvider) { s.nonce = "yanlis-nonce" })
+	env.callback(providerGoogle, state2, "gizli-kod-degeri", cookie2, false)
 
 	outputs := buf.String()
 	forbiddenMap := map[string]string{
@@ -1111,7 +1111,7 @@ func TestFederationCallback_LogsDoNotLeak(t *testing.T) {
 		"cookie-2":   cookie2.Value,
 		"nonce":      d.Nonce,
 		"email":      "sizmasin@ornek.com",
-		"request id": o.authReqID,
+		"request id": env.authReqID,
 		"verifier":   d.CodeVerifier,
 	}
 	for name, value := range forbiddenMap {
@@ -1124,7 +1124,7 @@ func TestFederationCallback_LogsDoNotLeak(t *testing.T) {
 	}
 	// id_token: it was produced both on the happy path and on the path where the
 	// verification FAILED; none of it (neither all nor a part) may enter a log.
-	tokenList := o.google.tokens()
+	tokenList := env.google.tokens()
 	if len(tokenList) == 0 {
 		t.Fatal("no id_token was produced; the test does NOT MEASURE id_token leakage")
 	}
@@ -1154,19 +1154,19 @@ func TestFederationCallback_LogsDoNotLeak(t *testing.T) {
 // 500, raising the SAME alarm as real server errors and not telling the user
 // what happened.
 func TestFederationCallback_ExpiredRequestReturns400(t *testing.T) {
-	o := newTestFederationPages(t)
-	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
+	env := newTestFederationPages(t)
+	state, cookie, w := env.start(t, providerGoogle, env.authReqID)
 	if state == "" {
 		t.Fatalf("start failed: status = %d", w.Code)
 	}
-	d := o.peekState(t, state)
-	o.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
+	d := env.peekState(t, state)
+	env.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
 
 	// T=10m20s: the request dropped from Redis by TTL. Since the TTL values are
 	// not changed, the record is dropped BY HAND.
-	o.requests.drop(o.authReqID)
+	env.requests.drop(env.authReqID)
 
-	resp := o.callback(providerGoogle, state, "kod-1", cookie, false)
+	resp := env.callback(providerGoogle, state, "kod-1", cookie, false)
 	if resp.Code == http.StatusInternalServerError {
 		t.Fatalf("an ordinary expiry produced a 500: body = %q", resp.Body.String())
 	}
@@ -1223,13 +1223,13 @@ func TestWriteCompletionError_Classification(t *testing.T) {
 func TestFederationCallback_NoUpstreamEmailNoAccount(t *testing.T) {
 	for _, sub := range []string{"epostasiz-1", "epostasiz-2"} {
 		t.Run(sub, func(t *testing.T) {
-			o := newTestFederationPages(t)
-			o.google.configure(func(s *fakeProvider) {
+			env := newTestFederationPages(t)
+			env.google.configure(func(s *fakeProvider) {
 				s.email = ""
 				s.sub = sub
 			})
 
-			w := o.runFlow(t, providerGoogle, false)
+			w := env.runFlow(t, providerGoogle, false)
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400, body = %q", w.Code, w.Body.String())
 			}
@@ -1237,10 +1237,10 @@ func TestFederationCallback_NoUpstreamEmailNoAccount(t *testing.T) {
 				t.Errorf("the user was not told what to do: body = %q", w.Body.String())
 			}
 			// No account must have been CREATED and no login must have HAPPENED.
-			if _, err := o.federated.UserByIdentity(context.Background(), providerGoogle, sub); !errors.Is(err, ErrIdentityNotFound) {
+			if _, err := env.federated.UserByIdentity(context.Background(), providerGoogle, sub); !errors.Is(err, ErrIdentityNotFound) {
 				t.Errorf("an account was OPENED with an empty email (error = %v)", err)
 			}
-			if o.requests.subject(o.authReqID) != "" {
+			if env.requests.subject(env.authReqID) != "" {
 				t.Error("sign-in with an empty email SUCCEEDED")
 			}
 		})
@@ -1256,8 +1256,8 @@ func TestFederationCallback_NoUpstreamEmailNoAccount(t *testing.T) {
 // flow. Still, there is no reason for the cookie to stay in the browser for
 // 10 more minutes after the flow ends.
 func TestFederationCallback_SuccessClearsFederationCookie(t *testing.T) {
-	o := newTestFederationPages(t)
-	w := o.runFlow(t, providerGoogle, false)
+	env := newTestFederationPages(t)
+	w := env.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusFound {
 		t.Fatalf("flow failed: status = %d, body = %q", w.Code, w.Body.String())
 	}
@@ -1279,7 +1279,7 @@ func TestFederationCallback_SuccessClearsFederationCookie(t *testing.T) {
 	}
 	// The attributes MUST BE THE SAME as at write time, otherwise the browser
 	// writes a SECOND cookie next to the old one instead of deleting it.
-	writing := o.pages.federationCookie("deger")
+	writing := env.pages.federationCookie("deger")
 	if deletion.Path != writing.Path {
 		t.Errorf("Path = %q, want %q", deletion.Path, writing.Path)
 	}

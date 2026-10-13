@@ -122,11 +122,11 @@ func (s *Service) ProfilePublications(ctx context.Context, viewerID, username, k
 	if !ValidUsername(username) {
 		return nil, ErrNotFound
 	}
-	p, err := s.store.GetProfileByUsername(ctx, username)
+	profile, err := s.store.GetProfileByUsername(ctx, username)
 	if err != nil {
 		return nil, err
 	}
-	items, err := s.store.ListProfilePublications(ctx, p.UserID, id, covers, cursor, limit)
+	items, err := s.store.ListProfilePublications(ctx, profile.UserID, id, covers, cursor, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -37,7 +37,7 @@ func buildClaims(sub, email string, verified bool) *auth.Claims {
 // bindSession imitates what the /authorize leg does: it binds the given
 // authRequestID to a browser and returns that browser's session cookie. The
 // /baglama page requires the SAME session binding as Phase 1's login page.
-func (o *fedEnv) bindSession(t *testing.T, authReqID string) *http.Cookie {
+func (env *fedEnv) bindSession(t *testing.T, authReqID string) *http.Cookie {
 	t.Helper()
 	session, err := randomToken()
 	if err != nil {
@@ -49,13 +49,13 @@ func (o *fedEnv) bindSession(t *testing.T, authReqID string) *http.Cookie {
 	}
 	var binding SessionBinding
 	binding.Add(authReqID, csrf)
-	if err := o.sessions.WriteSession(context.Background(), session, binding, time.Minute); err != nil {
+	if err := env.sessions.WriteSession(context.Background(), session, binding, time.Minute); err != nil {
 		t.Fatalf("could not write session: %v", err)
 	}
 	return &http.Cookie{Name: cookieNameSession, Value: session}
 }
 
-func (o *fedEnv) linkGetRequest(pendingID string, cookie *http.Cookie) *httptest.ResponseRecorder {
+func (env *fedEnv) linkGetRequest(pendingID string, cookie *http.Cookie) *httptest.ResponseRecorder {
 	target := pathLink
 	if pendingID != "" {
 		target += "?" + url.Values{fieldPendingID: {pendingID}}.Encode()
@@ -65,18 +65,18 @@ func (o *fedEnv) linkGetRequest(pendingID string, cookie *http.Cookie) *httptest
 		r.AddCookie(cookie)
 	}
 	w := httptest.NewRecorder()
-	o.mux.ServeHTTP(w, r)
+	env.mux.ServeHTTP(w, r)
 	return w
 }
 
-func (o *fedEnv) linkPostRequest(value url.Values, cookie *http.Cookie) *httptest.ResponseRecorder {
+func (env *fedEnv) linkPostRequest(value url.Values, cookie *http.Cookie) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, pathLink, strings.NewReader(value.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if cookie != nil {
 		r.AddCookie(cookie)
 	}
 	w := httptest.NewRecorder()
-	o.mux.ServeHTTP(w, r)
+	env.mux.ServeHTTP(w, r)
 	return w
 }
 
@@ -84,15 +84,15 @@ func (o *fedEnv) linkPostRequest(value url.Values, cookie *http.Cookie) *httptes
 // PASSWORD and a conflicting email, it logs in with Google and the flow
 // redirects to /baglama. Returns: the pending record's id, the CSRF token in
 // the form, the browser's session cookie and the conflicting account.
-func (o *fedEnv) setupPendingLink(t *testing.T) (string, string, *http.Cookie, *User) {
+func (env *fedEnv) setupPendingLink(t *testing.T) (string, string, *http.Cookie, *User) {
 	t.Helper()
-	o.google.configure(func(s *fakeProvider) { s.email = "cakisan@ornek.com" })
-	existing, err := o.users.Create(context.Background(), "cakisan@ornek.com", "Mevcut", testPassword)
+	env.google.configure(func(s *fakeProvider) { s.email = "cakisan@ornek.com" })
+	existing, err := env.users.Create(context.Background(), "cakisan@ornek.com", "Mevcut", testPassword)
 	if err != nil {
 		t.Fatalf("could not create existing account: %v", err)
 	}
 
-	w := o.runFlow(t, providerGoogle, false)
+	w := env.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302 (redirect to /baglama), body = %q", w.Code, w.Body.String())
 	}
@@ -107,12 +107,12 @@ func (o *fedEnv) setupPendingLink(t *testing.T) (string, string, *http.Cookie, *
 	if pendingID == "" {
 		t.Fatal("no beklemeID in the redirect")
 	}
-	if o.requests.subject(o.authReqID) != "" {
+	if env.requests.subject(env.authReqID) != "" {
 		t.Fatal("the request must NOT be completed while there is a conflict")
 	}
 
-	cookie := o.sessionCookie
-	form := o.linkGetRequest(pendingID, cookie)
+	cookie := env.sessionCookie
+	form := env.linkGetRequest(pendingID, cookie)
 	if form.Code != http.StatusOK {
 		t.Fatalf("could not open the link form: status = %d, body = %q", form.Code, form.Body.String())
 	}
@@ -134,23 +134,23 @@ func (o *fedEnv) setupPendingLink(t *testing.T) (string, string, *http.Cookie, *
 //     have changed, and then a lookup by email would find ANOTHER account
 //     (or none).
 func TestResolveUser_LinkedIdentityBeforeEmail(t *testing.T) {
-	o := newTestFederationPages(t)
+	env := newTestFederationPages(t)
 	ctx := context.Background()
 
-	a, err := o.users.Create(ctx, "a@ornek.com", "A", testPassword)
+	a, err := env.users.Create(ctx, "a@ornek.com", "A", testPassword)
 	if err != nil {
 		t.Fatalf("could not create A: %v", err)
 	}
-	if err := o.federated.Link(ctx, providerGoogle, "sub-1", a.ID); err != nil {
+	if err := env.federated.Link(ctx, providerGoogle, "sub-1", a.ID); err != nil {
 		t.Fatalf("could not link A: %v", err)
 	}
-	b, err := o.users.Create(ctx, "yeni@ornek.com", "B", testPassword)
+	b, err := env.users.Create(ctx, "yeni@ornek.com", "B", testPassword)
 	if err != nil {
 		t.Fatalf("could not create B: %v", err)
 	}
 
 	// id_token: sub=sub-1 (linked to A) but the email belongs to B.
-	user, conflict, err := o.pages.resolveUser(ctx, providerGoogle, buildClaims("sub-1", "yeni@ornek.com", true))
+	user, conflict, err := env.pages.resolveUser(ctx, providerGoogle, buildClaims("sub-1", "yeni@ornek.com", true))
 	if err != nil {
 		t.Fatalf("resolveUser: %v", err)
 	}
@@ -169,15 +169,15 @@ func TestResolveUser_LinkedIdentityBeforeEmail(t *testing.T) {
 //     This is the only case the spec explicitly forbids.
 func TestResolveUser_PrivateRelayDoesNotTriggerLink(t *testing.T) {
 	t.Run("address registered on an account WITH a password: NO linking", func(t *testing.T) {
-		o := newTestFederationPages(t)
+		env := newTestFederationPages(t)
 		ctx := context.Background()
 		// The attacker may have created an account with a password using the
 		// victim's relay address.
-		if _, err := o.users.Create(ctx, "abc"+privateRelaySuffix, "Saldirgan", testPassword); err != nil {
+		if _, err := env.users.Create(ctx, "abc"+privateRelaySuffix, "Saldirgan", testPassword); err != nil {
 			t.Fatalf("could not create account: %v", err)
 		}
 
-		user, conflict, err := o.pages.resolveUser(ctx, providerApple, buildClaims("yeni-sub", "abc"+privateRelaySuffix, true))
+		user, conflict, err := env.pages.resolveUser(ctx, providerApple, buildClaims("yeni-sub", "abc"+privateRelaySuffix, true))
 		if err != nil {
 			t.Fatalf("resolveUser: %v", err)
 		}
@@ -193,15 +193,15 @@ func TestResolveUser_PrivateRelayDoesNotTriggerLink(t *testing.T) {
 		if conflict.PendingID != "" {
 			t.Error("no pending record must be opened for the hidden relay address")
 		}
-		if _, err := o.federated.UserByIdentity(ctx, providerApple, "yeni-sub"); err == nil {
+		if _, err := env.federated.UserByIdentity(ctx, providerApple, "yeni-sub"); err == nil {
 			t.Error("identity was linked: NO linking on the hidden relay address")
 		}
 	})
 
 	t.Run("address not registered: new account directly", func(t *testing.T) {
-		o := newTestFederationPages(t)
+		env := newTestFederationPages(t)
 		ctx := context.Background()
-		user, conflict, err := o.pages.resolveUser(ctx, providerApple, buildClaims("yeni-sub", "def"+privateRelaySuffix, true))
+		user, conflict, err := env.pages.resolveUser(ctx, providerApple, buildClaims("yeni-sub", "def"+privateRelaySuffix, true))
 		if err != nil {
 			t.Fatalf("resolveUser: %v", err)
 		}
@@ -219,14 +219,14 @@ func TestResolveUser_PrivateRelayDoesNotTriggerLink(t *testing.T) {
 
 // 4. Account with a password: the link page.
 func TestResolveUser_EmailConflictWithPasswordLeadsToLink(t *testing.T) {
-	o := newTestFederationPages(t)
+	env := newTestFederationPages(t)
 	ctx := context.Background()
-	existing, err := o.users.Create(ctx, "ortak@ornek.com", "Mevcut", testPassword)
+	existing, err := env.users.Create(ctx, "ortak@ornek.com", "Mevcut", testPassword)
 	if err != nil {
 		t.Fatalf("could not create account: %v", err)
 	}
 
-	user, conflict, err := o.pages.resolveUser(ctx, providerGoogle, buildClaims("yeni-sub", "ortak@ornek.com", true))
+	user, conflict, err := env.pages.resolveUser(ctx, providerGoogle, buildClaims("yeni-sub", "ortak@ornek.com", true))
 	if err != nil {
 		t.Fatalf("resolveUser: %v", err)
 	}
@@ -245,26 +245,26 @@ func TestResolveUser_EmailConflictWithPasswordLeadsToLink(t *testing.T) {
 	if conflict.Email != "ortak@ornek.com" {
 		t.Errorf("Email = %q", conflict.Email)
 	}
-	if _, err := o.federated.UserByIdentity(ctx, providerGoogle, "yeni-sub"); err == nil {
+	if _, err := env.federated.UserByIdentity(ctx, providerGoogle, "yeni-sub"); err == nil {
 		t.Error("identity was linked: NO linking without asking for the password")
 	}
-	if _, err := o.users.ByID(ctx, existing.ID); err != nil {
+	if _, err := env.users.ByID(ctx, existing.ID); err != nil {
 		t.Errorf("existing account was damaged: %v", err)
 	}
 }
 
 // 5. K1: account without a password -> 409, NO link, NO new account.
 func TestResolveUser_EmailConflictWithoutPasswordBlocked(t *testing.T) {
-	o := newTestFederationPages(t)
+	env := newTestFederationPages(t)
 	ctx := context.Background()
 	// An account opened with Google that has NO PASSWORD.
-	existing, err := o.federated.CreateFederatedUser(ctx, providerGoogle, "google-sub", "ortak@ornek.com", "Mevcut", true)
+	existing, err := env.federated.CreateFederatedUser(ctx, providerGoogle, "google-sub", "ortak@ornek.com", "Mevcut", true)
 	if err != nil {
 		t.Fatalf("could not create federated account: %v", err)
 	}
 
 	// It comes from Apple with the SAME email.
-	user, conflict, err := o.pages.resolveUser(ctx, providerApple, buildClaims("apple-sub", "ortak@ornek.com", true))
+	user, conflict, err := env.pages.resolveUser(ctx, providerApple, buildClaims("apple-sub", "ortak@ornek.com", true))
 	if err != nil {
 		t.Fatalf("resolveUser: %v", err)
 	}
@@ -280,11 +280,11 @@ func TestResolveUser_EmailConflictWithoutPasswordBlocked(t *testing.T) {
 	if !reflect.DeepEqual(conflict.ExistingProviders, []string{providerGoogle}) {
 		t.Errorf("ExistingProviders = %v, want [google]", conflict.ExistingProviders)
 	}
-	if _, err := o.federated.UserByIdentity(ctx, providerApple, "apple-sub"); err == nil {
+	if _, err := env.federated.UserByIdentity(ctx, providerApple, "apple-sub"); err == nil {
 		t.Error("identity was linked: K1 FORBIDS linking")
 	}
 	// A NEW RECORD MUST NOT BE CREATED: the same email still belongs to the first account.
-	same, err := o.users.ByEmail(ctx, "ortak@ornek.com")
+	same, err := env.users.ByEmail(ctx, "ortak@ornek.com")
 	if err != nil {
 		t.Fatalf("existing account disappeared: %v", err)
 	}
@@ -297,10 +297,10 @@ func TestResolveUser_EmailConflictWithoutPasswordBlocked(t *testing.T) {
 // using the victim's address; the victim logs in with Google. It must NOT BE
 // LINKED AUTOMATICALLY.
 func TestResolveUser_NoSilentLinkToPrecreatedAccount(t *testing.T) {
-	o := newTestFederationPages(t)
+	env := newTestFederationPages(t)
 	ctx := context.Background()
 	// users: kurban@ornek.com, password = the ATTACKER's password.
-	attackers, err := o.users.Create(ctx, "kurban@ornek.com", "Kurban", "saldirganin-sifresi")
+	attackers, err := env.users.Create(ctx, "kurban@ornek.com", "Kurban", "saldirganin-sifresi")
 	if err != nil {
 		t.Fatalf("could not create account: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestResolveUser_NoSilentLinkToPrecreatedAccount(t *testing.T) {
 	// Google: it must not link EVEN IF the email is verified -- this is the
 	// real point of the test. Since WE do not do the email verification,
 	// email_verified does not prove that this account belongs to the victim.
-	user, conflict, err := o.pages.resolveUser(ctx, providerGoogle, buildClaims("kurban-google-sub", "kurban@ornek.com", true))
+	user, conflict, err := env.pages.resolveUser(ctx, providerGoogle, buildClaims("kurban-google-sub", "kurban@ornek.com", true))
 	if err != nil {
 		t.Fatalf("resolveUser: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestResolveUser_NoSilentLinkToPrecreatedAccount(t *testing.T) {
 	if conflict == nil {
 		t.Fatal("a conflict was expected")
 	}
-	if _, err := o.federated.UserByIdentity(ctx, providerGoogle, "kurban-google-sub"); err == nil {
+	if _, err := env.federated.UserByIdentity(ctx, providerGoogle, "kurban-google-sub"); err == nil {
 		t.Errorf("identity was SILENTLY linked to account %s", attackers.ID)
 	}
 }
@@ -331,31 +331,31 @@ func TestResolveUser_NoSilentLinkToPrecreatedAccount(t *testing.T) {
 // because of UNIQUE (lower(email)) the INSERT returns ErrEmailInUse if the
 // address already exists. Decision: 409 in this case too -- never a link.
 func TestResolveUser_ExistingPrivateRelayReturns409(t *testing.T) {
-	o := newTestFederationPages(t)
+	env := newTestFederationPages(t)
 	ctx := context.Background()
 	relay := "abc" + privateRelaySuffix
 	// The address is already registered with ANOTHER sub (the user may have
 	// deleted their account and signed up again; the Apple relay address stays
 	// the same).
-	if _, err := o.federated.CreateFederatedUser(ctx, providerApple, "eski-sub", relay, "Eski", true); err != nil {
+	if _, err := env.federated.CreateFederatedUser(ctx, providerApple, "eski-sub", relay, "Eski", true); err != nil {
 		t.Fatalf("could not create first account: %v", err)
 	}
-	o.apple.configure(func(s *fakeProvider) {
+	env.apple.configure(func(s *fakeProvider) {
 		s.sub = "yeni-sub"
 		s.email = relay
 	})
 
-	w := o.runFlow(t, providerApple, true)
+	w := env.runFlow(t, providerApple, true)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409, body = %q", w.Code, w.Body.String())
 	}
 	if strings.Contains(w.Body.String(), "<form") {
 		t.Error("the 409 page has a password form: that means linking exists")
 	}
-	if _, err := o.federated.UserByIdentity(ctx, providerApple, "yeni-sub"); err == nil {
+	if _, err := env.federated.UserByIdentity(ctx, providerApple, "yeni-sub"); err == nil {
 		t.Error("identity was linked: NO linking")
 	}
-	if o.requests.subject(o.authReqID) != "" {
+	if env.requests.subject(env.authReqID) != "" {
 		t.Error("request was completed: there must be NO sign-in")
 	}
 }
@@ -366,8 +366,8 @@ func TestResolveUser_ExistingPrivateRelayReturns409(t *testing.T) {
 
 // Phase 1's C1 lesson: if there is NO binding the form is NEVER RENDERED.
 func TestLinkGet_WithoutBindingRejected(t *testing.T) {
-	o := newTestFederationPages(t)
-	pendingID, _, cookie, _ := o.setupPendingLink(t)
+	env := newTestFederationPages(t)
+	pendingID, _, cookie, _ := env.setupPendingLink(t)
 
 	statuses := []struct {
 		name   string
@@ -377,11 +377,11 @@ func TestLinkGet_WithoutBindingRejected(t *testing.T) {
 		{"no beklemeID", "", cookie},
 		{"made-up beklemeID", "uydurma-bekleme-id", cookie},
 		{"no session cookie", pendingID, nil},
-		{"session bound to ANOTHER request", pendingID, o.bindSession(t, "baska-istek")},
+		{"session bound to ANOTHER request", pendingID, env.bindSession(t, "baska-istek")},
 	}
 	for _, d := range statuses {
 		t.Run(d.name, func(t *testing.T) {
-			w := o.linkGetRequest(d.id, d.cookie)
+			w := env.linkGetRequest(d.id, d.cookie)
 			if w.Code != http.StatusForbidden {
 				t.Errorf("status = %d, want 403", w.Code)
 			}
@@ -393,10 +393,10 @@ func TestLinkGet_WithoutBindingRejected(t *testing.T) {
 }
 
 func TestLinkPost_WrongCSRFRejected(t *testing.T) {
-	o := newTestFederationPages(t)
-	pendingID, _, cookie, existing := o.setupPendingLink(t)
+	env := newTestFederationPages(t)
+	pendingID, _, cookie, existing := env.setupPendingLink(t)
 
-	w := o.linkPostRequest(url.Values{
+	w := env.linkPostRequest(url.Values{
 		fieldPendingID: {pendingID},
 		fieldCSRF:      {"yanlis-csrf"},
 		"sifre":        {testPassword},
@@ -404,19 +404,19 @@ func TestLinkPost_WrongCSRFRejected(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", w.Code)
 	}
-	if _, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub); err == nil {
+	if _, err := env.federated.UserByIdentity(context.Background(), providerGoogle, env.google.sub); err == nil {
 		t.Error("identity was linked while CSRF was wrong")
 	}
-	if o.requests.subject(o.authReqID) == existing.ID {
+	if env.requests.subject(env.authReqID) == existing.ID {
 		t.Error("signed in while CSRF was wrong")
 	}
 }
 
 func TestLinkPost_CorrectPasswordLinksAndLogsIn(t *testing.T) {
-	o := newTestFederationPages(t)
-	pendingID, csrf, cookie, existing := o.setupPendingLink(t)
+	env := newTestFederationPages(t)
+	pendingID, csrf, cookie, existing := env.setupPendingLink(t)
 
-	w := o.linkPostRequest(url.Values{
+	w := env.linkPostRequest(url.Values{
 		fieldPendingID: {pendingID},
 		fieldCSRF:      {csrf},
 		"sifre":        {testPassword},
@@ -424,29 +424,29 @@ func TestLinkPost_CorrectPasswordLinksAndLogsIn(t *testing.T) {
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302, body = %q", w.Code, w.Body.String())
 	}
-	if location := w.Header().Get("Location"); location != o.expectedCallback() {
-		t.Errorf("Location = %q, want %q", location, o.expectedCallback())
+	if location := w.Header().Get("Location"); location != env.expectedCallback() {
+		t.Errorf("Location = %q, want %q", location, env.expectedCallback())
 	}
-	linked, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub)
+	linked, err := env.federated.UserByIdentity(context.Background(), providerGoogle, env.google.sub)
 	if err != nil {
 		t.Fatalf("identity was not linked: %v", err)
 	}
 	if linked.ID != existing.ID {
 		t.Errorf("identity linked to account %q, want %q", linked.ID, existing.ID)
 	}
-	if s := o.requests.subject(o.authReqID); s != existing.ID {
+	if s := env.requests.subject(env.authReqID); s != existing.ID {
 		t.Errorf("Subject = %q, want %q", s, existing.ID)
 	}
-	if got := o.requests.amrFor(o.authReqID); !slices.Equal(got, []string{"fed"}) {
+	if got := env.requests.amrFor(env.authReqID); !slices.Equal(got, []string{"fed"}) {
 		t.Errorf("amr = %v, want [fed]", got)
 	}
 }
 
 func TestLinkPost_WrongPasswordDoesNotLink(t *testing.T) {
-	o := newTestFederationPages(t)
-	pendingID, csrf, cookie, _ := o.setupPendingLink(t)
+	env := newTestFederationPages(t)
+	pendingID, csrf, cookie, _ := env.setupPendingLink(t)
 
-	w := o.linkPostRequest(url.Values{
+	w := env.linkPostRequest(url.Values{
 		fieldPendingID: {pendingID},
 		fieldCSRF:      {csrf},
 		"sifre":        {"yanlis-sifre-degeri"},
@@ -457,10 +457,10 @@ func TestLinkPost_WrongPasswordDoesNotLink(t *testing.T) {
 	if !strings.Contains(w.Body.String(), msgLoginFailed) {
 		t.Errorf("body does not carry the error text: %q", w.Body.String())
 	}
-	if _, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub); err == nil {
+	if _, err := env.federated.UserByIdentity(context.Background(), providerGoogle, env.google.sub); err == nil {
 		t.Error("identity was LINKED with the wrong password")
 	}
-	if o.requests.subject(o.authReqID) != "" {
+	if env.requests.subject(env.authReqID) != "" {
 		t.Error("signed in with the wrong password")
 	}
 }
@@ -468,20 +468,20 @@ func TestLinkPost_WrongPasswordDoesNotLink(t *testing.T) {
 // The pending link must be SINGLE-USE: after the correct password is entered
 // a second link cannot be made with the same PendingID.
 func TestPendingLink_SingleUse(t *testing.T) {
-	o := newTestFederationPages(t)
-	pendingID, csrf, cookie, _ := o.setupPendingLink(t)
+	env := newTestFederationPages(t)
+	pendingID, csrf, cookie, _ := env.setupPendingLink(t)
 	form := url.Values{fieldPendingID: {pendingID}, fieldCSRF: {csrf}, "sifre": {testPassword}}
 
-	first := o.linkPostRequest(form, cookie)
+	first := env.linkPostRequest(form, cookie)
 	if first.Code != http.StatusFound {
 		t.Fatalf("first POST status = %d, want 302, body = %q", first.Code, first.Body.String())
 	}
-	second := o.linkPostRequest(form, cookie)
+	second := env.linkPostRequest(form, cookie)
 	if second.Code != http.StatusForbidden {
 		t.Errorf("second POST status = %d, want 403 (pending is single-use)", second.Code)
 	}
 	// The form must not open any more either.
-	if w := o.linkGetRequest(pendingID, cookie); w.Code != http.StatusForbidden {
+	if w := env.linkGetRequest(pendingID, cookie); w.Code != http.StatusForbidden {
 		t.Errorf("GET status for a consumed pending = %d, want 403", w.Code)
 	}
 }
@@ -489,13 +489,13 @@ func TestPendingLink_SingleUse(t *testing.T) {
 // The attacker must not be able to complete SOMEONE ELSE's pending link in
 // their own browser.
 func TestLink_CannotCompleteInOtherBrowser(t *testing.T) {
-	o := newTestFederationPages(t)
-	pendingID, csrf, _, existing := o.setupPendingLink(t)
+	env := newTestFederationPages(t)
+	pendingID, csrf, _, existing := env.setupPendingLink(t)
 	// The attacker's browser: it has a session cookie bound to its own flow but
 	// NOT bound to the VICTIM's request.
-	attacker := o.bindSession(t, "saldirganin-istegi")
+	attacker := env.bindSession(t, "saldirganin-istegi")
 
-	w := o.linkPostRequest(url.Values{
+	w := env.linkPostRequest(url.Values{
 		fieldPendingID: {pendingID},
 		fieldCSRF:      {csrf},
 		"sifre":        {testPassword},
@@ -503,10 +503,10 @@ func TestLink_CannotCompleteInOtherBrowser(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", w.Code)
 	}
-	if _, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub); err == nil {
+	if _, err := env.federated.UserByIdentity(context.Background(), providerGoogle, env.google.sub); err == nil {
 		t.Error("linking was COMPLETED in another browser")
 	}
-	if o.requests.subject(o.authReqID) == existing.ID {
+	if env.requests.subject(env.authReqID) == existing.ID {
 		t.Error("signed in from another browser")
 	}
 }
@@ -515,11 +515,11 @@ func TestLink_CannotCompleteInOtherBrowser(t *testing.T) {
 // surface for password guessing and a separate endpoint from Phase 1's login
 // limit.
 func TestLink_RateLimitApplied(t *testing.T) {
-	o := newTestFederationPages(t)
-	pendingID, csrf, cookie, _ := o.setupPendingLink(t)
+	env := newTestFederationPages(t)
+	pendingID, csrf, cookie, _ := env.setupPendingLink(t)
 
 	// A separate mux: the same handler, but this time wrapped with the limiter's limit.
-	limiter, err := NewRateLimiter(o.store.rdb, RateLimitConfig{
+	limiter, err := NewRateLimiter(env.store.rdb, RateLimitConfig{
 		LoginIPPerMin: 1, LoginEmailPerHour: 100, SignupIPPerHour: 100,
 	}, []byte("test-anahtari"))
 	if err != nil {
@@ -527,15 +527,15 @@ func TestLink_RateLimitApplied(t *testing.T) {
 	}
 	mux := http.NewServeMux()
 	interceptor := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
-	o.pages.MountLink(mux, interceptor, limiter)
-	o.mux = mux
+	env.pages.MountLink(mux, interceptor, limiter)
+	env.mux = mux
 
 	form := url.Values{fieldPendingID: {pendingID}, fieldCSRF: {csrf}, "sifre": {"yanlis-sifre-degeri"}}
-	first := o.linkPostRequest(form, cookie)
+	first := env.linkPostRequest(form, cookie)
 	if first.Code == http.StatusTooManyRequests {
 		t.Fatalf("first attempt got 429; the limit is set up wrong")
 	}
-	second := o.linkPostRequest(form, cookie)
+	second := env.linkPostRequest(form, cookie)
 	if second.Code != http.StatusTooManyRequests {
 		t.Errorf("second attempt status = %d, want 429", second.Code)
 	}
@@ -543,7 +543,7 @@ func TestLink_RateLimitApplied(t *testing.T) {
 	// The counter must be SEPARATE from the login endpoint: the login budget
 	// must not have been used up.
 	ctx := context.Background()
-	keyList, err := o.store.rdb.Keys(ctx, rateLimitPrefix+":*").Result()
+	keyList, err := env.store.rdb.Keys(ctx, rateLimitPrefix+":*").Result()
 	if err != nil && err != redis.Nil {
 		t.Fatalf("could not read keys: %v", err)
 	}
@@ -566,12 +566,12 @@ func TestLink_RateLimitApplied(t *testing.T) {
 // get a new pending record on every attempt. What limits the number of
 // attempts aimed at a single account is the account counter.
 func TestLink_AccountRateLimitApplied(t *testing.T) {
-	o := newTestFederationPages(t)
-	pendingID, csrf, cookie, _ := o.setupPendingLink(t)
+	env := newTestFederationPages(t)
+	pendingID, csrf, cookie, _ := env.setupPendingLink(t)
 
 	// The IP limit is GENEROUS (100/min), the account limit is 1/hour: the ONLY
 	// reason for rejection must be the account counter.
-	limiter, err := NewRateLimiter(o.store.rdb, RateLimitConfig{
+	limiter, err := NewRateLimiter(env.store.rdb, RateLimitConfig{
 		LoginIPPerMin: 100, LoginEmailPerHour: 1, SignupIPPerHour: 100,
 	}, []byte("test-anahtari"))
 	if err != nil {
@@ -579,11 +579,11 @@ func TestLink_AccountRateLimitApplied(t *testing.T) {
 	}
 	mux := http.NewServeMux()
 	interceptor := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
-	o.pages.Mount(mux, interceptor, limiter)
-	o.pages.MountLink(mux, interceptor, limiter)
-	o.mux = mux
+	env.pages.Mount(mux, interceptor, limiter)
+	env.pages.MountLink(mux, interceptor, limiter)
+	env.mux = mux
 
-	first := o.linkPostRequest(url.Values{
+	first := env.linkPostRequest(url.Values{
 		fieldPendingID: {pendingID}, fieldCSRF: {csrf}, "sifre": {"yanlis-sifre-degeri"},
 	}, cookie)
 	if first.Code != http.StatusUnauthorized {
@@ -592,7 +592,7 @@ func TestLink_AccountRateLimitApplied(t *testing.T) {
 
 	// The attacker gets a NEW pending record (repeats the federation round):
 	// the uniqueness of the record does not limit the number of attempts.
-	secondFlow := o.runFlow(t, providerGoogle, false)
+	secondFlow := env.runFlow(t, providerGoogle, false)
 	if secondFlow.Code != http.StatusFound {
 		t.Fatalf("second flow status = %d, want 302", secondFlow.Code)
 	}
@@ -604,7 +604,7 @@ func TestLink_AccountRateLimitApplied(t *testing.T) {
 	if newID == "" || newID == pendingID {
 		t.Fatalf("could not get the new pending record: %q", newID)
 	}
-	newForm := o.linkGetRequest(newID, cookie)
+	newForm := env.linkGetRequest(newID, cookie)
 	if newForm.Code != http.StatusOK {
 		t.Fatalf("could not open the new form: status = %d", newForm.Code)
 	}
@@ -613,14 +613,14 @@ func TestLink_AccountRateLimitApplied(t *testing.T) {
 		t.Fatal("no CSRF token in the new form")
 	}
 
-	second := o.linkPostRequest(url.Values{
+	second := env.linkPostRequest(url.Values{
 		fieldPendingID: {newID}, fieldCSRF: {matches[1]}, "sifre": {"yanlis-sifre-degeri"},
 	}, cookie)
 	if second.Code != http.StatusTooManyRequests {
 		t.Errorf("second attempt status = %d, want 429 (account counter)", second.Code)
 	}
 
-	keyList, err := o.store.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
+	keyList, err := env.store.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
 	if err != nil {
 		t.Fatalf("could not read keys: %v", err)
 	}
@@ -635,7 +635,7 @@ func TestLink_AccountRateLimitApplied(t *testing.T) {
 	}
 	// The account identity must not appear in PLAIN TEXT in the Redis key.
 	for _, a := range keyList {
-		if strings.Contains(a, o.google.email) {
+		if strings.Contains(a, env.google.email) {
 			t.Errorf("counter key carries the email in plain text: %q", a)
 		}
 	}
@@ -646,11 +646,11 @@ func TestLink_AccountRateLimitApplied(t *testing.T) {
 // pending link with a single cookieless POST (otherwise the victim would
 // have to redo the whole federation round).
 func TestPendingLink_UnboundPostCannotDestroy(t *testing.T) {
-	o := newTestFederationPages(t)
-	pendingID, csrf, cookie, existing := o.setupPendingLink(t)
+	env := newTestFederationPages(t)
+	pendingID, csrf, cookie, existing := env.setupPendingLink(t)
 
 	// The attacker: NO cookie, NO CSRF.
-	attack := o.linkPostRequest(url.Values{
+	attack := env.linkPostRequest(url.Values{
 		fieldPendingID: {pendingID}, "sifre": {"herhangi"},
 	}, nil)
 	if attack.Code != http.StatusForbidden {
@@ -658,16 +658,16 @@ func TestPendingLink_UnboundPostCannotDestroy(t *testing.T) {
 	}
 
 	// The victim must STILL be able to complete their own flow.
-	w := o.linkPostRequest(url.Values{
+	w := env.linkPostRequest(url.Values{
 		fieldPendingID: {pendingID}, fieldCSRF: {csrf}, "sifre": {testPassword},
 	}, cookie)
 	if w.Code != http.StatusFound {
 		t.Fatalf("the victim's pending was destroyed: status = %d, body = %q", w.Code, w.Body.String())
 	}
-	if s := o.requests.subject(o.authReqID); s != existing.ID {
+	if s := env.requests.subject(env.authReqID); s != existing.ID {
 		t.Errorf("Subject = %q, want %q", s, existing.ID)
 	}
-	if got := o.requests.amrFor(o.authReqID); !slices.Equal(got, []string{"fed"}) {
+	if got := env.requests.amrFor(env.authReqID); !slices.Equal(got, []string{"fed"}) {
 		t.Errorf("amr = %v, want [fed]", got)
 	}
 }
@@ -675,11 +675,11 @@ func TestPendingLink_UnboundPostCannotDestroy(t *testing.T) {
 // An account without a password must NEVER come to the link page; if it
 // does, 409.
 func TestLink_NotOpenedForPasswordlessAccount(t *testing.T) {
-	o := newTestFederationPages(t)
+	env := newTestFederationPages(t)
 	ctx := context.Background()
 	// resolveUser does not produce this record (the K1 branch returns 409); the
 	// record is written BY HAND, so this is a defense-in-depth test.
-	passwordless, err := o.federated.CreateFederatedUser(ctx, providerGoogle, "google-sub", "sifresiz@ornek.com", "Sifresiz", true)
+	passwordless, err := env.federated.CreateFederatedUser(ctx, providerGoogle, "google-sub", "sifresiz@ornek.com", "Sifresiz", true)
 	if err != nil {
 		t.Fatalf("could not create federated account: %v", err)
 	}
@@ -692,19 +692,19 @@ func TestLink_NotOpenedForPasswordlessAccount(t *testing.T) {
 		t.Fatalf("could not generate csrf: %v", err)
 	}
 	pending := PendingLink{
-		AuthRequestID: o.authReqID,
+		AuthRequestID: env.authReqID,
 		UserID:        passwordless.ID,
 		Provider:      providerApple,
 		Sub:           "apple-sub",
 		Email:         "sifresiz@ornek.com",
 		CSRF:          csrf,
 	}
-	if err := o.pages.flows.WritePendingLink(ctx, pendingID, pending, pendingLinkTTL); err != nil {
+	if err := env.pages.flows.WritePendingLink(ctx, pendingID, pending, pendingLinkTTL); err != nil {
 		t.Fatalf("could not write pending: %v", err)
 	}
-	cookie := o.sessionCookie
+	cookie := env.sessionCookie
 
-	w := o.linkPostRequest(url.Values{
+	w := env.linkPostRequest(url.Values{
 		fieldPendingID: {pendingID},
 		fieldCSRF:      {csrf},
 		"sifre":        {testPassword},
@@ -712,10 +712,10 @@ func TestLink_NotOpenedForPasswordlessAccount(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409", w.Code)
 	}
-	if _, err := o.federated.UserByIdentity(ctx, providerApple, "apple-sub"); err == nil {
+	if _, err := env.federated.UserByIdentity(ctx, providerApple, "apple-sub"); err == nil {
 		t.Error("linking was done on an account without a password")
 	}
-	if o.requests.subject(o.authReqID) != "" {
+	if env.requests.subject(env.authReqID) != "" {
 		t.Error("signed in on an account without a password")
 	}
 }
@@ -726,15 +726,15 @@ func TestLink_NotOpenedForPasswordlessAccount(t *testing.T) {
 // password CORRECTLY. This is an ordinary expiry and must not produce a 500:
 // the user must read what happened and that they must restart from the app.
 func TestLinkPost_ExpiredRequestReturns400(t *testing.T) {
-	o := newTestFederationPages(t)
-	pendingID, csrf, cookie, _ := o.setupPendingLink(t)
+	env := newTestFederationPages(t)
+	pendingID, csrf, cookie, _ := env.setupPendingLink(t)
 
 	// The auth request expired with the TTL (since the TTL values are not
 	// changed, the record is dropped by hand); the pending record and the session
 	// binding are STILL valid, so the test really measures the EXPIRY path.
-	o.requests.drop(o.authReqID)
+	env.requests.drop(env.authReqID)
 
-	w := o.linkPostRequest(url.Values{
+	w := env.linkPostRequest(url.Values{
 		fieldPendingID: {pendingID},
 		fieldCSRF:      {csrf},
 		"sifre":        {testPassword},
@@ -748,7 +748,7 @@ func TestLinkPost_ExpiredRequestReturns400(t *testing.T) {
 	if !strings.Contains(w.Body.String(), msgRequestExpired) {
 		t.Errorf("the user was not told what happened: body = %q", w.Body.String())
 	}
-	if o.requests.subject(o.authReqID) != "" {
+	if env.requests.subject(env.authReqID) != "" {
 		t.Error("a dropped request was COMPLETED")
 	}
 }

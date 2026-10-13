@@ -131,14 +131,14 @@ var csrfPattern = regexp.MustCompile(`name="csrf" value="([^"]*)"`)
 // In production ONLY /authorize does this (Pages.WrapAuthorize);
 // GET /giris and GET /kayit DO NOT MINT a binding. The tests take that path
 // too: first the binding, then the form.
-func bindTestSession(t *testing.T, o *pagesEnv, id string, existing *http.Cookie) *http.Cookie {
+func bindTestSession(t *testing.T, env *pagesEnv, id string, existing *http.Cookie) *http.Cookie {
 	t.Helper()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/authorize", nil)
 	if existing != nil {
 		r.AddCookie(existing)
 	}
-	if err := o.pages.BindSession(w, r, id); err != nil {
+	if err := env.pages.BindSession(w, r, id); err != nil {
 		t.Fatalf("BindSession: %v", err)
 	}
 	for _, c := range w.Result().Cookies() {
@@ -152,17 +152,17 @@ func bindTestSession(t *testing.T, o *pagesEnv, id string, existing *http.Cookie
 
 // openForm imitates a browser starting the flow with /authorize and then
 // opening the form with GET; it returns (session cookie, CSRF token).
-func openForm(t *testing.T, o *pagesEnv, path, id string) (*http.Cookie, string) {
+func openForm(t *testing.T, env *pagesEnv, path, id string) (*http.Cookie, string) {
 	t.Helper()
-	cookie := bindTestSession(t, o, id, nil)
-	return cookie, showForm(t, o, path, id, cookie)
+	cookie := bindTestSession(t, env, id, nil)
+	return cookie, showForm(t, env, path, id, cookie)
 }
 
 // showForm opens the GET form with an existing cookie and returns the CSRF
 // token in the form.
-func showForm(t *testing.T, o *pagesEnv, path, id string, cookie *http.Cookie) string {
+func showForm(t *testing.T, env *pagesEnv, path, id string, cookie *http.Cookie) string {
 	t.Helper()
-	w := formRequest(o, path, id, cookie)
+	w := formRequest(env, path, id, cookie)
 	if w.Code != http.StatusOK {
 		t.Fatalf("could not open the form: status = %d", w.Code)
 	}
@@ -175,22 +175,22 @@ func showForm(t *testing.T, o *pagesEnv, path, id string, cookie *http.Cookie) s
 
 // formRequest calls GET /giris or GET /kayit with the given cookie (may be
 // nil).
-func formRequest(o *pagesEnv, path, id string, cookie *http.Cookie) *httptest.ResponseRecorder {
+func formRequest(env *pagesEnv, path, id string, cookie *http.Cookie) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, path+"?authRequestID="+url.QueryEscape(id), nil)
 	if cookie != nil {
 		r.AddCookie(cookie)
 	}
 	if path == pathLogin {
-		o.pages.Login(w, r)
+		env.pages.Login(w, r)
 	} else {
-		o.pages.Signup(w, r)
+		env.pages.Signup(w, r)
 	}
 	return w
 }
 
 // postForm does a form POST with the given cookie (may be nil).
-func postForm(o *pagesEnv, path string, form url.Values, cookie *http.Cookie) *httptest.ResponseRecorder {
+func postForm(env *pagesEnv, path string, form url.Values, cookie *http.Cookie) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -198,17 +198,17 @@ func postForm(o *pagesEnv, path string, form url.Values, cookie *http.Cookie) *h
 		r.AddCookie(cookie)
 	}
 	if path == pathLogin {
-		o.pages.Login(w, r)
+		env.pages.Login(w, r)
 	} else {
-		o.pages.Signup(w, r)
+		env.pages.Signup(w, r)
 	}
 	return w
 }
 
 func TestLogin_ShowsForm(t *testing.T) {
-	o := newTestPages(t)
-	cookie := bindTestSession(t, o, "abc", nil)
-	w := formRequest(o, pathLogin, "abc", cookie)
+	env := newTestPages(t)
+	cookie := bindTestSession(t, env, "abc", nil)
+	w := formRequest(env, pathLogin, "abc", cookie)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -223,10 +223,10 @@ func TestLogin_ShowsForm(t *testing.T) {
 // While setting up the binding, /authorize must give the browser an HttpOnly +
 // SameSite=Lax session cookie; this cookie is the flow's only binding point.
 func TestWrapAuthorize_SetsSessionCookie(t *testing.T) {
-	o := newTestPages(t)
+	env := newTestPages(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/authorize", nil)
-	if err := o.pages.BindSession(w, r, "abc"); err != nil {
+	if err := env.pages.BindSession(w, r, "abc"); err != nil {
 		t.Fatalf("BindSession: %v", err)
 	}
 	var cookie *http.Cookie
@@ -252,7 +252,7 @@ func TestWrapAuthorize_SetsSessionCookie(t *testing.T) {
 		t.Errorf("cookie value is %d characters, 32 bytes of entropy were expected", len(cookie.Value))
 	}
 	// The binding must have been written to the store.
-	binding, err := o.sessions.ReadSession(context.Background(), cookie.Value)
+	binding, err := env.sessions.ReadSession(context.Background(), cookie.Value)
 	if err != nil {
 		t.Fatalf("ReadSession: %v", err)
 	}
@@ -273,10 +273,10 @@ func TestWrapAuthorize_SetsSessionCookie(t *testing.T) {
 func TestFormGet_WithoutBindingRejected(t *testing.T) {
 	for _, path := range []string{pathLogin, pathSignup} {
 		t.Run(path, func(t *testing.T) {
-			o := newTestPages(t)
+			env := newTestPages(t)
 
 			// (a) No cookie at all.
-			w := formRequest(o, path, "istek-A", nil)
+			w := formRequest(env, path, "istek-A", nil)
 			if w.Code != http.StatusForbidden {
 				t.Errorf("GET status without cookie = %d, want 403", w.Code)
 			}
@@ -288,8 +288,8 @@ func TestFormGet_WithoutBindingRejected(t *testing.T) {
 			}
 
 			// (b) A cookie bound to ANOTHER request.
-			cookieB := bindTestSession(t, o, "istek-B", nil)
-			w = formRequest(o, path, "istek-A", cookieB)
+			cookieB := bindTestSession(t, env, "istek-B", nil)
+			w = formRequest(env, path, "istek-A", cookieB)
 			if w.Code != http.StatusForbidden {
 				t.Errorf("GET status with a cookie bound to another id = %d, want 403", w.Code)
 			}
@@ -298,15 +298,15 @@ func TestFormGet_WithoutBindingRejected(t *testing.T) {
 			}
 
 			// (c) A forged cookie value.
-			w = formRequest(o, path, "istek-A", &http.Cookie{Name: cookieNameSession, Value: "uydurma"})
+			w = formRequest(env, path, "istek-A", &http.Cookie{Name: cookieNameSession, Value: "uydurma"})
 			if w.Code != http.StatusForbidden {
 				t.Errorf("GET status with a made-up cookie = %d, want 403", w.Code)
 			}
 
 			// (d) NEGATIVE CONTROL: with the right binding the form REALLY opens, so
 			// the 403s above come from the binding.
-			cookieA := bindTestSession(t, o, "istek-A", nil)
-			w = formRequest(o, path, "istek-A", cookieA)
+			cookieA := bindTestSession(t, env, "istek-A", nil)
+			w = formRequest(env, path, "istek-A", cookieA)
 			if w.Code != http.StatusOK {
 				t.Fatalf("GET status with a bound cookie = %d, want 200", w.Code)
 			}
@@ -323,13 +323,13 @@ func TestFormGet_WithoutBindingRejected(t *testing.T) {
 // /authorize would overwrite the first and the first tab would get 403. Its
 // end-to-end counterpart is in flow_test.go.
 func TestBindSession_TwoParallelRequestsSameCookie(t *testing.T) {
-	o := newTestPages(t)
-	cookie := bindTestSession(t, o, "istek-1", nil)
-	cookie2 := bindTestSession(t, o, "istek-2", cookie)
+	env := newTestPages(t)
+	cookie := bindTestSession(t, env, "istek-1", nil)
+	cookie2 := bindTestSession(t, env, "istek-2", cookie)
 	if cookie2.Value != cookie.Value {
 		t.Fatalf("second /authorize changed the cookie value: %q -> %q", cookie.Value, cookie2.Value)
 	}
-	binding, err := o.sessions.ReadSession(context.Background(), cookie2.Value)
+	binding, err := env.sessions.ReadSession(context.Background(), cookie2.Value)
 	if err != nil {
 		t.Fatalf("ReadSession: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestBindSession_TwoParallelRequestsSameCookie(t *testing.T) {
 	}
 	// The forms of both tabs must be openable.
 	for _, id := range []string{"istek-1", "istek-2"} {
-		if w := formRequest(o, pathLogin, id, cookie2); w.Code != http.StatusOK {
+		if w := formRequest(env, pathLogin, id, cookie2); w.Code != http.StatusOK {
 			t.Errorf("%s form status = %d, want 200", id, w.Code)
 		}
 	}
@@ -349,13 +349,13 @@ func TestBindSession_TwoParallelRequestsSameCookie(t *testing.T) {
 // The set must not grow WITHOUT BOUND (bloat surface): when the upper bound is
 // exceeded the OLDEST entry drops and the newest remain.
 func TestBindSession_EnforcesMaxBindings(t *testing.T) {
-	o := newTestPages(t)
+	env := newTestPages(t)
 	var cookie *http.Cookie
 	total := maxSessionBindings + 3
 	for i := 0; i < total; i++ {
-		cookie = bindTestSession(t, o, "istek-"+strconv.Itoa(i), cookie)
+		cookie = bindTestSession(t, env, "istek-"+strconv.Itoa(i), cookie)
 	}
-	binding, err := o.sessions.ReadSession(context.Background(), cookie.Value)
+	binding, err := env.sessions.ReadSession(context.Background(), cookie.Value)
 	if err != nil {
 		t.Fatalf("ReadSession: %v", err)
 	}
@@ -399,9 +399,9 @@ func TestSessionCookie_SecureFollowsIssuerScheme(t *testing.T) {
 
 // The login page is meaningless without an authRequestID; the form must not be shown.
 func TestLogin_MissingAuthRequestIDRejected(t *testing.T) {
-	o := newTestPages(t)
+	env := newTestPages(t)
 	w := httptest.NewRecorder()
-	o.pages.Login(w, httptest.NewRequest(http.MethodGet, pathLogin, nil))
+	env.pages.Login(w, httptest.NewRequest(http.MethodGet, pathLogin, nil))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (authRequestID missing)", w.Code)
 	}
@@ -410,22 +410,22 @@ func TestLogin_MissingAuthRequestIDRejected(t *testing.T) {
 // C1: if there is NO cookie POST /giris is rejected and the user store is
 // NEVER TOUCHED (i.e. password verification is not reached).
 func TestLogin_NoCookieRejectedBeforePasswordCheck(t *testing.T) {
-	o := newTestPages(t)
-	if _, err := o.users.Create(t.Context(), "kurban@ornek.com", "K", "dogruSifre12"); err != nil {
+	env := newTestPages(t)
+	if _, err := env.users.Create(t.Context(), "kurban@ornek.com", "K", "dogruSifre12"); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	beforeByEmail, beforeCreate := o.users.counts()
+	beforeByEmail, beforeCreate := env.users.counts()
 
 	form := url.Values{
 		"eposta": {"kurban@ornek.com"}, "sifre": {"dogruSifre12"},
 		"authRequestID": {"abc"}, fieldCSRF: {"ne-olursa"},
 	}
-	w := postForm(o, pathLogin, form, nil)
+	w := postForm(env, pathLogin, form, nil)
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (a POST without a cookie must be rejected)", w.Code)
 	}
-	afterByEmail, afterCreate := o.users.counts()
+	afterByEmail, afterCreate := env.users.counts()
 	if afterByEmail != beforeByEmail || afterCreate != beforeCreate {
 		t.Errorf("user store was touched (ByEmail %d->%d, Create %d->%d); the rejection happened AFTER the password check",
 			beforeByEmail, afterByEmail, beforeCreate, afterCreate)
@@ -439,27 +439,27 @@ func TestLogin_NoCookieRejectedBeforePasswordCheck(t *testing.T) {
 // rejected. An attacker must not be able to carry the cookie of their own auth
 // request and make the victim's request complete (or the reverse).
 func TestLogin_OtherAuthRequestIDRejected(t *testing.T) {
-	o := newTestPages(t)
-	if _, err := o.users.Create(t.Context(), "kurban@ornek.com", "K", "dogruSifre12"); err != nil {
+	env := newTestPages(t)
+	if _, err := env.users.Create(t.Context(), "kurban@ornek.com", "K", "dogruSifre12"); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	// Browser B opens a session for "istek-B".
-	cookieB, csrfB := openForm(t, o, pathLogin, "istek-B")
-	beforeByEmail, _ := o.users.counts()
+	cookieB, csrfB := openForm(t, env, pathLogin, "istek-B")
+	beforeByEmail, _ := env.users.counts()
 
 	// With the same cookie, try to complete ANOTHER auth request (istek-A).
 	form := url.Values{
 		"eposta": {"kurban@ornek.com"}, "sifre": {"dogruSifre12"},
 		"authRequestID": {"istek-A"}, fieldCSRF: {csrfB},
 	}
-	w := postForm(o, pathLogin, form, cookieB)
+	w := postForm(env, pathLogin, form, cookieB)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (the id bound to the cookie does not match the form id)", w.Code)
 	}
-	if afterByEmail, _ := o.users.counts(); afterByEmail != beforeByEmail {
+	if afterByEmail, _ := env.users.counts(); afterByEmail != beforeByEmail {
 		t.Error("password check was reached with a mismatched id")
 	}
-	if o.completer.subject("istek-A") != "" {
+	if env.completer.subject("istek-A") != "" {
 		t.Error("request-A was bound to a user")
 	}
 }
@@ -467,12 +467,12 @@ func TestLogin_OtherAuthRequestIDRejected(t *testing.T) {
 // C1: an undefined/forged cookie value is rejected too (there is no binding in
 // the store).
 func TestLogin_ForgedCookieRejected(t *testing.T) {
-	o := newTestPages(t)
+	env := newTestPages(t)
 	form := url.Values{
 		"eposta": {"a@ornek.com"}, "sifre": {"x"},
 		"authRequestID": {"abc"}, fieldCSRF: {"y"},
 	}
-	w := postForm(o, pathLogin, form, &http.Cookie{Name: cookieNameSession, Value: "uydurma-deger"})
+	w := postForm(env, pathLogin, form, &http.Cookie{Name: cookieNameSession, Value: "uydurma-deger"})
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", w.Code)
 	}
@@ -480,11 +480,11 @@ func TestLogin_ForgedCookieRejected(t *testing.T) {
 
 // C1: it is rejected if the CSRF token is missing or wrong.
 func TestLogin_MissingOrWrongCSRFRejected(t *testing.T) {
-	o := newTestPages(t)
-	if _, err := o.users.Create(t.Context(), "kurban@ornek.com", "K", "dogruSifre12"); err != nil {
+	env := newTestPages(t)
+	if _, err := env.users.Create(t.Context(), "kurban@ornek.com", "K", "dogruSifre12"); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	cookie, csrf := openForm(t, o, pathLogin, "istek-1")
+	cookie, csrf := openForm(t, env, pathLogin, "istek-1")
 
 	for _, d := range []struct {
 		name  string
@@ -495,16 +495,16 @@ func TestLogin_MissingOrWrongCSRFRejected(t *testing.T) {
 		{"other-random", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
 	} {
 		t.Run(d.name, func(t *testing.T) {
-			beforeByEmail, _ := o.users.counts()
+			beforeByEmail, _ := env.users.counts()
 			form := url.Values{
 				"eposta": {"kurban@ornek.com"}, "sifre": {"dogruSifre12"},
 				"authRequestID": {"istek-1"}, fieldCSRF: {d.token},
 			}
-			w := postForm(o, pathLogin, form, cookie)
+			w := postForm(env, pathLogin, form, cookie)
 			if w.Code != http.StatusForbidden {
 				t.Fatalf("status = %d, want 403", w.Code)
 			}
-			if afterByEmail, _ := o.users.counts(); afterByEmail != beforeByEmail {
+			if afterByEmail, _ := env.users.counts(); afterByEmail != beforeByEmail {
 				t.Error("CSRF rejection happened after the password check")
 			}
 		})
@@ -514,43 +514,43 @@ func TestLogin_MissingOrWrongCSRFRejected(t *testing.T) {
 // C1 happy path: with a valid cookie + matching authRequestID + correct CSRF
 // the login WORKS and the flow returns to the callback.
 func TestLogin_ValidCookieWorks(t *testing.T) {
-	o := newTestPages(t)
-	users, err := o.users.Create(t.Context(), "kurban@ornek.com", "K", "dogruSifre12")
+	env := newTestPages(t)
+	users, err := env.users.Create(t.Context(), "kurban@ornek.com", "K", "dogruSifre12")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	cookie, csrf := openForm(t, o, pathLogin, "istek-1")
+	cookie, csrf := openForm(t, env, pathLogin, "istek-1")
 	form := url.Values{
 		"eposta": {"kurban@ornek.com"}, "sifre": {"dogruSifre12"},
 		"authRequestID": {"istek-1"}, fieldCSRF: {csrf},
 	}
-	w := postForm(o, pathLogin, form, cookie)
+	w := postForm(env, pathLogin, form, cookie)
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302. body: %s", w.Code, w.Body.String())
 	}
 	if location := w.Header().Get("Location"); location != "/bitti?id=istek-1" {
 		t.Errorf("Location = %q", location)
 	}
-	if got := o.completer.subject("istek-1"); got != users.ID {
+	if got := env.completer.subject("istek-1"); got != users.ID {
 		t.Errorf("subject bound to the request = %q, want the user ID", got)
 	}
-	if got := o.completer.amrFor("istek-1"); !slices.Equal(got, []string{"pwd"}) {
+	if got := env.completer.amrFor("istek-1"); !slices.Equal(got, []string{"pwd"}) {
 		t.Errorf("amr = %v, want [pwd]", got)
 	}
 }
 
 // Signup is subject to the same binding.
 func TestSignup_NoCookieRejectedNoUserCreated(t *testing.T) {
-	o := newTestPages(t)
+	env := newTestPages(t)
 	form := url.Values{
 		"eposta": {"yeni@ornek.com"}, "ad": {"Yeni"},
 		"sifre": {"uzunSifre123"}, "authRequestID": {"abc"}, fieldCSRF: {"x"},
 	}
-	w := postForm(o, pathSignup, form, nil)
+	w := postForm(env, pathSignup, form, nil)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", w.Code)
 	}
-	if _, create := o.users.counts(); create != 0 {
+	if _, create := env.users.counts(); create != 0 {
 		t.Error("a user was created in the rejected signup POST")
 	}
 }
@@ -560,29 +560,29 @@ func TestSignup_NoCookieRejectedNoUserCreated(t *testing.T) {
 // pending request must not be rebindable to a different identity until a code
 // is produced.
 func TestSignup_SecondSignupKeepsSubject(t *testing.T) {
-	o := newTestPages(t)
+	env := newTestPages(t)
 	const id = "istek-1"
 
 	signUp := func(email string) *httptest.ResponseRecorder {
-		cookie, csrf := openForm(t, o, pathSignup, id)
+		cookie, csrf := openForm(t, env, pathSignup, id)
 		form := url.Values{
 			"eposta": {email}, "ad": {"K"}, "sifre": {"uzunSifre123"},
 			"authRequestID": {id}, fieldCSRF: {csrf},
 		}
-		return postForm(o, pathSignup, form, cookie)
+		return postForm(env, pathSignup, form, cookie)
 	}
 
 	if w := signUp("birinci@ornek.com"); w.Code != http.StatusFound {
 		t.Fatalf("first signup status = %d, want 302. body: %s", w.Code, w.Body.String())
 	}
-	firstSubject := o.completer.subject(id)
+	firstSubject := env.completer.subject(id)
 	if firstSubject == "" {
 		t.Fatal("the first signup request did not bind")
 	}
 	// The signup POST is the FOURTH amr call site (page.go:586). The login
 	// POST's assertion does NOT cover this line: it is a separate call and a
 	// separate constant.
-	if got := o.completer.amrFor(id); !slices.Equal(got, []string{"pwd"}) {
+	if got := env.completer.amrFor(id); !slices.Equal(got, []string{"pwd"}) {
 		t.Errorf("amr after signup = %v, want [pwd]", got)
 	}
 
@@ -590,7 +590,7 @@ func TestSignup_SecondSignupKeepsSubject(t *testing.T) {
 	if w.Code == http.StatusFound {
 		t.Error("second signup returned 302; the request can be bound again")
 	}
-	if last := o.completer.subject(id); last != firstSubject {
+	if last := env.completer.subject(id); last != firstSubject {
 		t.Errorf("Subject was OVERWRITTEN: %q -> %q", firstSubject, last)
 	}
 }
@@ -604,16 +604,16 @@ func TestSignup_SecondSignupKeepsSubject(t *testing.T) {
 // cookie/CSRF: otherwise both would stop at 403 and the test would be
 // vacuous.
 func TestLogin_FailureDoesNotRevealUserExistence(t *testing.T) {
-	o := newTestPages(t)
+	env := newTestPages(t)
 	const email = "ayni@ornek.com"
-	cookie, csrf := openForm(t, o, pathLogin, "istek-1")
+	cookie, csrf := openForm(t, env, pathLogin, "istek-1")
 
 	tryLogin := func() *httptest.ResponseRecorder {
 		form := url.Values{
 			"eposta": {email}, "sifre": {"yanlis"},
 			"authRequestID": {"istek-1"}, fieldCSRF: {csrf},
 		}
-		return postForm(o, pathLogin, form, cookie)
+		return postForm(env, pathLogin, form, cookie)
 	}
 
 	// State A: there is no account with this email.
@@ -621,7 +621,7 @@ func TestLogin_FailureDoesNotRevealUserExistence(t *testing.T) {
 
 	// State B: the account exists, but the "wrong" password differs from the real
 	// password; i.e. this branch also stays on the LOGIN-FAILED path.
-	if _, err := o.users.Create(t.Context(), email, "V", "dogruSifre12"); err != nil {
+	if _, err := env.users.Create(t.Context(), email, "V", "dogruSifre12"); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	b := tryLogin()
@@ -644,12 +644,12 @@ func TestLogin_FailureDoesNotRevealUserExistence(t *testing.T) {
 // The page must escape user input; this is automatic because the template is
 // produced with html/template, but it is tested against regression.
 func TestPages_EscapeInput(t *testing.T) {
-	o := newTestPages(t)
+	env := newTestPages(t)
 	bad := `"><script>alert(1)</script>`
 	// The binding must be SET UP: otherwise GET stops at 403, the body is never
 	// produced and the test becomes vacuous.
-	cookie := bindTestSession(t, o, bad, nil)
-	w := formRequest(o, pathLogin, bad, cookie)
+	cookie := bindTestSession(t, env, bad, nil)
+	w := formRequest(env, pathLogin, bad, cookie)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (was the page really rendered?)", w.Code)
 	}
@@ -666,14 +666,14 @@ func TestPages_EscapeInput(t *testing.T) {
 // typed). But this echo opens an XSS surface; here we directly measure that
 // html/template escapes it.
 func TestLogin_EchoedEmailEscaped(t *testing.T) {
-	o := newTestPages(t)
-	cookie, csrf := openForm(t, o, pathLogin, "istek-1")
+	env := newTestPages(t)
+	cookie, csrf := openForm(t, env, pathLogin, "istek-1")
 	bad := `"><script>alert(1)</script>`
 	form := url.Values{
 		"eposta": {bad}, "sifre": {"yanlis"},
 		"authRequestID": {"istek-1"}, fieldCSRF: {csrf},
 	}
-	w := postForm(o, pathLogin, form, cookie)
+	w := postForm(env, pathLogin, form, cookie)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 (was the form really processed?)", w.Code)
 	}
@@ -691,9 +691,9 @@ func TestLogin_EchoedEmailEscaped(t *testing.T) {
 }
 
 func TestSignup_ShowsForm(t *testing.T) {
-	o := newTestPages(t)
-	cookie := bindTestSession(t, o, "abc", nil)
-	w := formRequest(o, pathSignup, "abc", cookie)
+	env := newTestPages(t)
+	cookie := bindTestSession(t, env, "abc", nil)
+	w := formRequest(env, pathSignup, "abc", cookie)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
@@ -707,16 +707,16 @@ func TestSignup_ShowsForm(t *testing.T) {
 // Signing up with an email in use must give the user an understandable error
 // but must not be a 500.
 func TestSignup_EmailInUse(t *testing.T) {
-	o := newTestPages(t)
-	if _, err := o.users.Create(t.Context(), "var@ornek.com", "V", "dogruSifre12"); err != nil {
+	env := newTestPages(t)
+	if _, err := env.users.Create(t.Context(), "var@ornek.com", "V", "dogruSifre12"); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	cookie, csrf := openForm(t, o, pathSignup, "istek-1")
+	cookie, csrf := openForm(t, env, pathSignup, "istek-1")
 	form := url.Values{
 		"eposta": {"var@ornek.com"}, "ad": {"Yeni"},
 		"sifre": {"baskaSifre12"}, "authRequestID": {"istek-1"}, fieldCSRF: {csrf},
 	}
-	w := postForm(o, pathSignup, form, cookie)
+	w := postForm(env, pathSignup, form, cookie)
 	if w.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409 (email in use)", w.Code)
 	}
@@ -725,13 +725,13 @@ func TestSignup_EmailInUse(t *testing.T) {
 // ---- /authorize/callback leg ----
 
 // callbackRequest calls /authorize/callback with the given cookie.
-func callbackRequest(o *pagesEnv, id string, cookie *http.Cookie) *httptest.ResponseRecorder {
+func callbackRequest(env *pagesEnv, id string, cookie *http.Cookie) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/authorize/callback?id="+url.QueryEscape(id), nil)
 	if cookie != nil {
 		r.AddCookie(cookie)
 	}
-	o.pages.Callback(w, r)
+	env.pages.Callback(w, r)
 	return w
 }
 
@@ -747,11 +747,11 @@ func (d *delegateSpy) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 // C1: /authorize/callback is REJECTED without a cookie and the library
 // handler is NEVER reached (i.e. no code is produced).
 func TestAuthorizeCallback_NoCookieRejected(t *testing.T) {
-	o := newTestPages(t)
+	env := newTestPages(t)
 	spy := &delegateSpy{}
-	o.pages.SetCallbackDelegate(spy)
+	env.pages.SetCallbackDelegate(spy)
 
-	w := callbackRequest(o, "istek-1", nil)
+	w := callbackRequest(env, "istek-1", nil)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", w.Code)
 	}
@@ -762,12 +762,12 @@ func TestAuthorizeCallback_NoCookieRejected(t *testing.T) {
 
 // C1: callback is REJECTED with a cookie bound to another auth request.
 func TestAuthorizeCallback_WrongCookieRejected(t *testing.T) {
-	o := newTestPages(t)
+	env := newTestPages(t)
 	spy := &delegateSpy{}
-	o.pages.SetCallbackDelegate(spy)
-	cookie, _ := openForm(t, o, pathLogin, "istek-B")
+	env.pages.SetCallbackDelegate(spy)
+	cookie, _ := openForm(t, env, pathLogin, "istek-B")
 
-	w := callbackRequest(o, "istek-A", cookie)
+	w := callbackRequest(env, "istek-A", cookie)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", w.Code)
 	}
@@ -779,12 +779,12 @@ func TestAuthorizeCallback_WrongCookieRejected(t *testing.T) {
 // C1 happy path: with the right cookie the callback delegates to the library
 // handler.
 func TestAuthorizeCallback_ValidCookieDelegates(t *testing.T) {
-	o := newTestPages(t)
+	env := newTestPages(t)
 	spy := &delegateSpy{}
-	o.pages.SetCallbackDelegate(spy)
-	cookie, _ := openForm(t, o, pathLogin, "istek-1")
+	env.pages.SetCallbackDelegate(spy)
+	cookie, _ := openForm(t, env, pathLogin, "istek-1")
 
-	w := callbackRequest(o, "istek-1", cookie)
+	w := callbackRequest(env, "istek-1", cookie)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -795,11 +795,11 @@ func TestAuthorizeCallback_ValidCookieDelegates(t *testing.T) {
 
 // The callback is meaningless without the id parameter.
 func TestAuthorizeCallback_MissingIDRejected(t *testing.T) {
-	o := newTestPages(t)
+	env := newTestPages(t)
 	spy := &delegateSpy{}
-	o.pages.SetCallbackDelegate(spy)
+	env.pages.SetCallbackDelegate(spy)
 	w := httptest.NewRecorder()
-	o.pages.Callback(w, httptest.NewRequest(http.MethodGet, "/authorize/callback", nil))
+	env.pages.Callback(w, httptest.NewRequest(http.MethodGet, "/authorize/callback", nil))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
@@ -822,11 +822,11 @@ func TestLogin_WorksAfterSignupWithPaddedEmail(t *testing.T) {
 	const padded = "  bosluk@ornek.com  "
 	const unpadded = "bosluk@ornek.com"
 
-	o := newTestPages(t)
+	env := newTestPages(t)
 
 	// Signup: padded input.
-	cookie, csrf := openForm(t, o, pathSignup, "istek-kayit")
-	w := postForm(o, pathSignup, url.Values{
+	cookie, csrf := openForm(t, env, pathSignup, "istek-kayit")
+	w := postForm(env, pathSignup, url.Values{
 		"authRequestID": {"istek-kayit"},
 		fieldCSRF:       {csrf},
 		"eposta":        {padded},
@@ -838,7 +838,7 @@ func TestLogin_WorksAfterSignupWithPaddedEmail(t *testing.T) {
 	}
 
 	// The stored value must be normalized.
-	registered, err := o.users.ByEmail(context.Background(), unpadded)
+	registered, err := env.users.ByEmail(context.Background(), unpadded)
 	if err != nil {
 		t.Fatalf("could not find the registered user: %v", err)
 	}
@@ -850,8 +850,8 @@ func TestLogin_WorksAfterSignupWithPaddedEmail(t *testing.T) {
 	for _, input := range []string{padded, unpadded, "  BOSLUK@ORNEK.COM "} {
 		t.Run("sign-in input="+strconv.Quote(input), func(t *testing.T) {
 			id := "istek-giris-" + input
-			cookie, csrf := openForm(t, o, pathLogin, id)
-			w := postForm(o, pathLogin, url.Values{
+			cookie, csrf := openForm(t, env, pathLogin, id)
+			w := postForm(env, pathLogin, url.Values{
 				"authRequestID": {id},
 				fieldCSRF:       {csrf},
 				"eposta":        {input},
@@ -866,8 +866,8 @@ func TestLogin_WorksAfterSignupWithPaddedEmail(t *testing.T) {
 	// NEGATIVE CONTROL: the fix must not turn into "every password passes".
 	// A wrong password must still get 401, i.e. the 302s above are thanks to
 	// normalization, not thanks to a loosened verification.
-	cookie, csrf = openForm(t, o, pathLogin, "istek-yanlis")
-	w = postForm(o, pathLogin, url.Values{
+	cookie, csrf = openForm(t, env, pathLogin, "istek-yanlis")
+	w = postForm(env, pathLogin, url.Values{
 		"authRequestID": {"istek-yanlis"},
 		fieldCSRF:       {csrf},
 		"eposta":        {padded},
@@ -884,7 +884,7 @@ func TestLogin_WorksAfterSignupWithPaddedEmail(t *testing.T) {
 // library handler it puts a handler that writes a 302 to the login page and
 // wraps it with Pages.WrapAuthorize. If fetchSite is passed empty, the
 // Sec-Fetch-Site header is NOT ADDED AT ALL (an old/non-browser client).
-func wrapAuthorize(o *pagesEnv, fetchSite, id string, cookie *http.Cookie) *httptest.ResponseRecorder {
+func wrapAuthorize(env *pagesEnv, fetchSite, id string, cookie *http.Cookie) *httptest.ResponseRecorder {
 	libHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", pathLogin+"?authRequestID="+url.QueryEscape(id))
 		w.WriteHeader(http.StatusFound)
@@ -898,15 +898,15 @@ func wrapAuthorize(o *pagesEnv, fetchSite, id string, cookie *http.Cookie) *http
 	if cookie != nil {
 		r.AddCookie(cookie)
 	}
-	o.pages.WrapAuthorize(libHandler).ServeHTTP(w, r)
+	env.pages.WrapAuthorize(libHandler).ServeHTTP(w, r)
 	return w
 }
 
 // isBound reads from the store whether the given cookie value is bound to
 // the given authRequestID.
-func isBound(t *testing.T, o *pagesEnv, session, id string) bool {
+func isBound(t *testing.T, env *pagesEnv, session, id string) bool {
 	t.Helper()
-	binding, err := o.sessions.ReadSession(context.Background(), session)
+	binding, err := env.sessions.ReadSession(context.Background(), session)
 	if err != nil {
 		return false
 	}
@@ -920,13 +920,13 @@ func isBound(t *testing.T, o *pagesEnv, session, id string) bool {
 // the victim cannot do GET /giris with that id (403) and the request CANNOT
 // BE COMPLETED.
 func TestWrapAuthorize_CrossSiteAddsNoBinding(t *testing.T) {
-	o := newTestPages(t)
+	env := newTestPages(t)
 	// The victim's own legitimate flow: the cookie and binding are born here.
-	victimCookie := bindTestSession(t, o, "mesru-1", nil)
+	victimCookie := bindTestSession(t, env, "mesru-1", nil)
 
 	// The address the attacker prepared is opened in the victim's browser by a
 	// cross-site top-level navigation.
-	w := wrapAuthorize(o, fetchSiteCrossSite, "saldirgan-1", victimCookie)
+	w := wrapAuthorize(env, fetchSiteCrossSite, "saldirgan-1", victimCookie)
 
 	// The request itself goes to the library (a 302 is written): instead of
 	// rejecting, only the binding is not set up.
@@ -938,18 +938,18 @@ func TestWrapAuthorize_CrossSiteAddsNoBinding(t *testing.T) {
 		t.Errorf("cross-site request wrote %d cookies, want 0", len(cookieList))
 	}
 	// The attacker's id must NOT have entered the victim's set.
-	if isBound(t, o, victimCookie.Value, "saldirgan-1") {
+	if isBound(t, env, victimCookie.Value, "saldirgan-1") {
 		t.Fatal("the cross-site request ADDED a binding to the victim's set (login-CSRF is open)")
 	}
 	// The victim cannot open the form with that id: 403.
-	if g := formRequest(o, pathLogin, "saldirgan-1", victimCookie); g.Code != http.StatusForbidden {
+	if g := formRequest(env, pathLogin, "saldirgan-1", victimCookie); g.Code != http.StatusForbidden {
 		t.Fatalf("GET /giris status for the injected id = %d, want 403", g.Code)
 	}
 	// The victim's EXISTING binding must NOT BE BROKEN (we did not turn it into a DoS).
-	if !isBound(t, o, victimCookie.Value, "mesru-1") {
+	if !isBound(t, env, victimCookie.Value, "mesru-1") {
 		t.Error("the victim's existing binding disappeared")
 	}
-	if g := formRequest(o, pathLogin, "mesru-1", victimCookie); g.Code != http.StatusOK {
+	if g := formRequest(env, pathLogin, "mesru-1", victimCookie); g.Code != http.StatusOK {
 		t.Errorf("the victim's legitimate form status = %d, want 200", g.Code)
 	}
 }
@@ -968,8 +968,8 @@ func TestWrapAuthorize_NonCrossSiteBinds(t *testing.T) {
 		{"no-header-fail-open", ""},
 	} {
 		t.Run(d.name, func(t *testing.T) {
-			o := newTestPages(t)
-			w := wrapAuthorize(o, d.fetchSite, "istek-1", nil)
+			env := newTestPages(t)
+			w := wrapAuthorize(env, d.fetchSite, "istek-1", nil)
 			if w.Code != http.StatusFound {
 				t.Fatalf("status = %d, want 302", w.Code)
 			}
@@ -982,11 +982,11 @@ func TestWrapAuthorize_NonCrossSiteBinds(t *testing.T) {
 			if session == "" {
 				t.Fatal("no session cookie was given (no binding was set up)")
 			}
-			if !isBound(t, o, session, "istek-1") {
+			if !isBound(t, env, session, "istek-1") {
 				t.Fatal("the binding was not written to the store")
 			}
 			// Happy path: the form must be openable.
-			if g := formRequest(o, pathLogin, "istek-1", &http.Cookie{Name: cookieNameSession, Value: session}); g.Code != http.StatusOK {
+			if g := formRequest(env, pathLogin, "istek-1", &http.Cookie{Name: cookieNameSession, Value: session}); g.Code != http.StatusOK {
 				t.Fatalf("form status = %d, want 200", g.Code)
 			}
 		})
@@ -997,10 +997,10 @@ func TestWrapAuthorize_NonCrossSiteBinds(t *testing.T) {
 // button of a provider that does not exist would see a 404, because that
 // endpoint's handler is never wired (see buildMux).
 func TestLogin_ShowsOnlyConfiguredProviders(t *testing.T) {
-	o := newTestPages(t)
-	o.pages.SetFederationProviders([]string{providerGoogle})
-	cookie := bindTestSession(t, o, "abc", nil)
-	w := formRequest(o, pathLogin, "abc", cookie)
+	env := newTestPages(t)
+	env.pages.SetFederationProviders([]string{providerGoogle})
+	cookie := bindTestSession(t, env, "abc", nil)
+	w := formRequest(env, pathLogin, "abc", cookie)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -1022,11 +1022,11 @@ func TestLogin_ShowsOnlyConfiguredProviders(t *testing.T) {
 // REQUIRE URL escaping: if it were joined by hand in the template, the "&"
 // inside would inject a foreign parameter into the query string.
 func TestLogin_ButtonCarriesAuthRequestID(t *testing.T) {
-	o := newTestPages(t)
-	o.pages.SetFederationProviders([]string{providerGoogle})
+	env := newTestPages(t)
+	env.pages.SetFederationProviders([]string{providerGoogle})
 	const id = "istek 1&yabanci=1"
-	cookie := bindTestSession(t, o, id, nil)
-	w := formRequest(o, pathLogin, id, cookie)
+	cookie := bindTestSession(t, env, id, nil)
+	w := formRequest(env, pathLogin, id, cookie)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
