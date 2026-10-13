@@ -36,6 +36,35 @@ PROFILES = {
 }
 
 
+# Shelf corner frequencies for the profile EQ.
+LOW_SHELF_HZ = 200
+HIGH_SHELF_HZ = 8000
+
+# Summed or equalized audio is scaled down to this peak instead of clipping.
+HEADROOM_PEAK = 0.98
+
+_INT32_FULL_SCALE = 2**31 - 1
+
+
+def _to_float(audio: AudioSegment) -> np.ndarray:
+    """Samples as float64 in [-1, 1], shaped (frames, channels)."""
+    samples = np.array(audio.get_array_of_samples(), dtype=np.float64)
+    samples /= float(2 ** (8 * audio.sample_width - 1))
+    return samples.reshape(-1, audio.channels)
+
+
+def _from_float(samples: np.ndarray, frame_rate: int) -> AudioSegment:
+    """32-bit segment from float samples shaped (frames, channels)."""
+    clipped = np.clip(samples, -1.0, 1.0)
+    data = np.round(clipped * _INT32_FULL_SCALE).astype("<i4")
+    return AudioSegment(
+        data.tobytes(),
+        frame_rate=frame_rate,
+        sample_width=4,
+        channels=samples.shape[1],
+    )
+
+
 class MasterService:
     """Handles audio mastering operations."""
 
@@ -83,7 +112,7 @@ class MasterService:
             if vocal_takes:
                 vocal_audio = await self._load_vocals(tmpdir, vocal_takes)
                 if vocal_audio:
-                    mixed = mixed.overlay(vocal_audio)
+                    mixed = self._sum([mixed, vocal_audio])
 
             # Apply mastering chain
             mastered = self._apply_mastering(mixed, profile_settings)
@@ -120,10 +149,7 @@ class MasterService:
         # Check for solo tracks
         has_solo = any(s.get("solo", False) for s in mix_settings)
 
-        # Start with silence matching the longest stem
-        max_length = max(len(s) for s in stems)
-        mixed = AudioSegment.silent(duration=max_length)
-
+        audible = []
         for i, stem in enumerate(stems):
             settings = mix_settings[i] if i < len(mix_settings) else {}
 
@@ -147,10 +173,13 @@ class MasterService:
             if pan != 0.0:
                 stem = stem.pan(pan)
 
-            # Overlay onto mix
-            mixed = mixed.overlay(stem)
+            audible.append(stem)
 
-        return mixed
+        if not audible:
+            return AudioSegment.silent(
+                duration=max(len(s) for s in stems), frame_rate=stems[0].frame_rate
+            )
+        return self._sum(audible)
 
     async def _load_vocals(
         self, tmpdir: str, vocal_takes: list[dict[str, Any]]
@@ -159,7 +188,7 @@ class MasterService:
         if not vocal_takes or not self.storage:
             return None
 
-        combined = None
+        takes = []
         for i, take in enumerate(vocal_takes):
             vocal_path = os.path.join(tmpdir, f"vocal_{i}.wav")
             self.storage.download_key_to_file(take["key"], vocal_path)
@@ -172,23 +201,64 @@ class MasterService:
                 volume_db = 20 * np.log10(max(volume, 0.001))
                 vocal = vocal + volume_db
 
-            if combined is None:
-                combined = vocal
-            else:
-                combined = combined.overlay(vocal)
+            takes.append(vocal)
 
-        return combined
+        return self._sum(takes)
+
+    @staticmethod
+    def _sum(segments: list[AudioSegment]) -> AudioSegment:
+        """Sum segments in floating point and keep the peak below full scale.
+
+        pydub's overlay adds integer samples and clips, so stems that each peak
+        near 0 dBFS turn into crackle when stacked. The level lost here comes
+        back in the mastering chain's normalize step.
+        """
+        frame_rate = max(s.frame_rate for s in segments)
+        channels = max(s.channels for s in segments)
+        arrays = [
+            _to_float(s.set_frame_rate(frame_rate).set_channels(channels))
+            for s in segments
+        ]
+        total = np.zeros((max(len(a) for a in arrays), channels))
+        for array in arrays:
+            total[: len(array)] += array
+
+        peak = np.max(np.abs(total)) if total.size else 0.0
+        if peak > HEADROOM_PEAK:
+            total *= HEADROOM_PEAK / peak
+        return _from_float(total, frame_rate)
+
+    def _apply_eq(self, audio: AudioSegment, settings: dict[str, Any]) -> AudioSegment:
+        """Low and high shelves: the band is boosted or cut, the rest stays.
+
+        A shelf adds (gain - 1) times the filtered band back onto the signal,
+        so the mid range passes through untouched.
+        """
+        eq = settings.get("eq", {})
+        shelves = [
+            (eq.get("low", 0), lambda a: a.low_pass_filter(LOW_SHELF_HZ)),
+            (eq.get("high", 0), lambda a: a.high_pass_filter(HIGH_SHELF_HZ)),
+        ]
+        if all(gain_db == 0 for gain_db, _ in shelves):
+            return audio
+
+        dry = _to_float(audio)
+        wet = dry.copy()
+        for gain_db, band_filter in shelves:
+            if gain_db != 0:
+                band = _to_float(band_filter(audio))[: len(dry)]
+                wet[: len(band)] += (10 ** (gain_db / 20) - 1) * band
+
+        peak = np.max(np.abs(wet)) if wet.size else 0.0
+        if peak > HEADROOM_PEAK:
+            wet *= HEADROOM_PEAK / peak
+        return _from_float(wet, audio.frame_rate)
 
     def _apply_mastering(
         self, audio: AudioSegment, settings: dict[str, Any]
     ) -> AudioSegment:
         """Apply mastering chain to audio."""
-        # Apply EQ (simplified high/mid/low shelf)
-        eq = settings.get("eq", {})
-        if eq.get("low", 0) != 0:
-            audio = audio.low_pass_filter(200) + eq["low"]
-        if eq.get("high", 0) != 0:
-            audio = audio.high_pass_filter(8000) + eq["high"]
+        audio = self._apply_eq(audio, settings)
 
         # Apply compression
         threshold = settings.get("compression_threshold", -20)
