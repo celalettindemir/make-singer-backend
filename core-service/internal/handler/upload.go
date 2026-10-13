@@ -13,6 +13,22 @@ import (
 
 const maxUploadSize = 50 * 1024 * 1024 // 50MB
 
+// vocalContentTypes are the accepted part Content-Types of a vocal upload.
+// React Native on iOS replaces the type the app sets with the system MIME type
+// of the file extension, which is audio/vnd.wave for .wav.
+var vocalContentTypes = map[string]bool{
+	"audio/wav":      true,
+	"audio/x-wav":    true,
+	"audio/wave":     true,
+	"audio/vnd.wave": true,
+	"audio/mpeg":     true,
+	"audio/mp3":      true,
+	"audio/mp4":      true,
+	"audio/x-m4a":    true,
+	"audio/aac":      true,
+	"audio/x-aac":    true,
+}
+
 type UploadHandler struct {
 	service   *service.UploadService
 	validator *validator.Validate
@@ -77,19 +93,7 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 
 	// Validate file type
 	contentType := file.Header.Get("Content-Type")
-	validTypes := map[string]bool{
-		"audio/wav":   true,
-		"audio/x-wav": true,
-		"audio/wave":  true,
-		"audio/mpeg":  true,
-		"audio/mp3":   true,
-		"audio/mp4":   true,
-		"audio/x-m4a": true,
-		"audio/aac":   true,
-		"audio/x-aac": true,
-	}
-
-	if !validTypes[contentType] {
+	if !vocalContentTypes[contentType] {
 		return response.ValidationError(c, i18n.KeyFileTypeInvalid, map[string]interface{}{
 			"contentType": contentType,
 		})
