@@ -11,10 +11,10 @@ import (
 
 // HesapWorker, silinen hesabin gecikmeli R2 temizligini yapar.
 type HesapWorker struct {
-	hesap *service.HesapService
+	hesap *service.AccountService
 }
 
-func NewHesapWorker(hesap *service.HesapService) *HesapWorker {
+func NewHesapWorker(hesap *service.AccountService) *HesapWorker {
 	return &HesapWorker{hesap: hesap}
 }
 
@@ -26,5 +26,5 @@ func (w *HesapWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		// Bozuk yuk tekrar denemekle duzelmez.
 		return fmt.Errorf("hesap temizlik yuku cozulemedi: %v: %w", err, asynq.SkipRetry)
 	}
-	return w.hesap.Temizle(ctx, yuk.UserID)
+	return w.hesap.Cleanup(ctx, yuk.UserID)
 }

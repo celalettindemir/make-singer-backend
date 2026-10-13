@@ -9,10 +9,10 @@ import (
 )
 
 type HesapHandler struct {
-	service *service.HesapService
+	service *service.AccountService
 }
 
-func NewHesapHandler(svc *service.HesapService) *HesapHandler {
+func NewHesapHandler(svc *service.AccountService) *HesapHandler {
 	return &HesapHandler{service: svc}
 }
 
@@ -31,8 +31,8 @@ func (h *HesapHandler) Sil(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
-	if err := h.service.Sil(c.Context(), userID); err != nil {
-		if errors.Is(err, service.ErrHesapYok) {
+	if err := h.service.Delete(c.Context(), userID); err != nil {
+		if errors.Is(err, service.ErrAccountNotFound) {
 			return response.NotFound(c, "Hesap bulunamadi")
 		}
 		return response.ServiceError(c, "Hesap silinemedi")

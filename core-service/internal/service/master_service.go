@@ -42,8 +42,8 @@ func (s *MasterService) Preview(ctx context.Context, userID string, req *model.M
 		return nil, err
 	}
 
-	// Mock adres bile ayni kurallarla uretilir: istemci bunu geri
-	// gonderdiginde KeyFromURL cozebilsin.
+	// Even the mock URL is produced under the same rules: so that KeyFromURL
+	// can resolve it when the client sends it back.
 	fileURL := client.UnsignedURL(key, s.r2Cfg)
 
 	return &model.MasterPreviewResponse{
@@ -55,8 +55,8 @@ func (s *MasterService) Preview(ctx context.Context, userID string, req *model.M
 
 // StartFinal queues a final mastering job
 func (s *MasterService) StartFinal(ctx context.Context, userID string, req *model.MasterFinalRequest) (*model.MasterFinalResponse, error) {
-	// Girdi denetimi is kaydindan ONCE: worker bu anahtarlari okuyacak,
-	// yabanci bir anahtar baskasinin dosyasini master'a sokardi.
+	// Input check BEFORE the job record: the worker will read these keys, and
+	// a foreign key would pull someone else's file into the master.
 	for _, u := range req.StemURLs {
 		if _, err := client.ResolveOwnedKey(u, userID, s.r2Cfg); err != nil {
 			return nil, fmt.Errorf("stem URL: %w", err)
@@ -128,7 +128,7 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 
 // GetStatus returns the current status of a master job
 func (s *MasterService) GetStatus(ctx context.Context, userID, jobID string) (*model.MasterStatusResponse, error) {
-	job, err := sahipliJobOku(ctx, s.redis, userID, jobID)
+	job, err := readOwnedJob(ctx, s.redis, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +143,7 @@ func (s *MasterService) GetStatus(ctx context.Context, userID, jobID string) (*m
 
 // GetResult returns the result of a completed master job
 func (s *MasterService) GetResult(ctx context.Context, userID, jobID string) (*model.MasterResultResponse, error) {
-	job, err := sahipliJobOku(ctx, s.redis, userID, jobID)
+	job, err := readOwnedJob(ctx, s.redis, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -155,10 +155,10 @@ func (s *MasterService) GetResult(ctx context.Context, userID, jobID string) (*m
 	return s.BuildResult(ctx, job.Result)
 }
 
-// BuildResult, Redis'te saklanan ham sonuc kaydindan istemci yanitini
-// uretir. Adres HER ISTEKTE yeniden uretilir: kayitta imzali URL
-// tutulmaz, boylece 24 saatlik is kaydi 1 saatlik imzayi tekrar
-// oynatmaz (ve gecmis bir expiresAt donmez).
+// BuildResult produces the client response from the raw result record stored
+// in Redis. The URL is regenerated ON EVERY REQUEST: the record holds no
+// signed URL, so the 24-hour job record cannot replay a 1-hour signature (and
+// a past expiresAt is never returned).
 func (s *MasterService) BuildResult(ctx context.Context, stored []byte) (*model.MasterResultResponse, error) {
 	var record model.MasterResultRecord
 	if err := json.Unmarshal(stored, &record); err != nil {
@@ -179,7 +179,7 @@ func (s *MasterService) BuildResult(ctx context.Context, stored []byte) (*model.
 // Helper methods
 
 func (s *MasterService) saveJob(ctx context.Context, job *model.Job) error {
-	return jobYaz(ctx, s.redis, job)
+	return writeJob(ctx, s.redis, job)
 }
 
 func newMasterTask(jobID string, payload []byte) (*asynq.Task, error) {

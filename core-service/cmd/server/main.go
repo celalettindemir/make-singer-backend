@@ -164,7 +164,7 @@ func main() {
 	}
 
 	// Hesap silme: kullanici kaydi kendi OP'mizde tutulur.
-	hesapService := service.NewHesapService(kimlikSunucu, silici, redisClient, asynqClient, sosyalDepo)
+	hesapService := service.NewAccountService(kimlikSunucu, silici, redisClient, asynqClient, sosyalDepo)
 	hesapHandler := handler.NewHesapHandler(hesapService)
 
 	// kopyalayici: arayuz degiskeni; r2Client nil iken dogrudan atamak
@@ -363,7 +363,7 @@ func startWorkerServer(
 	audioClient *client.AudioClient,
 	r2Client client.StorageClient,
 	hub *ws.Hub,
-	hesapService *service.HesapService,
+	hesapService *service.AccountService,
 	sosyalWorker *worker.SosyalWorker,
 ) {
 	asynqLogLevel := asynq.InfoLevel
@@ -403,7 +403,7 @@ func startWorkerServer(
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeMaster, masterWorker.ProcessTask)
-	mux.HandleFunc(service.TaskTypeHesapTemizle, worker.NewHesapWorker(hesapService).ProcessTask)
+	mux.HandleFunc(service.TaskTypeAccountCleanup, worker.NewHesapWorker(hesapService).ProcessTask)
 	mux.HandleFunc(social.TaskTypePrepare, sosyalWorker.Hazirla)
 	mux.HandleFunc(social.TaskTypeDeleteFiles, sosyalWorker.DosyaSil)
 

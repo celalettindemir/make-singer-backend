@@ -13,17 +13,17 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func isKaydet(t *testing.T, rdb *redis.Client, job *model.Job) {
+func storeJob(t *testing.T, rdb *redis.Client, job *model.Job) {
 	t.Helper()
-	if err := jobYaz(context.Background(), rdb, job); err != nil {
+	if err := writeJob(context.Background(), rdb, job); err != nil {
 		t.Fatalf("jobYaz: %v", err)
 	}
 }
 
-func TestRenderService_BaskasininIsi404(t *testing.T) {
-	rdb := canliRedis(t)
+func TestRenderService_OtherUsersJobNotFound(t *testing.T) {
+	rdb := liveRedis(t)
 	s := NewRenderService(rdb, nil, nil, testR2Cfg())
-	isKaydet(t, rdb, &model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued})
+	storeJob(t, rdb, &model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued})
 
 	if _, err := s.GetStatus(context.Background(), "kullanici-b", "is1"); !errors.Is(err, ErrJobNotFound) {
 		t.Errorf("baska kullanici icin ErrJobNotFound bekleniyordu, geldi: %v", err)
@@ -33,15 +33,15 @@ func TestRenderService_BaskasininIsi404(t *testing.T) {
 	}
 }
 
-func TestRenderService_BaskasiIptalEdemez(t *testing.T) {
-	rdb := canliRedis(t)
+func TestRenderService_OtherUserCannotCancel(t *testing.T) {
+	rdb := liveRedis(t)
 	s := NewRenderService(rdb, nil, nil, testR2Cfg())
-	isKaydet(t, rdb, &model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued})
+	storeJob(t, rdb, &model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued})
 
 	if _, err := s.CancelRender(context.Background(), "kullanici-b", "is1"); !errors.Is(err, ErrJobNotFound) {
 		t.Fatalf("baska kullanici icin ErrJobNotFound bekleniyordu, geldi: %v", err)
 	}
-	job, err := jobOku(context.Background(), rdb, "is1")
+	job, err := readJob(context.Background(), rdb, "is1")
 	if err != nil {
 		t.Fatalf("jobOku: %v", err)
 	}
@@ -50,32 +50,32 @@ func TestRenderService_BaskasiIptalEdemez(t *testing.T) {
 	}
 }
 
-func TestRenderService_BaskasininSonucu404(t *testing.T) {
-	rdb := canliRedis(t)
-	s := NewRenderService(rdb, nil, &sahteDepo{}, testR2Cfg())
-	sonuc, _ := json.Marshal(model.RenderResultRecord{ID: "r1", Stems: []model.StemResultRecord{{ID: "s1", FileKey: "stems/kullanici-a/p1/s1.mp3"}}})
-	isKaydet(t, rdb, &model.Job{ID: "is1", OwnerID: "kullanici-a", Status: model.JobStatusSucceeded, Result: sonuc})
+func TestRenderService_OtherUsersResultNotFound(t *testing.T) {
+	rdb := liveRedis(t)
+	s := NewRenderService(rdb, nil, &fakeStorage{}, testR2Cfg())
+	result, _ := json.Marshal(model.RenderResultRecord{ID: "r1", Stems: []model.StemResultRecord{{ID: "s1", FileKey: "stems/kullanici-a/p1/s1.mp3"}}})
+	storeJob(t, rdb, &model.Job{ID: "is1", OwnerID: "kullanici-a", Status: model.JobStatusSucceeded, Result: result})
 
 	if _, err := s.GetResult(context.Background(), "kullanici-b", "is1"); !errors.Is(err, ErrJobNotFound) {
 		t.Errorf("ErrJobNotFound bekleniyordu, geldi: %v", err)
 	}
 }
 
-func TestRenderService_SahipsizKayitKimseyeAcilmaz(t *testing.T) {
-	rdb := canliRedis(t)
+func TestRenderService_OwnerlessRecordHiddenFromAll(t *testing.T) {
+	rdb := liveRedis(t)
 	s := NewRenderService(rdb, nil, nil, testR2Cfg())
-	isKaydet(t, rdb, &model.Job{ID: "eski", Status: model.JobStatusQueued})
+	storeJob(t, rdb, &model.Job{ID: "eski", Status: model.JobStatusQueued})
 
 	if _, err := s.GetStatus(context.Background(), "kullanici-a", "eski"); !errors.Is(err, ErrJobNotFound) {
 		t.Errorf("OwnerID'siz kayit icin ErrJobNotFound bekleniyordu, geldi: %v", err)
 	}
 }
 
-func TestMasterService_BaskasininIsi404(t *testing.T) {
-	rdb := canliRedis(t)
-	s := NewMasterService(rdb, nil, &sahteDepo{}, testR2Cfg())
-	sonuc, _ := json.Marshal(model.MasterResultRecord{FileKey: "masters/kullanici-a/p1/m1.wav"})
-	isKaydet(t, rdb, &model.Job{ID: "m1", Type: model.JobTypeMaster, OwnerID: "kullanici-a", Status: model.JobStatusSucceeded, Result: sonuc})
+func TestMasterService_OtherUsersJobNotFound(t *testing.T) {
+	rdb := liveRedis(t)
+	s := NewMasterService(rdb, nil, &fakeStorage{}, testR2Cfg())
+	result, _ := json.Marshal(model.MasterResultRecord{FileKey: "masters/kullanici-a/p1/m1.wav"})
+	storeJob(t, rdb, &model.Job{ID: "m1", Type: model.JobTypeMaster, OwnerID: "kullanici-a", Status: model.JobStatusSucceeded, Result: result})
 
 	if _, err := s.GetStatus(context.Background(), "kullanici-b", "m1"); !errors.Is(err, ErrJobNotFound) {
 		t.Errorf("status: ErrJobNotFound bekleniyordu, geldi: %v", err)
@@ -88,29 +88,29 @@ func TestMasterService_BaskasininIsi404(t *testing.T) {
 	}
 }
 
-// bekleyenGorevPayload, kuyruktaki tek gorevin is payload'ini cozer.
-func bekleyenGorevPayload(t *testing.T, kuyruk string, hedef any) {
+// pendingTaskPayload decodes the job payload of the single pending task in the queue.
+func pendingTaskPayload(t *testing.T, queue string, target any) {
 	t.Helper()
-	insp := asynq.NewInspector(asynq.RedisClientOpt{Addr: canliRedisAdresi, DB: 13})
+	insp := asynq.NewInspector(asynq.RedisClientOpt{Addr: liveRedisAddr, DB: 13})
 	defer insp.Close()
-	gorevler, err := insp.ListPendingTasks(kuyruk)
-	if err != nil || len(gorevler) != 1 {
-		t.Fatalf("bekleyen gorev = %d, hata %v", len(gorevler), err)
+	tasks, err := insp.ListPendingTasks(queue)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("bekleyen gorev = %d, hata %v", len(tasks), err)
 	}
-	var zarf struct {
+	var envelope struct {
 		Payload json.RawMessage `json:"payload"`
 	}
-	if err := json.Unmarshal(gorevler[0].Payload, &zarf); err != nil {
+	if err := json.Unmarshal(tasks[0].Payload, &envelope); err != nil {
 		t.Fatalf("gorev zarfi: %v", err)
 	}
-	if err := json.Unmarshal(zarf.Payload, hedef); err != nil {
+	if err := json.Unmarshal(envelope.Payload, target); err != nil {
 		t.Fatalf("gorev payload: %v", err)
 	}
 }
 
-func TestRenderService_StartRenderSahibiYazar(t *testing.T) {
-	rdb := canliRedis(t)
-	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: canliRedisAdresi, DB: 13})
+func TestRenderService_StartRenderWritesOwner(t *testing.T) {
+	rdb := liveRedis(t)
+	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: liveRedisAddr, DB: 13})
 	defer ac.Close()
 	s := NewRenderService(rdb, ac, nil, testR2Cfg())
 
@@ -118,7 +118,7 @@ func TestRenderService_StartRenderSahibiYazar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartRender: %v", err)
 	}
-	job, err := jobOku(context.Background(), rdb, resp.JobID)
+	job, err := readJob(context.Background(), rdb, resp.JobID)
 	if err != nil {
 		t.Fatalf("jobOku: %v", err)
 	}
@@ -126,15 +126,15 @@ func TestRenderService_StartRenderSahibiYazar(t *testing.T) {
 		t.Fatalf("is kaydi sahibi = %q", job.OwnerID)
 	}
 	var p model.RenderJobPayload
-	bekleyenGorevPayload(t, "render", &p)
+	pendingTaskPayload(t, "render", &p)
 	if p.OwnerID != "kullanici-a" {
 		t.Errorf("gorev payload sahibi = %q", p.OwnerID)
 	}
 }
 
-func TestMasterService_StartFinalSahibiYazar(t *testing.T) {
-	rdb := canliRedis(t)
-	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: canliRedisAdresi, DB: 13})
+func TestMasterService_StartFinalWritesOwner(t *testing.T) {
+	rdb := liveRedis(t)
+	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: liveRedisAddr, DB: 13})
 	defer ac.Close()
 	cfg := testR2Cfg()
 	s := NewMasterService(rdb, ac, nil, cfg)
@@ -147,7 +147,7 @@ func TestMasterService_StartFinalSahibiYazar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartFinal: %v", err)
 	}
-	job, err := jobOku(context.Background(), rdb, resp.JobID)
+	job, err := readJob(context.Background(), rdb, resp.JobID)
 	if err != nil {
 		t.Fatalf("jobOku: %v", err)
 	}
@@ -155,38 +155,38 @@ func TestMasterService_StartFinalSahibiYazar(t *testing.T) {
 		t.Fatalf("is kaydi sahibi = %q", job.OwnerID)
 	}
 	var p model.MasterJobPayload
-	bekleyenGorevPayload(t, "master", &p)
+	pendingTaskPayload(t, "master", &p)
 	if p.OwnerID != "kullanici-a" {
 		t.Errorf("gorev payload sahibi = %q", p.OwnerID)
 	}
 }
 
-func TestRenderService_StartRenderStemModunuYazar(t *testing.T) {
-	rdb := canliRedis(t)
-	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: canliRedisAdresi, DB: 13})
+func TestRenderService_StartRenderWritesStemMode(t *testing.T) {
+	rdb := liveRedis(t)
+	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: liveRedisAddr, DB: 13})
 	defer ac.Close()
 	s := NewRenderService(rdb, ac, nil, testR2Cfg())
 
-	davul := model.InstrumentDrums
+	drums := model.InstrumentDrums
 	req := &model.RenderStartRequest{
 		ProjectID:       uuid.New().String(),
 		Arrangement:     model.Arrangement{Instruments: []model.Instrument{model.InstrumentDrums}},
 		StemMode:        model.StemModeFocus,
-		FocusInstrument: &davul,
+		FocusInstrument: &drums,
 	}
 	if _, err := s.StartRender(context.Background(), "kullanici-a", req); err != nil {
 		t.Fatalf("StartRender: %v", err)
 	}
 	var p model.RenderJobPayload
-	bekleyenGorevPayload(t, "render", &p)
+	pendingTaskPayload(t, "render", &p)
 	if p.StemMode != model.StemModeFocus || p.FocusInstrument == nil || *p.FocusInstrument != model.InstrumentDrums {
 		t.Errorf("payload stem ayari = %q %v", p.StemMode, p.FocusInstrument)
 	}
 }
 
-func TestRenderService_StartRenderVarsayilanMix(t *testing.T) {
-	rdb := canliRedis(t)
-	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: canliRedisAdresi, DB: 13})
+func TestRenderService_StartRenderDefaultsToMix(t *testing.T) {
+	rdb := liveRedis(t)
+	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: liveRedisAddr, DB: 13})
 	defer ac.Close()
 	s := NewRenderService(rdb, ac, nil, testR2Cfg())
 
@@ -195,14 +195,14 @@ func TestRenderService_StartRenderVarsayilanMix(t *testing.T) {
 		t.Fatalf("StartRender: %v", err)
 	}
 	var p model.RenderJobPayload
-	bekleyenGorevPayload(t, "render", &p)
+	pendingTaskPayload(t, "render", &p)
 	if p.StemMode != model.StemModeMix {
 		t.Errorf("varsayilan mod = %q, mix bekleniyordu", p.StemMode)
 	}
 }
 
-func TestRenderService_GecersizStemAyariIsYaratmaz(t *testing.T) {
-	// Redis nil: dogrulama is kaydindan ONCE olmali, dokunulursa panic.
+func TestRenderService_InvalidStemSettingsCreateNoJob(t *testing.T) {
+	// Redis is nil: validation must happen BEFORE the job record; panics if touched.
 	s := NewRenderService(nil, nil, nil, testR2Cfg())
 	req := &model.RenderStartRequest{ProjectID: uuid.New().String(), StemMode: model.StemModeFocus}
 	if _, err := s.StartRender(context.Background(), "kullanici-a", req); !errors.Is(err, model.ErrInvalidStemSettings) {

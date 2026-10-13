@@ -40,7 +40,7 @@ func (s *ExportService) ExportMP3(ctx context.Context, userID string, req *model
 		quality = *req.Quality
 	}
 
-	// Sahiplik denetimi mock dalindan once: dev ve prod ayni davranir.
+	// Ownership check before the mock branch: dev and prod behave the same.
 	inputKey, err := client.ResolveOwnedKey(req.MasterFileURL, userID, s.r2Cfg)
 	if err != nil {
 		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
@@ -88,9 +88,9 @@ func (s *ExportService) ExportMP3(ctx context.Context, userID string, req *model
 		return nil, fmt.Errorf("MP3 encoding failed: %w", err)
 	}
 
-	// outputKey public (exports/) oldugu icin URLFor kalici CDN adresi
-	// dondurur; audio-service'ten gelen resp.OutputURL imzasiz oldugundan
-	// dogrudan istemciye verilmez.
+	// outputKey is public (exports/), so URLFor returns a permanent CDN URL;
+	// resp.OutputURL from audio-service is unsigned and is never handed
+	// directly to the client.
 	fileURL, _, err := s.r2Client.URLFor(ctx, outputKey)
 	if err != nil {
 		return nil, fmt.Errorf("export URL uretilemedi: %w", err)
@@ -117,7 +117,7 @@ func (s *ExportService) ExportWAV(ctx context.Context, userID string, req *model
 		sampleRate = *req.SampleRate
 	}
 
-	// Sahiplik denetimi mock dalindan once: dev ve prod ayni davranir.
+	// Ownership check before the mock branch: dev and prod behave the same.
 	inputKey, err := client.ResolveOwnedKey(req.MasterFileURL, userID, s.r2Cfg)
 	if err != nil {
 		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
@@ -147,9 +147,9 @@ func (s *ExportService) ExportWAV(ctx context.Context, userID string, req *model
 		return nil, fmt.Errorf("WAV encoding failed: %w", err)
 	}
 
-	// outputKey public (exports/) oldugu icin URLFor kalici CDN adresi
-	// dondurur; audio-service'ten gelen resp.OutputURL imzasiz oldugundan
-	// dogrudan istemciye verilmez.
+	// outputKey is public (exports/), so URLFor returns a permanent CDN URL;
+	// resp.OutputURL from audio-service is unsigned and is never handed
+	// directly to the client.
 	fileURL, _, err := s.r2Client.URLFor(ctx, outputKey)
 	if err != nil {
 		return nil, fmt.Errorf("export URL uretilemedi: %w", err)
@@ -167,7 +167,7 @@ func (s *ExportService) ExportWAV(ctx context.Context, userID string, req *model
 
 // ExportStems exports stems as ZIP
 func (s *ExportService) ExportStems(ctx context.Context, userID string, req *model.ExportStemsRequest) (*model.ExportStemsResponse, error) {
-	// Sahiplik denetimi mock dalindan once: dev ve prod ayni davranir.
+	// Ownership check before the mock branch: dev and prod behave the same.
 	// Build file list for ZIP
 	files := make([]client.ZipFileEntry, 0)
 
@@ -230,9 +230,9 @@ func (s *ExportService) ExportStems(ctx context.Context, userID string, req *mod
 		return nil, fmt.Errorf("ZIP creation failed: %w", err)
 	}
 
-	// outputKey public (exports/) oldugu icin URLFor kalici CDN adresi
-	// dondurur; audio-service'ten gelen resp.OutputURL imzasiz oldugundan
-	// dogrudan istemciye verilmez.
+	// outputKey is public (exports/), so URLFor returns a permanent CDN URL;
+	// resp.OutputURL from audio-service is unsigned and is never handed
+	// directly to the client.
 	fileURL, _, err := s.r2Client.URLFor(ctx, outputKey)
 	if err != nil {
 		return nil, fmt.Errorf("export URL uretilemedi: %w", err)
@@ -257,7 +257,7 @@ func (s *ExportService) exportMP3Mock(userID string, quality int) (*model.Export
 		Size:      5242880, // ~5MB
 		Format:    "mp3",
 		Quality:   quality,
-		ExpiresAt: nil, // mock export de public/kalicidir, suresi yok
+		ExpiresAt: nil, // the mock export is public/permanent too, no expiry
 	}, nil
 }
 
@@ -272,7 +272,7 @@ func (s *ExportService) exportWAVMock(userID string, bitDepth, sampleRate int) (
 		Format:     "wav",
 		BitDepth:   bitDepth,
 		SampleRate: sampleRate,
-		ExpiresAt:  nil, // mock export de public/kalicidir, suresi yok
+		ExpiresAt:  nil, // the mock export is public/permanent too, no expiry
 	}, nil
 }
 
@@ -294,6 +294,6 @@ func (s *ExportService) exportStemsMock(userID string, req *model.ExportStemsReq
 		FileURL:   client.UnsignedURL(key, s.r2Cfg),
 		Size:      52428800, // ~50MB
 		FileCount: fileCount,
-		ExpiresAt: nil, // mock export de public/kalicidir, suresi yok
+		ExpiresAt: nil, // the mock export is public/permanent too, no expiry
 	}, nil
 }

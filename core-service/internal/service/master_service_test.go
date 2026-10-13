@@ -9,10 +9,10 @@ import (
 	"github.com/makeasinger/api/internal/model"
 )
 
-// TestMasterService_Preview_ExpiresAtConfigTTL, MasterPreviewResponse.ExpiresAt
-// degerinin r2Cfg.PresignTTL'den geldigini dogrular. r2Cfg.PresignTTL burada
-// bilinen 1 saatlik varsayilandan FARKLI (2 saat) verilir: eger kod tekrar
-// sabit "1 saat" degerine donerse bu test kirilir.
+// TestMasterService_Preview_ExpiresAtConfigTTL verifies that
+// MasterPreviewResponse.ExpiresAt comes from r2Cfg.PresignTTL. r2Cfg.PresignTTL
+// is given a value (2 hours) DIFFERENT from the known 1-hour default: if the
+// code reverts to the fixed "1 hour" value this test breaks.
 func TestMasterService_Preview_ExpiresAtConfigTTL(t *testing.T) {
 	r2Cfg := &config.R2Config{PresignTTL: 2 * time.Hour}
 	s := NewMasterService(nil, nil, nil, r2Cfg)
@@ -27,10 +27,10 @@ func TestMasterService_Preview_ExpiresAtConfigTTL(t *testing.T) {
 		t.Fatal("ExpiresAt nil, sureli bir link icin dolu olmali")
 	}
 
-	fark := resp.ExpiresAt.Sub(before)
-	// 1 saatlik sabit degere donulmusse fark ~1h olur; config'teki 2h'e
-	// yakin olmasi gerekir (bir miktar tolerans ile).
-	if fark < 90*time.Minute || fark > 130*time.Minute {
-		t.Errorf("ExpiresAt farki = %v, config'teki 2h PresignTTL'e yakin olmali (sabit 1h kullanilmis olabilir)", fark)
+	diff := resp.ExpiresAt.Sub(before)
+	// If it reverted to the fixed 1-hour value the difference would be ~1h; it
+	// must be close to the 2h in the config (with some tolerance).
+	if diff < 90*time.Minute || diff > 130*time.Minute {
+		t.Errorf("ExpiresAt farki = %v, config'teki 2h PresignTTL'e yakin olmali (sabit 1h kullanilmis olabilir)", diff)
 	}
 }

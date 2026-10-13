@@ -27,7 +27,7 @@ func (hBosKuyruk) Enqueue(t *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo,
 
 func hesapUygulamasi(kimlikHata error, userID string) *fiber.App {
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 50 * time.Millisecond})
-	svc := service.NewHesapService(hSahteKimlik{hata: kimlikHata}, nil, rdb, hBosKuyruk{}, nil)
+	svc := service.NewAccountService(hSahteKimlik{hata: kimlikHata}, nil, rdb, hBosKuyruk{}, nil)
 	app := fiber.New()
 	app.Delete("/api/account", kullaniciOlarak(userID), NewHesapHandler(svc).Sil)
 	return app

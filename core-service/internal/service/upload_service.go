@@ -36,8 +36,8 @@ func NewUploadService(r2Client client.StorageClient, r2Cfg *config.R2Config) *Up
 func (s *UploadService) UploadVocal(ctx context.Context, userID, projectID, sectionID, takeName string, file io.Reader, fileSize int64) (*model.UploadVocalResponse, error) {
 	takeID := uuid.New().String()
 
-	// Anahtar kullaniciyla oneklenir; istemci kimlikleri segment
-	// dogrulamasindan gecer. Mock yol da ayni dogrulamayi yapar.
+	// The key is prefixed with the user; client ids go through segment
+	// validation. The mock path does the same validation.
 	key, err := client.UserKey("vocals", userID, projectID, sectionID, takeID+".wav")
 	if err != nil {
 		return nil, err
@@ -48,8 +48,8 @@ func (s *UploadService) UploadVocal(ctx context.Context, userID, projectID, sect
 		return s.uploadMock(takeID, key)
 	}
 
-	// Upload to R2. Upload adresi de dondurur; ayrica URLFor cagirmak
-	// ikinci (bosa giden) bir imzalama demekti.
+	// Upload to R2. Upload also returns the URL; calling URLFor separately
+	// would have meant a second (wasted) signing.
 	fileURL, expiresAt, err := s.r2Client.Upload(ctx, key, file, "audio/wav")
 	if err != nil {
 		return nil, fmt.Errorf("vokal yuklenemedi: %w", err)
@@ -66,8 +66,8 @@ func (s *UploadService) UploadVocal(ctx context.Context, userID, projectID, sect
 	}, nil
 }
 
-// DeleteVocal, vokali deterministik anahtariyla siler. Eskiden anahtar
-// "vocals/*/<id>.wav" literal glob'uydu ve hicbir nesneyle eslesmiyordu.
+// DeleteVocal deletes the vocal by its deterministic key. The key used to be
+// the literal glob "vocals/*/<id>.wav", which matched no object.
 func (s *UploadService) DeleteVocal(ctx context.Context, userID, projectID, sectionID, takeID string) error {
 	key, err := client.UserKey("vocals", userID, projectID, sectionID, takeID+".wav")
 	if err != nil {
@@ -82,9 +82,9 @@ func (s *UploadService) DeleteVocal(ctx context.Context, userID, projectID, sect
 // GetSignedURL generates a presigned URL for temporary access to a file
 func (s *UploadService) GetSignedURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
 	if s.r2Client == nil {
-		// Mock: adres UnsignedURL ile uretilir ki KeyFromURL sonraki
-		// istekte (ornegin master isinde) bu adresi geri anahtara
-		// cozebilsin. Sabit cdn.makeasinger.com bilinmeyen bir konaktir.
+		// Mock: the URL is produced with UnsignedURL so that KeyFromURL can
+		// resolve it back to a key on a later request (e.g. in a master job).
+		// The fixed cdn.makeasinger.com is an unknown host.
 		return client.UnsignedURL(key, s.r2Cfg), nil
 	}
 
@@ -95,8 +95,8 @@ func (s *UploadService) GetSignedURL(ctx context.Context, key string, expiry tim
 func (s *UploadService) uploadMock(takeID, key string) (*model.UploadVocalResponse, error) {
 	return &model.UploadVocalResponse{
 		ID: takeID,
-		// UnsignedURL kullanilir: mock ciktisi da KeyFromURL ile
-		// cozulebilsin diye (bkz. export/master/render mock'lari).
+		// UnsignedURL is used so that the mock output can also be resolved with
+		// KeyFromURL (see the export/master/render mocks).
 		FileURL:    client.UnsignedURL(key, s.r2Cfg),
 		Duration:   32.5,
 		SampleRate: 44100,

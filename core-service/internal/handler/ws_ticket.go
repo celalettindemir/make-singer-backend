@@ -60,7 +60,7 @@ func (h *WSTicketHandler) Issue(c *fiber.Ctx) error {
 // reddetmek, HTTP durum kodu yerine kapanis cercevesi demek olurdu.
 func (h *WSTicketHandler) Gate(c *fiber.Ctx) error {
 	err := h.service.Redeem(c.Context(), c.Query("ticket"), c.Params("jobId"))
-	if errors.Is(err, service.ErrBiletGecersiz) {
+	if errors.Is(err, service.ErrInvalidTicket) {
 		return response.Unauthorized(c, "Gecersiz WebSocket bileti")
 	}
 	if err != nil {

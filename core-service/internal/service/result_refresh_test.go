@@ -14,30 +14,31 @@ import (
 	"github.com/makeasinger/api/internal/model"
 )
 
-// sahteDepo, her URLFor cagrisinda FARKLI bir adres uretir. Boylece
-// "saklanan adres mi donuyor, taze uretilen mi" sorusu kesin yanit alir.
-type sahteDepo struct {
-	cagri     int
-	yuklenen  []string
-	urlForCnt int
+// fakeStorage produces a DIFFERENT URL on every URLFor call. That way the
+// question "is the stored URL returned or a freshly generated one" gets a
+// definite answer.
+type fakeStorage struct {
+	calls       int
+	uploaded    []string
+	urlForCount int
 }
 
-func (d *sahteDepo) Upload(ctx context.Context, key string, body io.Reader, contentType string) (string, time.Time, error) {
-	d.yuklenen = append(d.yuklenen, key)
+func (d *fakeStorage) Upload(ctx context.Context, key string, body io.Reader, contentType string) (string, time.Time, error) {
+	d.uploaded = append(d.uploaded, key)
 	u, e, err := d.URLFor(ctx, key)
 	return u, e, err
 }
 
-func (d *sahteDepo) Delete(ctx context.Context, key string) error { return nil }
+func (d *fakeStorage) Delete(ctx context.Context, key string) error { return nil }
 
-func (d *sahteDepo) GetSignedURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
+func (d *fakeStorage) GetSignedURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
 	return "", nil
 }
 
-func (d *sahteDepo) URLFor(ctx context.Context, key string) (string, time.Time, error) {
-	d.cagri++
-	d.urlForCnt++
-	return fmt.Sprintf("https://makeasinger-private.hesap123.r2.cloudflarestorage.com/%s?X-Amz-Signature=taze%d", key, d.cagri),
+func (d *fakeStorage) URLFor(ctx context.Context, key string) (string, time.Time, error) {
+	d.calls++
+	d.urlForCount++
+	return fmt.Sprintf("https://makeasinger-private.hesap123.r2.cloudflarestorage.com/%s?X-Amz-Signature=taze%d", key, d.calls),
 		time.Now().Add(time.Hour), nil
 }
 
@@ -51,33 +52,33 @@ func testR2Cfg() *config.R2Config {
 	}
 }
 
-// eskiKayit, hatali surumun Redis'e yazdigi kaydi taklit eder: icinde
-// donmus bir imzali URL ve GECMISTE kalan bir expiresAt vardir. Yeni
-// kod fileKey'i okuyup adresi yeniden uretmeli, bu olu adresi degil.
-func eskiKayitBytes(t *testing.T) []byte {
+// staleRecordBytes imitates the record a faulty version wrote to Redis: it
+// holds a frozen signed URL and an expiresAt left in the PAST. The new code
+// must read fileKey and regenerate the URL, not use this dead URL.
+func staleRecordBytes(t *testing.T) []byte {
 	t.Helper()
-	gecmis := time.Now().Add(-3 * time.Hour)
-	ham := map[string]any{
+	past := time.Now().Add(-3 * time.Hour)
+	raw := map[string]any{
 		"fileKey":   "masters/p1/m1.wav",
 		"fileUrl":   "https://makeasinger-private.hesap123.r2.cloudflarestorage.com/masters/p1/m1.wav?X-Amz-Signature=DONMUS",
-		"expiresAt": gecmis.Format(time.RFC3339Nano),
+		"expiresAt": past.Format(time.RFC3339Nano),
 		"duration":  180.5,
 		"profile":   "clean",
 		"peakDb":    -0.3,
 		"lufs":      -14,
 	}
-	b, err := json.Marshal(ham)
+	data, err := json.Marshal(raw)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	return b
+	return data
 }
 
-func TestMasterService_BuildResult_AdresHerOkumadaTazelenir(t *testing.T) {
-	depo := &sahteDepo{}
-	s := NewMasterService(nil, nil, depo, testR2Cfg())
+func TestMasterService_BuildResultRefreshesURLOnEveryRead(t *testing.T) {
+	storage := &fakeStorage{}
+	s := NewMasterService(nil, nil, storage, testR2Cfg())
 
-	resp, err := s.BuildResult(context.Background(), eskiKayitBytes(t))
+	resp, err := s.BuildResult(context.Background(), staleRecordBytes(t))
 	if err != nil {
 		t.Fatalf("BuildResult: %v", err)
 	}
@@ -95,8 +96,8 @@ func TestMasterService_BuildResult_AdresHerOkumadaTazelenir(t *testing.T) {
 		t.Errorf("olcumler kayboldu: %+v", resp)
 	}
 
-	// Ikinci okuma yine YENI bir adres uretmeli.
-	resp2, err := s.BuildResult(context.Background(), eskiKayitBytes(t))
+	// The second read must again produce a NEW URL.
+	resp2, err := s.BuildResult(context.Background(), staleRecordBytes(t))
 	if err != nil {
 		t.Fatalf("ikinci BuildResult: %v", err)
 	}
@@ -105,16 +106,16 @@ func TestMasterService_BuildResult_AdresHerOkumadaTazelenir(t *testing.T) {
 	}
 }
 
-func TestMasterService_BuildResult_AnahtarsizKayitHata(t *testing.T) {
-	s := NewMasterService(nil, nil, &sahteDepo{}, testR2Cfg())
+func TestMasterService_BuildResultFailsWithoutKey(t *testing.T) {
+	s := NewMasterService(nil, nil, &fakeStorage{}, testR2Cfg())
 	if _, err := s.BuildResult(context.Background(), []byte(`{"duration":1}`)); err == nil {
 		t.Error("anahtarsiz kayit icin hata bekleniyordu")
 	}
 }
 
-func TestRenderService_BuildResult_StemAdresleriTazelenir(t *testing.T) {
-	depo := &sahteDepo{}
-	s := NewRenderService(nil, nil, depo, testR2Cfg())
+func TestRenderService_BuildResultRefreshesStemURLs(t *testing.T) {
+	storage := &fakeStorage{}
+	s := NewRenderService(nil, nil, storage, testR2Cfg())
 
 	record := &model.RenderResultRecord{
 		ID:  "r1",
@@ -147,26 +148,26 @@ func TestRenderService_BuildResult_StemAdresleriTazelenir(t *testing.T) {
 	}
 }
 
-// TestRenderService_BuildResult_SaklananJSONdaImzaliURLYok: kayit
-// serilestirildiginde icinde imzali adres BULUNMAMALI.
-func TestRenderService_BuildResult_KayittaImzaYok(t *testing.T) {
+// TestRenderService_BuildResultRecordHasNoSignature: when the record is
+// serialized it must NOT contain a signed URL.
+func TestRenderService_BuildResultRecordHasNoSignature(t *testing.T) {
 	record := &model.RenderResultRecord{
 		Stems: []model.StemResultRecord{{ID: "s1", FileKey: "stems/p1/s1.wav"}},
 	}
-	b, err := json.Marshal(record)
+	data, err := json.Marshal(record)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if got := string(b); strings.Contains(got, "X-Amz-Signature") || strings.Contains(got, "fileUrl") {
+	if got := string(data); strings.Contains(got, "X-Amz-Signature") || strings.Contains(got, "fileUrl") {
 		t.Errorf("kayitta imzali adres var: %s", got)
 	}
 }
 
-// TestUploadService_TekImzalama: Upload zaten adresi donduruyor; ayrica
-// URLFor cagrilmasi ikinci (bosa giden) bir imzalama demekti.
-func TestUploadService_TekImzalama(t *testing.T) {
-	depo := &sahteDepo{}
-	s := NewUploadService(depo, &config.R2Config{})
+// TestUploadService_SignsOnce: Upload already returns the URL; calling
+// URLFor separately would have meant a second (wasted) signing.
+func TestUploadService_SignsOnce(t *testing.T) {
+	storage := &fakeStorage{}
+	s := NewUploadService(storage, &config.R2Config{})
 
 	resp, err := s.UploadVocal(context.Background(), "kullanici-a", "p1", "s1", "take1", nil, 0)
 	if err != nil {
@@ -175,21 +176,20 @@ func TestUploadService_TekImzalama(t *testing.T) {
 	if resp.FileURL == "" {
 		t.Fatal("adres bos")
 	}
-	if depo.urlForCnt != 1 {
-		t.Errorf("URLFor %d kez cagrildi, 1 bekleniyordu (Upload icindeki tek imzalama)", depo.urlForCnt)
+	if storage.urlForCount != 1 {
+		t.Errorf("URLFor %d kez cagrildi, 1 bekleniyordu (Upload icindeki tek imzalama)", storage.urlForCount)
 	}
 	if resp.ExpiresAt == nil {
 		t.Error("private vokal icin expiresAt bekleniyordu")
 	}
 }
 
-// TestUploadService_MockAdresi_KeyFromURLIleCozulur, r2Client
-// yapilandirilmamisken (mock yol) UploadVocal'in urettigi adresin
-// KeyFromURL ile geri anahtara cozulebildigini dogrular. Eskiden bu
-// adres sabit "https://cdn.makeasinger.com/..." idi ve bilinmeyen bir
-// konak oldugu icin sonraki bir master isteginde KeyFromURL hata
-// veriyordu ("taninmayan konak").
-func TestUploadService_MockAdresi_KeyFromURLIleCozulur(t *testing.T) {
+// TestUploadService_MockURLResolvesWithKeyFromURL verifies that, while
+// r2Client is not configured (mock path), the URL UploadVocal produces can be
+// resolved back to a key with KeyFromURL. This URL used to be the fixed
+// "https://cdn.makeasinger.com/..." and, being an unknown host, KeyFromURL
+// failed on a later master request ("unknown host").
+func TestUploadService_MockURLResolvesWithKeyFromURL(t *testing.T) {
 	r2Cfg := &config.R2Config{
 		PrivateBucket: "makeasinger-private",
 		AccountID:     "hesap123",
@@ -201,28 +201,27 @@ func TestUploadService_MockAdresi_KeyFromURLIleCozulur(t *testing.T) {
 		t.Fatalf("UploadVocal: %v", err)
 	}
 
-	beklenenAnahtar := fmt.Sprintf("vocals/kullanici-a/p1/s1/%s.wav", resp.ID)
+	wantKey := fmt.Sprintf("vocals/kullanici-a/p1/s1/%s.wav", resp.ID)
 	gotKey, err := client.KeyFromURL(resp.FileURL, r2Cfg)
 	if err != nil {
 		t.Fatalf("mock adresi KeyFromURL ile cozulemedi: %v (adres: %s)", err, resp.FileURL)
 	}
-	if gotKey != beklenenAnahtar {
-		t.Errorf("cozulen anahtar = %q, beklenen %q", gotKey, beklenenAnahtar)
+	if gotKey != wantKey {
+		t.Errorf("cozulen anahtar = %q, beklenen %q", gotKey, wantKey)
 	}
 }
 
-// TestUploadService_GetSignedURLMock_KeyFromURLIleCozulur,
-// GetSignedURL'in mock yolunun da ayni kurallarla cozulebilen bir adres
-// urettigini dogrular.
-func TestUploadService_GetSignedURLMock_KeyFromURLIleCozulur(t *testing.T) {
+// TestUploadService_GetSignedURLMockResolvesWithKeyFromURL verifies that the
+// mock path of GetSignedURL also produces a URL that resolves under the same rules.
+func TestUploadService_GetSignedURLMockResolvesWithKeyFromURL(t *testing.T) {
 	r2Cfg := &config.R2Config{
 		PrivateBucket: "makeasinger-private",
 		AccountID:     "hesap123",
 	}
 	s := NewUploadService(nil, r2Cfg)
 
-	anahtar := "vocals/p1/take1.wav"
-	url, err := s.GetSignedURL(context.Background(), anahtar, time.Hour)
+	key := "vocals/p1/take1.wav"
+	url, err := s.GetSignedURL(context.Background(), key, time.Hour)
 	if err != nil {
 		t.Fatalf("GetSignedURL: %v", err)
 	}
@@ -231,13 +230,13 @@ func TestUploadService_GetSignedURLMock_KeyFromURLIleCozulur(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mock adresi KeyFromURL ile cozulemedi: %v (adres: %s)", err, url)
 	}
-	if gotKey != anahtar {
-		t.Errorf("cozulen anahtar = %q, beklenen %q", gotKey, anahtar)
+	if gotKey != key {
+		t.Errorf("cozulen anahtar = %q, beklenen %q", gotKey, key)
 	}
 }
 
-func TestRenderService_BuildResultStemModunuTasir(t *testing.T) {
-	s := NewRenderService(nil, nil, &sahteDepo{}, testR2Cfg())
+func TestRenderService_BuildResultCarriesStemMode(t *testing.T) {
+	s := NewRenderService(nil, nil, &fakeStorage{}, testR2Cfg())
 	record := &model.RenderResultRecord{
 		StemMode: model.StemModeMix,
 		Stems:    []model.StemResultRecord{{ID: "s1", Instrument: model.InstrumentMix, FileKey: "stems/kullanici-a/p1/s1.mp3"}},
