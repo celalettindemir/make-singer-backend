@@ -57,22 +57,22 @@ func TestAccountService_DeleteRemovesAllAndSchedulesCleanup(t *testing.T) {
 	ident, deleter, queue := &fakeIdentity{}, &fakeDeleter{}, &fakeQueue{}
 	svc := NewAccountService(ident, deleter, unreachableRedis(), queue, nil)
 	if err := svc.Delete(context.Background(), accountID); err != nil {
-		t.Fatalf("beklenmeyen hata: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if !slices.Equal(ident.deleted, []string{accountID}) {
-		t.Fatalf("kimlik silinen = %v", ident.deleted)
+		t.Fatalf("deleted ID = %v", ident.deleted)
 	}
 	if len(deleter.prefixes) != 5 {
-		t.Fatalf("5 onek bekleniyordu, gelen %v", deleter.prefixes)
+		t.Fatalf("expected 5 prefixes, got %v", deleter.prefixes)
 	}
 	if len(queue.tasks) != 1 || queue.tasks[0].Type() != TaskTypeAccountCleanup {
-		t.Fatalf("ikinci temizlik gorevi kurulmadi: %v", queue.tasks)
+		t.Fatalf("the second cleanup task was not set up: %v", queue.tasks)
 	}
 	var p struct {
 		UserID string `json:"userId"`
 	}
 	if err := json.Unmarshal(queue.tasks[0].Payload(), &p); err != nil || p.UserID != accountID {
-		t.Fatalf("gorev yuku = %s", queue.tasks[0].Payload())
+		t.Fatalf("task payload = %s", queue.tasks[0].Payload())
 	}
 }
 
@@ -80,31 +80,31 @@ func TestAccountService_DeleteMissingIdentityIsNotFound(t *testing.T) {
 	ident, deleter, queue := &fakeIdentity{err: identity.ErrUserNotFound}, &fakeDeleter{}, &fakeQueue{}
 	err := NewAccountService(ident, deleter, unreachableRedis(), queue, nil).Delete(context.Background(), accountID)
 	if !errors.Is(err, ErrAccountNotFound) {
-		t.Fatalf("ErrHesapYok bekleniyordu, gelen %v", err)
+		t.Fatalf("want ErrAccountNotFound, got %v", err)
 	}
 	if len(deleter.prefixes) != 0 || len(queue.tasks) != 0 {
-		t.Fatal("kimlik silinmeden R2'ye dokunulmamali")
+		t.Fatal("R2 must not be touched before the identity is deleted")
 	}
 }
 
 func TestAccountService_DeleteIdentityErrorLeavesR2Untouched(t *testing.T) {
-	ident, deleter, queue := &fakeIdentity{err: errors.New("pg kapali")}, &fakeDeleter{}, &fakeQueue{}
+	ident, deleter, queue := &fakeIdentity{err: errors.New("pg is down")}, &fakeDeleter{}, &fakeQueue{}
 	err := NewAccountService(ident, deleter, unreachableRedis(), queue, nil).Delete(context.Background(), accountID)
 	if err == nil || errors.Is(err, ErrAccountNotFound) {
-		t.Fatalf("genel hata bekleniyordu, gelen %v", err)
+		t.Fatalf("want a generic error, got %v", err)
 	}
 	if len(deleter.prefixes) != 0 || len(queue.tasks) != 0 {
-		t.Fatal("kimlik silinmeden R2'ye dokunulmamali")
+		t.Fatal("R2 must not be touched before the identity is deleted")
 	}
 }
 
 func TestAccountService_DeleteR2ErrorDoesNotFailRequest(t *testing.T) {
-	ident, deleter, queue := &fakeIdentity{}, &fakeDeleter{err: errors.New("r2 kapali")}, &fakeQueue{}
+	ident, deleter, queue := &fakeIdentity{}, &fakeDeleter{err: errors.New("r2 is down")}, &fakeQueue{}
 	if err := NewAccountService(ident, deleter, unreachableRedis(), queue, nil).Delete(context.Background(), accountID); err != nil {
-		t.Fatalf("hesap silindikten sonra hata donmemeli: %v", err)
+		t.Fatalf("no error must be returned after the account is deleted: %v", err)
 	}
 	if len(queue.tasks) != 1 {
-		t.Fatal("R2 hatasinda ikinci temizlik yine kurulmali")
+		t.Fatal("the second cleanup must still be set up on an R2 error")
 	}
 }
 
@@ -112,14 +112,14 @@ func TestAccountService_DeleteInvalidIDDeletesNothing(t *testing.T) {
 	ident, deleter, queue := &fakeIdentity{}, &fakeDeleter{}, &fakeQueue{}
 	err := NewAccountService(ident, deleter, unreachableRedis(), queue, nil).Delete(context.Background(), "../x")
 	if !errors.Is(err, ErrAccountNotFound) || len(ident.deleted) != 0 {
-		t.Fatalf("gecersiz id silinmemeli: err=%v silinen=%v", err, ident.deleted)
+		t.Fatalf("an invalid id must not be deleted: err=%v deleted=%v", err, ident.deleted)
 	}
 }
 
 func TestAccountService_CleanupWithoutR2NoError(t *testing.T) {
 	svc := NewAccountService(&fakeIdentity{}, nil, unreachableRedis(), &fakeQueue{}, nil)
 	if err := svc.Cleanup(context.Background(), accountID); err != nil {
-		t.Fatalf("R2 yokken temizlik no-op olmali: %v", err)
+		t.Fatalf("cleanup must be a no-op without R2: %v", err)
 	}
 }
 
@@ -129,11 +129,11 @@ func TestAccountService_DeleteMarkLives24Hours(t *testing.T) {
 	rdb := liveRedis(t)
 	svc := NewAccountService(&fakeIdentity{}, &fakeDeleter{}, rdb, &fakeQueue{}, nil)
 	if err := svc.Delete(context.Background(), accountID); err != nil {
-		t.Fatalf("beklenmeyen hata: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	ttl, err := rdb.TTL(context.Background(), deletionmark.Key(accountID)).Result()
 	if err != nil || ttl <= 23*time.Hour || ttl > 24*time.Hour {
-		t.Fatalf("isaret TTL = %v (err %v), ~24 saat bekleniyordu", ttl, err)
+		t.Fatalf("marker TTL = %v (err %v), want ~24 hours", ttl, err)
 	}
 }
 
@@ -142,10 +142,10 @@ func TestAccountService_DeleteMarkLives24Hours(t *testing.T) {
 func TestAccountService_DeleteSchedulesCleanupOneHourLater(t *testing.T) {
 	queue := &fakeQueue{}
 	if err := NewAccountService(&fakeIdentity{}, &fakeDeleter{}, unreachableRedis(), queue, nil).Delete(context.Background(), accountID); err != nil {
-		t.Fatalf("beklenmeyen hata: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(queue.options) != 1 {
-		t.Fatalf("tek gorev bekleniyordu: %d", len(queue.options))
+		t.Fatalf("expected a single task: %d", len(queue.options))
 	}
 	var delay time.Duration
 	for _, o := range queue.options[0] {
@@ -154,6 +154,6 @@ func TestAccountService_DeleteSchedulesCleanupOneHourLater(t *testing.T) {
 		}
 	}
 	if delay != time.Hour {
-		t.Fatalf("gecikme = %v, 1 saat bekleniyordu", delay)
+		t.Fatalf("delay = %v, want 1 hour", delay)
 	}
 }

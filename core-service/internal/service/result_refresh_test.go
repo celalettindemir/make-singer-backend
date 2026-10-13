@@ -84,32 +84,32 @@ func TestMasterService_BuildResultRefreshesURLOnEveryRead(t *testing.T) {
 	}
 
 	if resp.FileURL == "" || resp.FileURL == "https://makeasinger-private.hesap123.r2.cloudflarestorage.com/masters/p1/m1.wav?X-Amz-Signature=DONMUS" {
-		t.Fatalf("saklanan donmus adres dondu: %q", resp.FileURL)
+		t.Fatalf("the stored frozen URL was returned: %q", resp.FileURL)
 	}
 	if resp.ExpiresAt == nil {
 		t.Fatal("ExpiresAt nil")
 	}
 	if !resp.ExpiresAt.After(time.Now()) {
-		t.Errorf("ExpiresAt gecmiste: %v (saklanan deger dondurulmus olabilir)", resp.ExpiresAt)
+		t.Errorf("ExpiresAt is in the past: %v (the stored value may have been frozen)", resp.ExpiresAt)
 	}
 	if resp.Duration != 180.5 || resp.LUFS != -14 {
-		t.Errorf("olcumler kayboldu: %+v", resp)
+		t.Errorf("the measurements were lost: %+v", resp)
 	}
 
 	// The second read must again produce a NEW URL.
 	resp2, err := s.BuildResult(context.Background(), staleRecordBytes(t))
 	if err != nil {
-		t.Fatalf("ikinci BuildResult: %v", err)
+		t.Fatalf("second BuildResult: %v", err)
 	}
 	if resp2.FileURL == resp.FileURL {
-		t.Errorf("ikinci okumada ayni adres dondu, imzalama tekrarlanmamis: %q", resp2.FileURL)
+		t.Errorf("the same URL was returned on the second read, the signing was not repeated: %q", resp2.FileURL)
 	}
 }
 
 func TestMasterService_BuildResultFailsWithoutKey(t *testing.T) {
 	s := NewMasterService(nil, nil, &fakeStorage{}, testR2Cfg())
 	if _, err := s.BuildResult(context.Background(), []byte(`{"duration":1}`)); err == nil {
-		t.Error("anahtarsiz kayit icin hata bekleniyordu")
+		t.Error("an error was expected for a record without a key")
 	}
 }
 
@@ -130,21 +130,21 @@ func TestRenderService_BuildResultRefreshesStemURLs(t *testing.T) {
 		t.Fatalf("BuildResult: %v", err)
 	}
 	if len(resp.Stems) != 1 {
-		t.Fatalf("stem sayisi = %d", len(resp.Stems))
+		t.Fatalf("stem count = %d", len(resp.Stems))
 	}
 	if resp.Stems[0].FileURL == "" {
-		t.Fatal("stem adresi bos")
+		t.Fatal("stem URL is empty")
 	}
 	if resp.Stems[0].ExpiresAt == nil || !resp.Stems[0].ExpiresAt.After(time.Now()) {
-		t.Errorf("stem expiresAt taze degil: %v", resp.Stems[0].ExpiresAt)
+		t.Errorf("stem expiresAt is not fresh: %v", resp.Stems[0].ExpiresAt)
 	}
 
 	resp2, err := s.BuildResult(context.Background(), record)
 	if err != nil {
-		t.Fatalf("ikinci BuildResult: %v", err)
+		t.Fatalf("second BuildResult: %v", err)
 	}
 	if resp2.Stems[0].FileURL == resp.Stems[0].FileURL {
-		t.Errorf("stem adresi tekrar uretilmemis: %q", resp2.Stems[0].FileURL)
+		t.Errorf("the stem URL was not regenerated: %q", resp2.Stems[0].FileURL)
 	}
 }
 
@@ -159,7 +159,7 @@ func TestRenderService_BuildResultRecordHasNoSignature(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	if got := string(data); strings.Contains(got, "X-Amz-Signature") || strings.Contains(got, "fileUrl") {
-		t.Errorf("kayitta imzali adres var: %s", got)
+		t.Errorf("the record has a signed URL: %s", got)
 	}
 }
 
@@ -174,13 +174,13 @@ func TestUploadService_SignsOnce(t *testing.T) {
 		t.Fatalf("UploadVocal: %v", err)
 	}
 	if resp.FileURL == "" {
-		t.Fatal("adres bos")
+		t.Fatal("URL is empty")
 	}
 	if storage.urlForCount != 1 {
-		t.Errorf("URLFor %d kez cagrildi, 1 bekleniyordu (Upload icindeki tek imzalama)", storage.urlForCount)
+		t.Errorf("URLFor was called %d times, want 1 (the single signing inside Upload)", storage.urlForCount)
 	}
 	if resp.ExpiresAt == nil {
-		t.Error("private vokal icin expiresAt bekleniyordu")
+		t.Error("expiresAt expected for a private vocal")
 	}
 }
 
@@ -204,10 +204,10 @@ func TestUploadService_MockURLResolvesWithKeyFromURL(t *testing.T) {
 	wantKey := fmt.Sprintf("vocals/kullanici-a/p1/s1/%s.wav", resp.ID)
 	gotKey, err := client.KeyFromURL(resp.FileURL, r2Cfg)
 	if err != nil {
-		t.Fatalf("mock adresi KeyFromURL ile cozulemedi: %v (adres: %s)", err, resp.FileURL)
+		t.Fatalf("could not resolve the mock URL with KeyFromURL: %v (URL: %s)", err, resp.FileURL)
 	}
 	if gotKey != wantKey {
-		t.Errorf("cozulen anahtar = %q, beklenen %q", gotKey, wantKey)
+		t.Errorf("resolved key = %q, want %q", gotKey, wantKey)
 	}
 }
 
@@ -228,10 +228,10 @@ func TestUploadService_GetSignedURLMockResolvesWithKeyFromURL(t *testing.T) {
 
 	gotKey, err := client.KeyFromURL(url, r2Cfg)
 	if err != nil {
-		t.Fatalf("mock adresi KeyFromURL ile cozulemedi: %v (adres: %s)", err, url)
+		t.Fatalf("could not resolve the mock URL with KeyFromURL: %v (URL: %s)", err, url)
 	}
 	if gotKey != key {
-		t.Errorf("cozulen anahtar = %q, beklenen %q", gotKey, key)
+		t.Errorf("resolved key = %q, want %q", gotKey, key)
 	}
 }
 
@@ -246,6 +246,6 @@ func TestRenderService_BuildResultCarriesStemMode(t *testing.T) {
 		t.Fatalf("BuildResult: %v", err)
 	}
 	if resp.StemMode != model.StemModeMix {
-		t.Errorf("yanit stemMode = %q", resp.StemMode)
+		t.Errorf("response stemMode = %q", resp.StemMode)
 	}
 }

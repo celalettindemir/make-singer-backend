@@ -105,16 +105,16 @@ func (s *Service) StartCover(ctx context.Context, userID, pubID string) (*CoverS
 	for _, stem := range sourceStems {
 		dest, err := CoverStemDestKey(id, folder, stem.ID, stem.Key)
 		if err != nil {
-			return nil, fmt.Errorf("cover stem anahtari kurulamadi: %w", err)
+			return nil, fmt.Errorf("could not build the cover stem key: %w", err)
 		}
 		if s.copier != nil {
 			if err := s.copier.Copy(ctx, stem.Key, dest); err != nil {
-				return nil, fmt.Errorf("cover stem kopyalanamadi: %w", err)
+				return nil, fmt.Errorf("could not copy the cover stem: %w", err)
 			}
 		}
 		url, _, err := client.ResolveURL(ctx, s.storage, s.r2, dest)
 		if err != nil {
-			return nil, fmt.Errorf("cover stem adresi uretilemedi: %w", err)
+			return nil, fmt.Errorf("could not generate the cover stem URL: %w", err)
 		}
 		stems = append(stems, CoverStem{ID: stem.ID, Instrument: stem.Instrument, FileURL: url, Duration: stem.Duration})
 	}

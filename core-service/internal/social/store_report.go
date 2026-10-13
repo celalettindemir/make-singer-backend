@@ -18,7 +18,7 @@ func (s *PostgresStore) InsertReport(ctx context.Context, report ReportInsert) e
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (bildiren_id, hedef_turu, hedef_id) DO NOTHING`,
 		report.ID, report.ReporterID, report.TargetType, report.TargetID, report.PublicationID, report.Reason, report.Description); err != nil {
-		return fmt.Errorf("sikayet eklenemedi: %w", err)
+		return fmt.Errorf("could not add the report: %w", err)
 	}
 	return nil
 }

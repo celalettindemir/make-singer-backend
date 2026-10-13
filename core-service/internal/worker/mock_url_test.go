@@ -33,10 +33,10 @@ func TestMasterWorker_MockOutputResolvable(t *testing.T) {
 		t.Fatalf("generateMockRecord: %v", err)
 	}
 	if record.FileKey == "" {
-		t.Fatal("mock kayitta nesne anahtari yok")
+		t.Fatal("the mock record has no object key")
 	}
 	if !strings.HasPrefix(record.FileKey, "masters/kullanici-a/p1/") {
-		t.Errorf("mock anahtar = %q, masters/ onekli olmali", record.FileKey)
+		t.Errorf("mock key = %q, it must have the masters/ prefix", record.FileKey)
 	}
 
 	url, _, err := client.ResolveURL(context.Background(), nil, cfg, record.FileKey)
@@ -45,10 +45,10 @@ func TestMasterWorker_MockOutputResolvable(t *testing.T) {
 	}
 	got, err := client.KeyFromURL(url, cfg)
 	if err != nil {
-		t.Fatalf("mock adres cozulemedi (%q): %v", url, err)
+		t.Fatalf("could not resolve the mock URL (%q): %v", url, err)
 	}
 	if got != record.FileKey {
-		t.Errorf("gidis donus bozuk: %q -> %q", record.FileKey, got)
+		t.Errorf("round trip is broken: %q -> %q", record.FileKey, got)
 	}
 }
 
@@ -65,11 +65,11 @@ func TestRenderWorker_MockStemURLResolvable(t *testing.T) {
 		t.Fatalf("generateMockResult: %v", err)
 	}
 	if len(record.Stems) != 1 {
-		t.Fatalf("stem sayisi = %d", len(record.Stems))
+		t.Fatalf("stem count = %d", len(record.Stems))
 	}
 	key := record.Stems[0].FileKey
 	if !strings.HasPrefix(key, "stems/kullanici-a/p1/") {
-		t.Fatalf("mock stem anahtari = %q", key)
+		t.Fatalf("mock stem key = %q", key)
 	}
 
 	url, _, err := client.ResolveURL(context.Background(), nil, cfg, key)
@@ -77,7 +77,7 @@ func TestRenderWorker_MockStemURLResolvable(t *testing.T) {
 		t.Fatalf("ResolveURL: %v", err)
 	}
 	if got, err := client.KeyFromURL(url, cfg); err != nil || got != key {
-		t.Errorf("mock stem adresi cozulemedi: url=%q got=%q err=%v", url, got, err)
+		t.Errorf("could not resolve the mock stem URL: url=%q got=%q err=%v", url, got, err)
 	}
 }
 
@@ -90,7 +90,7 @@ func TestMasterWorker_BuildMixSettingsCarriesNoURL(t *testing.T) {
 	payload := &model.MasterJobPayload{StemURLs: []string{signed}}
 	settings := w.buildMixSettings(payload)
 	if len(settings) != 1 {
-		t.Fatalf("kanal sayisi = %d", len(settings))
+		t.Fatalf("channel count = %d", len(settings))
 	}
 
 	b, err := json.Marshal(settings)
@@ -99,7 +99,7 @@ func TestMasterWorker_BuildMixSettingsCarriesNoURL(t *testing.T) {
 	}
 	body := string(b)
 	if strings.Contains(body, "X-Amz-Signature") || strings.Contains(body, "stem_url") || strings.Contains(body, "GIZLI") {
-		t.Errorf("mix ayarlarinda adres/imza var: %s", body)
+		t.Errorf("the mix settings have a URL/signature: %s", body)
 	}
 }
 
@@ -128,11 +128,11 @@ func TestRenderWorker_MockModes(t *testing.T) {
 			got = append(got, s.Instrument)
 		}
 		if len(got) != len(d.want) {
-			t.Fatalf("%q: stemler = %v, beklenen %v", d.mode, got, d.want)
+			t.Fatalf("%q: stems = %v, want %v", d.mode, got, d.want)
 		}
 		for i := range got {
 			if got[i] != d.want[i] {
-				t.Errorf("%q: stemler = %v, beklenen %v", d.mode, got, d.want)
+				t.Errorf("%q: stems = %v, want %v", d.mode, got, d.want)
 			}
 		}
 	}

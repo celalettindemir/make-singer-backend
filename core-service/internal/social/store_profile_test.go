@@ -14,25 +14,25 @@ func TestPostgresStore_UpsertAndGetProfile(t *testing.T) {
 	id := uuid.NewString()
 
 	if _, err := store.GetProfile(ctx, id); !errors.Is(err, ErrNoProfile) {
-		t.Fatalf("profil yokken ErrProfilYok bekleniyordu: %v", err)
+		t.Fatalf("want ErrNoProfile when there is no profile: %v", err)
 	}
 	rec, err := store.UpsertProfile(ctx, ProfileRecord{UserID: id, Username: "ali", DisplayName: "Ali", Bio: "b"})
 	if err != nil || rec.Username != "ali" || rec.CreatedAt.IsZero() {
-		t.Fatalf("kaydet = %+v, %v", rec, err)
+		t.Fatalf("save = %+v, %v", rec, err)
 	}
 	// The second write updates (PUT both creates and updates).
 	if _, err := store.UpsertProfile(ctx, ProfileRecord{UserID: id, Username: "ali2", DisplayName: "Ali Veli", Bio: ""}); err != nil {
-		t.Fatalf("guncelle: %v", err)
+		t.Fatalf("update: %v", err)
 	}
 	rec, err = store.GetProfile(ctx, id)
 	if err != nil || rec.Username != "ali2" || rec.DisplayName != "Ali Veli" || rec.Bio != "" {
-		t.Fatalf("getir = %+v, %v", rec, err)
+		t.Fatalf("get = %+v, %v", rec, err)
 	}
 	if _, err := store.GetProfileByUsername(ctx, "ali"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("eski ad bulunmamali: %v", err)
+		t.Fatalf("the old username must not be found: %v", err)
 	}
 	if rec, err := store.GetProfileByUsername(ctx, "ali2"); err != nil || rec.UserID != id {
-		t.Fatalf("adla getir = %+v, %v", rec, err)
+		t.Fatalf("get by username = %+v, %v", rec, err)
 	}
 }
 
@@ -43,14 +43,14 @@ func TestPostgresStore_UsernameTaken(t *testing.T) {
 	testInsertProfile(t, store, a, "ayse")
 	_, err := store.UpsertProfile(ctx, ProfileRecord{UserID: b, Username: "ayse", DisplayName: "Ayse"})
 	if !errors.Is(err, ErrUsernameTaken) {
-		t.Fatalf("ErrKullaniciAdiAlinmis bekleniyordu: %v", err)
+		t.Fatalf("want ErrUsernameTaken: %v", err)
 	}
 	owners, err := store.UsernameOwners(ctx, []string{"ayse", "ayse2", "yok"})
 	if err != nil || len(owners) != 1 || owners["ayse"] != a {
-		t.Fatalf("AdSahipleri = %v, %v", owners, err)
+		t.Fatalf("UsernameOwners = %v, %v", owners, err)
 	}
 	if empty, err := store.UsernameOwners(ctx, nil); err != nil || len(empty) != 0 {
-		t.Fatalf("bos liste = %v, %v", empty, err)
+		t.Fatalf("empty list = %v, %v", empty, err)
 	}
 }
 
@@ -78,9 +78,9 @@ func TestPostgresStore_ProfileCounts(t *testing.T) {
 		cover        int
 		followedByMe bool
 	}{
-		{"sahip", owner, 3, 1, false},
-		{"takipci", follower, 2, 1, true},
-		{"yabanci", stranger, 1, 1, false},
+		{"owner", owner, 3, 1, false},
+		{"follower", follower, 2, 1, true},
+		{"stranger", stranger, 1, 1, false},
 	}
 	for _, tc := range cases {
 		s, err := store.ProfileCounts(ctx, owner, tc.viewer)
@@ -91,7 +91,7 @@ func TestPostgresStore_ProfileCounts(t *testing.T) {
 			t.Errorf("%s: %+v", tc.name, s)
 		}
 		if s.Stats.Followers != 1 || s.Stats.Following != 1 {
-			t.Errorf("%s takip sayaclari: %+v", tc.name, s.Stats)
+			t.Errorf("%s follow counters: %+v", tc.name, s.Stats)
 		}
 	}
 }

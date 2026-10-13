@@ -46,7 +46,7 @@ type selectiveDeleter struct {
 func (s *selectiveDeleter) DeletePrefix(_ context.Context, prefix string) (int, error) {
 	s.prefixes = append(s.prefixes, prefix)
 	if s.failPrefix != "" && strings.HasPrefix(prefix, s.failPrefix) {
-		return 0, errors.New("r2 kapali")
+		return 0, errors.New("r2 is down")
 	}
 	return 1, nil
 }
@@ -61,19 +61,19 @@ func TestAccountService_DeleteRemovesSocialPrefixesAndRows(t *testing.T) {
 	social := &fakeSocialCleaner{ids: []string{socialPub1, socialPub2}, deleter: deleter}
 	svc := NewAccountService(&fakeIdentity{}, deleter, unreachableRedis(), &fakeQueue{}, social)
 	if err := svc.Delete(context.Background(), accountID); err != nil {
-		t.Fatalf("beklenmeyen hata: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(deleter.prefixes) != 7 {
-		t.Fatalf("5 kullanici + 2 sosyal onek bekleniyordu: %v", deleter.prefixes)
+		t.Fatalf("expected 5 user + 2 social prefixes: %v", deleter.prefixes)
 	}
 	if !slices.Equal(deleter.prefixes[5:], []string{"sosyal/" + socialPub1 + "/", "sosyal/" + socialPub2 + "/"}) {
-		t.Fatalf("sosyal onekler = %v", deleter.prefixes[5:])
+		t.Fatalf("social prefixes = %v", deleter.prefixes[5:])
 	}
 	if !slices.Equal(social.deleted, []string{accountID}) {
-		t.Fatalf("sosyal satirlar silinmeli: %v", social.deleted)
+		t.Fatalf("social rows must be deleted: %v", social.deleted)
 	}
 	if !slices.Equal(social.tracesDeleted, []string{accountID}) || social.prefixCountAtTraces != 5 {
-		t.Fatalf("izler sosyal onek dongusunden once silinmeli: %v, onek %d", social.tracesDeleted, social.prefixCountAtTraces)
+		t.Fatalf("traces must be deleted before the social prefix loop: %v, prefix %d", social.tracesDeleted, social.prefixCountAtTraces)
 	}
 }
 
@@ -84,42 +84,42 @@ func TestAccountService_CleanupDeletesProfileDespiteR2Error(t *testing.T) {
 	social := &fakeSocialCleaner{ids: []string{socialPub1, socialPub2}, deleter: deleter}
 	svc := NewAccountService(&fakeIdentity{}, deleter, unreachableRedis(), &fakeQueue{}, social)
 	if err := svc.Cleanup(context.Background(), accountID); err == nil {
-		t.Fatal("R2 hatasi donmeli")
+		t.Fatal("an R2 error must be returned")
 	}
 	if !slices.Equal(social.tracesDeleted, []string{accountID}) || social.prefixCountAtTraces != 5 {
-		t.Fatalf("profil R2'den once silinmeli: %v, onek %d", social.tracesDeleted, social.prefixCountAtTraces)
+		t.Fatalf("the profile must be deleted before R2: %v, prefix %d", social.tracesDeleted, social.prefixCountAtTraces)
 	}
 	if len(social.deleted) != 0 {
-		t.Fatal("R2 temizligi eksikken yayin satirlari silinmemeli")
+		t.Fatal("publication rows must not be deleted while the R2 cleanup is incomplete")
 	}
 
 	// Delayed retry: R2 recovered, the same ids are listed again.
 	deleter.failPrefix = ""
 	if err := svc.Cleanup(context.Background(), accountID); err != nil {
-		t.Fatalf("tekrar: %v", err)
+		t.Fatalf("retry: %v", err)
 	}
 	if !slices.Equal(deleter.prefixes[12:], []string{"sosyal/" + socialPub1 + "/", "sosyal/" + socialPub2 + "/"}) {
-		t.Fatalf("tekrar ayni sosyal onekleri silmeli: %v", deleter.prefixes)
+		t.Fatalf("the retry must delete the same social prefixes: %v", deleter.prefixes)
 	}
 	if !slices.Equal(social.deleted, []string{accountID}) {
-		t.Fatalf("tekrar sonunda satirlar silinmeli: %v", social.deleted)
+		t.Fatalf("rows must be deleted at the end of the retry: %v", social.deleted)
 	}
 }
 
 // A trace deletion error does not stop the R2 loop; the error is added to the joined error.
 func TestAccountService_CleanupTraceErrorDoesNotStopR2(t *testing.T) {
 	deleter := &selectiveDeleter{}
-	traceErr := errors.New("pg kapali")
+	traceErr := errors.New("pg is down")
 	social := &fakeSocialCleaner{ids: []string{socialPub1, socialPub2}, tracesErr: traceErr}
 	svc := NewAccountService(&fakeIdentity{}, deleter, unreachableRedis(), &fakeQueue{}, social)
 	if err := svc.Cleanup(context.Background(), accountID); !errors.Is(err, traceErr) {
-		t.Fatalf("iz silme hatasi donmeli: %v", err)
+		t.Fatalf("a trace delete error must be returned: %v", err)
 	}
 	if len(deleter.prefixes) != 7 {
-		t.Fatalf("iz hatasina ragmen tum onekler silinmeli: %v", deleter.prefixes)
+		t.Fatalf("all prefixes must be deleted despite the trace error: %v", deleter.prefixes)
 	}
 	if !slices.Equal(social.deleted, []string{accountID}) {
-		t.Fatalf("R2 basariliyken satirlar silinmeli: %v", social.deleted)
+		t.Fatalf("rows must be deleted when R2 succeeds: %v", social.deleted)
 	}
 }
 
@@ -129,24 +129,24 @@ func TestAccountService_CleanupSocialR2ErrorKeepsRows(t *testing.T) {
 	social := &fakeSocialCleaner{ids: []string{socialPub1, socialPub2}}
 	svc := NewAccountService(&fakeIdentity{}, deleter, unreachableRedis(), &fakeQueue{}, social)
 	if err := svc.Cleanup(context.Background(), accountID); err == nil {
-		t.Fatal("R2 hatasi donmeli")
+		t.Fatal("an R2 error must be returned")
 	}
 	if len(social.deleted) != 0 {
-		t.Fatal("R2 temizligi eksikken satirlar silinmemeli")
+		t.Fatal("rows must not be deleted while the R2 cleanup is incomplete")
 	}
 	if len(deleter.prefixes) != 7 {
-		t.Fatalf("hata olsa da tum onekler denenmeli: %v", deleter.prefixes)
+		t.Fatalf("all prefixes must be tried even on error: %v", deleter.prefixes)
 	}
 }
 
 func TestAccountService_CleanupSocialListError(t *testing.T) {
-	social := &fakeSocialCleaner{listErr: errors.New("pg kapali")}
+	social := &fakeSocialCleaner{listErr: errors.New("pg is down")}
 	svc := NewAccountService(&fakeIdentity{}, &selectiveDeleter{}, unreachableRedis(), &fakeQueue{}, social)
 	if err := svc.Cleanup(context.Background(), accountID); err == nil {
-		t.Fatal("liste hatasi donmeli")
+		t.Fatal("a list error must be returned")
 	}
 	if len(social.deleted) != 0 {
-		t.Fatal("liste okunamadan satir silinmemeli")
+		t.Fatal("rows must not be deleted while the list is unreadable")
 	}
 }
 
@@ -155,9 +155,9 @@ func TestAccountService_CleanupWithoutR2DeletesSocialRows(t *testing.T) {
 	social := &fakeSocialCleaner{ids: []string{socialPub1}}
 	svc := NewAccountService(&fakeIdentity{}, nil, unreachableRedis(), &fakeQueue{}, social)
 	if err := svc.Cleanup(context.Background(), accountID); err != nil {
-		t.Fatalf("beklenmeyen hata: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if !slices.Equal(social.deleted, []string{accountID}) {
-		t.Fatalf("satirlar silinmeli: %v", social.deleted)
+		t.Fatalf("rows must be deleted: %v", social.deleted)
 	}
 }

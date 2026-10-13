@@ -24,7 +24,7 @@ func (w *AccountWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	}
 	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
 		// A malformed payload is not fixed by retrying.
-		return fmt.Errorf("hesap temizlik yuku cozulemedi: %v: %w", err, asynq.SkipRetry)
+		return fmt.Errorf("could not decode the account cleanup payload: %v: %w", err, asynq.SkipRetry)
 	}
 	return w.accounts.Cleanup(ctx, payload.UserID)
 }

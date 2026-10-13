@@ -25,7 +25,7 @@ const maxStemSize = 50 << 20
 
 // errOwnerDeleted: the job owner's account was deleted; the job stops
 // without charging and without writing files.
-var errOwnerDeleted = errors.New("is sahibinin hesabi silindi")
+var errOwnerDeleted = errors.New("the job owner's account was deleted")
 
 // ownerDeleted checks the job owner's deletion mark. If the checker is nil
 // no check is made.
@@ -42,7 +42,7 @@ func ownerDeleted(ctx context.Context, d deletionmark.Checker, ownerID string) (
 func ownerCanWrite(ctx context.Context, d deletionmark.Checker, ownerID string) error {
 	deleted, err := ownerDeleted(ctx, d, ownerID)
 	if err != nil {
-		return fmt.Errorf("hesap durumu denetlenemedi: %w", err)
+		return fmt.Errorf("could not check the account status: %w", err)
 	}
 	if deleted {
 		return errOwnerDeleted
@@ -115,15 +115,15 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, payloa
 	if err := w.renderService.CompleteJob(ctx, jobID, result); err != nil {
 		w.failJob(ctx, jobID, "Failed to save result")
 		// The Suno fee was paid; a retry would rerun the job and charge again.
-		return fmt.Errorf("sonuc kaydedilemedi: %w: %w", err, asynq.SkipRetry)
+		return fmt.Errorf("could not save the result: %w: %w", err, asynq.SkipRetry)
 	}
 
 	// URLs are generated fresh for publishing; the record keeps the key.
 	resp, err := w.renderService.BuildResult(ctx, result)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Stem URL uretilemedi: %v", err))
+		w.failJob(ctx, jobID, fmt.Sprintf("Could not generate the stem URL: %v", err))
 		// Same reason: the paid generation finished and a retry would charge again.
-		return fmt.Errorf("stem URL uretilemedi: %w: %w", err, asynq.SkipRetry)
+		return fmt.Errorf("could not generate the stem URL: %w: %w", err, asynq.SkipRetry)
 	}
 	w.hub.BroadcastComplete(jobID, resp)
 	log.Printf("Render job %s completed", jobID)
@@ -138,20 +138,20 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, payloa
 // charge Suno again (4 x 62 credits with MaxRetry(3)).
 func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.RenderJobPayload, progress func(int, string)) (result *model.RenderResultRecord, retErr error) {
 	if w.r2Client == nil {
-		return nil, fmt.Errorf("depolama yapilandirilmamis, Suno cagrilmadi: %w", asynq.SkipRetry)
+		return nil, fmt.Errorf("storage is not configured, Suno was not called: %w", asynq.SkipRetry)
 	}
 
 	// BEFORE the paid call: if the owner/project cannot form a key, the
 	// stems cannot be uploaded and 62 credits are wasted.
 	if _, err := client.UserKey("stems", payload.OwnerID, payload.ProjectID, "x.mp3"); err != nil {
-		return nil, fmt.Errorf("is sahibi/proje anahtara uygun degil, Suno cagrilmadi: %w: %w", err, asynq.SkipRetry)
+		return nil, fmt.Errorf("job owner/project does not fit the key, Suno was not called: %w: %w", err, asynq.SkipRetry)
 	}
 
 	// The mode is resolved BEFORE the paid call: if the focus instrument
 	// cannot be mapped, 12 credits must not be spent and then fail.
 	mode, focusName, err := stemPlan(payload)
 	if err != nil {
-		return nil, fmt.Errorf("stem ayari gecersiz, Suno cagrilmadi: %w: %w", err, asynq.SkipRetry)
+		return nil, fmt.Errorf("invalid stem setting, Suno was not called: %w: %w", err, asynq.SkipRetry)
 	}
 
 	// BEFORE the paid call: Suno is not charged for a deleted account.
@@ -159,9 +159,9 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 	// owner is permanent.
 	if err := ownerCanWrite(ctx, w.deletionChecker, payload.OwnerID); err != nil {
 		if errors.Is(err, errOwnerDeleted) {
-			return nil, fmt.Errorf("suno cagrilmadi: %w: %w", err, asynq.SkipRetry)
+			return nil, fmt.Errorf("suno was not called: %w: %w", err, asynq.SkipRetry)
 		}
-		return nil, fmt.Errorf("suno cagrilmadi: %w", err)
+		return nil, fmt.Errorf("suno was not called: %w", err)
 	}
 
 	progress(5, "Building music prompt...")
@@ -206,7 +206,7 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 	case model.StemModeMix:
 		// The generation is instrumental; the track itself is the single stem, no splitting.
 		if track.AudioURL == "" {
-			return nil, charged("mix render failed", errors.New("suno parca adresi donmedi"))
+			return nil, charged("mix render failed", errors.New("suno did not return a track URL"))
 		}
 		stems = []client.Stem{{Instrument: model.InstrumentMix, URL: track.AudioURL}}
 
@@ -238,7 +238,7 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 			return nil, charged("stem splitting failed", err)
 		}
 		if len(stems) == 0 {
-			return nil, charged("stem splitting failed", errors.New("suno hic enstruman stem'i donmedi"))
+			return nil, charged("stem splitting failed", errors.New("suno returned no instrument stems"))
 		}
 	}
 
@@ -261,11 +261,11 @@ func stemPlan(payload *model.RenderJobPayload) (model.StemMode, string, error) {
 		return model.StemModeStems, "", nil
 	case model.StemModeFocus:
 		if payload.FocusInstrument == nil {
-			return "", "", errors.New("focus modu enstruman ister")
+			return "", "", errors.New("focus mode requires an instrument")
 		}
 		name, ok := client.SunoStemName(*payload.FocusInstrument)
 		if !ok {
-			return "", "", fmt.Errorf("enstruman ayrilamaz: %s", *payload.FocusInstrument)
+			return "", "", fmt.Errorf("instrument cannot be separated: %s", *payload.FocusInstrument)
 		}
 		return model.StemModeFocus, name, nil
 	default:
@@ -304,8 +304,8 @@ func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, payloa
 
 	result, err := w.generateMockResult(payload)
 	if err != nil {
-		w.failJob(ctx, jobID, "Gecersiz is sahibi veya proje")
-		return fmt.Errorf("mock sonuc: %w: %w", err, asynq.SkipRetry)
+		w.failJob(ctx, jobID, "Invalid job owner or project")
+		return fmt.Errorf("mock result: %w: %w", err, asynq.SkipRetry)
 	}
 
 	if err := w.renderService.CompleteJob(ctx, jobID, result); err != nil {
@@ -315,7 +315,7 @@ func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, payloa
 
 	resp, err := w.renderService.BuildResult(ctx, result)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Stem URL uretilemedi: %v", err))
+		w.failJob(ctx, jobID, fmt.Sprintf("Could not generate the stem URL: %v", err))
 		return err
 	}
 	w.hub.BroadcastComplete(jobID, resp)
@@ -341,7 +341,7 @@ func (w *RenderWorker) uploadStems(ctx context.Context, ownerID, projectID strin
 			return nil, err
 		}
 		if err := w.transferStem(ctx, stem.URL, key); err != nil {
-			return nil, fmt.Errorf("%s stem'i aktarilamadi: %w", stem.Instrument, err)
+			return nil, fmt.Errorf("could not transfer the %s stem: %w", stem.Instrument, err)
 		}
 		results = append(results, model.StemResultRecord{
 			ID:           stemID,
@@ -368,14 +368,14 @@ func (w *RenderWorker) transferStem(ctx context.Context, rawURL, key string) err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("indirme durumu %d", resp.StatusCode)
+		return fmt.Errorf("download status %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxStemSize+1))
 	if err != nil {
 		return err
 	}
 	if len(data) > maxStemSize {
-		return fmt.Errorf("stem %d bayt tavanini asiyor", maxStemSize)
+		return fmt.Errorf("stem exceeds the %d byte cap", maxStemSize)
 	}
 	_, _, err = w.r2Client.Upload(ctx, key, bytes.NewReader(data), "audio/mpeg")
 	return err

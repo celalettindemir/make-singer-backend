@@ -25,7 +25,7 @@ func TestPostgresStore_DuplicateReportCreatesNoRow(t *testing.T) {
 		newReport(TargetComment, comment, "taciz"),
 	} {
 		if err := store.InsertReport(ctx, s); err != nil {
-			t.Fatalf("SikayetEkle: %v", err)
+			t.Fatalf("InsertReport: %v", err)
 		}
 	}
 	var n int
@@ -35,7 +35,7 @@ func TestPostgresStore_DuplicateReportCreatesNoRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n != 2 || reason != "spam" {
-		t.Fatalf("kayit sayisi %d, yayin nedeni %q; beklenen 2 ve ilk neden spam", n, reason)
+		t.Fatalf("row count %d, publication reason %q; want 2 and first reason spam", n, reason)
 	}
 
 	// When a publication is permanently deleted, its reports go by cascade.
@@ -43,6 +43,6 @@ func TestPostgresStore_DuplicateReportCreatesNoRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sosyal.sikayet WHERE bildiren_id = $1`, reporter).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("cascade sonrasi %d sikayet, %v", n, err)
+		t.Fatalf("%d reports after cascade, %v", n, err)
 	}
 }

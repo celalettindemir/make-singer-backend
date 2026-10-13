@@ -119,7 +119,7 @@ func prepareTask() *asynq.Task {
 func TestSocialWorker_CopiesAnalyzesPublishes(t *testing.T) {
 	setup := newSocialTestWorker(preparingRecord(), nil)
 	if err := setup.w.Prepare(context.Background(), prepareTask()); err != nil {
-		t.Fatalf("Hazirla: %v", err)
+		t.Fatalf("Prepare: %v", err)
 	}
 	want := []copyCall{
 		{"masters/" + socialTestOwnerID + "/p1/m1.wav", "sosyal/" + socialTestPubID + "/master.wav"},
@@ -127,25 +127,25 @@ func TestSocialWorker_CopiesAnalyzesPublishes(t *testing.T) {
 		{"stems/" + socialTestOwnerID + "/p1/bass.mp3", "sosyal/" + socialTestPubID + "/stems/bass.mp3"},
 	}
 	if len(setup.copier.copies) != len(want) {
-		t.Fatalf("kopyalar = %v", setup.copier.copies)
+		t.Fatalf("copies = %v", setup.copier.copies)
 	}
 	for i, b := range want {
 		if setup.copier.copies[i] != b {
-			t.Errorf("kopya %d = %v, beklenen %v", i, setup.copier.copies[i], b)
+			t.Errorf("copy %d = %v, want %v", i, setup.copier.copies[i], b)
 		}
 	}
 	if *setup.analyzer.req != (client.AnalysisRequest{InputKey: "sosyal/" + socialTestPubID + "/master.wav", PreviewKey: "sosyal/" + socialTestPubID + "/onizleme.mp3", PeakCount: 64, PreviewSeconds: 30}) {
-		t.Fatalf("analiz istegi = %+v", *setup.analyzer.req)
+		t.Fatalf("analysis request = %+v", *setup.analyzer.req)
 	}
 	s := setup.store.published
 	if s == nil || s.MasterKey != "sosyal/"+socialTestPubID+"/master.wav" || len(s.Waveform) != 64 || s.PreviewKey != "sosyal/"+socialTestPubID+"/onizleme.mp3" {
-		t.Fatalf("sonuc = %+v", s)
+		t.Fatalf("result = %+v", s)
 	}
 	if len(s.Stems) != 2 || s.Stems[1] != (social.StemRecord{ID: "bass", Instrument: "bass", Duration: 184, Key: "sosyal/" + socialTestPubID + "/stems/bass.mp3"}) {
-		t.Fatalf("stem listesi = %+v", s.Stems)
+		t.Fatalf("stem list = %+v", s.Stems)
 	}
 	if setup.store.markedFailed {
-		t.Fatal("basarili is hata yapmamali")
+		t.Fatal("a successful job must not mark an error")
 	}
 }
 
@@ -154,13 +154,13 @@ func TestSocialWorker_SkipsMissingDeletedOrReady(t *testing.T) {
 	deletedRecord.Deleted = true
 	publishedRecord := preparingRecord()
 	publishedRecord.Status = social.StatusPublished
-	for name, record := range map[string]*social.PreparationRecord{"yok": nil, "silinmis": deletedRecord, "yayinda": publishedRecord} {
+	for name, record := range map[string]*social.PreparationRecord{"missing": nil, "deleted": deletedRecord, "published": publishedRecord} {
 		setup := newSocialTestWorker(record, nil)
 		if err := setup.w.Prepare(context.Background(), prepareTask()); err != nil {
-			t.Errorf("%s: hata donmemeli: %v", name, err)
+			t.Errorf("%s: no error must be returned: %v", name, err)
 		}
 		if len(setup.copier.copies) != 0 || setup.store.published != nil {
-			t.Errorf("%s: hicbir sey yapilmamali", name)
+			t.Errorf("%s: nothing must be done", name)
 		}
 	}
 }
@@ -169,10 +169,10 @@ func TestSocialWorker_DeletedOwnerNotCopiedMarkedFailed(t *testing.T) {
 	setup := newSocialTestWorker(preparingRecord(), &fakeChecker{answer: alwaysDeleted})
 	err := setup.w.Prepare(context.Background(), prepareTask())
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu: %v", err)
+		t.Fatalf("want SkipRetry: %v", err)
 	}
 	if len(setup.copier.copies) != 0 || !setup.store.markedFailed || setup.store.published != nil {
-		t.Fatalf("kopya=%d hata=%v", len(setup.copier.copies), setup.store.markedFailed)
+		t.Fatalf("copies=%d error=%v", len(setup.copier.copies), setup.store.markedFailed)
 	}
 }
 
@@ -181,36 +181,36 @@ func TestSocialWorker_OwnerDeletedMidJob(t *testing.T) {
 	deletedOnSecondCheck := func(n int) (bool, error) { return n >= 1, nil }
 	setup := newSocialTestWorker(preparingRecord(), &fakeChecker{answer: deletedOnSecondCheck})
 	if err := setup.w.Prepare(context.Background(), prepareTask()); !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu: %v", err)
+		t.Fatalf("want SkipRetry: %v", err)
 	}
 	if len(setup.copier.copies) != 1 || !setup.store.markedFailed {
-		t.Fatalf("yalnizca master kopyalanmali: %v", setup.copier.copies)
+		t.Fatalf("only the master must be copied: %v", setup.copier.copies)
 	}
 }
 
 func TestSocialWorker_CheckErrorRetried(t *testing.T) {
-	setup := newSocialTestWorker(preparingRecord(), &fakeChecker{answer: func(int) (bool, error) { return false, errors.New("redis kapali") }})
+	setup := newSocialTestWorker(preparingRecord(), &fakeChecker{answer: func(int) (bool, error) { return false, errors.New("redis is down") }})
 	err := setup.w.Prepare(context.Background(), prepareTask())
 	if err == nil || errors.Is(err, asynq.SkipRetry) || setup.store.markedFailed {
-		t.Fatalf("tekrar denenebilir hata bekleniyordu: %v hata=%v", err, setup.store.markedFailed)
+		t.Fatalf("want a retryable error: %v error=%v", err, setup.store.markedFailed)
 	}
 }
 
 func TestSocialWorker_CopyErrorOnLastAttemptMarksFailed(t *testing.T) {
 	setup := newSocialTestWorker(preparingRecord(), nil)
-	setup.copier.err = errors.New("r2 kapali")
+	setup.copier.err = errors.New("r2 is down")
 	if err := setup.w.Prepare(context.Background(), prepareTask()); err == nil || errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("tekrar denenebilir hata bekleniyordu: %v", err)
+		t.Fatalf("want a retryable error: %v", err)
 	}
 	if setup.store.markedFailed || setup.store.published != nil {
-		t.Fatal("son deneme degilken hata durumuna alinmamali")
+		t.Fatal("must not be marked failed when it is not the last attempt")
 	}
 	setup.w.isLastAttempt = func(context.Context) bool { return true }
 	if err := setup.w.Prepare(context.Background(), prepareTask()); err == nil {
-		t.Fatal("hata donmeli")
+		t.Fatal("an error must be returned")
 	}
 	if !setup.store.markedFailed {
-		t.Fatal("son denemede yayin hata olmali")
+		t.Fatal("the publication must be failed on the last attempt")
 	}
 }
 
@@ -222,10 +222,10 @@ func TestSocialWorker_DeadlineOnLastAttemptMarksFailed(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 	if err := setup.w.Prepare(ctx, prepareTask()); err == nil {
-		t.Fatal("hata donmeli")
+		t.Fatal("an error must be returned")
 	}
 	if !setup.store.markedFailed {
-		t.Fatal("suresi dolan son denemede yayin hata olmali")
+		t.Fatal("the publication must be failed on the last attempt even when the deadline expired")
 	}
 }
 
@@ -237,22 +237,22 @@ func TestSocialWorker_CanceledJobNotMarkedFailed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := setup.w.Prepare(ctx, prepareTask()); !errors.Is(err, context.Canceled) {
-		t.Fatalf("iptal hatasi donmeli: %v", err)
+		t.Fatalf("a cancellation error must be returned: %v", err)
 	}
 	if setup.store.markedFailed {
-		t.Fatal("iptal edilen is hata durumuna alinmamali")
+		t.Fatal("a canceled job must not be marked failed")
 	}
 }
 
 func TestSocialWorker_AnalyzeErrorDoesNotBlockPublish(t *testing.T) {
 	setup := newSocialTestWorker(preparingRecord(), nil)
-	setup.analyzer.err = errors.New("audio-service kapali")
+	setup.analyzer.err = errors.New("audio-service is down")
 	if err := setup.w.Prepare(context.Background(), prepareTask()); err != nil {
-		t.Fatalf("analiz hatasi isi bozmamali: %v", err)
+		t.Fatalf("an analysis error must not break the job: %v", err)
 	}
 	s := setup.store.published
 	if s == nil || s.Waveform == nil || len(s.Waveform) != 0 || s.PreviewKey != "" {
-		t.Fatalf("bos dalga formu, onizlemesiz yayinlanmali: %+v", s)
+		t.Fatalf("it must be published with an empty waveform and no preview: %+v", s)
 	}
 }
 
@@ -260,10 +260,10 @@ func TestSocialWorker_AnalyzeOutputValidated(t *testing.T) {
 	setup := newSocialTestWorker(preparingRecord(), nil)
 	setup.analyzer.resp = &client.AnalysisResponse{Peaks: fillPeaks(10, 0.5)}
 	if err := setup.w.Prepare(context.Background(), prepareTask()); err != nil {
-		t.Fatalf("Hazirla: %v", err)
+		t.Fatalf("Prepare: %v", err)
 	}
 	if len(setup.store.published.Waveform) != 0 {
-		t.Fatalf("64 olmayan tepe dizisi atilmali: %v", setup.store.published.Waveform)
+		t.Fatalf("a peak array that is not 64 long must be discarded: %v", setup.store.published.Waveform)
 	}
 
 	setup = newSocialTestWorker(preparingRecord(), nil)
@@ -271,11 +271,11 @@ func TestSocialWorker_AnalyzeOutputValidated(t *testing.T) {
 	p[0], p[1], p[2] = -0.2, 1.7, math.NaN()
 	setup.analyzer.resp = &client.AnalysisResponse{Peaks: p}
 	if err := setup.w.Prepare(context.Background(), prepareTask()); err != nil {
-		t.Fatalf("Hazirla: %v", err)
+		t.Fatalf("Prepare: %v", err)
 	}
 	d := setup.store.published.Waveform
 	if d[0] != 0 || d[1] != 1 || d[2] != 0 || d[3] != 0.5 {
-		t.Fatalf("degerler 0-1'e kenetlenmeli: %v", d[:4])
+		t.Fatalf("values must be clamped to 0-1: %v", d[:4])
 	}
 }
 
@@ -283,10 +283,10 @@ func TestSocialWorker_WithoutR2AndAnalyzer(t *testing.T) {
 	d := &fakePreparationStore{record: preparingRecord()}
 	w := NewSocialWorker(d, nil, nil, nil, nil)
 	if err := w.Prepare(context.Background(), prepareTask()); err != nil {
-		t.Fatalf("Hazirla: %v", err)
+		t.Fatalf("Prepare: %v", err)
 	}
 	if d.published == nil || d.published.MasterKey != "sosyal/"+socialTestPubID+"/master.wav" || len(d.published.Waveform) != 0 {
-		t.Fatalf("sonuc = %+v", d.published)
+		t.Fatalf("result = %+v", d.published)
 	}
 }
 
@@ -294,10 +294,10 @@ func TestSocialWorker_MalformedPayloadNotRetried(t *testing.T) {
 	setup := newSocialTestWorker(preparingRecord(), nil)
 	for _, payload := range []string{"{", `{"yayinId":"../x"}`} {
 		if err := setup.w.Prepare(context.Background(), asynq.NewTask(social.TaskTypePrepare, []byte(payload))); !errors.Is(err, asynq.SkipRetry) {
-			t.Errorf("%s: SkipRetry bekleniyordu: %v", payload, err)
+			t.Errorf("%s: want SkipRetry: %v", payload, err)
 		}
 		if err := setup.w.DeleteFiles(context.Background(), asynq.NewTask(social.TaskTypeDeleteFiles, []byte(payload))); !errors.Is(err, asynq.SkipRetry) {
-			t.Errorf("%s: DosyaSil SkipRetry bekleniyordu: %v", payload, err)
+			t.Errorf("%s: DeleteFiles want SkipRetry: %v", payload, err)
 		}
 	}
 }
@@ -322,9 +322,9 @@ func TestSocialWorker_DeleteFiles(t *testing.T) {
 		record      *social.PreparationRecord
 		wantDeleted bool
 	}{
-		{"silinmis", deletedRecord, true},
-		{"satir yok", nil, true},
-		{"canli", preparingRecord(), false},
+		{"deleted", deletedRecord, true},
+		{"no row", nil, true},
+		{"live", preparingRecord(), false},
 	}
 	for _, d := range cases {
 		s := &fakeSocialDeleter{}
@@ -337,13 +337,13 @@ func TestSocialWorker_DeleteFiles(t *testing.T) {
 		}
 	}
 
-	s := &fakeSocialDeleter{err: errors.New("r2 kapali")}
+	s := &fakeSocialDeleter{err: errors.New("r2 is down")}
 	w := NewSocialWorker(&fakePreparationStore{record: deletedRecord}, nil, nil, s, nil)
 	if err := w.DeleteFiles(context.Background(), task); err == nil {
-		t.Fatal("R2 hatasi tekrar denensin diye donmeli")
+		t.Fatal("the R2 error must be returned so that it is retried")
 	}
-	w = NewSocialWorker(&fakePreparationStore{readErr: errors.New("pg kapali")}, nil, nil, &fakeSocialDeleter{}, nil)
+	w = NewSocialWorker(&fakePreparationStore{readErr: errors.New("pg is down")}, nil, nil, &fakeSocialDeleter{}, nil)
 	if err := w.DeleteFiles(context.Background(), task); err == nil {
-		t.Fatal("okuma hatasi donmeli")
+		t.Fatal("a read error must be returned")
 	}
 }

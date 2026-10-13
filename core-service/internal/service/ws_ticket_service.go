@@ -18,7 +18,7 @@ const wsTicketTTL = 30 * time.Second
 
 // ErrInvalidTicket: the ticket does not exist, has expired, was already used
 // or belongs to another job. The cases are deliberately not told apart.
-var ErrInvalidTicket = errors.New("websocket bileti gecersiz")
+var ErrInvalidTicket = errors.New("invalid websocket ticket")
 
 // ticketPattern: 32 bytes of unpadded base64url = 43 characters. Malformed
 // input never reaches Redis.
@@ -46,11 +46,11 @@ func (s *WSTicketService) Issue(ctx context.Context, userID, jobID string) (*mod
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
-		return nil, fmt.Errorf("bilet uretilemedi: %w", err)
+		return nil, fmt.Errorf("could not generate the ticket: %w", err)
 	}
 	ticket := base64.RawURLEncoding.EncodeToString(raw)
 	if err := s.redis.Set(ctx, ticketKey(ticket), jobID, wsTicketTTL).Err(); err != nil {
-		return nil, fmt.Errorf("bilet kaydedilemedi: %w", err)
+		return nil, fmt.Errorf("could not save the ticket: %w", err)
 	}
 	return &model.WSTicketResponse{Ticket: ticket, ExpiresAt: time.Now().Add(wsTicketTTL)}, nil
 }
@@ -66,7 +66,7 @@ func (s *WSTicketService) Redeem(ctx context.Context, ticket, jobID string) erro
 		return ErrInvalidTicket
 	}
 	if err != nil {
-		return fmt.Errorf("bilet okunamadi: %w", err)
+		return fmt.Errorf("could not read the ticket: %w", err)
 	}
 	if boundJobID != jobID {
 		return ErrInvalidTicket

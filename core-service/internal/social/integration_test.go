@@ -34,13 +34,13 @@ func TestIntegration_PublicationLifecycle(t *testing.T) {
 	owner, listener := uuid.NewString(), uuid.NewString()
 
 	if _, err := s.CreatePublication(ctx, owner, PublicationRequest{}); !errors.Is(err, ErrNoProfile) {
-		t.Fatalf("profilsiz yayin: %v", err)
+		t.Fatalf("publication without a profile: %v", err)
 	}
 	if _, err := s.SaveProfile(ctx, owner, ProfileInput{Username: "sahip", DisplayName: "Sahip"}); err != nil {
-		t.Fatalf("profil: %v", err)
+		t.Fatalf("profile: %v", err)
 	}
 	if _, err := s.SaveProfile(ctx, listener, ProfileInput{Username: "dinleyici", DisplayName: "D"}); err != nil {
-		t.Fatalf("profil: %v", err)
+		t.Fatalf("profile: %v", err)
 	}
 
 	req := validRequest()
@@ -48,89 +48,89 @@ func TestIntegration_PublicationLifecycle(t *testing.T) {
 	req.Stems[0].URL = "stems/" + owner + "/p1/drums.mp3"
 	resp, err := s.CreatePublication(ctx, owner, req)
 	if err != nil {
-		t.Fatalf("YayinOlustur: %v", err)
+		t.Fatalf("CreatePublication: %v", err)
 	}
 	if len(q.tasks) != 1 {
-		t.Fatalf("hazirla isi kurulmali")
+		t.Fatalf("the prepare job must be enqueued")
 	}
 
 	// While preparing, visible only to its owner.
 	if pub, err := s.Publication(ctx, owner, resp.ID); err != nil || pub.Status != StatusPreparing {
-		t.Fatalf("sahip hazirlanani gormeli: %+v, %v", pub, err)
+		t.Fatalf("the owner must see the publication in preparation: %+v, %v", pub, err)
 	}
 	if _, err := s.Publication(ctx, listener, resp.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("dinleyici hazirlanani gormemeli: %v", err)
+		t.Fatalf("a listener must not see the publication in preparation: %v", err)
 	}
 
 	prep, err := store.GetPreparation(ctx, resp.ID)
 	if err != nil || prep.Preparation.MasterKey != req.MasterURL {
-		t.Fatalf("hazirlik = %+v, %v", prep, err)
+		t.Fatalf("preparation = %+v, %v", prep, err)
 	}
 	master, _ := MasterDestKey(resp.ID, prep.Preparation.MasterKey)
 	waveform := make([]float64, 64)
 	if err := store.Publish(ctx, resp.ID, PreparationResult{MasterKey: master, Waveform: waveform}); err != nil {
-		t.Fatalf("Yayinla: %v", err)
+		t.Fatalf("Publish: %v", err)
 	}
 
 	detail, err := s.PublicationBySlug(ctx, listener, resp.Slug)
 	if err != nil {
-		t.Fatalf("SlugGoster: %v", err)
+		t.Fatalf("PublicationBySlug: %v", err)
 	}
 	m := jsonFields(t, detail)
 	for _, field := range []string{"id", "slug", "baslik", "sahip", "tur", "bpm", "ton", "sureSn", "dalgaFormu",
 		"begeniSayisi", "yorumSayisi", "coverSayisi", "begendimMi", "altyapiAcik", "kaynak", "olusturma",
 		"aciklama", "yorumAcik", "sozler", "yapi", "durum", "benimMi", "gorunurluk"} {
 		if _, ok := m[field]; !ok {
-			t.Errorf("YayinDetayi.%s yok", field)
+			t.Errorf("PublicationDetail.%s is missing", field)
 		}
 	}
 	if m["kaynak"] != nil || m["durum"] != "yayinda" || m["benimMi"] != false || len(m["dalgaFormu"].([]any)) != 64 {
-		t.Fatalf("detay = %v", m)
+		t.Fatalf("detail = %v", m)
 	}
 	if ownerJSON := m["sahip"].(map[string]any); ownerJSON["kullaniciAdi"] != "sahip" {
-		t.Fatalf("sahip = %v", ownerJSON)
+		t.Fatalf("owner = %v", ownerJSON)
 	}
 
 	feed, err := s.Feed(ctx, listener, TabForYou, "", 20)
 	if err != nil || len(feed.Items) != 1 || feed.NextCursor != nil {
-		t.Fatalf("senin icin = %+v, %v", feed, err)
+		t.Fatalf("for you = %+v, %v", feed, err)
 	}
 	if own, _ := s.Feed(ctx, owner, TabForYou, "", 20); len(own.Items) != 0 {
-		t.Fatalf("kendi yayinim senin icin'de olmamali: %+v", own.Items)
+		t.Fatalf("my own publication must not appear in for-you: %+v", own.Items)
 	}
 	if b, err := s.SetLike(ctx, listener, resp.ID, true); err != nil || b.LikeCount != 1 || !b.LikedByMe {
-		t.Fatalf("begeni = %+v, %v", b, err)
+		t.Fatalf("like = %+v, %v", b, err)
 	}
 
 	files, err := s.Files(ctx, listener, resp.ID)
 	if err != nil || files.Master.URL == "" {
-		t.Fatalf("dosyalar = %+v, %v", files, err)
+		t.Fatalf("files = %+v, %v", files, err)
 	}
 
 	followersOnly := VisibilityFollowers
 	if _, err := s.UpdatePublication(ctx, owner, resp.ID, PublicationPatch{Visibility: &followersOnly}); err != nil {
-		t.Fatalf("yama: %v", err)
+		t.Fatalf("patch: %v", err)
 	}
 	if _, err := s.Publication(ctx, listener, resp.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("takipciler yayini takip etmeyene gorunmemeli: %v", err)
+		t.Fatalf("a followers-only publication must not be visible to a non-follower: %v", err)
 	}
 	p, err := s.Profile(ctx, listener, "sahip")
 	if err != nil || p.Stats.Songs != 0 {
-		t.Fatalf("takip etmeyen icin sarki sayaci 0 olmali: %+v, %v", p, err)
+		t.Fatalf("the song counter must be 0 for a non-follower: %+v, %v", p, err)
 	}
 	me, _ := s.MyProfile(ctx, owner)
 	if me.Stats.Songs != 1 || !me.IsMe {
-		t.Fatalf("sahibin sayaci = %+v", me)
+		t.Fatalf("owner counter = %+v", me)
 	}
 
 	if err := s.DeletePublication(ctx, owner, resp.ID); err != nil {
-		t.Fatalf("sil: %v", err)
+		t.Fatalf("delete: %v", err)
 	}
 	if err := s.DeletePublication(ctx, owner, resp.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("ikinci silme: %v", err)
+		t.Fatalf("second delete: %v", err)
 	}
 	if len(q.tasks) != 2 || q.tasks[1].Type() != TaskTypeDeleteFiles {
-		t.Fatalf("dosya silme isi kurulmali: %d", len(q.tasks))
+		t.Fatalf("the file delete job must be enqueued: %d", len(q.tasks))
 	}
 }
 
@@ -142,14 +142,14 @@ func TestIntegration_UsernameAvailability(t *testing.T) {
 	for i, username := range []string{"ali", "ali2"} {
 		id := []string{a, b}[i]
 		if _, err := s.SaveProfile(ctx, id, ProfileInput{Username: username, DisplayName: "x"}); err != nil {
-			t.Fatalf("profil: %v", err)
+			t.Fatalf("profile: %v", err)
 		}
 	}
 	avail, err := s.CheckUsername(ctx, uuid.NewString(), "ali")
 	if err != nil || avail.Available || avail.Suggestion == nil || *avail.Suggestion != "ali3" {
-		t.Fatalf("uygunluk = %+v, %v", avail, err)
+		t.Fatalf("availability = %+v, %v", avail, err)
 	}
 	if _, err := s.SaveProfile(ctx, b, ProfileInput{Username: "ali", DisplayName: "x"}); !errors.Is(err, ErrUsernameTaken) {
-		t.Fatalf("alinmis ad: %v", err)
+		t.Fatalf("taken username: %v", err)
 	}
 }

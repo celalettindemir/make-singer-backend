@@ -20,7 +20,7 @@ func TestSocialHandler_StartCoverContract(t *testing.T) {
 		`"ton":{"tonik":"A","mod":"minor"},"sureSn":180,"yapi":[],"sozler":{"bolumler":[]},` +
 		`"stemler":[{"id":"drums","enstruman":"Davul","fileUrl":"https://x/stems/u/k/drums.mp3","sure":3}]}`
 	if status != http.StatusOK || raw != want || s.lastID != "y1" {
-		t.Fatalf("durum=%d govde=%s", status, raw)
+		t.Fatalf("status=%d body=%s", status, raw)
 	}
 }
 
@@ -37,7 +37,7 @@ func TestSocialHandler_CoverErrorCodes(t *testing.T) {
 		status, body := doSocialRequest(t, newSocialApp(&fakeSocialService{err: tc.err}, socialTestUser), http.MethodPost,
 			"/api/social/yayinlar/y1/cover-baslat", "")
 		if status != tc.status || errorCode(body) != tc.code {
-			t.Errorf("%v: durum=%d govde=%v", tc.err, status, body)
+			t.Errorf("%v: status=%d body=%v", tc.err, status, body)
 		}
 	}
 }
@@ -51,12 +51,12 @@ func TestSocialHandler_CoversPageAndLimit(t *testing.T) {
 	app := newSocialAppWithLimits(s, socialTestUser, SocialLimits{Publication: passThrough, Comment: passThrough, Cover: limiter})
 	status, body := doSocialRequest(t, app, http.MethodGet, "/api/social/yayinlar/y1/coverlar?imlec=i", "")
 	if status != http.StatusOK || s.lastCursor != "i" || s.lastID != "y1" {
-		t.Fatalf("liste: durum=%d govde=%v", status, body)
+		t.Fatalf("list: status=%d body=%v", status, body)
 	}
 	if v, present := body["sonrakiImlec"]; !present || v != nil {
-		t.Fatalf("sonrakiImlec null olmali: %v", body)
+		t.Fatalf("sonrakiImlec must be null: %v", body)
 	}
 	if status, _ := doSocialRawRequest(t, app, http.MethodPost, "/api/social/yayinlar/y1/cover-baslat", ""); status != http.StatusTooManyRequests {
-		t.Fatalf("cover limiti cover-baslat'a uygulanmali: %d", status)
+		t.Fatalf("the cover limit must apply to cover-baslat: %d", status)
 	}
 }

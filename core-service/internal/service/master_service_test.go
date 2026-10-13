@@ -20,17 +20,17 @@ func TestMasterService_Preview_ExpiresAtConfigTTL(t *testing.T) {
 	before := time.Now()
 	resp, err := s.Preview(context.Background(), "kullanici-a", &model.MasterPreviewRequest{})
 	if err != nil {
-		t.Fatalf("Preview hata verdi: %v", err)
+		t.Fatalf("Preview failed: %v", err)
 	}
 
 	if resp.ExpiresAt == nil {
-		t.Fatal("ExpiresAt nil, sureli bir link icin dolu olmali")
+		t.Fatal("ExpiresAt is nil, it must be set for a timed link")
 	}
 
 	diff := resp.ExpiresAt.Sub(before)
 	// If it reverted to the fixed 1-hour value the difference would be ~1h; it
 	// must be close to the 2h in the config (with some tolerance).
 	if diff < 90*time.Minute || diff > 130*time.Minute {
-		t.Errorf("ExpiresAt farki = %v, config'teki 2h PresignTTL'e yakin olmali (sabit 1h kullanilmis olabilir)", diff)
+		t.Errorf("ExpiresAt difference = %v, it must be close to the 2h PresignTTL in the config (a fixed 1h may have been used)", diff)
 	}
 }

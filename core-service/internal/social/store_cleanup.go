@@ -13,14 +13,14 @@ func (s *PostgresStore) ListPublicationIDs(ctx context.Context, userID string) (
 	rows, err := s.pool.Query(ctx,
 		`SELECT id::text FROM sosyal.yayin WHERE sahip_id = $1 ORDER BY olusturma`, userID)
 	if err != nil {
-		return nil, fmt.Errorf("yayinlar listelenemedi: %w", err)
+		return nil, fmt.Errorf("could not list publications: %w", err)
 	}
 	defer rows.Close()
 	ids := []string{}
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("yayin kimligi okunamadi: %w", err)
+			return nil, fmt.Errorf("could not read the publication ID: %w", err)
 		}
 		ids = append(ids, id)
 	}
@@ -65,16 +65,16 @@ func (s *PostgresStore) DeleteUserData(ctx context.Context, userID string) error
 func (s *PostgresStore) deleteInTx(ctx context.Context, userID string, queries []string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("sosyal silme islemi baslatilamadi: %w", err)
+		return fmt.Errorf("could not start the social delete transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	for _, query := range queries {
 		if _, err := tx.Exec(ctx, query, userID); err != nil {
-			return fmt.Errorf("sosyal veri silinemedi: %w", err)
+			return fmt.Errorf("could not delete social data: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("sosyal silme commit edilemedi: %w", err)
+		return fmt.Errorf("could not commit the social delete: %w", err)
 	}
 	return nil
 }

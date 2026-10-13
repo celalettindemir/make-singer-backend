@@ -34,12 +34,12 @@ func TestPostgresStore_ListCoversVisibilityAndOrder(t *testing.T) {
 		}
 	}
 	assertOrder(t, "ben", allTimePages(t, fetch(me), 2), []string{c1, c2, c3, c4})
-	assertOrder(t, "yabanci izleyici", allTimePages(t, fetch(uuid.NewString()), 2), []string{c1, c4})
+	assertOrder(t, "stranger viewer", allTimePages(t, fetch(uuid.NewString()), 2), []string{c1, c4})
 
 	// The source summary is filled in on covers.
 	items, err := store.ListCovers(ctx, source, me, nil, 1)
 	if err != nil || items[0].Source == nil || items[0].Source.PublicationID != source || items[0].Source.Deleted {
-		t.Fatalf("kaynak ozeti = %+v, %v", items, err)
+		t.Fatalf("source summary = %+v, %v", items, err)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestPostgresStore_ListStems(t *testing.T) {
 
 	empty, err := store.ListStems(ctx, id)
 	if err != nil || empty == nil || len(empty) != 0 {
-		t.Fatalf("bos liste = %#v, %v", empty, err)
+		t.Fatalf("empty list = %#v, %v", empty, err)
 	}
 	want := []StemRecord{{ID: "drums", Instrument: "Davul", Duration: 12.5, Key: "sosyal/" + id + "/stems/drums.mp3"}}
 	if _, err := pool.Exec(ctx, `UPDATE sosyal.yayin SET stem_listesi = $2 WHERE id = $1`, id, want); err != nil {
@@ -59,10 +59,10 @@ func TestPostgresStore_ListStems(t *testing.T) {
 	}
 	stems, err := store.ListStems(ctx, id)
 	if err != nil || len(stems) != 1 || stems[0] != want[0] {
-		t.Fatalf("stemler = %+v, %v", stems, err)
+		t.Fatalf("stems = %+v, %v", stems, err)
 	}
 	if _, err := store.ListStems(ctx, uuid.NewString()); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("olmayan yayin: %v", err)
+		t.Fatalf("missing publication: %v", err)
 	}
 }
 
@@ -76,6 +76,6 @@ func TestPostgresStore_ListCoversHidesOwnerWithoutProfile(t *testing.T) {
 
 	items, err := store.ListCovers(ctx, source, me, nil, 10)
 	if err != nil || len(items) != 1 || items[0].ID != visible {
-		t.Fatalf("coverlar = %+v, %v; beklenen yalnizca %s", items, err, visible)
+		t.Fatalf("covers = %+v, %v; want only %s", items, err, visible)
 	}
 }

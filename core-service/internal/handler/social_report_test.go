@@ -12,15 +12,15 @@ func TestSocialHandler_Report201NoBody(t *testing.T) {
 	status, raw := doSocialRawRequest(t, newSocialApp(s, socialTestUser), http.MethodPost, "/api/social/sikayetler",
 		`{"hedefTuru":"yorum","hedefId":"c1","neden":"spam","aciklama":"x"}`)
 	if status != http.StatusCreated || raw != "" {
-		t.Fatalf("durum=%d govde=%q", status, raw)
+		t.Fatalf("status=%d body=%q", status, raw)
 	}
 	if s.lastReport != (social.ReportInput{TargetType: "yorum", TargetID: "c1", Reason: "spam", Description: "x"}) {
-		t.Fatalf("iletilen = %+v", s.lastReport)
+		t.Fatalf("forwarded = %+v", s.lastReport)
 	}
 	// aciklama is optional.
 	if status, _ := doSocialRawRequest(t, newSocialApp(s, socialTestUser), http.MethodPost, "/api/social/sikayetler",
 		`{"hedefTuru":"yayin","hedefId":"y1","neden":"diger"}`); status != http.StatusCreated || s.lastReport.Description != "" {
-		t.Fatalf("aciklamasiz: durum=%d %+v", status, s.lastReport)
+		t.Fatalf("without a description: status=%d %+v", status, s.lastReport)
 	}
 }
 
@@ -36,7 +36,7 @@ func TestSocialHandler_ReportErrors(t *testing.T) {
 		status, body := doSocialRequest(t, newSocialApp(&fakeSocialService{err: tc.err}, socialTestUser), http.MethodPost,
 			"/api/social/sikayetler", `{"hedefTuru":"yayin","hedefId":"y1","neden":"spam"}`)
 		if status != tc.status || errorCode(body) != tc.code {
-			t.Errorf("%v: durum=%d govde=%v", tc.err, status, body)
+			t.Errorf("%v: status=%d body=%v", tc.err, status, body)
 		}
 	}
 }

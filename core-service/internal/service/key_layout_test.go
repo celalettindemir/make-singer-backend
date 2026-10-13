@@ -39,7 +39,7 @@ func TestUploadService_KeyHasUserPrefix(t *testing.T) {
 	}
 	want := "vocals/kullanici-a/p1/s1/" + resp.ID + ".wav"
 	if len(storage.uploaded) != 1 || storage.uploaded[0] != want {
-		t.Errorf("yuklenen = %v, beklenen %q", storage.uploaded, want)
+		t.Errorf("uploaded = %v, want %q", storage.uploaded, want)
 	}
 }
 
@@ -49,10 +49,10 @@ func TestUploadService_InvalidSegmentNotUploaded(t *testing.T) {
 
 	_, err := s.UploadVocal(context.Background(), "kullanici-a", "../kullanici-b", "s1", "take1", nil, 0)
 	if !errors.Is(err, client.ErrInvalidSegment) {
-		t.Fatalf("ErrGecersizSegment bekleniyordu, geldi: %v", err)
+		t.Fatalf("want ErrInvalidSegment, got: %v", err)
 	}
 	if len(storage.uploaded) != 0 {
-		t.Errorf("gecersiz istekte yukleme yapildi: %v", storage.uploaded)
+		t.Errorf("an upload was made for an invalid request: %v", storage.uploaded)
 	}
 }
 
@@ -75,10 +75,10 @@ func TestUploadService_DeleteUsesDeterministicKey(t *testing.T) {
 		t.Fatalf("DeleteVocal: %v", err)
 	}
 	if len(storage.deleted) != 1 || storage.deleted[0] != "vocals/kullanici-a/p1/s1/t1.wav" {
-		t.Errorf("silinen = %v", storage.deleted)
+		t.Errorf("deleted = %v", storage.deleted)
 	}
 	if err := s.DeleteVocal(context.Background(), "kullanici-a", "p1", "s1", "*"); !errors.Is(err, client.ErrInvalidSegment) {
-		t.Errorf("glob takeId icin ErrGecersizSegment bekleniyordu, geldi: %v", err)
+		t.Errorf("want ErrInvalidSegment for a glob takeId, got: %v", err)
 	}
 }
 
@@ -90,10 +90,10 @@ func TestExportService_RejectsOtherUsersMaster(t *testing.T) {
 	foreign := client.UnsignedURL("masters/kullanici-b/p1/m1.wav", cfg)
 	_, err := s.ExportMP3(context.Background(), "kullanici-a", &model.ExportMP3Request{MasterFileURL: foreign})
 	if !errors.Is(err, client.ErrKeyNotOwned) {
-		t.Fatalf("ErrYabanciAnahtar bekleniyordu, geldi: %v", err)
+		t.Fatalf("want ErrKeyNotOwned, got: %v", err)
 	}
 	if audio.encode != nil {
-		t.Error("yabanci girdiyle audio-service cagrildi")
+		t.Error("audio-service was called with a foreign input")
 	}
 }
 
@@ -107,7 +107,7 @@ func TestExportService_OutputHasUserPrefix(t *testing.T) {
 		t.Fatalf("ExportWAV: %v", err)
 	}
 	if audio.encode.InputKey != "masters/kullanici-a/p1/m1.wav" || !strings.HasPrefix(audio.encode.OutputKey, "exports/kullanici-a/") {
-		t.Errorf("encode istegi = %+v", audio.encode)
+		t.Errorf("encode request = %+v", audio.encode)
 	}
 }
 
@@ -121,10 +121,10 @@ func TestExportService_RejectsForeignStemInZip(t *testing.T) {
 		client.UnsignedURL("stems/kullanici-b/p1/s2.mp3", cfg),
 	}}
 	if _, err := s.ExportStems(context.Background(), "kullanici-a", req); !errors.Is(err, client.ErrKeyNotOwned) {
-		t.Fatalf("ErrYabanciAnahtar bekleniyordu, geldi: %v", err)
+		t.Fatalf("want ErrKeyNotOwned, got: %v", err)
 	}
 	if audio.zip != nil {
-		t.Error("yabanci stem ile zip olusturuldu")
+		t.Error("a zip was created with a foreign stem")
 	}
 }
 
@@ -134,7 +134,7 @@ func TestMasterService_StartFinalRejectsForeignStem(t *testing.T) {
 
 	req := &model.MasterFinalRequest{StemURLs: []string{client.UnsignedURL("stems/kullanici-b/p1/s1.mp3", cfg)}}
 	if _, err := s.StartFinal(context.Background(), "kullanici-a", req); !errors.Is(err, client.ErrKeyNotOwned) {
-		t.Errorf("stem: ErrYabanciAnahtar bekleniyordu, geldi: %v", err)
+		t.Errorf("stem: want ErrKeyNotOwned, got: %v", err)
 	}
 
 	req = &model.MasterFinalRequest{
@@ -142,7 +142,7 @@ func TestMasterService_StartFinalRejectsForeignStem(t *testing.T) {
 		VocalTakes: []model.VocalTake{{FileURL: client.UnsignedURL("vocals/kullanici-b/p1/s1/t1.wav", cfg)}},
 	}
 	if _, err := s.StartFinal(context.Background(), "kullanici-a", req); !errors.Is(err, client.ErrKeyNotOwned) {
-		t.Errorf("vokal: ErrYabanciAnahtar bekleniyordu, geldi: %v", err)
+		t.Errorf("vocal: want ErrKeyNotOwned, got: %v", err)
 	}
 }
 
@@ -152,19 +152,19 @@ func TestExportService_MockBranchChecksOwnership(t *testing.T) {
 
 	foreign := client.UnsignedURL("masters/kullanici-b/p1/m1.wav", cfg)
 	if _, err := s.ExportMP3(context.Background(), "kullanici-a", &model.ExportMP3Request{MasterFileURL: foreign}); !errors.Is(err, client.ErrKeyNotOwned) {
-		t.Errorf("mp3: ErrYabanciAnahtar bekleniyordu, geldi: %v", err)
+		t.Errorf("mp3: want ErrKeyNotOwned, got: %v", err)
 	}
 	if _, err := s.ExportWAV(context.Background(), "kullanici-a", &model.ExportWAVRequest{MasterFileURL: foreign}); !errors.Is(err, client.ErrKeyNotOwned) {
-		t.Errorf("wav: ErrYabanciAnahtar bekleniyordu, geldi: %v", err)
+		t.Errorf("wav: want ErrKeyNotOwned, got: %v", err)
 	}
 	stems := &model.ExportStemsRequest{StemURLs: []string{client.UnsignedURL("stems/kullanici-b/p1/s1.mp3", cfg)}}
 	if _, err := s.ExportStems(context.Background(), "kullanici-a", stems); !errors.Is(err, client.ErrKeyNotOwned) {
-		t.Errorf("stems: ErrYabanciAnahtar bekleniyordu, geldi: %v", err)
+		t.Errorf("stems: want ErrKeyNotOwned, got: %v", err)
 	}
 
 	own := client.UnsignedURL("masters/kullanici-a/p1/m1.wav", cfg)
 	if _, err := s.ExportMP3(context.Background(), "kullanici-a", &model.ExportMP3Request{MasterFileURL: own}); err != nil {
-		t.Errorf("kendi master mock: %v", err)
+		t.Errorf("own master mock: %v", err)
 	}
 }
 
@@ -175,12 +175,12 @@ func TestService_UnknownHostIsInvalidURL(t *testing.T) {
 	ex := NewExportService(nil, nil, cfg)
 	_, err := ex.ExportMP3(context.Background(), "kullanici-a", &model.ExportMP3Request{MasterFileURL: bad})
 	if !errors.Is(err, client.ErrInvalidURL) || errors.Is(err, client.ErrKeyNotOwned) {
-		t.Errorf("ExportMP3: ErrGecersizURL bekleniyordu, geldi: %v", err)
+		t.Errorf("ExportMP3: want ErrInvalidURL, got: %v", err)
 	}
 
 	ms := NewMasterService(nil, nil, nil, cfg)
 	_, err = ms.StartFinal(context.Background(), "kullanici-a", &model.MasterFinalRequest{StemURLs: []string{bad}})
 	if !errors.Is(err, client.ErrInvalidURL) || errors.Is(err, client.ErrKeyNotOwned) {
-		t.Errorf("StartFinal: ErrGecersizURL bekleniyordu, geldi: %v", err)
+		t.Errorf("StartFinal: want ErrInvalidURL, got: %v", err)
 	}
 }

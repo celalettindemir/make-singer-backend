@@ -30,7 +30,7 @@ func signStatus(t *testing.T, app *fiber.App, body string) (int, string) {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := app.Test(req)
 	if err != nil {
-		t.Fatalf("istek: %v", err)
+		t.Fatalf("request: %v", err)
 	}
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(b)
@@ -40,7 +40,7 @@ func TestFileHandler_Signs(t *testing.T) {
 	status, body := signStatus(t, signApp("u1"),
 		`{"urls":["https://makesinger-cdn.celalettindemir.dev/exports/u1/e1.mp3"]}`)
 	if status != http.StatusOK || !strings.Contains(body, `"files"`) {
-		t.Fatalf("durum=%d govde=%s", status, body)
+		t.Fatalf("status=%d body=%s", status, body)
 	}
 }
 
@@ -48,7 +48,7 @@ func TestFileHandler_Foreign404(t *testing.T) {
 	status, _ := signStatus(t, signApp("u1"),
 		`{"urls":["https://makesinger-cdn.celalettindemir.dev/exports/u2/e1.mp3"]}`)
 	if status != http.StatusNotFound {
-		t.Fatalf("durum=%d, beklenen 404", status)
+		t.Fatalf("status=%d, want 404", status)
 	}
 }
 
@@ -64,13 +64,13 @@ func TestFileHandler_InvalidInput400(t *testing.T) {
 		`{"urls":[` + strings.Join(tooMany, ",") + `]}`,
 	} {
 		if status, _ := signStatus(t, signApp("u1"), body); status != http.StatusBadRequest {
-			t.Errorf("%.40s... icin durum=%d, beklenen 400", body, status)
+			t.Errorf("%.40s...: status=%d, want 400", body, status)
 		}
 	}
 }
 
 func TestFileHandler_Unauthenticated401(t *testing.T) {
 	if status, _ := signStatus(t, signApp(""), `{"urls":["x"]}`); status != http.StatusUnauthorized {
-		t.Fatalf("durum=%d, beklenen 401", status)
+		t.Fatalf("status=%d, want 401", status)
 	}
 }

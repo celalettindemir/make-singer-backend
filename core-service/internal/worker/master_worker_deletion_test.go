@@ -25,7 +25,7 @@ func (s *fakeAudio) Master(context.Context, *client.MasterRequest) (*client.Mast
 	if s.err == nil {
 		// The success path enters the hub broadcast (no hub in the test); the
 		// call is counted and an error is returned.
-		return nil, errors.New("sahte ses: master cagrildi")
+		return nil, errors.New("fake audio: master was called")
 	}
 	return nil, s.err
 }
@@ -58,25 +58,25 @@ func TestMasterWorker_NoUploadForDeletedOwner(t *testing.T) {
 	h := &fakeChecker{answer: alwaysDeleted}
 	err := masterTestWorker(audio, h).processWithAudioService(context.Background(), "j1", masterPayload())
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
 	if audio.masterCalls != 0 {
-		t.Fatalf("silinmis sahip icin master %d kez cagrildi", audio.masterCalls)
+		t.Fatalf("master was called %d times for a deleted owner", audio.masterCalls)
 	}
 	if len(h.asked) == 0 || h.asked[0] != "kullanici-a" {
-		t.Fatalf("is sahibi denetlenmedi: %v", h.asked)
+		t.Fatalf("the job owner was not checked: %v", h.asked)
 	}
 }
 
 func TestMasterWorker_CheckErrorIsRetryable(t *testing.T) {
 	audio := &fakeAudio{}
-	h := &fakeChecker{answer: func(int) (bool, error) { return false, errors.New("redis kapali") }}
+	h := &fakeChecker{answer: func(int) (bool, error) { return false, errors.New("redis is down") }}
 	err := masterTestWorker(audio, h).processWithAudioService(context.Background(), "j1", masterPayload())
 	if err == nil || errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("denetim hatasi tekrar denenebilir olmali, geldi: %v", err)
+		t.Fatalf("a check error must be retryable, got: %v", err)
 	}
 	if audio.masterCalls != 0 {
-		t.Fatalf("denetim hatasinda master %d kez cagrildi", audio.masterCalls)
+		t.Fatalf("master was called %d times on a check error", audio.masterCalls)
 	}
 }
 
@@ -85,7 +85,7 @@ func TestMasterWorker_CallsMasterForLiveOwner(t *testing.T) {
 	h := &fakeChecker{answer: func(int) (bool, error) { return false, nil }}
 	_ = masterTestWorker(audio, h).processWithAudioService(context.Background(), "j1", masterPayload())
 	if audio.masterCalls != 1 {
-		t.Fatalf("master %d kez cagrildi, 1 bekleniyordu", audio.masterCalls)
+		t.Fatalf("master was called %d times, want 1", audio.masterCalls)
 	}
 }
 
@@ -93,6 +93,6 @@ func TestMasterWorker_NoCheckWithoutChecker(t *testing.T) {
 	audio := &fakeAudio{}
 	_ = masterTestWorker(audio, nil).processWithAudioService(context.Background(), "j1", masterPayload())
 	if audio.masterCalls != 1 {
-		t.Fatalf("master %d kez cagrildi, 1 bekleniyordu", audio.masterCalls)
+		t.Fatalf("master was called %d times, want 1", audio.masterCalls)
 	}
 }

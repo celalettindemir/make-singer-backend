@@ -95,7 +95,7 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 	if cfg.R2.AccessKeyID != "" && cfg.R2.SecretAccessKey != "" {
 		r2, err := client.NewR2Client(&cfg.R2)
 		if err != nil {
-			t.Fatalf("R2 istemcisi kurulamadi: %v", err)
+			t.Fatalf("could not set up the R2 client: %v", err)
 		}
 		r2Client = r2
 	}
@@ -201,7 +201,7 @@ func TestRenderFullPipeline_RealSuno(t *testing.T) {
 	// cannot trigger it by accident. The check happens before .env is loaded:
 	// the consent must be given on the command line, not in the file.
 	if os.Getenv("SUNO_E2E_ONAY") != "1" {
-		t.Skip("ucretli Suno testi atlandi; calistirmak icin SUNO_E2E_ONAY=1")
+		t.Skip("paid Suno test skipped; set SUNO_E2E_ONAY=1 to run it")
 	}
 
 	app, cleanup := setupRealApp(t)

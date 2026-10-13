@@ -31,12 +31,12 @@ func TestBuildMusicStyle(t *testing.T) {
 
 	minimal := &model.RenderJobPayload{Brief: model.Brief{Genre: model.Genre("rock"), Vibes: []string{"x"}}}
 	if got := buildMusicStyle(minimal); got != "rock, instrumental, x" {
-		t.Errorf("asgari = %q", got)
+		t.Errorf("minimal = %q", got)
 	}
 
 	long := &model.RenderJobPayload{Brief: model.Brief{Genre: model.Genre("pop"), Vibes: []string{strings.Repeat("ş", 900)}}}
 	got = buildMusicStyle(long)
 	if len(got) > 1000 || !utf8.ValidString(got) {
-		t.Errorf("uzun style %d bayt, gecerli UTF-8: %v", len(got), utf8.ValidString(got))
+		t.Errorf("long style %d bytes, valid UTF-8: %v", len(got), utf8.ValidString(got))
 	}
 }

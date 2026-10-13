@@ -52,11 +52,11 @@ func asynqIsLastAttempt(ctx context.Context) bool {
 func decodeSocialTaskPayload(t *asynq.Task) (string, error) {
 	var payload social.TaskPayload
 	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
-		return "", fmt.Errorf("sosyal gorev yuku cozulemedi: %v: %w", err, asynq.SkipRetry)
+		return "", fmt.Errorf("could not decode the social task payload: %v: %w", err, asynq.SkipRetry)
 	}
 	id, err := uuid.Parse(payload.PublicationID)
 	if err != nil {
-		return "", fmt.Errorf("sosyal gorev yukunde gecersiz yayin kimligi: %w", asynq.SkipRetry)
+		return "", fmt.Errorf("invalid publication ID in the social task payload: %w", asynq.SkipRetry)
 	}
 	return id.String(), nil
 }
@@ -99,7 +99,7 @@ func (w *SocialWorker) Prepare(ctx context.Context, t *asynq.Task) error {
 func (w *SocialWorker) checkOwner(ctx context.Context, ownerID string) error {
 	if err := ownerCanWrite(ctx, w.deletionChecker, ownerID); err != nil {
 		if errors.Is(err, errOwnerDeleted) {
-			return fmt.Errorf("yayin hazirlanmadi: %w: %w", err, asynq.SkipRetry)
+			return fmt.Errorf("publication was not prepared: %w: %w", err, asynq.SkipRetry)
 		}
 		return err
 	}
@@ -117,7 +117,7 @@ func (w *SocialWorker) fail(ctx context.Context, id string, err error) error {
 	}
 	if errors.Is(err, asynq.SkipRetry) || w.isLastAttempt(ctx) {
 		if markErr := w.store.MarkFailed(context.WithoutCancel(ctx), id); markErr != nil {
-			log.Printf("Uyari: yayin hata durumuna alinamadi (%s): %v", id, markErr)
+			log.Printf("Warning: could not mark the publication as failed (%s): %v", id, markErr)
 		}
 	}
 	return err
@@ -129,20 +129,20 @@ func (w *SocialWorker) copyFiles(ctx context.Context, record *social.Preparation
 	var result social.PreparationResult
 	master, err := social.MasterDestKey(record.ID, record.Preparation.MasterKey)
 	if err != nil {
-		return result, fmt.Errorf("master hedefi kurulamadi: %v: %w", err, asynq.SkipRetry)
+		return result, fmt.Errorf("could not build the master target: %v: %w", err, asynq.SkipRetry)
 	}
 	if err := w.copyOne(ctx, record.OwnerID, record.Preparation.MasterKey, master); err != nil {
-		return result, fmt.Errorf("master kopyalanamadi: %w", err)
+		return result, fmt.Errorf("could not copy the master: %w", err)
 	}
 	result.MasterKey = master
 	result.Stems = make([]social.StemRecord, 0, len(record.Preparation.Stems))
 	for _, st := range record.Preparation.Stems {
 		dst, err := social.StemDestKey(record.ID, st.ID, st.Key)
 		if err != nil {
-			return result, fmt.Errorf("stem hedefi kurulamadi: %v: %w", err, asynq.SkipRetry)
+			return result, fmt.Errorf("could not build the stem target: %v: %w", err, asynq.SkipRetry)
 		}
 		if err := w.copyOne(ctx, record.OwnerID, st.Key, dst); err != nil {
-			return result, fmt.Errorf("stem kopyalanamadi: %w", err)
+			return result, fmt.Errorf("could not copy the stem: %w", err)
 		}
 		result.Stems = append(result.Stems, social.StemRecord{
 			ID: st.ID, Instrument: st.Instrument, Duration: st.Duration, Key: dst,
@@ -170,7 +170,7 @@ func (w *SocialWorker) analyze(ctx context.Context, id string, result *social.Pr
 	}
 	previewKey, err := social.PreviewDestKey(id)
 	if err != nil {
-		log.Printf("Uyari: onizleme hedefi kurulamadi (%s): %v", id, err)
+		log.Printf("Warning: could not build the preview target (%s): %v", id, err)
 		return
 	}
 	resp, err := w.analyzer.Analyze(ctx, &client.AnalysisRequest{
@@ -178,11 +178,11 @@ func (w *SocialWorker) analyze(ctx context.Context, id string, result *social.Pr
 		PeakCount: waveformPeakCount, PreviewSeconds: previewSeconds,
 	})
 	if err != nil {
-		log.Printf("Uyari: yayin analiz edilemedi, dalga formu bos kalacak (%s): %v", id, err)
+		log.Printf("Warning: could not analyze the publication, the waveform will stay empty (%s): %v", id, err)
 		return
 	}
 	if len(resp.Peaks) != waveformPeakCount {
-		log.Printf("Uyari: analiz %d tepe dondu, %d bekleniyordu (%s)", len(resp.Peaks), waveformPeakCount, id)
+		log.Printf("Warning: the analysis returned %d peaks, %d expected (%s)", len(resp.Peaks), waveformPeakCount, id)
 		return
 	}
 	waveform := make([]float64, waveformPeakCount)
@@ -205,7 +205,7 @@ func (w *SocialWorker) DeleteFiles(ctx context.Context, t *asynq.Task) error {
 	}
 	prefix, err := client.SocialPrefix(id)
 	if err != nil {
-		return fmt.Errorf("sosyal onek kurulamadi: %v: %w", err, asynq.SkipRetry)
+		return fmt.Errorf("could not build the social prefix: %v: %w", err, asynq.SkipRetry)
 	}
 	record, err := w.store.GetPreparation(ctx, id)
 	switch {
@@ -220,7 +220,7 @@ func (w *SocialWorker) DeleteFiles(ctx context.Context, t *asynq.Task) error {
 		return nil
 	}
 	if _, err := w.prefixDeleter.DeletePrefix(ctx, prefix); err != nil {
-		return fmt.Errorf("sosyal dosyalari silinemedi: %w", err)
+		return fmt.Errorf("could not delete the social files: %w", err)
 	}
 	return nil
 }

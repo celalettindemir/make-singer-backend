@@ -70,7 +70,7 @@ func testInsertPublication(t *testing.T, pool *pgxpool.Pool, row testPublication
 			CASE WHEN $8::uuid IS NULL THEN NULL ELSE 'eski_ad' END, $9, $10, $11)`,
 		row.ID, row.Slug, row.OwnerID, row.Title, row.Visibility, row.BackingEnabled, row.Preparation, source, row.Status, row.CreatedAt, deletedAt)
 	if err != nil {
-		t.Fatalf("test yayini eklenemedi: %v", err)
+		t.Fatalf("could not add the test publication: %v", err)
 	}
 	return row.ID
 }
@@ -79,13 +79,13 @@ func testInsertFollow(t *testing.T, pool *pgxpool.Pool, follower, followee strin
 	t.Helper()
 	if _, err := pool.Exec(context.Background(),
 		`INSERT INTO sosyal.takip (takipci_id, takip_edilen_id) VALUES ($1, $2)`, follower, followee); err != nil {
-		t.Fatalf("takip eklenemedi: %v", err)
+		t.Fatalf("could not add the follow: %v", err)
 	}
 }
 
 func testInsertProfile(t *testing.T, store *PostgresStore, id, name string) {
 	t.Helper()
 	if _, err := store.UpsertProfile(context.Background(), ProfileRecord{UserID: id, Username: name, DisplayName: name}); err != nil {
-		t.Fatalf("profil eklenemedi: %v", err)
+		t.Fatalf("could not add the profile: %v", err)
 	}
 }

@@ -23,7 +23,7 @@ func (s *PostgresStore) Follow(ctx context.Context, followerID, followeeID strin
 	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO sosyal.takip (takipci_id, takip_edilen_id) VALUES ($1, $2)
 		ON CONFLICT DO NOTHING`, followerID, followeeID); err != nil {
-		return fmt.Errorf("takip eklenemedi: %w", err)
+		return fmt.Errorf("could not add the follow: %w", err)
 	}
 	return nil
 }
@@ -32,7 +32,7 @@ func (s *PostgresStore) Unfollow(ctx context.Context, followerID, followeeID str
 	if _, err := s.pool.Exec(ctx, `
 		DELETE FROM sosyal.takip WHERE takipci_id = $1 AND takip_edilen_id = $2`,
 		followerID, followeeID); err != nil {
-		return fmt.Errorf("takip kaldirilamadi: %w", err)
+		return fmt.Errorf("could not remove the follow: %w", err)
 	}
 	return nil
 }
@@ -43,7 +43,7 @@ func (s *PostgresStore) FollowStatus(ctx context.Context, followerID, followeeID
 		SELECT (SELECT count(*) FROM sosyal.takip WHERE takip_edilen_id = $2),
 		       EXISTS (SELECT 1 FROM sosyal.takip WHERE takipci_id = $1 AND takip_edilen_id = $2)`,
 		followerID, followeeID).Scan(&status.Followers, &status.FollowedByMe); err != nil {
-		return nil, fmt.Errorf("takip durumu okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the follow status: %w", err)
 	}
 	return &status, nil
 }
@@ -72,14 +72,14 @@ func (s *PostgresStore) Suggestions(ctx context.Context, viewerID string, limit 
 		 ORDER BY s.begeni DESC, s.son DESC, p.kullanici_id
 		 LIMIT $2`, viewerID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("oneriler okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read suggestions: %w", err)
 	}
 	defer rows.Close()
 	records := []ProfileRecord{}
 	for rows.Next() {
 		profile, err := scanProfile(rows)
 		if err != nil {
-			return nil, fmt.Errorf("oneri okunamadi: %w", err)
+			return nil, fmt.Errorf("could not read a suggestion: %w", err)
 		}
 		records = append(records, *profile)
 	}

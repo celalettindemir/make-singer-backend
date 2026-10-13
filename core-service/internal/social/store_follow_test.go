@@ -16,7 +16,7 @@ func testInsertLikeAt(t *testing.T, pool *pgxpool.Pool, user, pub string, at tim
 	if _, err := pool.Exec(context.Background(),
 		`INSERT INTO sosyal.begeni (kullanici_id, yayin_id, olusturma) VALUES ($1, $2, $3)`,
 		user, pub, at); err != nil {
-		t.Fatalf("begeni eklenemedi: %v", err)
+		t.Fatalf("could not add the like: %v", err)
 	}
 }
 
@@ -28,7 +28,7 @@ func TestPostgresStore_FollowIdempotent(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		if err := store.Follow(ctx, a, b); err != nil {
-			t.Fatalf("TakipEt %d: %v", i, err)
+			t.Fatalf("Follow %d: %v", i, err)
 		}
 	}
 	if err := store.Follow(ctx, c, b); err != nil {
@@ -36,23 +36,23 @@ func TestPostgresStore_FollowIdempotent(t *testing.T) {
 	}
 	status, err := store.FollowStatus(ctx, a, b)
 	if err != nil || status.Followers != 2 || !status.FollowedByMe {
-		t.Fatalf("durum = %+v, %v", status, err)
+		t.Fatalf("status = %+v, %v", status, err)
 	}
 	reverse, err := store.FollowStatus(ctx, b, a)
 	if err != nil || reverse.Followers != 0 || reverse.FollowedByMe {
-		t.Fatalf("ters yon = %+v, %v", reverse, err)
+		t.Fatalf("reverse direction = %+v, %v", reverse, err)
 	}
 	for i := 0; i < 2; i++ {
 		if err := store.Unfollow(ctx, a, b); err != nil {
-			t.Fatalf("TakibiBirak %d: %v", i, err)
+			t.Fatalf("Unfollow %d: %v", i, err)
 		}
 	}
 	status, err = store.FollowStatus(ctx, a, b)
 	if err != nil || status.Followers != 1 || status.FollowedByMe {
-		t.Fatalf("birakmadan sonra = %+v, %v", status, err)
+		t.Fatalf("after unfollowing = %+v, %v", status, err)
 	}
 	if err := store.Follow(ctx, a, a); err == nil {
-		t.Fatal("kendini takip CHECK kisitina takilmali")
+		t.Fatal("a self-follow must hit the CHECK constraint")
 	}
 }
 
@@ -105,7 +105,7 @@ func TestPostgresStore_Suggestions(t *testing.T) {
 
 	suggestions, err := store.Suggestions(ctx, me, 10)
 	if err != nil {
-		t.Fatalf("Oneriler: %v", err)
+		t.Fatalf("Suggestions: %v", err)
 	}
 	var names []string
 	for _, out := range suggestions {

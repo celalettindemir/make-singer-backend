@@ -8,21 +8,21 @@ func TestDestKeys(t *testing.T) {
 		t.Fatalf("master = %q, %v", got, err)
 	}
 	if got, err := MasterDestKey(id, "masters/u/p/m1"); err != nil || got != "sosyal/"+id+"/master" {
-		t.Fatalf("uzantisiz master = %q, %v", got, err)
+		t.Fatalf("master without extension = %q, %v", got, err)
 	}
 	if got, err := StemDestKey(id, "drums", "stems/u/p/drums.mp3"); err != nil || got != "sosyal/"+id+"/stems/drums.mp3" {
 		t.Fatalf("stem = %q, %v", got, err)
 	}
 	if got, err := PreviewDestKey(id); err != nil || got != "sosyal/"+id+"/onizleme.mp3" {
-		t.Fatalf("onizleme = %q, %v", got, err)
+		t.Fatalf("preview = %q, %v", got, err)
 	}
 	if _, err := StemDestKey(id, "a.b", "stems/u/p/x.mp3"); err == nil {
-		t.Fatal("noktali stem id reddedilmeli")
+		t.Fatal("a stem id with dots must be rejected")
 	}
 	if _, err := StemDestKey(id, "../x", "stems/u/p/x.mp3"); err == nil {
-		t.Fatal("tirmanan stem id reddedilmeli")
+		t.Fatal("a traversing stem id must be rejected")
 	}
 	if got := extension("stems/u/p/x.WAV"); got != "" {
-		t.Fatalf("buyuk harfli uzanti segment desenine uymaz, bos olmali: %q", got)
+		t.Fatalf("an uppercase extension does not match the segment pattern, must be empty: %q", got)
 	}
 }

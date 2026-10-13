@@ -12,7 +12,7 @@ import (
 // It panics at registration time if ipLimiter is nil.
 func (h *SocialHandler) PublicRoutes(r fiber.Router, ipLimiter fiber.Handler) {
 	if ipLimiter == nil {
-		panic("handler: PublicRotalar icin IP limiteri doldurulmali")
+		panic("handler: the IP limiter must be set for PublicRoutes")
 	}
 	r.Get("/s/:slug", noStore, ipLimiter, h.Preview)
 }

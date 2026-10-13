@@ -84,13 +84,13 @@ func main() {
 	// the correct, visible signal, and a restart is the correct recovery
 	// from a transient outage (e.g. Postgres).
 	if cfg.Auth.Issuer == "" {
-		log.Fatalf("AUTH_ISSUER zorunlu: kimlik saglayicisi olmadan /api korunamaz")
+		log.Fatalf("AUTH_ISSUER is required: /api cannot be protected without an identity provider")
 	}
 	identityServer, err := identity.Start(ctx, &cfg.Auth, redisClient, cfg.Server.Env)
 	if err != nil {
-		log.Fatalf("Kimlik saglayicisi baslatilamadi, servis baslatilmiyor: %v", err)
+		log.Fatalf("Could not start the identity provider, the service is not starting: %v", err)
 	}
-	log.Printf("Kimlik saglayicisi %s uzerinde, issuer %s", cfg.Auth.Port, cfg.Auth.Issuer)
+	log.Printf("Identity provider at %s, issuer %s", cfg.Auth.Port, cfg.Auth.Issuer)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -102,11 +102,11 @@ func main() {
 	// a pod without the social tables answers every /api/social request with 500.
 	socialPool, err := identity.Connect(ctx, cfg.Auth.DBURL)
 	if err != nil {
-		log.Fatalf("Sosyal veritabanina baglanilamadi: %v", err)
+		log.Fatalf("Could not connect to the social database: %v", err)
 	}
 	defer socialPool.Close()
 	if err := social.Migrate(ctx, socialPool); err != nil {
-		log.Fatalf("Sosyal migration basarisiz: %v", err)
+		log.Fatalf("Social migration failed: %v", err)
 	}
 	socialStore := social.NewPostgresStore(socialPool)
 
@@ -211,7 +211,7 @@ func main() {
 		// persist the Authorization header in the log, the second the plain
 		// text password of login/registration forms.
 		logFormat = "[${time}] ${status} - ${latency} ${method} ${path} ${queryParams}\n"
-		log.Println("Debug logging enabled (istek header'lari ve govdesi loglanmaz)")
+		log.Println("Debug logging enabled (request headers and bodies are not logged)")
 	}
 	app.Use(logger.New(logger.Config{
 		Format: logFormat,

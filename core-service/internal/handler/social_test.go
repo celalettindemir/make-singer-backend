@@ -195,13 +195,13 @@ func doSocialRequest(t *testing.T, app *fiber.App, method, path, body string) (i
 	}
 	resp, err := app.Test(req)
 	if err != nil {
-		t.Fatalf("istek: %v", err)
+		t.Fatalf("request: %v", err)
 	}
 	raw, _ := io.ReadAll(resp.Body)
 	var out map[string]any
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &out); err != nil {
-			t.Fatalf("govde JSON degil (%d): %s", resp.StatusCode, raw)
+			t.Fatalf("body is not JSON (%d): %s", resp.StatusCode, raw)
 		}
 	}
 	return resp.StatusCode, out
@@ -217,10 +217,10 @@ func TestSocialHandler_MyProfileMissing404NoProfile(t *testing.T) {
 	s := &fakeSocialService{err: social.ErrNoProfile}
 	status, body := doSocialRequest(t, newSocialApp(s, socialTestUser), http.MethodGet, "/api/social/profil/ben", "")
 	if status != http.StatusNotFound || errorCode(body) != "profil_yok" {
-		t.Fatalf("durum=%d govde=%v", status, body)
+		t.Fatalf("status=%d body=%v", status, body)
 	}
 	if s.lastUser != socialTestUser {
-		t.Fatalf("kullanici iletilmedi: %q", s.lastUser)
+		t.Fatalf("user was not forwarded: %q", s.lastUser)
 	}
 }
 
@@ -231,17 +231,17 @@ func TestSocialHandler_MyProfileContractFields(t *testing.T) {
 	}}
 	status, body := doSocialRequest(t, newSocialApp(s, socialTestUser), http.MethodGet, "/api/social/profil/ben", "")
 	if status != http.StatusOK {
-		t.Fatalf("durum=%d", status)
+		t.Fatalf("status=%d", status)
 	}
 	for _, field := range []string{"kullaniciAdi", "gorunenAd", "avatarRengi", "bio", "istatistik", "takipEdiyorMuyum", "benMiyim"} {
 		if _, ok := body[field]; !ok {
-			t.Errorf("%s alani yok: %v", field, body)
+			t.Errorf("field %s is missing: %v", field, body)
 		}
 	}
 	stats := body["istatistik"].(map[string]any)
 	for _, field := range []string{"sarki", "takipci", "takip", "cover"} {
 		if _, ok := stats[field]; !ok {
-			t.Errorf("istatistik.%s yok", field)
+			t.Errorf("istatistik.%s is missing", field)
 		}
 	}
 }
@@ -255,14 +255,14 @@ func TestSocialHandler_SaveProfileErrorCodes(t *testing.T) {
 		{social.ErrUsernameTaken, http.StatusConflict, "kullanici_adi_alinmis"},
 		{social.ErrInvalidUsername, http.StatusUnprocessableEntity, "gecersiz_kullanici_adi"},
 		{wrapValidation("gorunenAd"), http.StatusUnprocessableEntity, "dogrulama"},
-		{errors.New("pg kapali"), http.StatusInternalServerError, "sunucu_hatasi"},
+		{errors.New("pg is down"), http.StatusInternalServerError, "sunucu_hatasi"},
 	}
 	for _, tc := range cases {
 		s := &fakeSocialService{err: tc.err}
 		status, body := doSocialRequest(t, newSocialApp(s, socialTestUser), http.MethodPut, "/api/social/profil/ben",
 			`{"kullaniciAdi":"ali","gorunenAd":"Ali","bio":""}`)
 		if status != tc.status || errorCode(body) != tc.code {
-			t.Errorf("%v: durum=%d govde=%v", tc.err, status, body)
+			t.Errorf("%v: status=%d body=%v", tc.err, status, body)
 		}
 	}
 }
@@ -274,14 +274,14 @@ func TestSocialHandler_SaveProfileForwardsBody(t *testing.T) {
 	status, _ := doSocialRequest(t, newSocialApp(s, socialTestUser), http.MethodPut, "/api/social/profil/ben",
 		`{"kullaniciAdi":"ali","gorunenAd":"Ali","bio":"selam"}`)
 	if status != http.StatusOK || s.lastProfile != (social.ProfileInput{Username: "ali", DisplayName: "Ali", Bio: "selam"}) {
-		t.Fatalf("durum=%d girdi=%+v", status, s.lastProfile)
+		t.Fatalf("status=%d input=%+v", status, s.lastProfile)
 	}
 }
 
 func TestSocialHandler_MalformedBody422(t *testing.T) {
 	status, body := doSocialRequest(t, newSocialApp(&fakeSocialService{}, socialTestUser), http.MethodPut, "/api/social/profil/ben", `{"kullaniciAdi":`)
 	if status != http.StatusUnprocessableEntity || errorCode(body) != "dogrulama" {
-		t.Fatalf("durum=%d govde=%v", status, body)
+		t.Fatalf("status=%d body=%v", status, body)
 	}
 }
 
@@ -289,10 +289,10 @@ func TestSocialHandler_CheckUsernameSuggestionNullOrSet(t *testing.T) {
 	s := &fakeSocialService{availability: &social.UsernameAvailability{Available: true}}
 	status, body := doSocialRequest(t, newSocialApp(s, socialTestUser), http.MethodGet, "/api/social/profil/kullanici-adi/uygun?ad=ali", "")
 	if status != http.StatusOK || body["uygun"] != true || s.lastUsername != "ali" {
-		t.Fatalf("durum=%d govde=%v ad=%q", status, body, s.lastUsername)
+		t.Fatalf("status=%d body=%v name=%q", status, body, s.lastUsername)
 	}
 	if suggestion, present := body["oneri"]; !present || suggestion != nil {
-		t.Fatalf("oneri alani null olarak bulunmali: %v", body)
+		t.Fatalf("the oneri field must be present as null: %v", body)
 	}
 }
 
@@ -300,13 +300,13 @@ func TestSocialHandler_ProfileMissing404NotFound(t *testing.T) {
 	s := &fakeSocialService{err: social.ErrNotFound}
 	status, body := doSocialRequest(t, newSocialApp(s, socialTestUser), http.MethodGet, "/api/social/profiller/yok", "")
 	if status != http.StatusNotFound || errorCode(body) != "bulunamadi" || s.lastUsername != "yok" {
-		t.Fatalf("durum=%d govde=%v", status, body)
+		t.Fatalf("status=%d body=%v", status, body)
 	}
 }
 
 func TestSocialHandler_Unauthenticated401(t *testing.T) {
 	status, _ := doSocialRequest(t, newSocialApp(&fakeSocialService{}, ""), http.MethodGet, "/api/social/profil/ben", "")
 	if status != http.StatusUnauthorized {
-		t.Fatalf("durum=%d", status)
+		t.Fatalf("status=%d", status)
 	}
 }

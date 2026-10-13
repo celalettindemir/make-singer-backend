@@ -20,7 +20,7 @@ func allTimePages(t *testing.T, fetch func(*TimeCursor) ([]PublicationSummary, e
 	for pageNo := 0; pageNo < 20; pageNo++ {
 		items, err := fetch(cursor)
 		if err != nil {
-			t.Fatalf("sayfa %d: %v", pageNo, err)
+			t.Fatalf("page %d: %v", pageNo, err)
 		}
 		done := len(items) <= limit
 		if !done {
@@ -35,18 +35,18 @@ func allTimePages(t *testing.T, fetch func(*TimeCursor) ([]PublicationSummary, e
 		last := items[len(items)-1]
 		cursor = &TimeCursor{T: last.CreatedAt, ID: last.ID}
 	}
-	t.Fatal("sayfalama bitmedi")
+	t.Fatal("pagination did not finish")
 	return nil
 }
 
 func assertOrder(t *testing.T, name string, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {
-		t.Fatalf("%s: %d oge, beklenen %d (%v)", name, len(got), len(want), got)
+		t.Fatalf("%s: %d items, want %d (%v)", name, len(got), len(want), got)
 	}
 	for i := range got {
 		if got[i] != want[i] {
-			t.Fatalf("%s: sira %d = %s, beklenen %s", name, i, got[i], want[i])
+			t.Fatalf("%s: position %d = %s, want %s", name, i, got[i], want[i])
 		}
 	}
 }
@@ -124,7 +124,7 @@ func TestPostgresStore_ListProfilePublications(t *testing.T) {
 
 	items, _ := store.ListProfilePublications(ctx, followee, stranger, true, nil, 20)
 	if items[0].Source == nil || items[0].Source.PublicationID != everyone || items[0].Owner.Username != "takip_edilen" {
-		t.Fatalf("cover ozeti = %+v", items[0])
+		t.Fatalf("cover summary = %+v", items[0])
 	}
 }
 
@@ -134,7 +134,7 @@ func insertLikes(t *testing.T, pool *pgxpool.Pool, pubID string, count int, at t
 		if _, err := pool.Exec(context.Background(),
 			`INSERT INTO sosyal.begeni (kullanici_id, yayin_id, olusturma) VALUES ($1, $2, $3)`,
 			uuid.NewString(), pubID, at); err != nil {
-			t.Fatalf("begeni: %v", err)
+			t.Fatalf("like: %v", err)
 		}
 	}
 }
@@ -159,16 +159,16 @@ func TestPostgresStore_FeedForYouScoreAndPaging(t *testing.T) {
 
 	all, err := store.FeedForYou(ctx, me, refTime, nil, 50)
 	if err != nil {
-		t.Fatalf("AkisSeninIcin: %v", err)
+		t.Fatalf("FeedForYou: %v", err)
 	}
 	var ids []string
 	for _, out := range all {
 		ids = append(ids, out.ID)
 	}
-	assertOrder(t, "senin icin", ids, []string{popular, quiet, oldPub})
+	assertOrder(t, "for you", ids, []string{popular, quiet, oldPub})
 	// (1+5)/(2+2)^1.5 = 0.75
 	if p := all[0].Score; p < 0.7499 || p > 0.7501 {
-		t.Fatalf("populer puani = %v, beklenen 0.75", p)
+		t.Fatalf("popularity score = %v, want 0.75", p)
 	}
 
 	// Same order with single-item pages, no repeats.
@@ -179,7 +179,7 @@ func TestPostgresStore_FeedForYouScoreAndPaging(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		items, err := store.FeedForYou(ctx, me, refTime, cursor, 1)
 		if err != nil {
-			t.Fatalf("sayfa: %v", err)
+			t.Fatalf("page: %v", err)
 		}
 		visited = append(visited, items[0].ID)
 		if len(items) == 1 {
@@ -187,7 +187,7 @@ func TestPostgresStore_FeedForYouScoreAndPaging(t *testing.T) {
 		}
 		cursor = &ScoreCursor{Score: items[0].Score, ID: items[0].ID, RefMs: refTime.UnixMilli()}
 	}
-	assertOrder(t, "senin icin sayfalari", visited, []string{popular, quiet, oldPub})
+	assertOrder(t, "for-you pages", visited, []string{popular, quiet, oldPub})
 }
 
 func TestPostgresStore_Like(t *testing.T) {
@@ -199,20 +199,20 @@ func TestPostgresStore_Like(t *testing.T) {
 	id := testInsertPublication(t, pool, testPublication{OwnerID: owner})
 	for i := 0; i < 2; i++ {
 		if err := store.Like(ctx, me, id); err != nil {
-			t.Fatalf("Begen %d: %v", i, err)
+			t.Fatalf("Like %d: %v", i, err)
 		}
 	}
 	rec, _ := store.GetPublication(ctx, id, me)
 	if rec.LikeCount != 1 || !rec.LikedByMe {
-		t.Fatalf("begeni tekrari guvenli olmali: %d %v", rec.LikeCount, rec.LikedByMe)
+		t.Fatalf("repeating a like must be safe: %d %v", rec.LikeCount, rec.LikedByMe)
 	}
 	for i := 0; i < 2; i++ {
 		if err := store.Unlike(ctx, me, id); err != nil {
-			t.Fatalf("Kaldir %d: %v", i, err)
+			t.Fatalf("Unlike %d: %v", i, err)
 		}
 	}
 	rec, _ = store.GetPublication(ctx, id, me)
 	if rec.LikeCount != 0 || rec.LikedByMe {
-		t.Fatalf("begeni kaldirilmali: %d %v", rec.LikeCount, rec.LikedByMe)
+		t.Fatalf("the like must be removed: %d %v", rec.LikeCount, rec.LikedByMe)
 	}
 }

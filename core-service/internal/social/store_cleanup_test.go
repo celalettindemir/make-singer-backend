@@ -32,26 +32,26 @@ func TestPostgresStore_DeleteUserData(t *testing.T) {
 		`INSERT INTO sosyal.sikayet (id, bildiren_id, hedef_turu, hedef_id, yayin_id, neden) VALUES (gen_random_uuid(), '` + leaver + `', 'yayin', '` + stayerPublication + `', '` + stayerPublication + `', 'spam')`,
 	} {
 		if _, err := pool.Exec(ctx, query); err != nil {
-			t.Fatalf("kurulum: %v", err)
+			t.Fatalf("setup: %v", err)
 		}
 	}
 
 	ids, err := store.ListPublicationIDs(ctx, leaver)
 	if err != nil {
-		t.Fatalf("YayinlariListele: %v", err)
+		t.Fatalf("ListPublicationIDs: %v", err)
 	}
 	sort.Strings(ids)
 	want := []string{live, deleted}
 	sort.Strings(want)
 	if len(ids) != 2 || ids[0] != want[0] || ids[1] != want[1] {
-		t.Fatalf("silinmisler dahil iki yayin bekleniyordu: %v", ids)
+		t.Fatalf("two publications including deleted ones were expected: %v", ids)
 	}
 
 	if err := store.DeleteUserData(ctx, leaver); err != nil {
-		t.Fatalf("KullaniciVerisiniSil: %v", err)
+		t.Fatalf("DeleteUserData: %v", err)
 	}
 	if err := store.DeleteUserData(ctx, leaver); err != nil {
-		t.Fatalf("tekrar silme hatasiz olmali: %v", err)
+		t.Fatalf("deleting again must not fail: %v", err)
 	}
 
 	var leaverRemaining int
@@ -62,26 +62,26 @@ func TestPostgresStore_DeleteUserData(t *testing.T) {
 		     + (SELECT count(*) FROM sosyal.yorum WHERE yazar_id = $1)
 		     + (SELECT count(*) FROM sosyal.takip WHERE takipci_id = $1 OR takip_edilen_id = $1)
 		     + (SELECT count(*) FROM sosyal.sikayet WHERE bildiren_id = $1)`, leaver, live).Scan(&leaverRemaining); err != nil {
-		t.Fatalf("sayim: %v", err)
+		t.Fatalf("count: %v", err)
 	}
 	if leaverRemaining != 0 {
-		t.Fatalf("silinen kullanicinin %d kaydi kaldi", leaverRemaining)
+		t.Fatalf("%d rows of the deleted user are left", leaverRemaining)
 	}
 
 	// Other people's data is intact; the cover stays and its source shows as deleted.
 	if _, err := store.GetProfile(ctx, stayer); err != nil {
-		t.Fatalf("kalan profil silinmemeli: %v", err)
+		t.Fatalf("the remaining profile must not be deleted: %v", err)
 	}
 	rec, err := store.GetPublication(ctx, stayerPublication, stayer)
 	if err != nil || rec.LikeCount != 1 || rec.CommentCount != 1 {
-		t.Fatalf("kalanin yayini = %+v, %v", rec, err)
+		t.Fatalf("remaining user's publication = %+v, %v", rec, err)
 	}
 	c, err := store.GetPublication(ctx, cover, stayer)
 	if err != nil || c.Source == nil || !c.Source.Deleted || c.Source.PublicationID != live {
-		t.Fatalf("cover kalmali ve kaynagi silindi olmali: %+v, %v", c, err)
+		t.Fatalf("the cover must remain and its source must be marked deleted: %+v, %v", c, err)
 	}
 	if empty, err := store.ListPublicationIDs(ctx, leaver); err != nil || len(empty) != 0 {
-		t.Fatalf("silinen kullanicinin yayini kalmamali: %v %v", empty, err)
+		t.Fatalf("the deleted user's publication must not remain: %v %v", empty, err)
 	}
 }
 
@@ -114,7 +114,7 @@ func setupTraceScenario(t *testing.T, store *PostgresStore) traceScenario {
 		`INSERT INTO sosyal.sikayet (id, bildiren_id, hedef_turu, hedef_id, yayin_id, neden) VALUES (gen_random_uuid(), gen_random_uuid(), 'yayin', '` + s.stayingPublication + `', '` + s.stayingPublication + `', 'spam')`,
 	} {
 		if _, err := pool.Exec(context.Background(), query); err != nil {
-			t.Fatalf("kurulum: %v", err)
+			t.Fatalf("setup: %v", err)
 		}
 	}
 	return s
@@ -124,7 +124,7 @@ func reportCount(t *testing.T, store *PostgresStore) int {
 	t.Helper()
 	var n int
 	if err := store.pool.QueryRow(context.Background(), `SELECT count(*) FROM sosyal.sikayet`).Scan(&n); err != nil {
-		t.Fatalf("sikayet sayimi: %v", err)
+		t.Fatalf("report count: %v", err)
 	}
 	return n
 }
@@ -137,33 +137,33 @@ func TestPostgresStore_DeleteUserTraces(t *testing.T) {
 	s := setupTraceScenario(t, store)
 
 	if err := store.DeleteUserTraces(ctx, s.leaving); err != nil {
-		t.Fatalf("KullaniciIzleriniSil: %v", err)
+		t.Fatalf("DeleteUserTraces: %v", err)
 	}
 	if err := store.DeleteUserTraces(ctx, s.leaving); err != nil {
-		t.Fatalf("tekrar iz silme hatasiz olmali: %v", err)
+		t.Fatalf("deleting traces again must not fail: %v", err)
 	}
 	if _, err := store.GetProfile(ctx, s.leaving); err == nil {
-		t.Fatal("profil silinmeli")
+		t.Fatal("the profile must be deleted")
 	}
 	if ids, err := store.ListPublicationIDs(ctx, s.leaving); err != nil || len(ids) != 1 || ids[0] != s.leavingPublication {
-		t.Fatalf("yayin satirlari kalmali: %v %v", ids, err)
+		t.Fatalf("publication rows must remain: %v %v", ids, err)
 	}
 	// Without a profile the publication is not visible on any read path.
 	if _, err := store.GetPublication(ctx, s.leavingPublication, s.staying); err == nil {
-		t.Fatal("profili silinen kullanicinin yayini gorunmemeli")
+		t.Fatal("the publication of a user whose profile was deleted must not be visible")
 	}
 	var stayerTraces int
 	if err := store.pool.QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM sosyal.begeni WHERE kullanici_id = $1)
 		     + (SELECT count(*) FROM sosyal.yorum WHERE yazar_id = $1)
 		     + (SELECT count(*) FROM sosyal.takip WHERE takipci_id = $1 OR takip_edilen_id = $1)`, s.leaving).Scan(&stayerTraces); err != nil {
-		t.Fatalf("sayim: %v", err)
+		t.Fatalf("count: %v", err)
 	}
 	if stayerTraces != 0 {
-		t.Fatalf("gidenin %d izi kaldi", stayerTraces)
+		t.Fatalf("%d traces of the departed user are left", stayerTraces)
 	}
 	if n := reportCount(t, store); n != 1 {
-		t.Fatalf("yalnizca ucuncu kisinin sikayeti kalmali, kalan %d", n)
+		t.Fatalf("only the third party's report must remain, %d left", n)
 	}
 }
 
@@ -172,10 +172,10 @@ func TestPostgresStore_DeleteUserData_CommentReports(t *testing.T) {
 	store := NewPostgresStore(testPool(t))
 	s := setupTraceScenario(t, store)
 	if err := store.DeleteUserData(context.Background(), s.leaving); err != nil {
-		t.Fatalf("KullaniciVerisiniSil: %v", err)
+		t.Fatalf("DeleteUserData: %v", err)
 	}
 	if n := reportCount(t, store); n != 1 {
-		t.Fatalf("yalnizca ucuncu kisinin sikayeti kalmali, kalan %d", n)
+		t.Fatalf("only the third party's report must remain, %d left", n)
 	}
 }
 
@@ -215,7 +215,7 @@ func TestPostgresStore_DeleteUserData_DeletedCommentAndRemainingReports(t *testi
 	fileReport(third, TargetPublication, stayerPublication, stayerPublication)  // stays
 
 	if err := store.DeleteUserData(ctx, leaver); err != nil {
-		t.Fatalf("KullaniciVerisiniSil: %v", err)
+		t.Fatalf("DeleteUserData: %v", err)
 	}
 	rows, err := pool.Query(ctx, `SELECT hedef_id::text FROM sosyal.sikayet ORDER BY hedef_turu`)
 	if err != nil {
@@ -230,5 +230,5 @@ func TestPostgresStore_DeleteUserData_DeletedCommentAndRemainingReports(t *testi
 		}
 		targets = append(targets, targetID)
 	}
-	assertOrder(t, "kalan sikayetler", targets, []string{stayerPublication, stayerComment})
+	assertOrder(t, "remaining reports", targets, []string{stayerPublication, stayerComment})
 }

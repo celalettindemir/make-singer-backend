@@ -32,19 +32,19 @@ func TestService_PostComment(t *testing.T) {
 	s, _ := newTestService(store)
 	comment, err := s.PostComment(context.Background(), userA, pubX, CommentInput{Text: "  harika  ", TimeMs: intp(180000)})
 	if err != nil {
-		t.Fatalf("YorumYaz: %v", err)
+		t.Fatalf("PostComment: %v", err)
 	}
 	if !comment.CanDelete || comment.Text != "harika" || comment.Author.Username != "ali" || *comment.TimeMs != 180000 {
-		t.Fatalf("yorum = %+v", comment)
+		t.Fatalf("comment = %+v", comment)
 	}
 	if len(store.insertedComments) != 1 || store.insertedComments[0].PublicationID != pubX || store.insertedComments[0].AuthorID != userA {
-		t.Fatalf("eklenen = %+v", store.insertedComments)
+		t.Fatalf("inserted = %+v", store.insertedComments)
 	}
 	if _, err := s.PostComment(context.Background(), userA, pubX, CommentInput{Text: "damgasiz"}); err != nil {
-		t.Fatalf("damgasiz yorum: %v", err)
+		t.Fatalf("comment without a timestamp: %v", err)
 	}
 	if store.insertedComments[1].TimeMs != nil {
-		t.Fatal("damgasiz yorumun zamani nil kalmali")
+		t.Fatal("the time of a comment without a timestamp must stay nil")
 	}
 }
 
@@ -58,21 +58,21 @@ func TestService_PostCommentErrors(t *testing.T) {
 		input CommentInput
 		want  error
 	}{
-		{"bos metin", nil, userA, pubX, CommentInput{Text: "   "}, ErrValidation},
-		{"uzun metin", nil, userA, pubX, CommentInput{Text: strings.Repeat("ş", 501)}, ErrValidation},
-		{"NUL iceren metin", nil, userA, pubX, CommentInput{Text: "a\x00b"}, ErrValidation},
-		{"negatif zaman", nil, userA, pubX, CommentInput{Text: "a", TimeMs: intp(-1)}, ErrValidation},
-		{"sureyi asan zaman", nil, userA, pubX, CommentInput{Text: "a", TimeMs: intp(180001)}, ErrValidation},
-		{"int32'yi asan zaman", func(store *fakeStore) { store.publications[pubX].DurationSec = 3_000_000 }, userA, pubX, CommentInput{Text: "a", TimeMs: intp(math.MaxInt32 + 1)}, ErrValidation},
-		{"gorunmeyen yayin", func(store *fakeStore) { store.publications[pubX].Visibility = VisibilityFollowers }, userA, pubX, CommentInput{Text: "a"}, ErrNotFound},
-		{"olmayan yayin", nil, userA, pubY, CommentInput{Text: "a"}, ErrNotFound},
-		{"bozuk yayin id", nil, userA, "x", CommentInput{Text: "a"}, ErrNotFound},
-		{"yorum kapali", func(store *fakeStore) { store.publications[pubX].CommentsEnabled = false }, userA, pubX, CommentInput{Text: "a"}, ErrCommentsDisabled},
-		{"yorum kapali, sahibi de yazamaz", func(store *fakeStore) {
+		{"empty text", nil, userA, pubX, CommentInput{Text: "   "}, ErrValidation},
+		{"long text", nil, userA, pubX, CommentInput{Text: strings.Repeat("ş", 501)}, ErrValidation},
+		{"text containing NUL", nil, userA, pubX, CommentInput{Text: "a\x00b"}, ErrValidation},
+		{"negative time", nil, userA, pubX, CommentInput{Text: "a", TimeMs: intp(-1)}, ErrValidation},
+		{"time past the duration", nil, userA, pubX, CommentInput{Text: "a", TimeMs: intp(180001)}, ErrValidation},
+		{"time past int32", func(store *fakeStore) { store.publications[pubX].DurationSec = 3_000_000 }, userA, pubX, CommentInput{Text: "a", TimeMs: intp(math.MaxInt32 + 1)}, ErrValidation},
+		{"invisible publication", func(store *fakeStore) { store.publications[pubX].Visibility = VisibilityFollowers }, userA, pubX, CommentInput{Text: "a"}, ErrNotFound},
+		{"missing publication", nil, userA, pubY, CommentInput{Text: "a"}, ErrNotFound},
+		{"malformed publication id", nil, userA, "x", CommentInput{Text: "a"}, ErrNotFound},
+		{"comments disabled", func(store *fakeStore) { store.publications[pubX].CommentsEnabled = false }, userA, pubX, CommentInput{Text: "a"}, ErrCommentsDisabled},
+		{"comments disabled, even the owner cannot write", func(store *fakeStore) {
 			store.profiles[userB] = &ProfileRecord{UserID: userB, Username: "sahip"}
 			store.publications[pubX].CommentsEnabled = false
 		}, userB, pubX, CommentInput{Text: "a"}, ErrCommentsDisabled},
-		{"profil yok", nil, userC, pubX, CommentInput{Text: "a"}, ErrNoProfile},
+		{"no profile", nil, userC, pubX, CommentInput{Text: "a"}, ErrNoProfile},
 	}
 	for _, c := range cases {
 		store := commentStore()
@@ -81,10 +81,10 @@ func TestService_PostCommentErrors(t *testing.T) {
 		}
 		s, _ := newTestService(store)
 		if _, err := s.PostComment(ctx, c.user, c.pub, c.input); !errors.Is(err, c.want) {
-			t.Errorf("%s: %v, beklenen %v", c.name, err, c.want)
+			t.Errorf("%s: %v, want %v", c.name, err, c.want)
 		}
 		if len(store.insertedComments) != 0 {
-			t.Errorf("%s: yorum yazilmamali", c.name)
+			t.Errorf("%s: no comment must be written", c.name)
 		}
 	}
 }
@@ -97,12 +97,12 @@ func TestService_CommentsDisabledAndVisibility(t *testing.T) {
 	ctx := context.Background()
 	for _, rec := range []string{userA, userB} {
 		if _, err := s.Comments(ctx, rec, pubX, "", 20); !errors.Is(err, ErrCommentsDisabled) {
-			t.Errorf("%s: %v, beklenen ErrYorumKapali", rec, err)
+			t.Errorf("%s: %v, want ErrCommentsDisabled", rec, err)
 		}
 	}
 	store.publications[pubX].Visibility = VisibilityFollowers
 	if _, err := s.Comments(ctx, userA, pubX, "", 20); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("gorunmeyen yayin: %v", err)
+		t.Fatalf("invisible publication: %v", err)
 	}
 }
 
@@ -119,14 +119,14 @@ func TestService_CommentsPageAndCursor(t *testing.T) {
 
 	page, err := s.Comments(ctx, userA, pubX, "", 1)
 	if err != nil || len(page.Items) != 1 || page.NextCursor == nil {
-		t.Fatalf("ilk sayfa = %+v, %v", page, err)
+		t.Fatalf("first page = %+v, %v", page, err)
 	}
 	if _, err := s.Comments(ctx, userA, pubX, *page.NextCursor, 1); err != nil {
 		t.Fatal(err)
 	}
 	cur := store.lastCommentCursor
 	if cur == nil || cur.Group != 0 || cur.TimeMs == nil || *cur.TimeMs != 500 || cur.ID != comment1 || !cur.T.Equal(t0) {
-		t.Fatalf("zamanli imlec = %+v", cur)
+		t.Fatalf("timed cursor = %+v", cur)
 	}
 
 	page, err = s.Comments(ctx, userA, pubX, "", 2)
@@ -138,13 +138,13 @@ func TestService_CommentsPageAndCursor(t *testing.T) {
 	}
 	cur = store.lastCommentCursor
 	if cur == nil || cur.Group != 1 || cur.TimeMs != nil || cur.ID != commentC {
-		t.Fatalf("damgasiz imlec = %+v", cur)
+		t.Fatalf("cursor without a timestamp = %+v", cur)
 	}
 
 	store.commentItems = nil
 	empty, err := s.Comments(ctx, userA, pubX, "", 20)
 	if err != nil || empty.Items == nil || empty.NextCursor != nil {
-		t.Fatalf("bos sayfa = %+v, %v", empty, err)
+		t.Fatalf("empty page = %+v, %v", empty, err)
 	}
 }
 
@@ -160,7 +160,7 @@ func TestService_CommentCursorValidation(t *testing.T) {
 		*encodeCursor(CommentCursor{Group: 1, ID: validID}),
 	} {
 		if _, err := decodeCommentCursor(raw); !errors.Is(err, ErrValidation) {
-			t.Errorf("%q: %v, beklenen ErrDogrulama", raw, err)
+			t.Errorf("%q: %v, want ErrValidation", raw, err)
 		}
 	}
 }
@@ -176,10 +176,10 @@ func TestService_DeleteComment(t *testing.T) {
 		store.commentRecords[comment1] = newRecord()
 		s, _ := newTestService(store)
 		if err := s.DeleteComment(ctx, rec, comment1); err != nil {
-			t.Fatalf("%s silemedi: %v", rec, err)
+			t.Fatalf("%s could not delete: %v", rec, err)
 		}
 		if err := s.DeleteComment(ctx, rec, comment1); !errors.Is(err, ErrNotFound) {
-			t.Fatalf("tekrar silme 404 olmali: %v", err)
+			t.Fatalf("deleting again must be 404: %v", err)
 		}
 	}
 	// A third person: 403 if they can see the publication, 404 if not.
@@ -187,18 +187,18 @@ func TestService_DeleteComment(t *testing.T) {
 	store.commentRecords[comment1] = newRecord()
 	s, _ := newTestService(store)
 	if err := s.DeleteComment(ctx, userC, comment1); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("baskasi: %v, beklenen ErrYetki", err)
+		t.Fatalf("someone else: %v, want ErrForbidden", err)
 	}
 	store.publications[pubX].Visibility = VisibilityFollowers
 	if err := s.DeleteComment(ctx, userC, comment1); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("gorunmeyen yayin: %v, beklenen ErrBulunamadi", err)
+		t.Fatalf("invisible publication: %v, want ErrNotFound", err)
 	}
 	if len(store.deletedComments) != 0 {
-		t.Fatal("yetkisiz silme yazilmamali")
+		t.Fatal("an unauthorized delete must not be written")
 	}
 	for _, id := range []string{"x", commentC} {
 		if err := s.DeleteComment(ctx, userA, id); !errors.Is(err, ErrNotFound) {
-			t.Errorf("%s: %v, beklenen ErrBulunamadi", id, err)
+			t.Errorf("%s: %v, want ErrNotFound", id, err)
 		}
 	}
 }

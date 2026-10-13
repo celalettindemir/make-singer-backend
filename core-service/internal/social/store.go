@@ -81,7 +81,7 @@ func (s *PostgresStore) GetProfile(ctx context.Context, userID string) (*Profile
 		return nil, ErrNoProfile
 	}
 	if err != nil {
-		return nil, fmt.Errorf("profil okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the profile: %w", err)
 	}
 	return profile, nil
 }
@@ -93,7 +93,7 @@ func (s *PostgresStore) GetProfileByUsername(ctx context.Context, username strin
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("profil okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the profile: %w", err)
 	}
 	return profile, nil
 }
@@ -112,7 +112,7 @@ func (s *PostgresStore) UpsertProfile(ctx context.Context, profile ProfileRecord
 		return nil, ErrUsernameTaken
 	}
 	if err != nil {
-		return nil, fmt.Errorf("profil kaydedilemedi: %w", err)
+		return nil, fmt.Errorf("could not save the profile: %w", err)
 	}
 	return saved, nil
 }
@@ -125,13 +125,13 @@ func (s *PostgresStore) UsernameOwners(ctx context.Context, usernames []string) 
 	rows, err := s.pool.Query(ctx,
 		`SELECT kullanici_adi, kullanici_id::text FROM sosyal.profil WHERE kullanici_adi = ANY($1)`, usernames)
 	if err != nil {
-		return nil, fmt.Errorf("adlar okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read usernames: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var username, owner string
 		if err := rows.Scan(&username, &owner); err != nil {
-			return nil, fmt.Errorf("ad okunamadi: %w", err)
+			return nil, fmt.Errorf("could not read a username: %w", err)
 		}
 		owners[username] = owner
 	}
@@ -153,7 +153,7 @@ func (s *PostgresStore) ProfileCounts(ctx context.Context, ownerID, viewerID str
 		ownerID, viewerID,
 	).Scan(&counts.Stats.Songs, &counts.Stats.Covers, &counts.Stats.Followers, &counts.Stats.Following, &counts.FollowedByMe)
 	if err != nil {
-		return nil, fmt.Errorf("profil sayaclari okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read profile counters: %w", err)
 	}
 	return &counts, nil
 }

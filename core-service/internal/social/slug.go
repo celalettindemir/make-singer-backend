@@ -16,7 +16,7 @@ var slugPattern = regexp.MustCompile(`^[A-Za-z0-9]{8}$`)
 
 // errSlugConflict is the store layer's slug UNIQUE violation; the service
 // retries with a new slug. It never leaks outside.
-var errSlugConflict = errors.New("slug cakismasi")
+var errSlugConflict = errors.New("slug collision")
 
 // ValidSlug reports whether the slug is 8 characters of [A-Za-z0-9].
 func ValidSlug(slug string) bool { return slugPattern.MatchString(slug) }

@@ -19,7 +19,7 @@ func liveRedis(t *testing.T) *redis.Client {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		t.Skip("yerel Redis yok, atlaniyor")
+		t.Skip("no local Redis, skipping")
 	}
 	_ = rdb.FlushDB(context.Background()).Err()
 	t.Cleanup(func() { _ = rdb.FlushDB(context.Background()).Err(); _ = rdb.Close() })

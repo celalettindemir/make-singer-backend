@@ -36,7 +36,7 @@ func systemMessage(t *testing.T, body map[string]any) string {
 	t.Helper()
 	msgs, _ := body["messages"].([]any)
 	if len(msgs) == 0 {
-		t.Fatal("istekte mesaj yok")
+		t.Fatal("no messages in the request")
 	}
 	m, _ := msgs[0].(map[string]any)
 	s, _ := m["content"].(string)
@@ -55,13 +55,13 @@ func TestLyricsService_RewriteUsesRequestedLanguagePrompt(t *testing.T) {
 		t.Fatalf("Rewrite: %v", err)
 	}
 	if len(res.Lines) != 2 {
-		t.Errorf("satirlar = %v", res.Lines)
+		t.Errorf("lines = %v", res.Lines)
 	}
 	if sys := systemMessage(t, requests[0]); !strings.Contains(sys, "Turkish") {
-		t.Errorf("system prompt Turkce olmali, geldi: %q", sys)
+		t.Errorf("the system prompt must be Turkish, got: %q", sys)
 	}
 	if requests[0]["temperature"] != 0.6 {
-		t.Errorf("rewrite sicakligi = %v, 0.6 bekleniyordu", requests[0]["temperature"])
+		t.Errorf("rewrite temperature = %v, want 0.6", requests[0]["temperature"])
 	}
 }
 
@@ -75,7 +75,7 @@ func TestLyricsService_RewriteDefaultsToEnglish(t *testing.T) {
 		t.Fatalf("Rewrite: %v", err)
 	}
 	if sys := systemMessage(t, requests[0]); !strings.Contains(sys, "English") {
-		t.Errorf("varsayilan dil Ingilizce olmali, geldi: %q", sys)
+		t.Errorf("the default language must be English, got: %q", sys)
 	}
 }
 
@@ -90,9 +90,9 @@ func TestLyricsService_GenerateUsesGenerateTemperature(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 	if len(res.Drafts) != 2 {
-		t.Errorf("taslaklar = %v", res.Drafts)
+		t.Errorf("drafts = %v", res.Drafts)
 	}
 	if requests[0]["temperature"] != 0.8 {
-		t.Errorf("uretim sicakligi = %v, 0.8 bekleniyordu", requests[0]["temperature"])
+		t.Errorf("generation temperature = %v, want 0.8", requests[0]["temperature"])
 	}
 }

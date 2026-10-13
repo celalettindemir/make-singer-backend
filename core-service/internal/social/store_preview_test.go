@@ -39,7 +39,7 @@ func TestPostgresStore_GetPreviewOnlyEveryoneAndLink(t *testing.T) {
 		rec, err := store.GetPreview(ctx, c.row.Slug)
 		if !c.visible {
 			if !errors.Is(err, ErrNotFound) {
-				t.Errorf("%s: %v, beklenen ErrBulunamadi", c.row.Slug, err)
+				t.Errorf("%s: %v, want ErrNotFound", c.row.Slug, err)
 			}
 			continue
 		}
@@ -48,17 +48,17 @@ func TestPostgresStore_GetPreviewOnlyEveryoneAndLink(t *testing.T) {
 		}
 		if rec.Title != "Baslik" || rec.DurationSec != 180 || rec.Genre != "pop" || rec.OwnerID != owner ||
 			rec.Owner != (ProfileSummary{Username: "sahip", DisplayName: "sahip", AvatarColor: AvatarColor(owner)}) {
-			t.Errorf("%s: kayit = %+v", c.row.Slug, rec)
+			t.Errorf("%s: record = %+v", c.row.Slug, rec)
 		}
 		if c.preview && (rec.PreviewKey != "sosyal/"+id+"/onizleme.mp3" || len(rec.Waveform) != 2) {
-			t.Errorf("%s: onizleme = %q dalga %v", c.row.Slug, rec.PreviewKey, rec.Waveform)
+			t.Errorf("%s: preview = %q waveform %v", c.row.Slug, rec.PreviewKey, rec.Waveform)
 		}
 		if !c.preview && (rec.PreviewKey != "" || rec.Waveform == nil || len(rec.Waveform) != 0) {
-			t.Errorf("%s: onizlemesiz = %q dalga %#v", c.row.Slug, rec.PreviewKey, rec.Waveform)
+			t.Errorf("%s: no preview = %q waveform %#v", c.row.Slug, rec.PreviewKey, rec.Waveform)
 		}
 	}
 	if _, err := store.GetPreview(ctx, "Yok12345"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("olmayan slug: %v", err)
+		t.Fatalf("missing slug: %v", err)
 	}
 }
 
@@ -68,6 +68,6 @@ func TestPostgresStore_GetPreviewOwnerWithoutProfile(t *testing.T) {
 	store := NewPostgresStore(pool)
 	testInsertPublication(t, pool, testPublication{Slug: "Profsiz1", OwnerID: uuid.NewString()})
 	if _, err := store.GetPreview(context.Background(), "Profsiz1"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("profilsiz sahip: %v, beklenen ErrBulunamadi", err)
+		t.Fatalf("owner without a profile: %v, want ErrNotFound", err)
 	}
 }

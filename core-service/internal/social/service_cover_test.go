@@ -46,24 +46,24 @@ func TestService_StartCover(t *testing.T) {
 
 	b, err := s.StartCover(context.Background(), userA, pubX)
 	if err != nil {
-		t.Fatalf("CoverBaslat: %v", err)
+		t.Fatalf("StartCover: %v", err)
 	}
 	if b.Source != (SourceSummary{PublicationID: pubX, Title: "Orijinal", OwnerUsername: "sahip"}) {
-		t.Fatalf("kaynak = %+v", b.Source)
+		t.Fatalf("source = %+v", b.Source)
 	}
 	if b.Genre != "pop" || b.BPM != 120 || b.MusicalKey.Mode != "minor" || b.DurationSec != 180 || len(b.Structure) != 1 || len(b.Lyrics.Sections) != 1 {
-		t.Fatalf("baslangic = %+v", b)
+		t.Fatalf("start = %+v", b)
 	}
 	if len(copier.copies) != 2 || len(b.Stems) != 2 {
-		t.Fatalf("kopyalar = %v, stemler = %+v", copier.copies, b.Stems)
+		t.Fatalf("copies = %v, stems = %+v", copier.copies, b.Stems)
 	}
 	pattern := regexp.MustCompile(`^stems/` + userA + `/([0-9a-f-]{36})/drums\.mp3$`)
 	m := pattern.FindStringSubmatch(copier.copies[0][1])
 	if copier.copies[0][0] != "sosyal/"+pubX+"/stems/drums.mp3" || m == nil {
-		t.Fatalf("ilk kopya = %v", copier.copies[0])
+		t.Fatalf("first copy = %v", copier.copies[0])
 	}
 	if copier.copies[1][1] != "stems/"+userA+"/"+m[1]+"/bass" {
-		t.Fatalf("ikinci kopya ayni klasore, uzantisiz = %v", copier.copies[1])
+		t.Fatalf("second copy in the same folder, without extension = %v", copier.copies[1])
 	}
 	stem := b.Stems[0]
 	if stem.ID != "drums" || stem.Instrument != "Davul" || stem.Duration != 180.5 ||
@@ -76,7 +76,7 @@ func TestService_StartCover(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(copier.copies[2][1], m[1]) {
-		t.Fatalf("her baslatma yeni klasor almali: %v", copier.copies[2])
+		t.Fatalf("every start must get a new folder: %v", copier.copies[2])
 	}
 }
 
@@ -85,7 +85,7 @@ func TestService_StartCoverSignedURL(t *testing.T) {
 	s := NewService(store, &fakeQueue{}, signingStorage{}, testR2()).WithCopier(&fakeCopier{})
 	b, err := s.StartCover(context.Background(), userA, pubX)
 	if err != nil || !strings.HasPrefix(b.Stems[0].FileURL, "https://imzali.example/stems/"+userA+"/") {
-		t.Fatalf("imzali adres = %+v, %v", b, err)
+		t.Fatalf("signed URL = %+v, %v", b, err)
 	}
 }
 
@@ -93,7 +93,7 @@ func TestService_StartCoverWithoutCopier(t *testing.T) {
 	s, _ := newTestService(coverStore())
 	b, err := s.StartCover(context.Background(), userA, pubX)
 	if err != nil || len(b.Stems) != 2 {
-		t.Fatalf("R2'siz (dev) baslangic = %+v, %v", b, err)
+		t.Fatalf("start without R2 (dev) = %+v, %v", b, err)
 	}
 }
 
@@ -106,14 +106,14 @@ func TestService_StartCoverErrors(t *testing.T) {
 		pub   string
 		want  error
 	}{
-		{"altyapi kapali", func(store *fakeStore) { store.publications[pubX].BackingEnabled = false }, userA, pubX, ErrBackingDisabled},
-		{"cover yayini", func(store *fakeStore) { store.publications[pubX].SourcePublicationID = pubY }, userA, pubX, ErrBackingDisabled},
-		{"stem kopyasi yok", func(store *fakeStore) { store.stemLists[pubX] = []StemRecord{} }, userA, pubX, ErrBackingDisabled},
-		{"gorunmeyen", func(store *fakeStore) { store.publications[pubX].Visibility = VisibilityFollowers }, userA, pubX, ErrNotFound},
-		{"olmayan", nil, userA, pubY, ErrNotFound},
-		{"bozuk id", nil, userA, "x", ErrNotFound},
-		{"sahibinin hazirlanan yayini", func(store *fakeStore) { store.publications[pubX].Status = StatusPreparing }, userB, pubX, ErrInvalidStatus},
-		{"baskasinin hazirlanan yayini", func(store *fakeStore) { store.publications[pubX].Status = StatusPreparing }, userA, pubX, ErrNotFound},
+		{"backing track disabled", func(store *fakeStore) { store.publications[pubX].BackingEnabled = false }, userA, pubX, ErrBackingDisabled},
+		{"cover publication", func(store *fakeStore) { store.publications[pubX].SourcePublicationID = pubY }, userA, pubX, ErrBackingDisabled},
+		{"no stem copy", func(store *fakeStore) { store.stemLists[pubX] = []StemRecord{} }, userA, pubX, ErrBackingDisabled},
+		{"invisible", func(store *fakeStore) { store.publications[pubX].Visibility = VisibilityFollowers }, userA, pubX, ErrNotFound},
+		{"missing", nil, userA, pubY, ErrNotFound},
+		{"malformed id", nil, userA, "x", ErrNotFound},
+		{"owner's publication in preparation", func(store *fakeStore) { store.publications[pubX].Status = StatusPreparing }, userB, pubX, ErrInvalidStatus},
+		{"someone else's publication in preparation", func(store *fakeStore) { store.publications[pubX].Status = StatusPreparing }, userA, pubX, ErrNotFound},
 	}
 	for _, c := range cases {
 		store := coverStore()
@@ -124,17 +124,17 @@ func TestService_StartCoverErrors(t *testing.T) {
 		copier := &fakeCopier{}
 		s.WithCopier(copier)
 		if _, err := s.StartCover(ctx, c.user, c.pub); !errors.Is(err, c.want) {
-			t.Errorf("%s: %v, beklenen %v", c.name, err, c.want)
+			t.Errorf("%s: %v, want %v", c.name, err, c.want)
 		}
 		if len(copier.copies) != 0 {
-			t.Errorf("%s: kopya yapilmamali", c.name)
+			t.Errorf("%s: no copy must be made", c.name)
 		}
 	}
 
 	s, _ := newTestService(coverStore())
-	s.WithCopier(&fakeCopier{err: errors.New("r2 kapali")})
+	s.WithCopier(&fakeCopier{err: errors.New("r2 is down")})
 	if _, err := s.StartCover(ctx, userA, pubX); err == nil || errors.Is(err, ErrBackingDisabled) {
-		t.Fatalf("kopya hatasi sunucu hatasi olmali: %v", err)
+		t.Fatalf("a copy error must be a server error: %v", err)
 	}
 }
 
@@ -146,27 +146,27 @@ func TestService_Covers(t *testing.T) {
 
 	page, err := s.Covers(ctx, userA, strings.ToUpper(pubX), "", 2)
 	if err != nil || len(page.Items) != 2 || page.NextCursor == nil {
-		t.Fatalf("sayfa = %+v, %v", page, err)
+		t.Fatalf("page = %+v, %v", page, err)
 	}
 	if store.lastFeed.kind != "cover" || store.lastFeed.owner != pubX || store.lastFeed.viewer != userA || store.lastFeed.limit != 2 {
-		t.Fatalf("depo cagrisi = %+v", store.lastFeed)
+		t.Fatalf("store call = %+v", store.lastFeed)
 	}
 
 	store.lastFeed = feedCall{}
 	store.publications[pubX].BackingEnabled = false
 	empty, err := s.Covers(ctx, userA, pubX, "", 20)
 	if err != nil || empty.Items == nil || len(empty.Items) != 0 || empty.NextCursor != nil {
-		t.Fatalf("altyapi kapali bos sayfa = %+v, %v", empty, err)
+		t.Fatalf("empty page with the backing track disabled = %+v, %v", empty, err)
 	}
 	if store.lastFeed.kind != "" {
-		t.Fatal("altyapi kapaliyken depo sorgulanmamali")
+		t.Fatal("the store must not be queried while the backing track is disabled")
 	}
 
 	store.publications[pubX].Visibility = VisibilityFollowers
 	if _, err := s.Covers(ctx, userA, pubX, "", 20); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("gorunmeyen kaynak: %v", err)
+		t.Fatalf("invisible source: %v", err)
 	}
 	if _, err := s.Covers(ctx, userA, pubX, "bozuk!", 20); !errors.Is(err, ErrValidation) {
-		t.Fatalf("bozuk imlec: %v", err)
+		t.Fatalf("malformed cursor: %v", err)
 	}
 }

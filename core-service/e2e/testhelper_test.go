@@ -53,7 +53,7 @@ func e2eURL(t *testing.T, kind, userID string, parts ...string) string {
 	t.Helper()
 	key, err := client.UserKey(kind, userID, parts...)
 	if err != nil {
-		t.Fatalf("anahtar: %v", err)
+		t.Fatalf("key: %v", err)
 	}
 	return client.UnsignedURL(key, e2eR2Cfg())
 }

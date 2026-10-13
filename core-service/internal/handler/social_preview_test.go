@@ -36,14 +36,14 @@ func TestSocialHandler_PreviewUnauthenticatedContract(t *testing.T) {
 	raw, _ := io.ReadAll(resp.Body)
 	want := `{"baslik":"Sarki","sahip":{"kullaniciAdi":"ali","gorunenAd":"Ali","avatarRengi":5},"sureSn":180,"dalgaFormu":[0.5,1],"onizlemeUrl":null,"tur":"pop"}`
 	if resp.StatusCode != http.StatusOK || string(raw) != want {
-		t.Fatalf("durum=%d govde=%s", resp.StatusCode, raw)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
 	}
 	if resp.Header.Get("Cache-Control") != "no-store" || s.lastID != "Ab3dEf9h" {
 		t.Fatalf("Cache-Control=%q slug=%q", resp.Header.Get("Cache-Control"), s.lastID)
 	}
 	// Endpoints that require authentication in the same app still return 401.
 	if status, _ := doSocialRequest(t, app, http.MethodGet, "/api/social/s/Ab3dEf9h", ""); status != http.StatusUnauthorized {
-		t.Fatalf("auth grubu atlanmamali: %d", status)
+		t.Fatalf("the auth group must not be skipped: %d", status)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestSocialHandler_Preview404JSON(t *testing.T) {
 	status, body := doSocialRequest(t, newPublicApp(&fakeSocialService{err: social.ErrNotFound}, passThrough),
 		http.MethodGet, "/api/public/s/Yok12345", "")
 	if status != http.StatusNotFound || errorCode(body) != "bulunamadi" {
-		t.Fatalf("durum=%d govde=%v", status, body)
+		t.Fatalf("status=%d body=%v", status, body)
 	}
 }
 
@@ -60,7 +60,7 @@ func TestSocialHandler_PreviewIPLimitApplied(t *testing.T) {
 	status, body := doSocialRequest(t, newPublicApp(&fakeSocialService{preview: &social.Preview{}}, limiter),
 		http.MethodGet, "/api/public/s/Ab3dEf9h", "")
 	if status != http.StatusTooManyRequests || errorCode(body) != "RATE_LIMITED" {
-		t.Fatalf("durum=%d govde=%v", status, body)
+		t.Fatalf("status=%d body=%v", status, body)
 	}
 }
 
@@ -83,7 +83,7 @@ func TestSocialHandler_PreviewNoStoreOnEveryResponse(t *testing.T) {
 				t.Fatal(err)
 			}
 			if resp.StatusCode != tc.want || resp.Header.Get("Cache-Control") != "no-store" {
-				t.Fatalf("durum=%d Cache-Control=%q", resp.StatusCode, resp.Header.Get("Cache-Control"))
+				t.Fatalf("status=%d Cache-Control=%q", resp.StatusCode, resp.Header.Get("Cache-Control"))
 			}
 		})
 	}
@@ -94,7 +94,7 @@ func expectPanic(t *testing.T, f func()) {
 	t.Helper()
 	defer func() {
 		if recover() == nil {
-			t.Fatal("eksik limiter ile kayit panik etmeliydi")
+			t.Fatal("registration with a missing limiter should have panicked")
 		}
 	}()
 	f()
@@ -104,17 +104,17 @@ func expectPanic(t *testing.T, f func()) {
 func TestSocialHandler_MissingLimiterPanicsAtRegistration(t *testing.T) {
 	h := NewSocialHandler(&fakeSocialService{})
 	cases := map[string]SocialLimits{
-		"hepsi-bos": {},
-		"yayin-bos": {Comment: passThrough, Cover: passThrough},
-		"yorum-bos": {Publication: passThrough, Cover: passThrough},
-		"cover-bos": {Publication: passThrough, Comment: passThrough},
+		"all-empty":         {},
+		"publication-empty": {Comment: passThrough, Cover: passThrough},
+		"comment-empty":     {Publication: passThrough, Cover: passThrough},
+		"cover-empty":       {Publication: passThrough, Comment: passThrough},
 	}
 	for name, l := range cases {
 		t.Run(name, func(t *testing.T) {
 			expectPanic(t, func() { h.Routes(fiber.New().Group("/api/social"), l) })
 		})
 	}
-	t.Run("ip-limiti-bos", func(t *testing.T) {
+	t.Run("ip-limiter-empty", func(t *testing.T) {
 		expectPanic(t, func() { h.PublicRoutes(fiber.New().Group("/api/public"), nil) })
 	})
 }

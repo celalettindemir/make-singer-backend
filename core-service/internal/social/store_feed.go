@@ -53,7 +53,7 @@ func (s *PostgresStore) timePage(ctx context.Context, condition string, cursor *
 		LIMIT $%d`, summarySelect, summaryFrom, condition, argCount+1, argCount+1, argCount+2, argCount+3)
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("liste okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the list: %w", err)
 	}
 	return scanSummaries(rows)
 }
@@ -64,7 +64,7 @@ func scanSummaries(rows pgx.Rows) ([]PublicationSummary, error) {
 	for rows.Next() {
 		var sc summaryScanner
 		if err := rows.Scan(sc.targets()...); err != nil {
-			return nil, fmt.Errorf("liste ogesi okunamadi: %w", err)
+			return nil, fmt.Errorf("could not read a list item: %w", err)
 		}
 		items = append(items, sc.summary())
 	}
@@ -124,7 +124,7 @@ func (s *PostgresStore) FeedForYou(ctx context.Context, viewerID string, referen
 		ORDER BY s.puan DESC, s.sira_id DESC
 		LIMIT $5`, viewerID, reference, cursorScore, cursorID, limit+1)
 	if err != nil {
-		return nil, fmt.Errorf("akis okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the feed: %w", err)
 	}
 	defer rows.Close()
 	items := []ScoredSummary{}
@@ -135,7 +135,7 @@ func (s *PostgresStore) FeedForYou(ctx context.Context, viewerID string, referen
 			rankID string
 		)
 		if err := rows.Scan(append(sc.targets(), &score, &rankID)...); err != nil {
-			return nil, fmt.Errorf("akis ogesi okunamadi: %w", err)
+			return nil, fmt.Errorf("could not read a feed item: %w", err)
 		}
 		items = append(items, ScoredSummary{PublicationSummary: sc.summary(), Score: score})
 	}
@@ -146,7 +146,7 @@ func (s *PostgresStore) Like(ctx context.Context, userID, pubID string) error {
 	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO sosyal.begeni (kullanici_id, yayin_id) VALUES ($1, $2)
 		ON CONFLICT DO NOTHING`, userID, pubID); err != nil {
-		return fmt.Errorf("begeni eklenemedi: %w", err)
+		return fmt.Errorf("could not add the like: %w", err)
 	}
 	return nil
 }
@@ -154,7 +154,7 @@ func (s *PostgresStore) Like(ctx context.Context, userID, pubID string) error {
 func (s *PostgresStore) Unlike(ctx context.Context, userID, pubID string) error {
 	if _, err := s.pool.Exec(ctx, `
 		DELETE FROM sosyal.begeni WHERE kullanici_id = $1 AND yayin_id = $2`, userID, pubID); err != nil {
-		return fmt.Errorf("begeni kaldirilamadi: %w", err)
+		return fmt.Errorf("could not remove the like: %w", err)
 	}
 	return nil
 }

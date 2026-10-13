@@ -43,7 +43,7 @@ func (s *ExportService) ExportMP3(ctx context.Context, userID string, req *model
 	// Ownership check before the mock branch: dev and prod behave the same.
 	inputKey, err := client.ResolveOwnedKey(req.MasterFileURL, userID, s.r2Cfg)
 	if err != nil {
-		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
+		return nil, fmt.Errorf("could not resolve the master URL: %w", err)
 	}
 
 	// Use mock response if audio client is not configured
@@ -93,7 +93,7 @@ func (s *ExportService) ExportMP3(ctx context.Context, userID string, req *model
 	// directly to the client.
 	fileURL, _, err := s.r2Client.URLFor(ctx, outputKey)
 	if err != nil {
-		return nil, fmt.Errorf("export URL uretilemedi: %w", err)
+		return nil, fmt.Errorf("could not generate the export URL: %w", err)
 	}
 
 	return &model.ExportMP3Response{
@@ -120,7 +120,7 @@ func (s *ExportService) ExportWAV(ctx context.Context, userID string, req *model
 	// Ownership check before the mock branch: dev and prod behave the same.
 	inputKey, err := client.ResolveOwnedKey(req.MasterFileURL, userID, s.r2Cfg)
 	if err != nil {
-		return nil, fmt.Errorf("master URL cozulemedi: %w", err)
+		return nil, fmt.Errorf("could not resolve the master URL: %w", err)
 	}
 
 	// Use mock response if audio client is not configured
@@ -152,7 +152,7 @@ func (s *ExportService) ExportWAV(ctx context.Context, userID string, req *model
 	// directly to the client.
 	fileURL, _, err := s.r2Client.URLFor(ctx, outputKey)
 	if err != nil {
-		return nil, fmt.Errorf("export URL uretilemedi: %w", err)
+		return nil, fmt.Errorf("could not generate the export URL: %w", err)
 	}
 
 	return &model.ExportWAVResponse{
@@ -175,7 +175,7 @@ func (s *ExportService) ExportStems(ctx context.Context, userID string, req *mod
 	for i, url := range req.StemURLs {
 		key, err := client.ResolveOwnedKey(url, userID, s.r2Cfg)
 		if err != nil {
-			return nil, fmt.Errorf("zip girdisi cozulemedi: %w", err)
+			return nil, fmt.Errorf("could not resolve the zip entry: %w", err)
 		}
 		files = append(files, client.ZipFileEntry{
 			Key:      key,
@@ -188,7 +188,7 @@ func (s *ExportService) ExportStems(ctx context.Context, userID string, req *mod
 		for i, url := range req.VocalURLs {
 			key, err := client.ResolveOwnedKey(url, userID, s.r2Cfg)
 			if err != nil {
-				return nil, fmt.Errorf("zip girdisi cozulemedi: %w", err)
+				return nil, fmt.Errorf("could not resolve the zip entry: %w", err)
 			}
 			files = append(files, client.ZipFileEntry{
 				Key:      key,
@@ -201,7 +201,7 @@ func (s *ExportService) ExportStems(ctx context.Context, userID string, req *mod
 	if req.IncludeMaster && req.MasterURL != "" {
 		key, err := client.ResolveOwnedKey(req.MasterURL, userID, s.r2Cfg)
 		if err != nil {
-			return nil, fmt.Errorf("zip girdisi cozulemedi: %w", err)
+			return nil, fmt.Errorf("could not resolve the zip entry: %w", err)
 		}
 		files = append(files, client.ZipFileEntry{
 			Key:      key,
@@ -235,7 +235,7 @@ func (s *ExportService) ExportStems(ctx context.Context, userID string, req *mod
 	// directly to the client.
 	fileURL, _, err := s.r2Client.URLFor(ctx, outputKey)
 	if err != nil {
-		return nil, fmt.Errorf("export URL uretilemedi: %w", err)
+		return nil, fmt.Errorf("could not generate the export URL: %w", err)
 	}
 
 	return &model.ExportStemsResponse{

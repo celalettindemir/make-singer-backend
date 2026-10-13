@@ -19,7 +19,7 @@ func testInsertComment(t *testing.T, pool *pgxpool.Pool, id, pub, author string,
 	if _, err := pool.Exec(context.Background(), `
 		INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin, zaman_ms, olusturma)
 		VALUES ($1, $2, $3, 'metin', $4, $5)`, id, pub, author, timeMs, createdAt); err != nil {
-		t.Fatalf("yorum eklenemedi: %v", err)
+		t.Fatalf("could not add the comment: %v", err)
 	}
 	return id
 }
@@ -35,7 +35,7 @@ func allCommentPages(t *testing.T, store *PostgresStore, pub, viewer string, lim
 	for pageNo := 0; pageNo < 20; pageNo++ {
 		items, err := store.ListComments(context.Background(), pub, viewer, cursor, limit)
 		if err != nil {
-			t.Fatalf("sayfa %d: %v", pageNo, err)
+			t.Fatalf("page %d: %v", pageNo, err)
 		}
 		s := buildCommentPage(items, limit)
 		all = append(all, s.Items...)
@@ -43,10 +43,10 @@ func allCommentPages(t *testing.T, store *PostgresStore, pub, viewer string, lim
 			return all
 		}
 		if cursor, err = decodeCommentCursor(*s.NextCursor); err != nil {
-			t.Fatalf("imlec cozulemedi: %v", err)
+			t.Fatalf("could not decode the cursor: %v", err)
 		}
 	}
-	t.Fatal("sayfalama bitmedi")
+	t.Fatal("pagination did not finish")
 	return nil
 }
 
@@ -84,7 +84,7 @@ func TestPostgresStore_CommentOrderAndPaging(t *testing.T) {
 		for _, pub := range allCommentPages(t, store, pub, viewer, limit) {
 			ids = append(ids, pub.ID)
 		}
-		assertOrder(t, "yorum sirasi", ids, want)
+		assertOrder(t, "comment order", ids, want)
 	}
 
 	// canDelete depends on the viewer: the author their own comment, the owner all of them.
@@ -96,14 +96,14 @@ func TestPostgresStore_CommentOrderAndPaging(t *testing.T) {
 			}
 		}
 		if n != wantCanDelete {
-			t.Errorf("izleyici %s: silinebilir %d, beklenen %d", viewerID, n, wantCanDelete)
+			t.Errorf("viewer %s: deletable %d, want %d", viewerID, n, wantCanDelete)
 		}
 	}
 
 	// commentCount does not count deleted ones.
 	rec, err := store.GetPublication(context.Background(), pub, viewer)
 	if err != nil || rec.CommentCount != 9 {
-		t.Fatalf("yorumSayisi = %d, %v; beklenen 9", rec.CommentCount, err)
+		t.Fatalf("yorumSayisi = %d, %v; want 9", rec.CommentCount, err)
 	}
 }
 
@@ -119,35 +119,35 @@ func TestPostgresStore_InsertGetDeleteComment(t *testing.T) {
 	id := uuid.NewString()
 	ins, err := store.InsertComment(ctx, CommentInsert{ID: id, PublicationID: pub, AuthorID: author, Text: "selam", TimeMs: intp(1200)})
 	if err != nil {
-		t.Fatalf("YorumEkle: %v", err)
+		t.Fatalf("InsertComment: %v", err)
 	}
 	if ins.ID != id || ins.Text != "selam" || *ins.TimeMs != 1200 || ins.Author.Username != "yazar" ||
 		ins.Author.AvatarColor != AvatarColor(author) || ins.CreatedAt.IsZero() || ins.CreatedAt.Location() != time.UTC {
-		t.Fatalf("yorum = %+v", ins)
+		t.Fatalf("comment = %+v", ins)
 	}
 	untimed, err := store.InsertComment(ctx, CommentInsert{ID: uuid.NewString(), PublicationID: pub, AuthorID: author, Text: "a"})
 	if err != nil || untimed.TimeMs != nil {
-		t.Fatalf("damgasiz = %+v, %v", untimed, err)
+		t.Fatalf("without a timestamp = %+v, %v", untimed, err)
 	}
 
 	rec, err := store.GetComment(ctx, id)
 	if err != nil || rec.PublicationID != pub || rec.AuthorID != author || rec.PublicationOwnerID != owner || rec.Deleted {
-		t.Fatalf("kayit = %+v, %v", rec, err)
+		t.Fatalf("record = %+v, %v", rec, err)
 	}
 	if err := store.DeleteComment(ctx, id); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.DeleteComment(ctx, id); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("tekrar silme: %v", err)
+		t.Fatalf("delete again: %v", err)
 	}
 	if rec, err := store.GetComment(ctx, id); err != nil || !rec.Deleted {
-		t.Fatalf("silinmis kayit = %+v, %v", rec, err)
+		t.Fatalf("deleted record = %+v, %v", rec, err)
 	}
 	if _, err := store.GetComment(ctx, uuid.NewString()); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("olmayan yorum: %v", err)
+		t.Fatalf("missing comment: %v", err)
 	}
 	if _, err := store.InsertComment(ctx, CommentInsert{ID: uuid.NewString(), PublicationID: pub, AuthorID: author, Text: "x", TimeMs: intp(-1)}); err == nil {
-		t.Fatal("negatif zaman_ms CHECK kisitina takilmali")
+		t.Fatal("a negative zaman_ms must hit the CHECK constraint")
 	}
 }
 
@@ -166,6 +166,6 @@ func TestPostgresStore_ListCommentsHidesAuthorWithoutProfile(t *testing.T) {
 
 	items := allCommentPages(t, store, pub, owner, 20)
 	if len(items) != 1 || items[0].ID != visible {
-		t.Fatalf("yorumlar = %+v, beklenen yalnizca %s", items, visible)
+		t.Fatalf("comments = %+v, want only %s", items, visible)
 	}
 }

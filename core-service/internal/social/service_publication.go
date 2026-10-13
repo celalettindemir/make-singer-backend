@@ -138,7 +138,7 @@ func (s *Service) CreatePublication(ctx context.Context, userID string, req Publ
 
 	for attempt := 1; ; attempt++ {
 		if insert.Slug, err = generateSlug(); err != nil {
-			return nil, fmt.Errorf("slug uretilemedi: %w", err)
+			return nil, fmt.Errorf("could not generate a slug: %w", err)
 		}
 		err = s.store.InsertPublication(ctx, insert)
 		if !errors.Is(err, errSlugConflict) || attempt == slugAttempts {
@@ -155,9 +155,9 @@ func (s *Service) CreatePublication(ctx context.Context, userID string, req Publ
 		// must run even if the request context was cancelled (e.g. on
 		// shutdown).
 		if rollbackErr := s.store.RemovePublication(context.WithoutCancel(ctx), insert.ID); rollbackErr != nil {
-			log.Printf("Uyari: kuyruga girmeyen yayin geri alinamadi (%s): %v", insert.ID, rollbackErr)
+			log.Printf("Warning: could not roll back the publication that was not enqueued (%s): %v", insert.ID, rollbackErr)
 		}
-		return nil, fmt.Errorf("hazirlama isi kurulamadi: %w", err)
+		return nil, fmt.Errorf("could not build the preparation job: %w", err)
 	}
 	return &PublicationResponse{ID: insert.ID, Slug: insert.Slug, Status: StatusPreparing}, nil
 }
@@ -272,7 +272,7 @@ func (s *Service) DeletePublication(ctx context.Context, userID, pubID string) e
 		asynq.ProcessIn(deleteFilesDelay),
 		asynq.MaxRetry(deleteFilesMaxRetry),
 	); err != nil {
-		log.Printf("Uyari: yayin dosya temizligi kurulamadi (%s): %v", pubUUID, err)
+		log.Printf("Warning: could not build the publication file cleanup (%s): %v", pubUUID, err)
 	}
 	return nil
 }
@@ -295,9 +295,9 @@ func (s *Service) Retry(ctx context.Context, userID, pubID string) (*Publication
 		// The publication must not stay in "hazirlaniyor" even when the request
 		// context was cancelled.
 		if failErr := s.store.MarkFailed(context.WithoutCancel(ctx), rec.ID); failErr != nil {
-			log.Printf("Uyari: kuyruga girmeyen yayin hataya alinamadi (%s): %v", rec.ID, failErr)
+			log.Printf("Warning: could not mark the publication that was not enqueued as failed (%s): %v", rec.ID, failErr)
 		}
-		return nil, fmt.Errorf("hazirlama isi kurulamadi: %w", err)
+		return nil, fmt.Errorf("could not build the preparation job: %w", err)
 	}
 	return &PublicationResponse{ID: rec.ID, Slug: rec.Slug, Status: StatusPreparing}, nil
 }
@@ -318,7 +318,7 @@ func (s *Service) Files(ctx context.Context, userID, pubID string) (*Publication
 	}
 	url, expiresAt, err := client.ResolveURL(ctx, s.storage, s.r2, rec.MasterKey)
 	if err != nil {
-		return nil, fmt.Errorf("dinleme adresi uretilemedi: %w", err)
+		return nil, fmt.Errorf("could not generate the listen URL: %w", err)
 	}
 	address := FileLink{URL: url}
 	if !expiresAt.IsZero() {

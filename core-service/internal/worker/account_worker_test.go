@@ -25,10 +25,10 @@ func TestAccountWorker_CleansPrefixes(t *testing.T) {
 	svc := service.NewAccountService(nopIdentity{}, s, nil, nil, nil)
 	task := asynq.NewTask(service.TaskTypeAccountCleanup, []byte(`{"userId":"6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"}`))
 	if err := NewAccountWorker(svc).ProcessTask(context.Background(), task); err != nil {
-		t.Fatalf("beklenmeyen hata: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(s.prefixes) != 5 {
-		t.Fatalf("5 onek bekleniyordu: %v", s.prefixes)
+		t.Fatalf("expected 5 prefixes: %v", s.prefixes)
 	}
 }
 
@@ -36,6 +36,6 @@ func TestAccountWorker_MalformedPayloadNotRetried(t *testing.T) {
 	svc := service.NewAccountService(nopIdentity{}, &recordingDeleter{}, nil, nil, nil)
 	err := NewAccountWorker(svc).ProcessTask(context.Background(), asynq.NewTask(service.TaskTypeAccountCleanup, []byte("{")))
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, gelen %v", err)
+		t.Fatalf("want SkipRetry, got %v", err)
 	}
 }

@@ -30,7 +30,7 @@ func renderApp(t *testing.T, userID string) *fiber.App {
 	rdb := liveRedis(t)
 	raw, _ := json.Marshal(model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued, CreatedAt: time.Now()})
 	if err := rdb.Set(context.Background(), "job:is1", raw, time.Hour).Err(); err != nil {
-		t.Fatalf("is yazilamadi: %v", err)
+		t.Fatalf("could not write the job: %v", err)
 	}
 	h := NewRenderHandler(service.NewRenderService(rdb, nil, nil, &config.R2Config{}), validator.New())
 	app := fiber.New()
@@ -47,10 +47,10 @@ func TestRenderHandler_OtherUsersJob404(t *testing.T) {
 	} {
 		resp, err := app.Test(req)
 		if err != nil {
-			t.Fatalf("istek: %v", err)
+			t.Fatalf("request: %v", err)
 		}
 		if resp.StatusCode != http.StatusNotFound {
-			t.Errorf("%s %s = %d, 404 bekleniyordu", req.Method, req.URL.Path, resp.StatusCode)
+			t.Errorf("%s %s = %d, want 404", req.Method, req.URL.Path, resp.StatusCode)
 		}
 	}
 }
@@ -59,10 +59,10 @@ func TestRenderHandler_OwnerReads(t *testing.T) {
 	app := renderApp(t, "kullanici-a")
 	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/status/is1", nil))
 	if err != nil {
-		t.Fatalf("istek: %v", err)
+		t.Fatalf("request: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, 200 bekleniyordu", resp.StatusCode)
+		t.Errorf("status = %d, want 200", resp.StatusCode)
 	}
 }
 
@@ -70,9 +70,9 @@ func TestRenderHandler_Unauthenticated401(t *testing.T) {
 	app := renderApp(t, "")
 	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/status/is1", nil))
 	if err != nil {
-		t.Fatalf("istek: %v", err)
+		t.Fatalf("request: %v", err)
 	}
 	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status = %d, 401 bekleniyordu", resp.StatusCode)
+		t.Errorf("status = %d, want 401", resp.StatusCode)
 	}
 }

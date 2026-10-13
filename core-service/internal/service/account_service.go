@@ -20,7 +20,7 @@ import (
 const TaskTypeAccountCleanup = "hesap:temizle"
 
 // ErrAccountNotFound: the account to delete was not found (or the id is invalid).
-var ErrAccountNotFound = errors.New("hesap bulunamadi")
+var ErrAccountNotFound = errors.New("account not found")
 
 // delayedCleanupDelay is how long after the deletion the second R2 cleanup
 // runs. It is far longer than the longest job attempt (render default 30 min
@@ -78,19 +78,19 @@ func (s *AccountService) Delete(ctx context.Context, userID string) error {
 		if errors.Is(err, identity.ErrUserNotFound) {
 			return ErrAccountNotFound
 		}
-		return fmt.Errorf("hesap silinemedi: %w", err)
+		return fmt.Errorf("could not delete the account: %w", err)
 	}
 
 	if err := s.redis.Set(ctx, deletionmark.Key(userID), "1", deletionmark.TTL).Err(); err != nil {
-		log.Printf("Uyari: silinmis isareti yazilamadi (kullanici %s): %v", userID, err)
+		log.Printf("Warning: could not write the deleted marker (user %s): %v", userID, err)
 	}
 	if err := s.Cleanup(ctx, userID); err != nil {
-		log.Printf("Uyari: hesap R2 temizligi eksik kaldi, gecikmeli gorev tamamlayacak (kullanici %s): %v", userID, err)
+		log.Printf("Warning: the account R2 cleanup is incomplete, the delayed task will finish it (user %s): %v", userID, err)
 	}
 
 	payload, err := json.Marshal(map[string]string{"userId": userID})
 	if err != nil {
-		log.Printf("Uyari: temizlik gorevi hazirlanamadi (kullanici %s): %v", userID, err)
+		log.Printf("Warning: could not prepare the cleanup task (user %s): %v", userID, err)
 		return nil
 	}
 	if _, err := s.queue.Enqueue(asynq.NewTask(TaskTypeAccountCleanup, payload),
@@ -98,7 +98,7 @@ func (s *AccountService) Delete(ctx context.Context, userID string) error {
 		asynq.ProcessIn(delayedCleanupDelay),
 		asynq.MaxRetry(10),
 	); err != nil {
-		log.Printf("Uyari: gecikmeli temizlik gorevi kurulamadi (kullanici %s): %v", userID, err)
+		log.Printf("Warning: could not set up the delayed cleanup task (user %s): %v", userID, err)
 	}
 	return nil
 }
@@ -135,11 +135,11 @@ func (s *AccountService) Cleanup(ctx context.Context, userID string) error {
 func (s *AccountService) cleanupSocial(ctx context.Context, userID string) error {
 	var errs []error
 	if err := s.social.DeleteUserTraces(ctx, userID); err != nil {
-		errs = append(errs, fmt.Errorf("sosyal izler silinemedi: %w", err))
+		errs = append(errs, fmt.Errorf("could not delete social traces: %w", err))
 	}
 	ids, err := s.social.ListPublicationIDs(ctx, userID)
 	if err != nil {
-		errs = append(errs, fmt.Errorf("sosyal yayinlar listelenemedi: %w", err))
+		errs = append(errs, fmt.Errorf("could not list social publications: %w", err))
 		return errors.Join(errs...)
 	}
 	if s.prefixDeleter != nil {
@@ -147,7 +147,7 @@ func (s *AccountService) cleanupSocial(ctx context.Context, userID string) error
 		for _, id := range ids {
 			prefix, err := client.SocialPrefix(id)
 			if err != nil {
-				errs = append(errs, fmt.Errorf("sosyal onek %s: %w", id, err))
+				errs = append(errs, fmt.Errorf("social prefix %s: %w", id, err))
 				prefixFailed = true
 				continue
 			}
@@ -161,7 +161,7 @@ func (s *AccountService) cleanupSocial(ctx context.Context, userID string) error
 		}
 	}
 	if err := s.social.DeleteUserData(ctx, userID); err != nil {
-		errs = append(errs, fmt.Errorf("sosyal veri silinemedi: %w", err))
+		errs = append(errs, fmt.Errorf("could not delete social data: %w", err))
 	}
 	return errors.Join(errs...)
 }

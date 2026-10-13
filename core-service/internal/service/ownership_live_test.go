@@ -16,7 +16,7 @@ import (
 func storeJob(t *testing.T, rdb *redis.Client, job *model.Job) {
 	t.Helper()
 	if err := writeJob(context.Background(), rdb, job); err != nil {
-		t.Fatalf("jobYaz: %v", err)
+		t.Fatalf("writeJob: %v", err)
 	}
 }
 
@@ -26,10 +26,10 @@ func TestRenderService_OtherUsersJobNotFound(t *testing.T) {
 	storeJob(t, rdb, &model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued})
 
 	if _, err := s.GetStatus(context.Background(), "kullanici-b", "is1"); !errors.Is(err, ErrJobNotFound) {
-		t.Errorf("baska kullanici icin ErrJobNotFound bekleniyordu, geldi: %v", err)
+		t.Errorf("want ErrJobNotFound for another user, got: %v", err)
 	}
 	if _, err := s.GetStatus(context.Background(), "kullanici-a", "is1"); err != nil {
-		t.Errorf("sahibi kendi isini okuyamadi: %v", err)
+		t.Errorf("the owner could not read their own job: %v", err)
 	}
 }
 
@@ -39,14 +39,14 @@ func TestRenderService_OtherUserCannotCancel(t *testing.T) {
 	storeJob(t, rdb, &model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued})
 
 	if _, err := s.CancelRender(context.Background(), "kullanici-b", "is1"); !errors.Is(err, ErrJobNotFound) {
-		t.Fatalf("baska kullanici icin ErrJobNotFound bekleniyordu, geldi: %v", err)
+		t.Fatalf("want ErrJobNotFound for another user, got: %v", err)
 	}
 	job, err := readJob(context.Background(), rdb, "is1")
 	if err != nil {
-		t.Fatalf("jobOku: %v", err)
+		t.Fatalf("readJob: %v", err)
 	}
 	if job.Status != model.JobStatusQueued {
-		t.Errorf("baskasinin iptali isi degistirdi: %s", job.Status)
+		t.Errorf("someone else's cancel changed the job: %s", job.Status)
 	}
 }
 
@@ -57,7 +57,7 @@ func TestRenderService_OtherUsersResultNotFound(t *testing.T) {
 	storeJob(t, rdb, &model.Job{ID: "is1", OwnerID: "kullanici-a", Status: model.JobStatusSucceeded, Result: result})
 
 	if _, err := s.GetResult(context.Background(), "kullanici-b", "is1"); !errors.Is(err, ErrJobNotFound) {
-		t.Errorf("ErrJobNotFound bekleniyordu, geldi: %v", err)
+		t.Errorf("want ErrJobNotFound, got: %v", err)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestRenderService_OwnerlessRecordHiddenFromAll(t *testing.T) {
 	storeJob(t, rdb, &model.Job{ID: "eski", Status: model.JobStatusQueued})
 
 	if _, err := s.GetStatus(context.Background(), "kullanici-a", "eski"); !errors.Is(err, ErrJobNotFound) {
-		t.Errorf("OwnerID'siz kayit icin ErrJobNotFound bekleniyordu, geldi: %v", err)
+		t.Errorf("want ErrJobNotFound for a record without OwnerID, got: %v", err)
 	}
 }
 
@@ -78,13 +78,13 @@ func TestMasterService_OtherUsersJobNotFound(t *testing.T) {
 	storeJob(t, rdb, &model.Job{ID: "m1", Type: model.JobTypeMaster, OwnerID: "kullanici-a", Status: model.JobStatusSucceeded, Result: result})
 
 	if _, err := s.GetStatus(context.Background(), "kullanici-b", "m1"); !errors.Is(err, ErrJobNotFound) {
-		t.Errorf("status: ErrJobNotFound bekleniyordu, geldi: %v", err)
+		t.Errorf("status: want ErrJobNotFound, got: %v", err)
 	}
 	if _, err := s.GetResult(context.Background(), "kullanici-b", "m1"); !errors.Is(err, ErrJobNotFound) {
-		t.Errorf("result: ErrJobNotFound bekleniyordu, geldi: %v", err)
+		t.Errorf("result: want ErrJobNotFound, got: %v", err)
 	}
 	if _, err := s.GetResult(context.Background(), "kullanici-a", "m1"); err != nil {
-		t.Errorf("sahibi sonucu okuyamadi: %v", err)
+		t.Errorf("the owner could not read the result: %v", err)
 	}
 }
 
@@ -95,16 +95,16 @@ func pendingTaskPayload(t *testing.T, queue string, target any) {
 	defer insp.Close()
 	tasks, err := insp.ListPendingTasks(queue)
 	if err != nil || len(tasks) != 1 {
-		t.Fatalf("bekleyen gorev = %d, hata %v", len(tasks), err)
+		t.Fatalf("pending tasks = %d, error %v", len(tasks), err)
 	}
 	var envelope struct {
 		Payload json.RawMessage `json:"payload"`
 	}
 	if err := json.Unmarshal(tasks[0].Payload, &envelope); err != nil {
-		t.Fatalf("gorev zarfi: %v", err)
+		t.Fatalf("task envelope: %v", err)
 	}
 	if err := json.Unmarshal(envelope.Payload, target); err != nil {
-		t.Fatalf("gorev payload: %v", err)
+		t.Fatalf("task payload: %v", err)
 	}
 }
 
@@ -120,15 +120,15 @@ func TestRenderService_StartRenderWritesOwner(t *testing.T) {
 	}
 	job, err := readJob(context.Background(), rdb, resp.JobID)
 	if err != nil {
-		t.Fatalf("jobOku: %v", err)
+		t.Fatalf("readJob: %v", err)
 	}
 	if job.OwnerID != "kullanici-a" {
-		t.Fatalf("is kaydi sahibi = %q", job.OwnerID)
+		t.Fatalf("job record owner = %q", job.OwnerID)
 	}
 	var p model.RenderJobPayload
 	pendingTaskPayload(t, "render", &p)
 	if p.OwnerID != "kullanici-a" {
-		t.Errorf("gorev payload sahibi = %q", p.OwnerID)
+		t.Errorf("task payload owner = %q", p.OwnerID)
 	}
 }
 
@@ -149,15 +149,15 @@ func TestMasterService_StartFinalWritesOwner(t *testing.T) {
 	}
 	job, err := readJob(context.Background(), rdb, resp.JobID)
 	if err != nil {
-		t.Fatalf("jobOku: %v", err)
+		t.Fatalf("readJob: %v", err)
 	}
 	if job.OwnerID != "kullanici-a" {
-		t.Fatalf("is kaydi sahibi = %q", job.OwnerID)
+		t.Fatalf("job record owner = %q", job.OwnerID)
 	}
 	var p model.MasterJobPayload
 	pendingTaskPayload(t, "master", &p)
 	if p.OwnerID != "kullanici-a" {
-		t.Errorf("gorev payload sahibi = %q", p.OwnerID)
+		t.Errorf("task payload owner = %q", p.OwnerID)
 	}
 }
 
@@ -180,7 +180,7 @@ func TestRenderService_StartRenderWritesStemMode(t *testing.T) {
 	var p model.RenderJobPayload
 	pendingTaskPayload(t, "render", &p)
 	if p.StemMode != model.StemModeFocus || p.FocusInstrument == nil || *p.FocusInstrument != model.InstrumentDrums {
-		t.Errorf("payload stem ayari = %q %v", p.StemMode, p.FocusInstrument)
+		t.Errorf("payload stem setting = %q %v", p.StemMode, p.FocusInstrument)
 	}
 }
 
@@ -197,7 +197,7 @@ func TestRenderService_StartRenderDefaultsToMix(t *testing.T) {
 	var p model.RenderJobPayload
 	pendingTaskPayload(t, "render", &p)
 	if p.StemMode != model.StemModeMix {
-		t.Errorf("varsayilan mod = %q, mix bekleniyordu", p.StemMode)
+		t.Errorf("default mode = %q, want mix", p.StemMode)
 	}
 }
 
@@ -206,6 +206,6 @@ func TestRenderService_InvalidStemSettingsCreateNoJob(t *testing.T) {
 	s := NewRenderService(nil, nil, nil, testR2Cfg())
 	req := &model.RenderStartRequest{ProjectID: uuid.New().String(), StemMode: model.StemModeFocus}
 	if _, err := s.StartRender(context.Background(), "kullanici-a", req); !errors.Is(err, model.ErrInvalidStemSettings) {
-		t.Fatalf("ErrGecersizStemAyari bekleniyordu, geldi: %v", err)
+		t.Fatalf("want ErrInvalidStemSettings, got: %v", err)
 	}
 }

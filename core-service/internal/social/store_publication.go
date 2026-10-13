@@ -142,7 +142,7 @@ func (s *PostgresStore) getPublication(ctx context.Context, condition, value, vi
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("yayin okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the publication: %w", err)
 	}
 	record.PublicationSummary = sc.summary()
 	record.OwnerID = sc.ownerID
@@ -199,7 +199,7 @@ func (s *PostgresStore) InsertPublication(ctx context.Context, input Publication
 		return errSlugConflict
 	}
 	if err != nil {
-		return fmt.Errorf("yayin eklenemedi: %w", err)
+		return fmt.Errorf("could not add the publication: %w", err)
 	}
 	return nil
 }
@@ -214,7 +214,7 @@ func (s *PostgresStore) UpdatePublication(ctx context.Context, id, ownerID strin
 		 WHERE id = $1 AND sahip_id = $2 AND silinme IS NULL`,
 		id, ownerID, patch.Description, patch.BackingEnabled, patch.Visibility, patch.CommentsEnabled)
 	if err != nil {
-		return fmt.Errorf("yayin guncellenemedi: %w", err)
+		return fmt.Errorf("could not update the publication: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return ErrNotFound
@@ -227,7 +227,7 @@ func (s *PostgresStore) DeletePublication(ctx context.Context, id, ownerID strin
 		UPDATE sosyal.yayin SET silinme = now()
 		 WHERE id = $1 AND sahip_id = $2 AND silinme IS NULL`, id, ownerID)
 	if err != nil {
-		return fmt.Errorf("yayin silinemedi: %w", err)
+		return fmt.Errorf("could not delete the publication: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return ErrNotFound
@@ -237,7 +237,7 @@ func (s *PostgresStore) DeletePublication(ctx context.Context, id, ownerID strin
 
 func (s *PostgresStore) RemovePublication(ctx context.Context, id string) error {
 	if _, err := s.pool.Exec(ctx, `DELETE FROM sosyal.yayin WHERE id = $1 AND durum = 'hazirlaniyor'`, id); err != nil {
-		return fmt.Errorf("yayin kaldirilamadi: %w", err)
+		return fmt.Errorf("could not unpublish the publication: %w", err)
 	}
 	return nil
 }
@@ -247,7 +247,7 @@ func (s *PostgresStore) ResetForRetry(ctx context.Context, id, ownerID string) e
 		UPDATE sosyal.yayin SET durum = 'hazirlaniyor'
 		 WHERE id = $1 AND sahip_id = $2 AND silinme IS NULL AND durum = 'hata'`, id, ownerID)
 	if err != nil {
-		return fmt.Errorf("yayin tekrar denemeye alinamadi: %w", err)
+		return fmt.Errorf("could not queue the publication for retry: %w", err)
 	}
 	if result.RowsAffected() == 1 {
 		return nil
@@ -256,7 +256,7 @@ func (s *PostgresStore) ResetForRetry(ctx context.Context, id, ownerID string) e
 	if err := s.pool.QueryRow(ctx, `
 		SELECT EXISTS (SELECT 1 FROM sosyal.yayin WHERE id = $1 AND sahip_id = $2 AND silinme IS NULL)`,
 		id, ownerID).Scan(&exists); err != nil {
-		return fmt.Errorf("yayin okunamadi: %w", err)
+		return fmt.Errorf("could not read the publication: %w", err)
 	}
 	if exists {
 		return ErrInvalidStatus
@@ -274,7 +274,7 @@ func (s *PostgresStore) GetPreparation(ctx context.Context, id string) (*Prepara
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("hazirlik okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the preparation data: %w", err)
 	}
 	return &record, nil
 }
@@ -295,7 +295,7 @@ func (s *PostgresStore) Publish(ctx context.Context, id string, result Preparati
 		 WHERE id = $1 AND durum = 'hazirlaniyor' AND silinme IS NULL`,
 		id, result.MasterKey, stems, waveform, result.PreviewKey)
 	if err != nil {
-		return fmt.Errorf("yayin yayinlanamadi: %w", err)
+		return fmt.Errorf("could not publish the publication: %w", err)
 	}
 	return nil
 }
@@ -304,7 +304,7 @@ func (s *PostgresStore) MarkFailed(ctx context.Context, id string) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE sosyal.yayin SET durum = 'hata' WHERE id = $1 AND durum = 'hazirlaniyor' AND silinme IS NULL`, id)
 	if err != nil {
-		return fmt.Errorf("yayin hata durumuna alinamadi: %w", err)
+		return fmt.Errorf("could not mark the publication as failed: %w", err)
 	}
 	return nil
 }

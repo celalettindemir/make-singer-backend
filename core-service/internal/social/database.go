@@ -46,34 +46,34 @@ func migrationNames() ([]string, error) {
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("sosyal migration icin baglanti alinamadi: %w", err)
+		return fmt.Errorf("could not get a connection for the social migration: %w", err)
 	}
 	defer conn.Release()
 
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationLockKey); err != nil {
-		return fmt.Errorf("sosyal migration kilidi alinamadi: %w", err)
+		return fmt.Errorf("could not acquire the social migration lock: %w", err)
 	}
 	defer func() {
 		if _, err := conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationLockKey); err != nil {
-			log.Printf("sosyal migration kilidi birakilamadi: %v", err)
+			log.Printf("could not release the social migration lock: %v", err)
 			// The session lock lives as long as the connection: close it so the
 			// pool drops it and the lock is released (Release discards a closed
 			// connection).
 			if closeErr := conn.Conn().Close(context.Background()); closeErr != nil {
-				log.Printf("sosyal migration baglantisi kapatilamadi: %v", closeErr)
+				log.Printf("could not close the social migration connection: %v", closeErr)
 			}
 		}
 	}()
 
 	if _, err := conn.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS sosyal`); err != nil {
-		return fmt.Errorf("sosyal semasi olusturulamadi: %w", err)
+		return fmt.Errorf("could not create the social schema: %w", err)
 	}
 	if _, err := conn.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS sosyal.schema_migrations (
 			version    text PRIMARY KEY,
 			applied_at timestamptz NOT NULL DEFAULT now()
 		)`); err != nil {
-		return fmt.Errorf("sosyal.schema_migrations olusturulamadi: %w", err)
+		return fmt.Errorf("could not create sosyal.schema_migrations: %w", err)
 	}
 
 	usernames, err := migrationNames()
@@ -85,30 +85,30 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		if err := conn.QueryRow(ctx,
 			`SELECT EXISTS(SELECT 1 FROM sosyal.schema_migrations WHERE version = $1)`, name,
 		).Scan(&exists); err != nil {
-			return fmt.Errorf("%s kontrol edilemedi: %w", name, err)
+			return fmt.Errorf("could not check %s: %w", name, err)
 		}
 		if exists {
 			continue
 		}
 		sql, err := migrationFS.ReadFile("migrations/" + name)
 		if err != nil {
-			return fmt.Errorf("%s okunamadi: %w", name, err)
+			return fmt.Errorf("could not read %s: %w", name, err)
 		}
 		tx, err := conn.Begin(ctx)
 		if err != nil {
-			return fmt.Errorf("%s icin islem baslatilamadi: %w", name, err)
+			return fmt.Errorf("could not start a transaction for %s: %w", name, err)
 		}
 		if _, err := tx.Exec(ctx, string(sql)); err != nil {
 			_ = tx.Rollback(ctx)
-			return fmt.Errorf("%s uygulanamadi: %w", name, err)
+			return fmt.Errorf("could not apply %s: %w", name, err)
 		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO sosyal.schema_migrations (version) VALUES ($1)`, name); err != nil {
 			_ = tx.Rollback(ctx)
-			return fmt.Errorf("%s kaydedilemedi: %w", name, err)
+			return fmt.Errorf("could not record %s: %w", name, err)
 		}
 		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("%s commit edilemedi: %w", name, err)
+			return fmt.Errorf("could not commit %s: %w", name, err)
 		}
 	}
 	return nil

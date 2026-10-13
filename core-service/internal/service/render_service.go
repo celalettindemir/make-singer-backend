@@ -43,11 +43,11 @@ func (s *RenderService) BuildResult(ctx context.Context, record *model.RenderRes
 	stems := make([]model.StemResult, 0, len(record.Stems))
 	for _, st := range record.Stems {
 		if st.FileKey == "" {
-			return nil, fmt.Errorf("stem kaydinda nesne anahtari yok: %s", st.ID)
+			return nil, fmt.Errorf("the stem record has no object key: %s", st.ID)
 		}
 		fileURL, expiresAt, err := client.ResolveURL(ctx, s.r2Client, s.r2Cfg, st.FileKey)
 		if err != nil {
-			return nil, fmt.Errorf("stem URL uretilemedi: %w", err)
+			return nil, fmt.Errorf("could not generate the stem URL: %w", err)
 		}
 		stems = append(stems, model.StemResult{
 			ID:           st.ID,

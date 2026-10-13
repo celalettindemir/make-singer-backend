@@ -52,7 +52,7 @@ func (s *UploadService) UploadVocal(ctx context.Context, userID, projectID, sect
 	// would have meant a second (wasted) signing.
 	fileURL, expiresAt, err := s.r2Client.Upload(ctx, key, file, "audio/wav")
 	if err != nil {
-		return nil, fmt.Errorf("vokal yuklenemedi: %w", err)
+		return nil, fmt.Errorf("could not upload the vocal: %w", err)
 	}
 
 	return &model.UploadVocalResponse{

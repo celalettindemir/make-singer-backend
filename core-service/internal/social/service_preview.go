@@ -61,7 +61,7 @@ func (s *Service) previewURL(ctx context.Context, key string) (string, error) {
 	}
 	url, err := s.storage.GetSignedURL(ctx, key, previewURLTTL)
 	if err != nil {
-		return "", fmt.Errorf("onizleme adresi imzalanamadi: %w", err)
+		return "", fmt.Errorf("could not sign the preview URL: %w", err)
 	}
 	return url, nil
 }

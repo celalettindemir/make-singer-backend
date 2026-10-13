@@ -30,7 +30,7 @@ func (s *PostgresStore) ListStems(ctx context.Context, pubID string) ([]StemReco
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("stem listesi okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the stem list: %w", err)
 	}
 	if stems == nil {
 		stems = []StemRecord{}

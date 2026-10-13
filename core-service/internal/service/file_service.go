@@ -38,7 +38,7 @@ func (s *FileService) Sign(ctx context.Context, userID string, urls []string) (*
 	for i, key := range keys {
 		signedURL, expiresAt, err := client.ResolveURL(ctx, s.storage, s.r2Cfg, key)
 		if err != nil {
-			return nil, fmt.Errorf("adres uretilemedi: %w", err)
+			return nil, fmt.Errorf("could not generate the URL: %w", err)
 		}
 		files[i] = model.SignedFile{URL: signedURL, ExpiresAt: model.ExpiresPtr(expiresAt)}
 	}

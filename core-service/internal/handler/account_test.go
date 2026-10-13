@@ -37,31 +37,31 @@ func accountDeleteStatus(t *testing.T, app *fiber.App) int {
 	t.Helper()
 	resp, err := app.Test(httptest.NewRequest(http.MethodDelete, "/api/account", nil))
 	if err != nil {
-		t.Fatalf("istek: %v", err)
+		t.Fatalf("request: %v", err)
 	}
 	return resp.StatusCode
 }
 
 func TestAccountHandler_Delete204(t *testing.T) {
 	if got := accountDeleteStatus(t, accountApp(nil, "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a")); got != http.StatusNoContent {
-		t.Fatalf("durum = %d, beklenen 204", got)
+		t.Fatalf("status = %d, want 204", got)
 	}
 }
 
 func TestAccountHandler_NotFound404(t *testing.T) {
 	if got := accountDeleteStatus(t, accountApp(identity.ErrUserNotFound, "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a")); got != http.StatusNotFound {
-		t.Fatalf("durum = %d, beklenen 404", got)
+		t.Fatalf("status = %d, want 404", got)
 	}
 }
 
 func TestAccountHandler_Unauthenticated401(t *testing.T) {
 	if got := accountDeleteStatus(t, accountApp(nil, "")); got != http.StatusUnauthorized {
-		t.Fatalf("durum = %d, beklenen 401", got)
+		t.Fatalf("status = %d, want 401", got)
 	}
 }
 
 func TestAccountHandler_IdentityError500(t *testing.T) {
 	if got := accountDeleteStatus(t, accountApp(errors.New("pg"), "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a")); got != http.StatusInternalServerError {
-		t.Fatalf("durum = %d, beklenen 500", got)
+		t.Fatalf("status = %d, want 500", got)
 	}
 }

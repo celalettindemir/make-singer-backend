@@ -71,7 +71,7 @@ type SocialLimits struct {
 // check for a nil handler, so it would otherwise be a 500 on the first request.
 func (h *SocialHandler) Routes(r fiber.Router, l SocialLimits) {
 	if l.Publication == nil || l.Comment == nil || l.Cover == nil {
-		panic("handler: SosyalLimitleri eksik; Yayin, Yorum ve Cover limiterlarinin hepsi doldurulmali")
+		panic("handler: SocialLimits is incomplete; the Publication, Comment and Cover limiters must all be set")
 	}
 	r.Get("/profil/ben", h.MyProfile)
 	r.Put("/profil/ben", h.SaveProfile)
@@ -145,7 +145,7 @@ func socialError(c *fiber.Ctx, err error) error {
 			return response.Error(c, e.status, e.code, e.message, nil)
 		}
 	}
-	log.Printf("sosyal: %s %s: %v", c.Method(), c.Route().Path, err)
+	log.Printf("social: %s %s: %v", c.Method(), c.Route().Path, err)
 	return response.Error(c, fiber.StatusInternalServerError, "sunucu_hatasi", i18n.KeyInternal, nil)
 }
 

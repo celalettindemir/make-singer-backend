@@ -64,7 +64,7 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 	}
 	for _, take := range req.VocalTakes {
 		if _, err := client.ResolveOwnedKey(take.FileURL, userID, s.r2Cfg); err != nil {
-			return nil, fmt.Errorf("vokal URL: %w", err)
+			return nil, fmt.Errorf("vocal URL: %w", err)
 		}
 	}
 
@@ -165,12 +165,12 @@ func (s *MasterService) BuildResult(ctx context.Context, stored []byte) (*model.
 		return nil, fmt.Errorf("failed to unmarshal result: %w", err)
 	}
 	if record.FileKey == "" {
-		return nil, fmt.Errorf("is kaydinda nesne anahtari yok")
+		return nil, fmt.Errorf("the job record has no object key")
 	}
 
 	fileURL, expiresAt, err := client.ResolveURL(ctx, s.r2Client, s.r2Cfg, record.FileKey)
 	if err != nil {
-		return nil, fmt.Errorf("master URL uretilemedi: %w", err)
+		return nil, fmt.Errorf("could not generate the master URL: %w", err)
 	}
 
 	return record.Response(fileURL, expiresAt), nil

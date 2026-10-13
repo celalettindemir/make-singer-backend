@@ -37,7 +37,7 @@ func (s *PostgresStore) GetPreview(ctx context.Context, slug string) (*PreviewRe
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("onizleme okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the preview: %w", err)
 	}
 	record.Owner.AvatarColor = AvatarColor(record.OwnerID)
 	record.Waveform = waveform

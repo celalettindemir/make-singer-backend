@@ -23,7 +23,7 @@ func ticketApp(t *testing.T, userID string) *fiber.App {
 	rdb := liveRedis(t)
 	raw, _ := json.Marshal(model.Job{ID: ticketJobID, OwnerID: "kullanici-a", Status: model.JobStatusRunning})
 	if err := rdb.Set(context.Background(), "job:"+ticketJobID, raw, time.Hour).Err(); err != nil {
-		t.Fatalf("is yazilamadi: %v", err)
+		t.Fatalf("could not write the job: %v", err)
 	}
 	h := NewWSTicketHandler(service.NewWSTicketService(rdb), validator.New())
 	app := fiber.New()
@@ -40,7 +40,7 @@ func fetchTicket(t *testing.T, app *fiber.App) (*http.Response, model.WSTicketRe
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := app.Test(req)
 	if err != nil {
-		t.Fatalf("bilet istegi: %v", err)
+		t.Fatalf("ticket request: %v", err)
 	}
 	var b model.WSTicketResponse
 	body, _ := io.ReadAll(resp.Body)
@@ -52,17 +52,17 @@ func TestWSTicketHandler_OwnerConnectsWithTicket(t *testing.T) {
 	app := ticketApp(t, "kullanici-a")
 	resp, b := fetchTicket(t, app)
 	if resp.StatusCode != http.StatusOK || b.Ticket == "" {
-		t.Fatalf("bilet = %d %+v", resp.StatusCode, b)
+		t.Fatalf("ticket = %d %+v", resp.StatusCode, b)
 	}
 
 	path := "/ws/jobs/" + ticketJobID + "?ticket=" + b.Ticket
 	first, _ := app.Test(httptest.NewRequest(http.MethodGet, path, nil))
 	if first.StatusCode != http.StatusOK {
-		t.Errorf("ilk baglanti = %d, 200 bekleniyordu", first.StatusCode)
+		t.Errorf("first connection = %d, want 200", first.StatusCode)
 	}
 	second, _ := app.Test(httptest.NewRequest(http.MethodGet, path, nil))
 	if second.StatusCode != http.StatusUnauthorized {
-		t.Errorf("ikinci baglanti = %d, 401 bekleniyordu", second.StatusCode)
+		t.Errorf("second connection = %d, want 401", second.StatusCode)
 	}
 }
 
@@ -70,7 +70,7 @@ func TestWSTicketHandler_OtherUserTicket404(t *testing.T) {
 	app := ticketApp(t, "kullanici-b")
 	resp, _ := fetchTicket(t, app)
 	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("status = %d, 404 bekleniyordu", resp.StatusCode)
+		t.Errorf("status = %d, want 404", resp.StatusCode)
 	}
 }
 
@@ -78,6 +78,6 @@ func TestWSTicketHandler_NoTicket401(t *testing.T) {
 	app := ticketApp(t, "kullanici-a")
 	resp, _ := app.Test(httptest.NewRequest(http.MethodGet, "/ws/jobs/"+ticketJobID, nil))
 	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("status = %d, 401 bekleniyordu", resp.StatusCode)
+		t.Errorf("status = %d, want 401", resp.StatusCode)
 	}
 }

@@ -123,53 +123,53 @@ func TestRenderWorker_SunoHappyPath(t *testing.T) {
 
 	res, err := testWorker(s, d).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if err != nil {
-		t.Fatalf("sunoIleUret: %v", err)
+		t.Fatalf("generateWithSuno: %v", err)
 	}
 	if !s.generateReq.Instrumental || !strings.HasPrefix(s.generateReq.Style, "pop, instrumental") {
-		t.Errorf("uretim istegi = %+v", s.generateReq)
+		t.Errorf("generation request = %+v", s.generateReq)
 	}
 	if s.splitArgs != [2]string{"t1", "a1"} {
-		t.Errorf("SplitStems argumanlari = %v", s.splitArgs)
+		t.Errorf("SplitStems arguments = %v", s.splitArgs)
 	}
 	if res.Duration != 180 || len(res.Stems) != 2 {
-		t.Fatalf("sonuc = %+v", res)
+		t.Fatalf("result = %+v", res)
 	}
 	if len(d.uploads) != 2 {
-		t.Fatalf("yukleme sayisi = %d, 2 bekleniyordu", len(d.uploads))
+		t.Fatalf("upload count = %d, want 2", len(d.uploads))
 	}
 	for i, y := range d.uploads {
 		st := res.Stems[i]
 		if y.key != st.FileKey || !strings.HasPrefix(y.key, "stems/kullanici-a/p1/") || !strings.HasSuffix(y.key, ".mp3") {
-			t.Errorf("anahtar = %q, kayit %q", y.key, st.FileKey)
+			t.Errorf("key = %q, record %q", y.key, st.FileKey)
 		}
 		if y.contentType != "audio/mpeg" {
-			t.Errorf("icerik tipi = %q", y.contentType)
+			t.Errorf("content type = %q", y.contentType)
 		}
 		if st.Duration != 180 {
-			t.Errorf("stem suresi = %v", st.Duration)
+			t.Errorf("stem duration = %v", st.Duration)
 		}
 	}
 	if !bytes.Equal(d.uploads[0].data, []byte("ses:/davul.mp3")) || res.Stems[1].Instrument != model.InstrumentPiano {
-		t.Errorf("yuklenen icerik/enstruman yanlis: %q, %v", d.uploads[0].data, res.Stems[1].Instrument)
+		t.Errorf("uploaded content/instrument is wrong: %q, %v", d.uploads[0].data, res.Stems[1].Instrument)
 	}
 }
 
 func TestRenderWorker_SunoGenerateRejectionIsRetryable(t *testing.T) {
-	s := &fakeSuno{generateErr: errors.New("kredi yok")}
+	s := &fakeSuno{generateErr: errors.New("no credits")}
 	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if err == nil || errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("ucret oncesi hata tekrar denenebilir olmali, geldi: %v", err)
+		t.Fatalf("an error before the charge must be retryable, got: %v", err)
 	}
 }
 
 func TestRenderWorker_SunoNoRetryAfterPaidStep(t *testing.T) {
 	srv := audioServer(t)
 	cases := map[string]*fakeSuno{
-		"bekleme hatasi":      {waitErr: errors.New("zaman asimi")},
-		"bolme hatasi":        {track: &client.Track{ID: "a1"}, splitErr: errors.New("reddedildi")},
-		"stem bekleme hatasi": {track: &client.Track{ID: "a1"}, stemWaitErr: errors.New("zaman asimi")},
-		"stem yok":            {track: &client.Track{ID: "a1"}},
-		"indirme 404": {track: &client.Track{ID: "a1"}, stems: []client.Stem{
+		"wait error":      {waitErr: errors.New("timed out")},
+		"split error":     {track: &client.Track{ID: "a1"}, splitErr: errors.New("rejected")},
+		"stem wait error": {track: &client.Track{ID: "a1"}, stemWaitErr: errors.New("timed out")},
+		"no stem":         {track: &client.Track{ID: "a1"}},
+		"download 404": {track: &client.Track{ID: "a1"}, stems: []client.Stem{
 			{Instrument: model.InstrumentDrums, URL: srv.URL + "/yok.mp3"},
 		}},
 	}
@@ -178,10 +178,10 @@ func TestRenderWorker_SunoNoRetryAfterPaidStep(t *testing.T) {
 			d := &fakeStorage{}
 			_, err := testWorker(s, d).generateWithSuno(context.Background(), testPayload(), noProgress)
 			if !errors.Is(err, asynq.SkipRetry) {
-				t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+				t.Fatalf("want SkipRetry, got: %v", err)
 			}
 			if len(d.uploads) != 0 {
-				t.Errorf("basarisiz iste yukleme olmamali: %d", len(d.uploads))
+				t.Errorf("there must be no upload for a failed job: %d", len(d.uploads))
 			}
 		})
 	}
@@ -191,10 +191,10 @@ func TestRenderWorker_SunoNotCalledWithoutStorage(t *testing.T) {
 	s := &fakeSuno{}
 	_, err := testWorker(s, nil).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
 	if s.generateCalls != 0 {
-		t.Errorf("depo yokken Suno %d kez cagrildi", s.generateCalls)
+		t.Errorf("Suno was called %d times without a store", s.generateCalls)
 	}
 }
 
@@ -211,10 +211,10 @@ func TestRenderWorker_SunoEstimatesMissingDuration(t *testing.T) {
 
 	res, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
 	if err != nil {
-		t.Fatalf("sunoIleUret: %v", err)
+		t.Fatalf("generateWithSuno: %v", err)
 	}
 	if res.Duration != 16 || len(res.Stems) != 1 || res.Stems[0].Duration != 16 {
-		t.Fatalf("sure = %v, stem = %+v; 16 bekleniyordu", res.Duration, res.Stems)
+		t.Fatalf("duration = %v, stem = %+v; want 16", res.Duration, res.Stems)
 	}
 }
 
@@ -224,10 +224,10 @@ func TestRenderWorker_SunoNotCalledForOwnerlessJob(t *testing.T) {
 	p.OwnerID = ""
 	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
 	if s.generateCalls != 0 {
-		t.Errorf("sahipsiz iste Suno %d kez cagrildi", s.generateCalls)
+		t.Errorf("Suno was called %d times for a job without an owner", s.generateCalls)
 	}
 }
 
@@ -235,7 +235,7 @@ func TestRenderWorker_SunoNotCalledForOwnerlessJob(t *testing.T) {
 type panickingStorage struct{ fakeStorage }
 
 func (d *panickingStorage) Upload(context.Context, string, io.Reader, string) (string, time.Time, error) {
-	panic("nil R2 istemcisi")
+	panic("nil R2 client")
 }
 
 // TestRenderWorker_SunoPanicAfterChargeNotRetried: asynq catches a panic and
@@ -249,7 +249,7 @@ func TestRenderWorker_SunoPanicAfterChargeNotRetried(t *testing.T) {
 	}
 	_, err := testWorker(s, &panickingStorage{}).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
 }
 
@@ -262,19 +262,19 @@ func TestRenderWorker_SunoMixModeDoesNotSplit(t *testing.T) {
 
 	res, err := testWorker(s, d).generateWithSuno(context.Background(), p, noProgress)
 	if err != nil {
-		t.Fatalf("sunoIleUret: %v", err)
+		t.Fatalf("generateWithSuno: %v", err)
 	}
 	if s.splitCalls != 0 || s.isolateCalls != 0 {
-		t.Errorf("mix modunda ayirma cagrildi: split=%d advanced=%d", s.splitCalls, s.isolateCalls)
+		t.Errorf("separation was called in mix mode: split=%d advanced=%d", s.splitCalls, s.isolateCalls)
 	}
 	if res.StemMode != model.StemModeMix || len(res.Stems) != 1 || res.Stems[0].Instrument != model.InstrumentMix {
-		t.Fatalf("sonuc = %+v", res)
+		t.Fatalf("result = %+v", res)
 	}
 	if len(d.uploads) != 1 || !bytes.Equal(d.uploads[0].data, []byte("ses:/tam.mp3")) || d.uploads[0].contentType != "audio/mpeg" {
-		t.Errorf("yukleme = %+v", d.uploads)
+		t.Errorf("upload = %+v", d.uploads)
 	}
 	if !strings.HasPrefix(d.uploads[0].key, "stems/kullanici-a/p1/") {
-		t.Errorf("anahtar = %q", d.uploads[0].key)
+		t.Errorf("key = %q", d.uploads[0].key)
 	}
 }
 
@@ -285,10 +285,10 @@ func TestRenderWorker_SunoEmptyModeActsAsMix(t *testing.T) {
 	p.StemMode = ""
 	res, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
 	if err != nil {
-		t.Fatalf("sunoIleUret: %v", err)
+		t.Fatalf("generateWithSuno: %v", err)
 	}
 	if s.splitCalls != 0 || res.StemMode != model.StemModeMix {
-		t.Errorf("bos mod mix gibi islenmeli: split=%d mod=%q", s.splitCalls, res.StemMode)
+		t.Errorf("an empty mode must be handled like mix: split=%d mode=%q", s.splitCalls, res.StemMode)
 	}
 }
 
@@ -298,7 +298,7 @@ func TestRenderWorker_SunoMixModeMissingTrackURLNoRetry(t *testing.T) {
 	p.StemMode = model.StemModeMix
 	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
 }
 
@@ -316,27 +316,27 @@ func TestRenderWorker_SunoFocusModeTwoStems(t *testing.T) {
 
 	res, err := testWorker(s, d).generateWithSuno(context.Background(), p, noProgress)
 	if err != nil {
-		t.Fatalf("sunoIleUret: %v", err)
+		t.Fatalf("generateWithSuno: %v", err)
 	}
 	if s.isolateArgs != [3]string{"t1", "a1", "Drum Kit"} || s.splitCalls != 0 {
-		t.Errorf("ayirma argumanlari = %v, split=%d", s.isolateArgs, s.splitCalls)
+		t.Errorf("separation arguments = %v, split=%d", s.isolateArgs, s.splitCalls)
 	}
 	if res.StemMode != model.StemModeFocus || len(res.Stems) != 2 {
-		t.Fatalf("sonuc = %+v", res)
+		t.Fatalf("result = %+v", res)
 	}
 	if res.Stems[0].Instrument != model.InstrumentDrums || res.Stems[1].Instrument != model.InstrumentRest {
-		t.Errorf("enstrumanlar = %v, %v", res.Stems[0].Instrument, res.Stems[1].Instrument)
+		t.Errorf("instruments = %v, %v", res.Stems[0].Instrument, res.Stems[1].Instrument)
 	}
 	if len(d.uploads) != 2 || !bytes.Equal(d.uploads[0].data, []byte("ses:/davul.mp3")) ||
 		!bytes.Equal(d.uploads[1].data, []byte("ses:/kalan.mp3")) {
-		t.Errorf("yuklemeler = %+v", d.uploads)
+		t.Errorf("uploads = %+v", d.uploads)
 	}
 }
 
 func TestRenderWorker_SunoFocusIsolateErrorSkipsRetry(t *testing.T) {
 	s := &fakeSuno{
 		track:      &client.Track{ID: "a1", Duration: 141},
-		isolateErr: errors.New("ayirma reddedildi"),
+		isolateErr: errors.New("separation rejected"),
 	}
 	p := testPayload()
 	p.StemMode = model.StemModeFocus
@@ -344,7 +344,7 @@ func TestRenderWorker_SunoFocusIsolateErrorSkipsRetry(t *testing.T) {
 	p.FocusInstrument = &drums
 	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
 }
 
@@ -355,19 +355,19 @@ func TestRenderWorker_SunoFocusUnmappedInstrumentNotCalled(t *testing.T) {
 	p.FocusInstrument = nil
 	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
 	if !errors.Is(err, asynq.SkipRetry) || s.generateCalls != 0 {
-		t.Fatalf("ucret oncesi SkipRetry ve sifir uretim bekleniyordu: err=%v uretim=%d", err, s.generateCalls)
+		t.Fatalf("want SkipRetry and zero generations before the charge: err=%v generations=%d", err, s.generateCalls)
 	}
 }
 
 func TestRenderWorker_SunoFocusIsolateWaitErrorNoRetry(t *testing.T) {
-	s := &fakeSuno{track: &client.Track{ID: "a1"}, isolatedWaitErr: errors.New("katalog eslesmesi")}
+	s := &fakeSuno{track: &client.Track{ID: "a1"}, isolatedWaitErr: errors.New("catalog match")}
 	p := testPayload()
 	p.StemMode = model.StemModeFocus
 	drums := model.InstrumentDrums
 	p.FocusInstrument = &drums
 	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
 }
 
@@ -392,25 +392,25 @@ func TestRenderWorker_SunoNotCalledForDeletedOwner(t *testing.T) {
 	d := &fakeStorage{}
 	_, err := workerWithChecker(s, d, h).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
 	if s.generateCalls != 0 || len(d.uploads) != 0 {
-		t.Fatalf("silinmis sahip icin uretim=%d yukleme=%d", s.generateCalls, len(d.uploads))
+		t.Fatalf("generations=%d uploads=%d for a deleted owner", s.generateCalls, len(d.uploads))
 	}
 	if len(h.asked) == 0 || h.asked[0] != "kullanici-a" {
-		t.Fatalf("is sahibi denetlenmedi: %v", h.asked)
+		t.Fatalf("the job owner was not checked: %v", h.asked)
 	}
 }
 
 func TestRenderWorker_SunoCheckErrorBeforeChargeIsRetryable(t *testing.T) {
 	s := &fakeSuno{}
-	h := &fakeChecker{answer: func(int) (bool, error) { return false, errors.New("redis kapali") }}
+	h := &fakeChecker{answer: func(int) (bool, error) { return false, errors.New("redis is down") }}
 	_, err := workerWithChecker(s, &fakeStorage{}, h).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if err == nil || errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("ucret oncesi denetim hatasi tekrar denenebilir olmali, geldi: %v", err)
+		t.Fatalf("a check error before the charge must be retryable, got: %v", err)
 	}
 	if s.generateCalls != 0 {
-		t.Fatalf("denetim hatasinda Suno %d kez cagrildi", s.generateCalls)
+		t.Fatalf("Suno was called %d times on a check error", s.generateCalls)
 	}
 }
 
@@ -419,10 +419,10 @@ func TestRenderWorker_SunoCheckErrorBeforeChargeIsRetryable(t *testing.T) {
 func TestRenderWorker_SunoNoUploadForOwnerDeletedAfterCharge(t *testing.T) {
 	srv := audioServer(t)
 	cases := map[string]func(n int) (bool, error){
-		"silindi": func(n int) (bool, error) { return n > 0, nil },
-		"denetim hatasi": func(n int) (bool, error) {
+		"deleted": func(n int) (bool, error) { return n > 0, nil },
+		"check error": func(n int) (bool, error) {
 			if n > 0 {
-				return false, errors.New("redis kapali")
+				return false, errors.New("redis is down")
 			}
 			return false, nil
 		},
@@ -439,10 +439,10 @@ func TestRenderWorker_SunoNoUploadForOwnerDeletedAfterCharge(t *testing.T) {
 			d := &fakeStorage{}
 			_, err := workerWithChecker(s, d, &fakeChecker{answer: answer}).generateWithSuno(context.Background(), testPayload(), noProgress)
 			if !errors.Is(err, asynq.SkipRetry) {
-				t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+				t.Fatalf("want SkipRetry, got: %v", err)
 			}
 			if s.generateCalls != 1 || len(d.uploads) != 0 {
-				t.Fatalf("uretim=%d yukleme=%d; 1 ve 0 bekleniyordu", s.generateCalls, len(d.uploads))
+				t.Fatalf("generations=%d uploads=%d; want 1 and 0", s.generateCalls, len(d.uploads))
 			}
 		})
 	}
@@ -464,10 +464,10 @@ func TestRenderWorker_SunoChecksBeforeEveryUpload(t *testing.T) {
 	h := &fakeChecker{answer: func(n int) (bool, error) { return n >= 2, nil }}
 	_, err := workerWithChecker(s, d, h).generateWithSuno(context.Background(), testPayload(), noProgress)
 	if !errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("SkipRetry bekleniyordu, geldi: %v", err)
+		t.Fatalf("want SkipRetry, got: %v", err)
 	}
 	if len(d.uploads) != 1 {
-		t.Fatalf("yukleme sayisi = %d, 1 bekleniyordu", len(d.uploads))
+		t.Fatalf("upload count = %d, want 1", len(d.uploads))
 	}
 }
 
@@ -483,9 +483,9 @@ func TestRenderWorker_SunoChecksEveryStepForLiveOwner(t *testing.T) {
 	d := &fakeStorage{}
 	h := &fakeChecker{answer: func(int) (bool, error) { return false, nil }}
 	if _, err := workerWithChecker(s, d, h).generateWithSuno(context.Background(), testPayload(), noProgress); err != nil {
-		t.Fatalf("sunoIleUret: %v", err)
+		t.Fatalf("generateWithSuno: %v", err)
 	}
 	if len(d.uploads) != 2 || len(h.asked) != 3 {
-		t.Fatalf("yukleme=%d denetim=%d; 2 ve 3 bekleniyordu", len(d.uploads), len(h.asked))
+		t.Fatalf("uploads=%d checks=%d; want 2 and 3", len(d.uploads), len(h.asked))
 	}
 }

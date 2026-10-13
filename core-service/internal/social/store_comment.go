@@ -50,7 +50,7 @@ func (s *PostgresStore) InsertComment(ctx context.Context, input CommentInsert) 
 		SELECT `+commentColumns+` FROM c JOIN sosyal.profil p ON p.kullanici_id = c.yazar_id`,
 		input.ID, input.PublicationID, input.AuthorID, input.Text, input.TimeMs))
 	if err != nil {
-		return nil, fmt.Errorf("yorum eklenemedi: %w", err)
+		return nil, fmt.Errorf("could not add the comment: %w", err)
 	}
 	return comment, nil
 }
@@ -85,7 +85,7 @@ func (s *PostgresStore) ListComments(ctx context.Context, pubID, viewerID string
 		          c.olusturma, c.id
 		 LIMIT $7`, pubID, viewerID, group, timeMs, createdAt, id, limit+1)
 	if err != nil {
-		return nil, fmt.Errorf("yorumlar okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read comments: %w", err)
 	}
 	defer rows.Close()
 	comments := []Comment{}
@@ -93,7 +93,7 @@ func (s *PostgresStore) ListComments(ctx context.Context, pubID, viewerID string
 		var canDelete bool
 		comment, err := scanComment(rows, &canDelete)
 		if err != nil {
-			return nil, fmt.Errorf("yorum okunamadi: %w", err)
+			return nil, fmt.Errorf("could not read the comment: %w", err)
 		}
 		comment.CanDelete = canDelete
 		comments = append(comments, *comment)
@@ -111,7 +111,7 @@ func (s *PostgresStore) GetComment(ctx context.Context, id string) (*CommentReco
 		return nil, ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("yorum okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the comment: %w", err)
 	}
 	return &record, nil
 }
@@ -120,7 +120,7 @@ func (s *PostgresStore) DeleteComment(ctx context.Context, id string) error {
 	result, err := s.pool.Exec(ctx,
 		`UPDATE sosyal.yorum SET silinme = now() WHERE id = $1 AND silinme IS NULL`, id)
 	if err != nil {
-		return fmt.Errorf("yorum silinemedi: %w", err)
+		return fmt.Errorf("could not delete the comment: %w", err)
 	}
 	if result.RowsAffected() == 0 {
 		return ErrNotFound

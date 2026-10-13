@@ -84,8 +84,8 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	// Step 3: Build vocal takes if present
 	vocalTakes, err := w.buildVocalTakes(payload)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Vokal URL cozulemedi: %v", err))
-		return fmt.Errorf("vokal URL cozulemedi: %w: %w", err, asynq.SkipRetry)
+		w.failJob(ctx, jobID, fmt.Sprintf("Could not resolve the vocal URL: %v", err))
+		return fmt.Errorf("could not resolve the vocal URL: %w: %w", err, asynq.SkipRetry)
 	}
 
 	// Step 3b: Convert stem URLs to keys. Every URL coming from the client
@@ -94,8 +94,8 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	for _, u := range payload.StemURLs {
 		k, err := client.ResolveOwnedKey(u, payload.OwnerID, w.r2Cfg)
 		if err != nil {
-			w.failJob(ctx, jobID, fmt.Sprintf("Stem URL cozulemedi: %v", err))
-			return fmt.Errorf("stem URL cozulemedi: %w: %w", err, asynq.SkipRetry)
+			w.failJob(ctx, jobID, fmt.Sprintf("Could not resolve the stem URL: %v", err))
+			return fmt.Errorf("could not resolve the stem URL: %w: %w", err, asynq.SkipRetry)
 		}
 		stemKeys = append(stemKeys, k)
 	}
@@ -105,8 +105,8 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 
 	outputKey, err := client.UserKey("masters", payload.OwnerID, payload.ProjectID, uuid.New().String()+".wav")
 	if err != nil {
-		w.failJob(ctx, jobID, "Gecersiz is sahibi veya proje")
-		return fmt.Errorf("master anahtari: %w: %w", err, asynq.SkipRetry)
+		w.failJob(ctx, jobID, "Invalid job owner or project")
+		return fmt.Errorf("master key: %w: %w", err, asynq.SkipRetry)
 	}
 
 	// The audio service writes the output to R2 itself; the Master call is
@@ -115,9 +115,9 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	if err := ownerCanWrite(ctx, w.deletionChecker, payload.OwnerID); err != nil {
 		w.failJob(ctx, jobID, err.Error())
 		if errors.Is(err, errOwnerDeleted) {
-			return fmt.Errorf("master yazilmadi: %w: %w", err, asynq.SkipRetry)
+			return fmt.Errorf("master was not written: %w: %w", err, asynq.SkipRetry)
 		}
-		return fmt.Errorf("master yazilmadi: %w", err)
+		return fmt.Errorf("master was not written: %w", err)
 	}
 
 	masterReq := &client.MasterRequest{
@@ -153,8 +153,8 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 
 	fileURL, expiresAt, err := client.ResolveURL(ctx, w.r2Client, w.r2Cfg, outputKey)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Master URL uretilemedi: %v", err))
-		return fmt.Errorf("master URL uretilemedi: %w", err)
+		w.failJob(ctx, jobID, fmt.Sprintf("Could not generate the master URL: %v", err))
+		return fmt.Errorf("could not generate the master URL: %w", err)
 	}
 
 	// Complete the job
@@ -198,13 +198,13 @@ func (w *MasterWorker) processWithMock(ctx context.Context, jobID string, payloa
 
 	record, err := w.generateMockRecord(payload)
 	if err != nil {
-		w.failJob(ctx, jobID, "Gecersiz is sahibi veya proje")
-		return fmt.Errorf("mock kayit: %w: %w", err, asynq.SkipRetry)
+		w.failJob(ctx, jobID, "Invalid job owner or project")
+		return fmt.Errorf("mock record: %w: %w", err, asynq.SkipRetry)
 	}
 	fileURL, expiresAt, err := client.ResolveURL(ctx, w.r2Client, w.r2Cfg, record.FileKey)
 	if err != nil {
-		w.failJob(ctx, jobID, fmt.Sprintf("Master URL uretilemedi: %v", err))
-		return fmt.Errorf("master URL uretilemedi: %w", err)
+		w.failJob(ctx, jobID, fmt.Sprintf("Could not generate the master URL: %v", err))
+		return fmt.Errorf("could not generate the master URL: %w", err)
 	}
 
 	w.completeJob(ctx, jobID, record)
@@ -261,7 +261,7 @@ func (w *MasterWorker) buildVocalTakes(payload *model.MasterJobPayload) ([]clien
 	for _, take := range payload.VocalTakes {
 		k, err := client.ResolveOwnedKey(take.FileURL, payload.OwnerID, w.r2Cfg)
 		if err != nil {
-			return nil, fmt.Errorf("vokal URL cozulemedi: %w", err)
+			return nil, fmt.Errorf("could not resolve the vocal URL: %w", err)
 		}
 		takes = append(takes, client.VocalTakeInput{
 			Key:    k,
