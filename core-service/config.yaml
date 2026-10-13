@@ -17,12 +17,12 @@ ratelimit:
   ws_ticket_per_min: 60
   sign_per_min: 60
   sosyal_yayin_per_hour: 30
-  sosyal_yorum_per_min: 10 # asimda 429 yavasla
+  sosyal_yorum_per_min: 10 # 429 yavasla when exceeded
   sosyal_cover_per_hour: 20
-  public_per_min: 30 # GET /api/public/s/{slug}, istemci IP'si basina
-  public_web_per_min: 600 # ayni uc, X-Web-Anahtari ile gelen tum web istekleri ortak
+  public_per_min: 30 # GET /api/public/s/{slug}, per client IP
+  public_web_per_min: 600 # same endpoint, shared by all web requests carrying X-Web-Anahtari
 
-# Kesfet (sosyal)
+# Discover (social)
 sosyal:
   web_anahtari: "" # Set via SOSYAL_WEB_ANAHTARI (or _FILE). Empty = web bypass disabled.
 
@@ -42,8 +42,8 @@ r2:
   secret_access_key: "" # Set via R2_SECRET_ACCESS_KEY env var
   public_bucket: "makeasinger-public"
   private_bucket: "makeasinger-private"
-  public_url: "https://makesinger-cdn.celalettindemir.dev" # zorunlu; R2_PUBLIC_URL ile ezilebilir
-  presign_ttl: "1h" # private nesneler icin presigned URL omru
+  public_url: "https://makesinger-cdn.celalettindemir.dev" # required; can be overridden by R2_PUBLIC_URL
+  presign_ttl: "1h" # lifetime of presigned URLs for private objects
 
 # Suno API Configuration
 suno:
@@ -58,7 +58,7 @@ audio:
   timeout: 120 # seconds
 
 # Custom OpenID Provider Configuration
-# auth.issuer zorunludur: bos ise servis baslamaz (legacy yol yok).
+# auth.issuer is required: the service does not start if it is empty (no legacy path).
 # If the provider fails to start, the service exits with a fatal error (fail-closed).
 auth:
   issuer: "" # Set via AUTH_ISSUER env var (e.g., https://makesinger-auth.celalettindemir.dev)
@@ -76,7 +76,7 @@ auth:
   # NOTE: access_ttl / refresh_ttl must be values time.ParseDuration
   # understands ("15m", "1440h"). Viper does NOT fall back to the default
   # for an unparsable value such as "15min" or "60d" — it silently yields
-  # 0s. kimlik.Start refuses to start on a non-positive TTL.
+  # 0s. identity.Start refuses to start on a non-positive TTL.
   # Rate limits for the OP listener's /giris and /kayit endpoints (GET
   # and POST). These run on a separate net/http listener, outside the
   # Fiber middleware chain, so internal/middleware/ratelimit.go never

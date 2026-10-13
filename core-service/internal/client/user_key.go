@@ -13,15 +13,15 @@ import (
 // ErrInvalidSegment: the value cannot be a key segment coming from a client.
 // The message carries no value; the error can land in the Redis job record
 // and in the response.
-var ErrInvalidSegment = errors.New("gecersiz anahtar segmenti")
+var ErrInvalidSegment = errors.New("invalid key segment")
 
 // ErrInvalidURL: the URL the client sent could not be parsed or belongs to an
 // unknown host. Endpoints map it to 400. The message carries no URL value.
-var ErrInvalidURL = errors.New("gecersiz URL")
+var ErrInvalidURL = errors.New("invalid URL")
 
 // ErrKeyNotOwned: the object is outside the requesting user's prefix. Endpoints
 // map it to 404; a 403 would confirm that the object exists.
-var ErrKeyNotOwned = errors.New("nesne bu kullaniciya ait degil")
+var ErrKeyNotOwned = errors.New("object does not belong to this user")
 
 // ownedKinds: for keys whose first segment is one of these, the second
 // segment is always the owner's userId.
@@ -42,10 +42,10 @@ var segmentPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}(\.[a-z0-9]{1,5})?$
 // write outside their own prefix and there is no separate table to check.
 func UserKey(kind, userID string, parts ...string) (string, error) {
 	if !ownedKinds[kind] {
-		return "", fmt.Errorf("bilinmeyen anahtar turu: %s", kind)
+		return "", fmt.Errorf("unknown key kind: %s", kind)
 	}
 	if len(parts) == 0 {
-		return "", fmt.Errorf("%w: dosya adi yok", ErrInvalidSegment)
+		return "", fmt.Errorf("%w: file name missing", ErrInvalidSegment)
 	}
 	all := append([]string{userID}, parts...)
 	for _, p := range all {

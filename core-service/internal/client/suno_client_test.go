@@ -31,7 +31,7 @@ func TestGenerateMusic_ProviderContract(t *testing.T) {
 	var body map[string]any
 	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/generate" {
-			t.Errorf("istek = %s %s", r.Method, r.URL.Path)
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
 		if r.Header.Get("Authorization") != "Bearer anahtar" {
 			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
@@ -53,7 +53,7 @@ func TestGenerateMusic_ProviderContract(t *testing.T) {
 	}
 	for k, v := range want {
 		if body[k] != v {
-			t.Errorf("govde[%q] = %v, beklenen %v", k, body[k], v)
+			t.Errorf("body[%q] = %v, want %v", k, body[k], v)
 		}
 	}
 }
@@ -64,7 +64,7 @@ func TestGenerateMusic_EnvelopeErrorCode(t *testing.T) {
 	})
 	_, err := c.GenerateMusic(context.Background(), &GenerateMusicRequest{Style: "pop"})
 	if err == nil || !strings.Contains(err.Error(), "429") {
-		t.Fatalf("429 hatasi bekleniyordu, geldi: %v", err)
+		t.Fatalf("expected a 429 error, got: %v", err)
 	}
 }
 
@@ -72,7 +72,7 @@ func TestWaitMusic_SuccessReturnsFirstTrack(t *testing.T) {
 	var n atomic.Int32
 	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/generate/record-info" || r.URL.Query().Get("taskId") != "t1" {
-			t.Errorf("istek = %s?%s", r.URL.Path, r.URL.RawQuery)
+			t.Errorf("request = %s?%s", r.URL.Path, r.URL.RawQuery)
 		}
 		if n.Add(1) == 1 {
 			writeEnvelope(w, 200, map[string]any{"status": "PENDING"})
@@ -89,7 +89,7 @@ func TestWaitMusic_SuccessReturnsFirstTrack(t *testing.T) {
 		t.Fatalf("WaitMusic: %v", err)
 	}
 	if tr.ID != "a1" || tr.AudioURL != "https://cdn.test/a1.mp3" || tr.Duration != 201.16 {
-		t.Errorf("parca = %+v", tr)
+		t.Errorf("track = %+v", tr)
 	}
 }
 
@@ -99,7 +99,7 @@ func TestWaitMusic_FailureStatusReturnsImmediately(t *testing.T) {
 	})
 	_, err := c.WaitMusic(context.Background(), "t1", time.Millisecond, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "yasakli kelime") {
-		t.Fatalf("hata mesaji bekleniyordu, geldi: %v", err)
+		t.Fatalf("expected an error message, got: %v", err)
 	}
 }
 
@@ -115,7 +115,7 @@ func TestWaitMusic_ToleratesTwoTransientErrors(t *testing.T) {
 		}}})
 	})
 	if _, err := c.WaitMusic(context.Background(), "t1", time.Millisecond, time.Second); err != nil {
-		t.Fatalf("iki gecici hata tolere edilmeliydi: %v", err)
+		t.Fatalf("two transient errors should have been tolerated: %v", err)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestWaitMusic_GivesUpAfterThreeConsecutiveErrors(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 	})
 	if _, err := c.WaitMusic(context.Background(), "t1", time.Millisecond, time.Second); err == nil {
-		t.Fatal("uc ardisik hatada vazgecmeliydi")
+		t.Fatal("should have given up after three consecutive errors")
 	}
 }
 
@@ -133,8 +133,8 @@ func TestWaitMusic_Timeout(t *testing.T) {
 		writeEnvelope(w, 200, map[string]any{"status": "TEXT_SUCCESS"})
 	})
 	_, err := c.WaitMusic(context.Background(), "t1", time.Millisecond, 20*time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "zaman asimi") {
-		t.Fatalf("zaman asimi bekleniyordu, geldi: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected a timeout, got: %v", err)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestSplitStems_ProviderContract(t *testing.T) {
 	var body map[string]any
 	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/vocal-removal/generate" {
-			t.Errorf("istek = %s %s", r.Method, r.URL.Path)
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		writeEnvelope(w, 200, map[string]any{"taskId": "s1"})
@@ -160,7 +160,7 @@ func TestSplitStems_ProviderContract(t *testing.T) {
 	want := map[string]any{"taskId": "t1", "audioId": "a1", "type": "split_stem", "callBackUrl": "https://ornek.test/geri"}
 	for k, v := range want {
 		if body[k] != v {
-			t.Errorf("govde[%q] = %v, beklenen %v", k, body[k], v)
+			t.Errorf("body[%q] = %v, want %v", k, body[k], v)
 		}
 	}
 }
@@ -168,7 +168,7 @@ func TestSplitStems_ProviderContract(t *testing.T) {
 func TestWaitStems_MapsInstrumentsSkipsVocals(t *testing.T) {
 	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/vocal-removal/record-info" || r.URL.Query().Get("taskId") != "s1" {
-			t.Errorf("istek = %s?%s", r.URL.Path, r.URL.RawQuery)
+			t.Errorf("request = %s?%s", r.URL.Path, r.URL.RawQuery)
 		}
 		writeEnvelope(w, 200, map[string]any{"successFlag": "SUCCESS", "response": map[string]any{
 			"originData":       []any{map[string]any{"duration": 1.0}},
@@ -191,11 +191,11 @@ func TestWaitStems_MapsInstrumentsSkipsVocals(t *testing.T) {
 		{Instrument: model.InstrumentPiano, URL: "https://cdn.test/klavye.mp3"},
 	}
 	if len(stems) != len(want) {
-		t.Fatalf("stems = %+v, beklenen %+v", stems, want)
+		t.Fatalf("stems = %+v, want %+v", stems, want)
 	}
 	for i := range want {
 		if stems[i] != want[i] {
-			t.Errorf("stems[%d] = %+v, beklenen %+v", i, stems[i], want[i])
+			t.Errorf("stems[%d] = %+v, want %+v", i, stems[i], want[i])
 		}
 	}
 }
@@ -206,7 +206,7 @@ func TestWaitStems_FailureFlag(t *testing.T) {
 	})
 	_, err := c.WaitStems(context.Background(), "s1", time.Millisecond, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "bolunemedi") {
-		t.Fatalf("hata bekleniyordu, geldi: %v", err)
+		t.Fatalf("expected an error, got: %v", err)
 	}
 }
 
@@ -217,8 +217,8 @@ func TestWaitMusic_EmptyTrackIDErrors(t *testing.T) {
 		}})
 	})
 	_, err := c.WaitMusic(context.Background(), "t1", time.Millisecond, time.Second)
-	if err == nil || !strings.Contains(err.Error(), "kimligi") {
-		t.Fatalf("hata bekleniyordu, geldi: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "track ID") {
+		t.Fatalf("expected an error, got: %v", err)
 	}
 }
 
@@ -233,7 +233,7 @@ func TestIsolateStem_ProviderContract(t *testing.T) {
 	var body map[string]any
 	c := advancedClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/vocal-removal/generate" {
-			t.Errorf("istek = %s %s", r.Method, r.URL.Path)
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
 		if r.Header.Get("Authorization") != "Bearer k" {
 			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
@@ -249,7 +249,7 @@ func TestIsolateStem_ProviderContract(t *testing.T) {
 	want := map[string]any{"taskId": "t1", "audioId": "m1", "type": "split_stem_advanced", "stemName": "Drum Kit", "callBackUrl": "https://cb.test/suno"}
 	for k, v := range want {
 		if body[k] != v {
-			t.Errorf("govde[%s] = %v, beklenen %v", k, body[k], v)
+			t.Errorf("body[%s] = %v, want %v", k, body[k], v)
 		}
 	}
 }
@@ -268,7 +268,7 @@ const advancedResponse = `{"code":200,"msg":"success","data":{
 func TestWaitIsolated_FirstVariantExtractAndRemoveURLs(t *testing.T) {
 	c := advancedClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/vocal-removal/record-info" || r.URL.Query().Get("taskId") != "a1" {
-			t.Errorf("istek = %s?%s", r.URL.Path, r.URL.RawQuery)
+			t.Errorf("request = %s?%s", r.URL.Path, r.URL.RawQuery)
 		}
 		_, _ = w.Write([]byte(advancedResponse))
 	})
@@ -278,7 +278,7 @@ func TestWaitIsolated_FirstVariantExtractAndRemoveURLs(t *testing.T) {
 		t.Fatalf("WaitIsolated: %v", err)
 	}
 	if s.ExtractURL != "https://tempfile.test/r/x_Drum Kit.mp3" || s.RemoveURL != "https://tempfile.test/r/y_Drum Kit.mp3" || s.Duration != 141.48 {
-		t.Errorf("sonuc = %+v", s)
+		t.Errorf("result = %+v", s)
 	}
 }
 
@@ -287,7 +287,7 @@ func TestWaitIsolated_EmptyOriginDataErrors(t *testing.T) {
 		_, _ = w.Write([]byte(`{"code":200,"msg":"success","data":{"successFlag":"SUCCESS","response":{"originData":[]}}}`))
 	})
 	if _, err := c.WaitIsolated(context.Background(), "a1", time.Millisecond, time.Second); err == nil {
-		t.Fatal("bos originData icin hata bekleniyordu")
+		t.Fatal("expected an error for empty originData")
 	}
 }
 
@@ -296,7 +296,7 @@ func TestWaitIsolated_MissingURLErrors(t *testing.T) {
 		_, _ = w.Write([]byte(`{"code":200,"msg":"success","data":{"successFlag":"SUCCESS","response":{"originData":[{"extract":{"audio_url":"https://x.test/e.mp3"},"remove":{"audio_url":""}}]}}}`))
 	})
 	if _, err := c.WaitIsolated(context.Background(), "a1", time.Millisecond, time.Second); err == nil {
-		t.Fatal("bos remove adresi icin hata bekleniyordu")
+		t.Fatal("expected an error for empty remove URL")
 	}
 }
 
@@ -306,7 +306,7 @@ func TestWaitIsolated_FailureFlag(t *testing.T) {
 	})
 	_, err := c.WaitIsolated(context.Background(), "a1", time.Millisecond, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "katalog eslesmesi") {
-		t.Fatalf("hata mesaji tasinmali, geldi: %v", err)
+		t.Fatalf("error message must be carried, got: %v", err)
 	}
 }
 
@@ -319,12 +319,12 @@ func TestSunoStemName(t *testing.T) {
 	}
 	for i, name := range want {
 		if got, ok := SunoStemName(i); !ok || got != name {
-			t.Errorf("SunoStemAdi(%s) = %q, %v; beklenen %q", i, got, ok, name)
+			t.Errorf("SunoStemAdi(%s) = %q, %v; want %q", i, got, ok, name)
 		}
 	}
 	for _, i := range []model.Instrument{model.InstrumentMix, model.InstrumentRest, "kazoo"} {
 		if _, ok := SunoStemName(i); ok {
-			t.Errorf("SunoStemAdi(%s) eslesmemeliydi", i)
+			t.Errorf("SunoStemAdi(%s) should not have matched", i)
 		}
 	}
 }

@@ -79,7 +79,7 @@ func signIDToken(t *testing.T, key *rsa.PrivateKey, iss, aud, nonce string) stri
 	j.Header["kid"] = kidFor(key)
 	s, err := j.SignedString(key)
 	if err != nil {
-		t.Fatalf("token imzalanamadi: %v", err)
+		t.Fatalf("could not sign token: %v", err)
 	}
 	return s
 }
@@ -100,10 +100,10 @@ func TestFlexibleBool_AcceptsStringAndBool(t *testing.T) {
 		t.Run(d.name, func(t *testing.T) {
 			var s struct{ V FlexibleBool }
 			if err := json.Unmarshal([]byte(d.input), &s); err != nil {
-				t.Fatalf("cozumlenemedi: %v", err)
+				t.Fatalf("could not parse: %v", err)
 			}
 			if bool(s.V) != d.want {
-				t.Errorf("= %v, beklenen %v", bool(s.V), d.want)
+				t.Errorf("= %v, want %v", bool(s.V), d.want)
 			}
 		})
 	}
@@ -116,10 +116,10 @@ func TestFlexibleBool_AcceptsStringAndBool(t *testing.T) {
 func TestFlexibleBool_RejectsMalformedValue(t *testing.T) {
 	var s struct{ V FlexibleBool }
 	if err := json.Unmarshal([]byte(`{"v":"belki"}`), &s); err == nil {
-		t.Error("bozuk deger kabul edildi")
+		t.Error("malformed value was accepted")
 	}
 	if err := json.Unmarshal([]byte(`{"v":3}`), &s); err == nil {
-		t.Error("sayi kabul edildi")
+		t.Error("number was accepted")
 	}
 }
 
@@ -146,7 +146,7 @@ const (
 func TestUpstreamVerifier_PinsAlgorithm(t *testing.T) {
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("rsa anahtari uretilemedi: %v", err)
+		t.Fatalf("could not generate RSA key: %v", err)
 	}
 	octKid := "oct-anahtar"
 	octSecret := []byte("saldirganin-ele-gecirdigi-jwks-sirri-0123456789")
@@ -167,14 +167,14 @@ func TestUpstreamVerifier_PinsAlgorithm(t *testing.T) {
 	defer cancel()
 	v, err := NewUpstreamVerifier(ctx, url, testIssuer, testClientID)
 	if err != nil {
-		t.Fatalf("dogrulayici kurulamadi: %v", err)
+		t.Fatalf("could not set up verifier: %v", err)
 	}
 	defer v.Close()
 
 	// Sanity check: a correct RS256 token must pass.
 	goodToken := signIDToken(t, rsaKey, testIssuer, testClientID, "n0")
 	if _, err := v.VerifyWithNonce(goodToken, "n0"); err != nil {
-		t.Fatalf("gecerli RS256 token reddedildi: %v", err)
+		t.Fatalf("valid RS256 token was rejected: %v", err)
 	}
 
 	// An attacker token signed with HS256, using the oct secret from the
@@ -191,11 +191,11 @@ func TestUpstreamVerifier_PinsAlgorithm(t *testing.T) {
 	badToken.Header["kid"] = octKid
 	signedBad, err := badToken.SignedString(octSecret)
 	if err != nil {
-		t.Fatalf("saldirgan token imzalanamadi: %v", err)
+		t.Fatalf("saldirgan could not sign token: %v", err)
 	}
 
 	if _, err := v.VerifyWithNonce(signedBad, "n-saldiri"); err == nil {
-		t.Error("HS256 ile imzalanmis token kabul edildi: alg sabitleme calismiyor")
+		t.Error("token signed with HS256 was accepted: alg pinning does not work")
 	}
 
 	// The "none" algorithm must be rejected in the same way.
@@ -209,10 +209,10 @@ func TestUpstreamVerifier_PinsAlgorithm(t *testing.T) {
 	})
 	unsigned, err := noneToken.SignedString(jwt.UnsafeAllowNoneSignatureType)
 	if err != nil {
-		t.Fatalf("imzasiz token uretilemedi: %v", err)
+		t.Fatalf("could not produce unsigned token: %v", err)
 	}
 	if _, err := v.VerifyWithNonce(unsigned, "n-saldiri2"); err == nil {
-		t.Error("none algoritmali token kabul edildi")
+		t.Error("token with alg none was accepted")
 	}
 }
 
@@ -224,7 +224,7 @@ func TestUpstreamVerifier_RejectsNonceMismatch(t *testing.T) {
 	defer cancel()
 	v, err := NewUpstreamVerifier(ctx, url, testIssuer, testClientID)
 	if err != nil {
-		t.Fatalf("dogrulayici kurulamadi: %v", err)
+		t.Fatalf("could not set up verifier: %v", err)
 	}
 	defer v.Close()
 
@@ -234,7 +234,7 @@ func TestUpstreamVerifier_RejectsNonceMismatch(t *testing.T) {
 	// victim's flow (token replay).
 	token := signIDToken(t, key, testIssuer, testClientID, "saldirganin-nonce-u")
 	if _, err := v.VerifyWithNonce(token, "kurbanin-bekledigi-nonce"); err == nil {
-		t.Error("eslesmeyen nonce kabul edildi")
+		t.Error("mismatching nonce was accepted")
 	}
 }
 
@@ -246,7 +246,7 @@ func TestUpstreamVerifier_RejectsEmptyNonce(t *testing.T) {
 	defer cancel()
 	v, err := NewUpstreamVerifier(ctx, url, testIssuer, testClientID)
 	if err != nil {
-		t.Fatalf("dogrulayici kurulamadi: %v", err)
+		t.Fatalf("could not set up verifier: %v", err)
 	}
 	defer v.Close()
 
@@ -255,7 +255,7 @@ func TestUpstreamVerifier_RejectsEmptyNonce(t *testing.T) {
 	// protection, and silently accepting it would remove the protection.
 	token := signIDToken(t, key, testIssuer, testClientID, "")
 	if _, err := v.VerifyWithNonce(token, ""); err == nil {
-		t.Error("bos nonce kabul edildi")
+		t.Error("empty nonce was accepted")
 	}
 }
 
@@ -267,23 +267,23 @@ func TestUpstreamVerifier_RequiresIssuerAndAudience(t *testing.T) {
 	defer cancel()
 	v, err := NewUpstreamVerifier(ctx, url, testIssuer, testClientID)
 	if err != nil {
-		t.Fatalf("dogrulayici kurulamadi: %v", err)
+		t.Fatalf("could not set up verifier: %v", err)
 	}
 	defer v.Close()
 
-	t.Run("baska iss reddedilir", func(t *testing.T) {
+	t.Run("other iss is rejected", func(t *testing.T) {
 		token := signIDToken(t, key, "https://baska-saglayici.ornek", testClientID, "n1")
 		if _, err := v.VerifyWithNonce(token, "n1"); err == nil {
-			t.Error("baska issuer'li token kabul edildi")
+			t.Error("token with another issuer was accepted")
 		}
 	})
 
-	t.Run("baska aud reddedilir", func(t *testing.T) {
+	t.Run("other aud is rejected", func(t *testing.T) {
 		// If aud does not contain our client_id it is rejected -- so a Google
 		// id_token issued to another application does not sign anyone in here.
 		token := signIDToken(t, key, testIssuer, "baska-istemci", "n2")
 		if _, err := v.VerifyWithNonce(token, "n2"); err == nil {
-			t.Error("baska audience'li token kabul edildi")
+			t.Error("token with another audience was accepted")
 		}
 	})
 }
@@ -296,7 +296,7 @@ func TestUpstreamVerifier_RejectsExpiredToken(t *testing.T) {
 	defer cancel()
 	v, err := NewUpstreamVerifier(ctx, url, testIssuer, testClientID)
 	if err != nil {
-		t.Fatalf("dogrulayici kurulamadi: %v", err)
+		t.Fatalf("could not set up verifier: %v", err)
 	}
 	defer v.Close()
 
@@ -313,11 +313,11 @@ func TestUpstreamVerifier_RejectsExpiredToken(t *testing.T) {
 	j.Header["kid"] = kidFor(key)
 	expiredToken, err := j.SignedString(key)
 	if err != nil {
-		t.Fatalf("token imzalanamadi: %v", err)
+		t.Fatalf("could not sign token: %v", err)
 	}
 
 	if _, err := v.VerifyWithNonce(expiredToken, "n1"); err == nil {
-		t.Error("suresi dolmus token kabul edildi")
+		t.Error("expired token was accepted")
 	}
 }
 
@@ -326,13 +326,13 @@ func TestUpstreamVerifier_RejectsExpiredToken(t *testing.T) {
 func TestNewUpstreamVerifier_RequiredFields(t *testing.T) {
 	ctx := context.Background()
 	if _, err := NewUpstreamVerifier(ctx, "", testIssuer, testClientID); err == nil {
-		t.Error("bos jwksURL kabul edildi")
+		t.Error("empty jwksURL was accepted")
 	}
 	if _, err := NewUpstreamVerifier(ctx, "https://ornek/jwks", "", testClientID); err == nil {
-		t.Error("bos issuer kabul edildi")
+		t.Error("empty issuer was accepted")
 	}
 	if _, err := NewUpstreamVerifier(ctx, "https://ornek/jwks", testIssuer, ""); err == nil {
-		t.Error("bos audience kabul edildi")
+		t.Error("empty audience was accepted")
 	}
 }
 
@@ -370,13 +370,13 @@ func TestUpstreamVerifier_FollowsKeyRotation(t *testing.T) {
 	defer cancel()
 	v, err := NewUpstreamVerifier(ctx, url, testIssuer, testClientID)
 	if err != nil {
-		t.Fatalf("dogrulayici kurulamadi: %v", err)
+		t.Fatalf("could not set up verifier: %v", err)
 	}
 	defer v.Close()
 
 	// A token signed with the old key passes.
 	if _, err := v.VerifyWithNonce(signIDToken(t, oldKey, testIssuer, testClientID, "n1"), "n1"); err != nil {
-		t.Fatalf("eski anahtarli token reddedildi: %v", err)
+		t.Fatalf("token with the old key was rejected: %v", err)
 	}
 
 	// The provider rotates the key.
@@ -389,6 +389,6 @@ func TestUpstreamVerifier_FollowsKeyRotation(t *testing.T) {
 	// uses its own internal context (independent of ctx) -- the note at the top
 	// of this test explains why it is not measured.
 	if _, err := v.VerifyWithNonce(signIDToken(t, newKey, testIssuer, testClientID, "n2"), "n2"); err != nil {
-		t.Fatalf("rotasyon sonrasi token reddedildi (yenileme olu mu?): %v", err)
+		t.Fatalf("token rejected after rotation (is refresh dead?): %v", err)
 	}
 }

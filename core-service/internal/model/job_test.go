@@ -5,15 +5,15 @@ import "testing"
 func TestJob_IsOwnedBy(t *testing.T) {
 	j := &Job{OwnerID: "kullanici-a"}
 	if !j.IsOwnedBy("kullanici-a") {
-		t.Error("sahibi kendi isini gormeli")
+		t.Error("the owner must see their own job")
 	}
 	if j.IsOwnedBy("kullanici-b") {
-		t.Error("baska kullanici isi gormemeli")
+		t.Error("another user must not see the job")
 	}
 	if j.IsOwnedBy("") {
-		t.Error("bos kullanici hicbir isi gormemeli")
+		t.Error("an empty user must not see any job")
 	}
 	if (&Job{}).IsOwnedBy("") {
-		t.Error("sahipsiz kayit bos kullaniciya da acilmamali")
+		t.Error("an ownerless record must not be open to an empty user either")
 	}
 }

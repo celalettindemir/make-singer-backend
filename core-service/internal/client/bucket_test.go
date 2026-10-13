@@ -36,7 +36,7 @@ func TestBucketFor(t *testing.T) {
 	}
 	for _, tc := range cases {
 		if got := BucketFor(tc.key, cfg); got != tc.want {
-			t.Errorf("BucketFor(%q) = %q, beklenen %q", tc.key, got, tc.want)
+			t.Errorf("BucketFor(%q) = %q, want %q", tc.key, got, tc.want)
 		}
 	}
 }
@@ -48,22 +48,22 @@ func TestKeyFromURL(t *testing.T) {
 		url  string
 		want string
 	}{
-		{"cdn adresi", "https://makesinger-cdn.celalettindemir.dev/exports/a.mp3", "exports/a.mp3"},
+		{"cdn address", "https://makesinger-cdn.celalettindemir.dev/exports/a.mp3", "exports/a.mp3"},
 		{"r2 endpoint", "https://makeasinger-private.r2.cloudflarestorage.com/vocals/p/s/t.wav", "vocals/p/s/t.wav"},
 		{"presigned", "https://makeasinger-private.r2.cloudflarestorage.com/masters/p/m.wav?X-Amz-Signature=abc&X-Amz-Expires=3600", "masters/p/m.wav"},
 		// The form the AWS SDK presigner really produces: bucket AND account id in
 		// the host. Hand-written "bucket.r2..." tests did not catch this.
-		{"hesap kapsamli konak", "https://makeasinger-private.hesap123.r2.cloudflarestorage.com/vocals/p/s/t.wav", "vocals/p/s/t.wav"},
-		{"hesap kapsamli public", "https://makeasinger-public.hesap123.r2.cloudflarestorage.com/exports/a.mp3", "exports/a.mp3"},
+		{"account-scoped host", "https://makeasinger-private.hesap123.r2.cloudflarestorage.com/vocals/p/s/t.wav", "vocals/p/s/t.wav"},
+		{"account-scoped public", "https://makeasinger-public.hesap123.r2.cloudflarestorage.com/exports/a.mp3", "exports/a.mp3"},
 	}
 	for _, tc := range cases {
 		got, err := KeyFromURL(tc.url, cfg)
 		if err != nil {
-			t.Errorf("%s: beklenmeyen hata: %v", tc.name, err)
+			t.Errorf("%s: unexpected error: %v", tc.name, err)
 			continue
 		}
 		if got != tc.want {
-			t.Errorf("%s: KeyFromURL = %q, beklenen %q", tc.name, got, tc.want)
+			t.Errorf("%s: KeyFromURL = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }
@@ -80,7 +80,7 @@ func TestKeyFromURL_UnknownHost(t *testing.T) {
 	}
 	for _, u := range badHosts {
 		if _, err := KeyFromURL(u, cfg); err == nil {
-			t.Errorf("taninmayan konak icin hata bekleniyordu: %s", u)
+			t.Errorf("expected an error for unknown host: %s", u)
 		}
 	}
 }
@@ -92,10 +92,10 @@ func TestKeyFromURL_ErrorOmitsSignedURL(t *testing.T) {
 	badURL := "https://kotu.example.com/vocals/a.wav?X-Amz-Signature=cokgizli"
 	_, err := KeyFromURL(badURL, cfg)
 	if err == nil {
-		t.Fatal("hata bekleniyordu")
+		t.Fatal("expected an error")
 	}
 	if strings.Contains(err.Error(), "cokgizli") || strings.Contains(err.Error(), "X-Amz-Signature") {
-		t.Errorf("hata mesajinda imza var: %v", err)
+		t.Errorf("error message contains the signature: %v", err)
 	}
 }
 
@@ -116,11 +116,11 @@ func TestKeyFromURL_RoundTrip(t *testing.T) {
 		}
 		got, err := KeyFromURL(url, cfg)
 		if err != nil {
-			t.Errorf("KeyFromURL(URLFor(%q)) hata verdi: %v", key, err)
+			t.Errorf("KeyFromURL(URLFor(%q)) failed: %v", key, err)
 			continue
 		}
 		if got != key {
-			t.Errorf("gidis donus bozuk: %q -> %q", key, got)
+			t.Errorf("round trip broken: %q -> %q", key, got)
 		}
 	}
 }
@@ -132,11 +132,11 @@ func TestUnsignedURL_RoundTrip(t *testing.T) {
 	for _, key := range []string{"exports/a.mp3", "masters/p/m.wav", "previews/p.mp3"} {
 		got, err := KeyFromURL(UnsignedURL(key, cfg), cfg)
 		if err != nil {
-			t.Errorf("UnsignedURL(%q) cozulemedi: %v", key, err)
+			t.Errorf("UnsignedURL(%q) could not be resolved: %v", key, err)
 			continue
 		}
 		if got != key {
-			t.Errorf("gidis donus bozuk: %q -> %q", key, got)
+			t.Errorf("round trip broken: %q -> %q", key, got)
 		}
 	}
 }
@@ -145,7 +145,7 @@ func TestKeyFromURL_EmptyAndMalformed(t *testing.T) {
 	cfg := testCfg()
 	for _, u := range []string{"", "://bozuk", "https://makesinger-cdn.celalettindemir.dev/"} {
 		if _, err := KeyFromURL(u, cfg); err == nil {
-			t.Errorf("%q icin hata bekleniyordu", u)
+			t.Errorf("expected an error for %q", u)
 		}
 	}
 }
@@ -155,7 +155,7 @@ func TestKeyFromURL_ErrorsWrapErrInvalidURL(t *testing.T) {
 	for _, u := range []string{"", "://bozuk", "/sadece/yol", "https://cdn.example.com/stems/a.mp3", "https://makesinger-cdn.celalettindemir.dev/"} {
 		_, err := KeyFromURL(u, cfg)
 		if !errors.Is(err, ErrInvalidURL) {
-			t.Errorf("%q: ErrGecersizURL bekleniyordu, geldi: %v", u, err)
+			t.Errorf("%q: expected ErrInvalidURL, got: %v", u, err)
 		}
 	}
 }

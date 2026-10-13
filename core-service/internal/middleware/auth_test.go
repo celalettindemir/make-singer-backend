@@ -19,7 +19,7 @@ func testKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
 	a, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("anahtar: %v", err)
+		t.Fatalf("key: %v", err)
 	}
 	return a
 }
@@ -29,7 +29,7 @@ func signTestToken(t *testing.T, privKey *rsa.PrivateKey, claims jwt.MapClaims) 
 	j := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	signed, err := j.SignedString(privKey)
 	if err != nil {
-		t.Fatalf("imzalama: %v", err)
+		t.Fatalf("signing: %v", err)
 	}
 	return signed
 }
@@ -73,10 +73,10 @@ func TestAuthenticate_AcceptsValidToken(t *testing.T) {
 	})
 	status, body := doRequest(t, newApp(t, privKey), "Bearer "+token)
 	if status != 200 {
-		t.Fatalf("durum = %d, beklenen 200", status)
+		t.Fatalf("status = %d, want 200", status)
 	}
 	if body != "kullanici-1" {
-		t.Errorf("userId = %q, beklenen kullanici-1", body)
+		t.Errorf("userId = %q, want kullanici-1", body)
 	}
 }
 
@@ -88,7 +88,7 @@ func TestAuthenticate_RejectsTokenWithoutExp(t *testing.T) {
 		"iss": testIssuer, "sub": "k1", "aud": []string{testClientID}, "jti": "jeton-1",
 	})
 	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
-		t.Errorf("durum = %d, beklenen 401", status)
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
@@ -99,7 +99,7 @@ func TestAuthenticate_RejectsExpiredToken(t *testing.T) {
 		"exp": time.Now().Add(-time.Minute).Unix(),
 	})
 	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
-		t.Errorf("durum = %d, beklenen 401", status)
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
@@ -112,7 +112,7 @@ func TestAuthenticate_RejectsTokenSignedByOtherKey(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
-		t.Errorf("durum = %d, beklenen 401", status)
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
@@ -126,7 +126,7 @@ func TestAuthenticate_RejectsWrongIssuer(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
-		t.Errorf("durum = %d, beklenen 401", status)
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
@@ -138,7 +138,7 @@ func TestAuthenticate_RejectsTokenWithoutIssuer(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
-		t.Errorf("durum = %d, beklenen 401", status)
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
@@ -166,10 +166,10 @@ func TestAuthenticate_RejectsAlgNone(t *testing.T) {
 	})
 	unsigned, err := j.SignedString(jwt.UnsafeAllowNoneSignatureType)
 	if err != nil {
-		t.Fatalf("imzasiz jeton uretilemedi: %v", err)
+		t.Fatalf("could not produce an unsigned token: %v", err)
 	}
 	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+unsigned); status != 401 {
-		t.Errorf("durum = %d, beklenen 401", status)
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
@@ -180,7 +180,7 @@ func TestAuthenticate_RejectsHS256AlgConfusion(t *testing.T) {
 	privKey := testKey(t)
 	pubDER, err := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
 	if err != nil {
-		t.Fatalf("acik anahtar kodlanamadi: %v", err)
+		t.Fatalf("could not encode the public key: %v", err)
 	}
 	j := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"iss": testIssuer, "sub": "k1", "aud": []string{testClientID}, "jti": "jeton-1",
@@ -189,10 +189,10 @@ func TestAuthenticate_RejectsHS256AlgConfusion(t *testing.T) {
 	// The public key is used as the HMAC secret.
 	forgedToken, err := j.SignedString(pubDER)
 	if err != nil {
-		t.Fatalf("HS256 jetonu uretilemedi: %v", err)
+		t.Fatalf("could not produce an HS256 token: %v", err)
 	}
 	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+forgedToken); status != 401 {
-		t.Errorf("durum = %d, beklenen 401", status)
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
@@ -200,14 +200,14 @@ func TestAuthenticate_MissingOrMalformedHeader(t *testing.T) {
 	privKey := testKey(t)
 	app := newApp(t, privKey)
 	for name, authHeader := range map[string]string{
-		"header yok":  "",
-		"Bearer yok":  "abc.def.ghi",
-		"bos jeton":   "Bearer ",
+		"no header":  "",
+		"no Bearer":  "abc.def.ghi",
+		"empty token":   "Bearer ",
 		"yanlis sema": "Basic abc",
-		"bozuk jeton": "Bearer not.a.jwt",
+		"malformed token": "Bearer not.a.jwt",
 	} {
 		if status, _ := doRequest(t, app, authHeader); status != 401 {
-			t.Errorf("%s: durum = %d, beklenen 401", name, status)
+			t.Errorf("%s: status = %d, want 401", name, status)
 		}
 	}
 }
@@ -220,7 +220,7 @@ func TestAuthenticate_RejectsEmptySub(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
-		t.Errorf("durum = %d, beklenen 401", status)
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
@@ -233,7 +233,7 @@ func TestAuthenticate_RejectsFutureNbf(t *testing.T) {
 		"exp": time.Now().Add(2 * time.Hour).Unix(),
 	})
 	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
-		t.Errorf("durum = %d, beklenen 401", status)
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
@@ -246,7 +246,7 @@ func TestAuthenticate_RejectsFutureIat(t *testing.T) {
 		"exp": time.Now().Add(2 * time.Hour).Unix(),
 	})
 	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
-		t.Errorf("durum = %d, beklenen 401", status)
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
@@ -260,7 +260,7 @@ func TestAuthenticate_RejectsWrongAud(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
-		t.Errorf("durum = %d, beklenen 401", status)
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
@@ -273,7 +273,7 @@ func TestAuthenticate_RejectsTokenWithoutAud(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if status, _ := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
-		t.Errorf("durum = %d, beklenen 401", status)
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
@@ -287,10 +287,10 @@ func TestAuthenticate_AcceptsMatchingAud(t *testing.T) {
 	})
 	status, body := doRequest(t, newApp(t, privKey), "Bearer "+token)
 	if status != 200 {
-		t.Fatalf("durum = %d, beklenen 200", status)
+		t.Fatalf("status = %d, want 200", status)
 	}
 	if body != "kullanici-9" {
-		t.Errorf("userId = %q, beklenen kullanici-9", body)
+		t.Errorf("userId = %q, want kullanici-9", body)
 	}
 }
 
@@ -309,27 +309,27 @@ func TestAuthenticate_RejectsIDTokenAsAccessToken(t *testing.T) {
 			"exp": time.Now().Add(time.Hour).Unix(),
 		},
 		// jti absent: it cannot be an access token.
-		"jti yok": {
+		"no jti": {
 			"iss": testIssuer, "sub": "kullanici-1",
 			"aud": []string{testClientID},
 			"exp": time.Now().Add(time.Hour).Unix(),
 		},
 		// jti added but azp is still there: still an id_token.
-		"jti var ama azp var": {
+		"jti present but azp present": {
 			"iss": testIssuer, "sub": "kullanici-1",
 			"aud": []string{testClientID}, "jti": "jeton-1",
 			"azp": testClientID,
 			"exp": time.Now().Add(time.Hour).Unix(),
 		},
 		// jti added but at_hash is still there.
-		"jti var ama at_hash var": {
+		"jti present but at_hash present": {
 			"iss": testIssuer, "sub": "kullanici-1",
 			"aud": []string{testClientID}, "jti": "jeton-1",
 			"at_hash": "eR1cMQ0Zo5ZhQnQ8Bnp2dA",
 			"exp":     time.Now().Add(time.Hour).Unix(),
 		},
 		// jti is made of whitespace: treated as absent.
-		"jti bos": {
+		"empty jti": {
 			"iss": testIssuer, "sub": "kullanici-1",
 			"aud": []string{testClientID}, "jti": "   ",
 			"exp": time.Now().Add(time.Hour).Unix(),
@@ -338,7 +338,7 @@ func TestAuthenticate_RejectsIDTokenAsAccessToken(t *testing.T) {
 	for name, claims := range cases {
 		token := signTestToken(t, privKey, claims)
 		if status, body := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
-			t.Errorf("%s: durum = %d (govde %q), beklenen 401", name, status, body)
+			t.Errorf("%s: status = %d (body %q), want 401", name, status, body)
 		}
 	}
 }
@@ -353,7 +353,7 @@ func TestAuthenticate_RejectsWhitespaceSub(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if status, body := doRequest(t, newApp(t, privKey), "Bearer "+token); status != 401 {
-		t.Errorf("durum = %d (govde %q), beklenen 401", status, body)
+		t.Errorf("status = %d (body %q), want 401", status, body)
 	}
 }
 
@@ -368,13 +368,13 @@ func TestNewOPAuthMiddleware_IncompleteConfigRejectsAll(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	cases := map[string]*AuthMiddleware{
-		"istemci bos":      NewOPAuthMiddleware(testIssuer, "", &privKey.PublicKey),
-		"issuer bos":       NewOPAuthMiddleware("", testClientID, &privKey.PublicKey),
-		"acik anahtar nil": NewOPAuthMiddleware(testIssuer, testClientID, nil),
+		"empty client":      NewOPAuthMiddleware(testIssuer, "", &privKey.PublicKey),
+		"empty issuer":       NewOPAuthMiddleware("", testClientID, &privKey.PublicKey),
+		"nil public key": NewOPAuthMiddleware(testIssuer, testClientID, nil),
 	}
 	for name, mw := range cases {
 		if status, _ := doRequest(t, newAppWithMiddleware(t, mw), "Bearer "+token); status != 401 {
-			t.Errorf("%s: durum = %d, beklenen 401", name, status)
+			t.Errorf("%s: status = %d, want 401", name, status)
 		}
 	}
 }
@@ -388,6 +388,6 @@ func TestAuthenticate_ZeroValueMiddlewareRejectsAll(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if status, body := doRequest(t, newAppWithMiddleware(t, &AuthMiddleware{}), "Bearer "+token); status != 401 {
-		t.Errorf("durum = %d (govde %q), beklenen 401", status, body)
+		t.Errorf("status = %d (body %q), want 401", status, body)
 	}
 }

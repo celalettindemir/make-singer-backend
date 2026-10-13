@@ -29,7 +29,7 @@ func gateStatus(t *testing.T, app *fiber.App) int {
 	t.Helper()
 	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/x", nil))
 	if err != nil {
-		t.Fatalf("istek: %v", err)
+		t.Fatalf("request: %v", err)
 	}
 	return resp.StatusCode
 }
@@ -37,26 +37,26 @@ func gateStatus(t *testing.T, app *fiber.App) int {
 func TestDeletedUserGate_503WithoutRedis(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 100 * time.Millisecond})
 	if got := gateStatus(t, gatedApp(rdb, "u1")); got != http.StatusServiceUnavailable {
-		t.Fatalf("durum = %d, beklenen 503", got)
+		t.Fatalf("status = %d, want 503", got)
 	}
 }
 
 func TestDeletedUserGate_401WithoutUserID(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
 	if got := gateStatus(t, gatedApp(rdb, "")); got != http.StatusUnauthorized {
-		t.Fatalf("durum = %d, beklenen 401", got)
+		t.Fatalf("status = %d, want 401", got)
 	}
 }
 
 func TestDeletedUserGate_401ForMarkedUser(t *testing.T) {
 	rdb := liveRedis(t)
 	if err := rdb.Set(context.Background(), deletionmark.Key("u1"), "1", time.Minute).Err(); err != nil {
-		t.Fatalf("isaret yazilamadi: %v", err)
+		t.Fatalf("could not write mark: %v", err)
 	}
 	if got := gateStatus(t, gatedApp(rdb, "u1")); got != http.StatusUnauthorized {
-		t.Fatalf("durum = %d, beklenen 401", got)
+		t.Fatalf("status = %d, want 401", got)
 	}
 	if got := gateStatus(t, gatedApp(rdb, "u2")); got != http.StatusOK {
-		t.Fatalf("isaretsiz kullanici durumu = %d, beklenen 200", got)
+		t.Fatalf("unmarked user status = %d, want 200", got)
 	}
 }

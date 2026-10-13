@@ -28,7 +28,7 @@ func (e *FlexibleBool) UnmarshalJSON(b []byte) error {
 	}
 	var s string
 	if err := json.Unmarshal(b, &s); err != nil {
-		return fmt.Errorf("email_verified ne bool ne string")
+		return fmt.Errorf("email_verified is neither bool nor string")
 	}
 	switch s {
 	case "true":
@@ -36,7 +36,7 @@ func (e *FlexibleBool) UnmarshalJSON(b []byte) error {
 	case "false":
 		*e = false
 	default:
-		return fmt.Errorf("email_verified beklenmeyen string")
+		return fmt.Errorf("email_verified has an unexpected string value")
 	}
 	return nil
 }
@@ -103,11 +103,11 @@ type UpstreamVerifier struct {
 // no configuration or clock injection is NEEDED.
 func NewUpstreamVerifier(ctx context.Context, jwksURL, issuer, audience string) (*UpstreamVerifier, error) {
 	if jwksURL == "" || issuer == "" || audience == "" {
-		return nil, fmt.Errorf("jwksURL, issuer ve audience zorunlu")
+		return nil, fmt.Errorf("jwksURL, issuer and audience are required")
 	}
 	jwks, err := keyfunc.NewDefaultCtx(ctx, []string{jwksURL})
 	if err != nil {
-		return nil, fmt.Errorf("JWKS kurulamadi: %w", err)
+		return nil, fmt.Errorf("could not set up JWKS: %w", err)
 	}
 	return &UpstreamVerifier{jwks: jwks, issuer: issuer, audience: audience}, nil
 }
@@ -124,7 +124,7 @@ func NewUpstreamVerifier(ctx context.Context, jwksURL, issuer, audience string) 
 // differences.
 func (v *UpstreamVerifier) VerifyWithNonce(tokenString, nonce string) (*Claims, error) {
 	if nonce == "" {
-		return nil, fmt.Errorf("nonce bos olamaz")
+		return nil, fmt.Errorf("nonce must not be empty")
 	}
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, v.jwks.Keyfunc,
 		// The alg is pinned EXPLICITLY: relying on the library's key-type
@@ -138,17 +138,17 @@ func (v *UpstreamVerifier) VerifyWithNonce(tokenString, nonce string) (*Claims, 
 	if err != nil {
 		// The error text does NOT include tokenString or raw claim values:
 		// the id_token must not leak into logs.
-		return nil, fmt.Errorf("id_token dogrulanamadi: %w", err)
+		return nil, fmt.Errorf("id_token could not be verified: %w", err)
 	}
 	claims, ok := token.Claims.(*Claims)
 	if !ok || !token.Valid {
-		return nil, fmt.Errorf("id_token claim'leri gecersiz")
+		return nil, fmt.Errorf("id_token claims are invalid")
 	}
 	if subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(nonce)) != 1 {
-		return nil, fmt.Errorf("nonce eslesmedi")
+		return nil, fmt.Errorf("nonce mismatch")
 	}
 	if strings.TrimSpace(claims.UserID) == "" {
-		return nil, fmt.Errorf("sub bos")
+		return nil, fmt.Errorf("sub is empty")
 	}
 	return claims, nil
 }

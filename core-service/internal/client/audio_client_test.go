@@ -23,16 +23,16 @@ func TestMasterRequest_KeyFieldsJSON(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if _, present := out["stem_keys"]; !present {
-		t.Errorf("stem_keys alani yok: %s", b)
+		t.Errorf("stem_keys field missing: %s", b)
 	}
 	if _, absent := out["stem_urls"]; absent {
-		t.Errorf("stem_urls alani hala duruyor: %s", b)
+		t.Errorf("stem_urls field is still present: %s", b)
 	}
 
 	takes := out["vocal_takes"].([]interface{})
 	first := takes[0].(map[string]interface{})
 	if _, present := first["key"]; !present {
-		t.Errorf("vocal_takes[].key alani yok: %s", b)
+		t.Errorf("vocal_takes[].key field missing: %s", b)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestMixChannel_HasNoURLField(t *testing.T) {
 	}
 	for _, field := range []string{"stem_url", "stem_urls", "url"} {
 		if _, absent := out[field]; absent {
-			t.Errorf("%s alani hala duruyor: %s", field, b)
+			t.Errorf("%s field is still present: %s", field, b)
 		}
 	}
 	if out["volume"] != 0.5 {
@@ -75,7 +75,7 @@ func TestEncodeRequest_InputKeyJSON(t *testing.T) {
 		t.Errorf("input_key = %v", out["input_key"])
 	}
 	if _, absent := out["input_url"]; absent {
-		t.Errorf("input_url alani hala duruyor: %s", b)
+		t.Errorf("input_url field is still present: %s", b)
 	}
 }
 

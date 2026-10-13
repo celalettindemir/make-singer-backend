@@ -44,11 +44,11 @@ func TestCopy_SameBucketUsesCopyObject(t *testing.T) {
 		t.Fatalf("Kopyala: %v", err)
 	}
 	if len(*requests) != 1 {
-		t.Fatalf("tek istek bekleniyordu: %d", len(*requests))
+		t.Fatalf("expected a single request: %d", len(*requests))
 	}
 	r := (*requests)[0]
 	if r.Method != http.MethodPut || !strings.HasSuffix(r.URL.Path, "/makeasinger-private/sosyal/y1/master.wav") {
-		t.Fatalf("istek = %s %s", r.Method, r.URL.Path)
+		t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 	}
 	if got := r.Header.Get("X-Amz-Copy-Source"); got != "makeasinger-private/masters/u1/p1/m.wav" {
 		t.Fatalf("kopya kaynagi = %q", got)
@@ -58,9 +58,9 @@ func TestCopy_SameBucketUsesCopyObject(t *testing.T) {
 func TestCopy_RejectsCrossBucket(t *testing.T) {
 	c, requests := fakeS3(t)
 	if err := c.Copy(context.Background(), "exports/u1/e1.mp3", "sosyal/y1/master.mp3"); err == nil {
-		t.Fatal("public -> private kopya reddedilmeliydi")
+		t.Fatal("public -> private copy should have been rejected")
 	}
 	if len(*requests) != 0 {
-		t.Fatal("reddedilen kopya R2'ye gitmemeli")
+		t.Fatal("the rejected copy must not reach R2")
 	}
 }

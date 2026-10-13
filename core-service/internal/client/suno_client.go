@@ -158,7 +158,7 @@ func (c *SunoClient) GenerateMusic(ctx context.Context, req *GenerateMusicReques
 		return "", err
 	}
 	if data.TaskID == "" {
-		return "", fmt.Errorf("suno: yanitta taskId yok")
+		return "", fmt.Errorf("suno: no taskId in response")
 	}
 	return data.TaskID, nil
 }
@@ -182,17 +182,17 @@ func (c *SunoClient) WaitMusic(ctx context.Context, taskID string, interval, max
 			return false, transientError{err}
 		}
 		if sunoFailureStatuses[data.Status] {
-			return false, fmt.Errorf("suno uretimi basarisiz (%s): %s", data.Status, data.ErrorMessage)
+			return false, fmt.Errorf("suno generation failed (%s): %s", data.Status, data.ErrorMessage)
 		}
 		if data.Status != "SUCCESS" {
 			return false, nil
 		}
 		if data.Response == nil || len(data.Response.SunoData) == 0 {
-			return false, fmt.Errorf("suno: SUCCESS ama parca yok")
+			return false, fmt.Errorf("suno: SUCCESS but no track")
 		}
 		p := data.Response.SunoData[0]
 		if p.ID == "" {
-			return false, fmt.Errorf("suno: SUCCESS ama parca kimligi yok")
+			return false, fmt.Errorf("suno: SUCCESS but no track ID")
 		}
 		result = &Track{ID: p.ID, AudioURL: p.AudioURL, Duration: p.Duration}
 		return true, nil
@@ -216,7 +216,7 @@ func (c *SunoClient) SplitStems(ctx context.Context, taskID, audioID string) (st
 		return "", err
 	}
 	if data.TaskID == "" {
-		return "", fmt.Errorf("suno: stem yanitinda taskId yok")
+		return "", fmt.Errorf("suno: no taskId in stem response")
 	}
 	return data.TaskID, nil
 }
@@ -235,7 +235,7 @@ func (c *SunoClient) WaitStems(ctx context.Context, stemTaskID string, interval,
 			return false, transientError{err}
 		}
 		if sunoFailureStatuses[data.SuccessFlag] {
-			return false, fmt.Errorf("suno stem bolme basarisiz (%s): %s", data.SuccessFlag, data.ErrorMessage)
+			return false, fmt.Errorf("suno stem split failed (%s): %s", data.SuccessFlag, data.ErrorMessage)
 		}
 		if data.SuccessFlag != "SUCCESS" {
 			return false, nil
@@ -278,7 +278,7 @@ func (c *SunoClient) IsolateStem(ctx context.Context, taskID, audioID, stemName 
 		return "", err
 	}
 	if data.TaskID == "" {
-		return "", fmt.Errorf("suno: ayirma yanitinda taskId yok")
+		return "", fmt.Errorf("suno: no taskId in separation response")
 	}
 	return data.TaskID, nil
 }
@@ -307,17 +307,17 @@ func (c *SunoClient) WaitIsolated(ctx context.Context, stemTaskID string, interv
 			return false, transientError{err}
 		}
 		if sunoFailureStatuses[data.SuccessFlag] {
-			return false, fmt.Errorf("suno ayirma basarisiz (%s): %s", data.SuccessFlag, data.ErrorMessage)
+			return false, fmt.Errorf("suno separation failed (%s): %s", data.SuccessFlag, data.ErrorMessage)
 		}
 		if data.SuccessFlag != "SUCCESS" {
 			return false, nil
 		}
 		if data.Response == nil || len(data.Response.OriginData) == 0 {
-			return false, fmt.Errorf("suno: SUCCESS ama originData yok")
+			return false, fmt.Errorf("suno: SUCCESS but no originData")
 		}
 		first := data.Response.OriginData[0]
 		if first.Extract.AudioURL == "" || first.Remove.AudioURL == "" {
-			return false, fmt.Errorf("suno: SUCCESS ama ayirma adresi eksik")
+			return false, fmt.Errorf("suno: SUCCESS but separation URL missing")
 		}
 		result = &IsolatedStem{ExtractURL: first.Extract.AudioURL, RemoveURL: first.Remove.AudioURL, Duration: first.Extract.Duration}
 		return true, nil
@@ -339,9 +339,9 @@ func (c *SunoClient) waitFor(ctx context.Context, interval, maxWait time.Duratio
 				return err
 			}
 			consecutiveErrors++
-			log.Printf("[Suno API] %s poll gecici hata %d/%d: %v", label, consecutiveErrors, pollErrorTolerance, err)
+			log.Printf("[Suno API] %s poll transient error %d/%d: %v", label, consecutiveErrors, pollErrorTolerance, err)
 			if consecutiveErrors >= pollErrorTolerance {
-				return fmt.Errorf("suno %s poll'u %d ardisik hatadan sonra birakildi: %w", label, consecutiveErrors, transient.error)
+				return fmt.Errorf("suno %s poll abandoned after %d consecutive errors: %w", label, consecutiveErrors, transient.error)
 			}
 		} else {
 			consecutiveErrors = 0
@@ -355,7 +355,7 @@ func (c *SunoClient) waitFor(ctx context.Context, interval, maxWait time.Duratio
 		case <-time.After(interval):
 		}
 	}
-	return fmt.Errorf("suno %s beklemesi zaman asimi (%v)", label, maxWait)
+	return fmt.Errorf("suno %s wait timed out (%v)", label, maxWait)
 }
 
 func asTransient(err error, target *transientError) bool {
@@ -395,13 +395,13 @@ func (c *SunoClient) do(req *http.Request, out any) error {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("suno istegi gonderilemedi: %w", err)
+		return fmt.Errorf("suno request could not be sent: %w", err)
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("suno yaniti okunamadi: %w", err)
+		return fmt.Errorf("suno response could not be read: %w", err)
 	}
 	log.Printf("[Suno API] %d %s %s", resp.StatusCode, req.Method, req.URL.Path)
 
@@ -415,7 +415,7 @@ func (c *SunoClient) do(req *http.Request, out any) error {
 		Data json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return fmt.Errorf("suno yaniti cozulemedi: %w", err)
+		return fmt.Errorf("suno response could not be decoded: %w", err)
 	}
 	if envelope.Code != 200 {
 		return fmt.Errorf("suno API error (code %d): %s", envelope.Code, envelope.Msg)
@@ -424,7 +424,7 @@ func (c *SunoClient) do(req *http.Request, out any) error {
 		return nil
 	}
 	if err := json.Unmarshal(envelope.Data, out); err != nil {
-		return fmt.Errorf("suno data alani cozulemedi: %w", err)
+		return fmt.Errorf("suno data field could not be decoded: %w", err)
 	}
 	return nil
 }

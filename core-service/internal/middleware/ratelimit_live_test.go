@@ -21,7 +21,7 @@ func liveRedis(t *testing.T) *redis.Client {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		t.Skip("yerel Redis yok, atlaniyor")
+		t.Skip("no local Redis, skipping")
 	}
 	_ = rdb.FlushDB(context.Background()).Err()
 	t.Cleanup(func() { _ = rdb.FlushDB(context.Background()).Err(); _ = rdb.Close() })
@@ -74,30 +74,30 @@ func TestLiveLimit_HappyPathAndCounter(t *testing.T) {
 	for i, wantRemaining := range []string{"2", "1", "0"} {
 		resp := liveRequest(t, app)
 		if resp.status != fiber.StatusOK {
-			t.Fatalf("istek %d: durum = %d, beklenen 200", i+1, resp.status)
+			t.Fatalf("request %d: status = %d, want 200", i+1, resp.status)
 		}
 		if resp.remaining != wantRemaining {
-			t.Errorf("istek %d: X-RateLimit-Remaining = %q, beklenen %q", i+1, resp.remaining, wantRemaining)
+			t.Errorf("request %d: X-RateLimit-Remaining = %q, want %q", i+1, resp.remaining, wantRemaining)
 		}
 		if i == 0 {
 			// The counter must start at 1: SET NX 0 + INCR.
 			if value, err := rdb.Get(ctx, key).Result(); err != nil || value != "1" {
-				t.Errorf("ilk istekten sonra sayac = %q (hata %v), beklenen \"1\"", value, err)
+				t.Errorf("counter after the first request = %q (err %v), want \"1\"", value, err)
 			}
 			// The TTL must be pinned at creation time.
 			if ttl, err := rdb.TTL(ctx, key).Result(); err != nil || ttl <= 0 {
-				t.Errorf("ilk istekten sonra TTL = %v (hata %v), beklenen > 0", ttl, err)
+				t.Errorf("TTL after the first request = %v (err %v), want > 0", ttl, err)
 			}
 		}
 	}
 
 	resp := liveRequest(t, app)
 	if resp.status != fiber.StatusTooManyRequests {
-		t.Fatalf("4. istek: durum = %d, beklenen 429", resp.status)
+		t.Fatalf("4th request: status = %d, want 429", resp.status)
 	}
 	seconds, err := strconv.Atoi(resp.retryAfter)
 	if err != nil || seconds < 1 {
-		t.Errorf("Retry-After = %q (hata %v), beklenen >= 1", resp.retryAfter, err)
+		t.Errorf("Retry-After = %q (err %v), want >= 1", resp.retryAfter, err)
 	}
 }
 
@@ -112,24 +112,24 @@ func TestLiveLimit_FixedWindowTTLNotRenewed(t *testing.T) {
 	key := fmt.Sprintf("ratelimit:pencere:%s", user)
 
 	if resp := liveRequest(t, app); resp.status != fiber.StatusOK {
-		t.Fatalf("ilk istek: durum = %d, beklenen 200", resp.status)
+		t.Fatalf("first request: status = %d, want 200", resp.status)
 	}
 	firstTTL, err := rdb.TTL(ctx, key).Result()
 	if err != nil {
-		t.Fatalf("TTL okunamadi: %v", err)
+		t.Fatalf("could not read TTL: %v", err)
 	}
 
 	time.Sleep(1200 * time.Millisecond)
 
 	if resp := liveRequest(t, app); resp.status != fiber.StatusOK {
-		t.Fatalf("ikinci istek: durum = %d, beklenen 200", resp.status)
+		t.Fatalf("second request: status = %d, want 200", resp.status)
 	}
 	secondTTL, err := rdb.TTL(ctx, key).Result()
 	if err != nil {
-		t.Fatalf("TTL okunamadi: %v", err)
+		t.Fatalf("could not read TTL: %v", err)
 	}
 	if secondTTL >= firstTTL {
-		t.Errorf("TTL yenilendi (%v -> %v); pencere sabit olmali", firstTTL, secondTTL)
+		t.Errorf("TTL was refreshed (%v -> %v); the window must be fixed", firstTTL, secondTTL)
 	}
 }
 
@@ -140,16 +140,16 @@ func TestLiveLimit_CounterResetsAfterWindow(t *testing.T) {
 	app := liveApp(rdb, user, "sifir", 1, time.Second)
 
 	if resp := liveRequest(t, app); resp.status != fiber.StatusOK {
-		t.Fatalf("ilk istek: durum = %d, beklenen 200", resp.status)
+		t.Fatalf("first request: status = %d, want 200", resp.status)
 	}
 	if resp := liveRequest(t, app); resp.status != fiber.StatusTooManyRequests {
-		t.Fatalf("ikinci istek: durum = %d, beklenen 429", resp.status)
+		t.Fatalf("second request: status = %d, want 429", resp.status)
 	}
 
 	time.Sleep(1200 * time.Millisecond)
 
 	if resp := liveRequest(t, app); resp.status != fiber.StatusOK {
-		t.Errorf("pencere dolduktan sonra: durum = %d, beklenen 200", resp.status)
+		t.Errorf("after the window expired: status = %d, want 200", resp.status)
 	}
 }
 
@@ -166,27 +166,27 @@ func TestLiveLimit_HealsLegacyKeyWithoutTTL(t *testing.T) {
 
 	// Set up a key by hand with no TTL and over quota (the legacy of the old code).
 	if err := rdb.Set(ctx, key, 99, 0).Err(); err != nil {
-		t.Fatalf("miras anahtar kurulamadi: %v", err)
+		t.Fatalf("could not set up the legacy key: %v", err)
 	}
 	if ttl, err := rdb.TTL(ctx, key).Result(); err != nil || ttl >= 0 {
-		t.Fatalf("hazirlik: TTL = %v (hata %v), TTL'siz olmali (-1)", ttl, err)
+		t.Fatalf("setup: TTL = %v (err %v), must have no TTL (-1)", ttl, err)
 	}
 
 	resp := liveRequest(t, app)
 	if resp.status != fiber.StatusTooManyRequests {
-		t.Fatalf("durum = %d, beklenen 429", resp.status)
+		t.Fatalf("status = %d, want 429", resp.status)
 	}
 	seconds, err := strconv.Atoi(resp.retryAfter)
 	if err != nil || seconds < 1 {
-		t.Errorf("Retry-After = %q (hata %v), beklenen >= 1", resp.retryAfter, err)
+		t.Errorf("Retry-After = %q (err %v), want >= 1", resp.retryAfter, err)
 	}
 	// Healing: the key must now carry a TTL, so the lock will open on its own.
 	ttl, err := rdb.TTL(ctx, key).Result()
 	if err != nil {
-		t.Fatalf("TTL okunamadi: %v", err)
+		t.Fatalf("could not read TTL: %v", err)
 	}
 	if ttl <= 0 {
-		t.Errorf("istekten sonra TTL = %v, beklenen > 0 (miras anahtar iyilestirilmedi)", ttl)
+		t.Errorf("TTL after the request = %v, want > 0 (the legacy key was not repaired)", ttl)
 	}
 }
 
@@ -217,17 +217,17 @@ func TestLiveLimit_WSTicketAndSign(t *testing.T) {
 
 			for i := 1; i <= 2; i++ {
 				if resp := liveRequest(t, app); resp.status != fiber.StatusOK {
-					t.Fatalf("istek %d: durum = %d, beklenen 200", i, resp.status)
+					t.Fatalf("request %d: status = %d, want 200", i, resp.status)
 				}
 			}
 			if resp := liveRequest(t, app); resp.status != fiber.StatusTooManyRequests {
-				t.Fatalf("3. istek: durum = %d, beklenen 429", resp.status)
+				t.Fatalf("3rd request: status = %d, want 429", resp.status)
 			}
 
 			key := fmt.Sprintf("ratelimit:%s:%s", d.prefix, user)
 			ttl, err := rdb.TTL(ctx, key).Result()
 			if err != nil || ttl <= 0 || ttl > time.Minute {
-				t.Errorf("TTL = %v (hata %v), beklenen 0 < ttl <= 60s", ttl, err)
+				t.Errorf("TTL = %v (err %v), want 0 < ttl <= 60s", ttl, err)
 			}
 		})
 	}

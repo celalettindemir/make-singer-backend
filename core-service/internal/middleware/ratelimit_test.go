@@ -40,7 +40,7 @@ func limitStatus(t *testing.T, app *fiber.App) int {
 func TestLimit_FailsClosedWithoutUserID(t *testing.T) {
 	// 127.0.0.1:1 is deliberately closed: Redis must never be contacted.
 	if status := limitStatus(t, limitedApp("127.0.0.1:1", "")); status != fiber.StatusUnauthorized {
-		t.Errorf("durum = %d, beklenen 401", status)
+		t.Errorf("status = %d, want 401", status)
 	}
 }
 
@@ -49,6 +49,6 @@ func TestLimit_FailsClosedWithoutUserID(t *testing.T) {
 func TestLimit_FailsClosedOnRedisError(t *testing.T) {
 	// No network needed: 127.0.0.1:1 gives a connection refusal.
 	if status := limitStatus(t, limitedApp("127.0.0.1:1", "kullanici-1")); status != fiber.StatusServiceUnavailable {
-		t.Errorf("durum = %d, beklenen 503", status)
+		t.Errorf("status = %d, want 503", status)
 	}
 }

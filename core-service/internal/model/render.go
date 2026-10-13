@@ -16,7 +16,7 @@ type RenderStartRequest struct {
 }
 
 // ErrInvalidStemSettings: stemMode and focusInstrument are inconsistent.
-var ErrInvalidStemSettings = errors.New("gecersiz stem ayari")
+var ErrInvalidStemSettings = errors.New("invalid stem settings")
 
 // StemSettings normalizes the request's stem mode: an empty mode is mix (the
 // cheap side; an old client cannot accidentally spend 62 credits). focus
@@ -30,12 +30,12 @@ func (r *RenderStartRequest) StemSettings() (StemMode, *Instrument, error) {
 	}
 	if mode != StemModeFocus {
 		if r.FocusInstrument != nil {
-			return "", nil, fmt.Errorf("%w: focusInstrument yalnizca focus modunda", ErrInvalidStemSettings)
+			return "", nil, fmt.Errorf("%w: focusInstrument is only allowed in focus mode", ErrInvalidStemSettings)
 		}
 		return mode, nil, nil
 	}
 	if r.FocusInstrument == nil {
-		return "", nil, fmt.Errorf("%w: focus modu focusInstrument ister", ErrInvalidStemSettings)
+		return "", nil, fmt.Errorf("%w: focus mode requires focusInstrument", ErrInvalidStemSettings)
 	}
 	for _, i := range r.Arrangement.Instruments {
 		if i == *r.FocusInstrument {
@@ -43,7 +43,7 @@ func (r *RenderStartRequest) StemSettings() (StemMode, *Instrument, error) {
 			return mode, &focus, nil
 		}
 	}
-	return "", nil, fmt.Errorf("%w: focusInstrument aranjmanda yok", ErrInvalidStemSettings)
+	return "", nil, fmt.Errorf("%w: focusInstrument is not in the arrangement", ErrInvalidStemSettings)
 }
 
 // Brief contains song parameters

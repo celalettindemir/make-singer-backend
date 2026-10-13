@@ -104,15 +104,15 @@ func ResolveURL(ctx context.Context, sc StorageClient, cfg *config.R2Config, key
 // Redis job record and the WebSocket broadcast, and a signed URL is a secret.
 func KeyFromURL(rawURL string, cfg *config.R2Config) (string, error) {
 	if rawURL == "" {
-		return "", fmt.Errorf("%w: bos URL", ErrInvalidURL)
+		return "", fmt.Errorf("%w: empty URL", ErrInvalidURL)
 	}
 
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return "", fmt.Errorf("%w: URL cozulemedi", ErrInvalidURL)
+		return "", fmt.Errorf("%w: URL could not be parsed", ErrInvalidURL)
 	}
 	if u.Host == "" {
-		return "", fmt.Errorf("%w: URL'de konak yok", ErrInvalidURL)
+		return "", fmt.Errorf("%w: URL has no host", ErrInvalidURL)
 	}
 
 	known := false
@@ -123,12 +123,12 @@ func KeyFromURL(rawURL string, cfg *config.R2Config) (string, error) {
 		}
 	}
 	if !known {
-		return "", fmt.Errorf("%w: taninmayan konak: %s", ErrInvalidURL, u.Host)
+		return "", fmt.Errorf("%w: unknown host: %s", ErrInvalidURL, u.Host)
 	}
 
 	key := strings.TrimPrefix(u.Path, "/")
 	if key == "" {
-		return "", fmt.Errorf("%w: URL'de nesne anahtari yok (konak: %s)", ErrInvalidURL, u.Host)
+		return "", fmt.Errorf("%w: URL has no object key (host: %s)", ErrInvalidURL, u.Host)
 	}
 	return key, nil
 }

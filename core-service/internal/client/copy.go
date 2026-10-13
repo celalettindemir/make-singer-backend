@@ -32,7 +32,7 @@ func (c *R2Client) Copy(ctx context.Context, src, dst string) error {
 	srcBucket := BucketFor(src, c.cfg)
 	dstBucket := BucketFor(dst, c.cfg)
 	if srcBucket != dstBucket {
-		return fmt.Errorf("bucket'lar arasi kopya reddedildi: %s -> %s", srcBucket, dstBucket)
+		return fmt.Errorf("cross-bucket copy rejected: %s -> %s", srcBucket, dstBucket)
 	}
 	_, err := c.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(dstBucket),
@@ -40,7 +40,7 @@ func (c *R2Client) Copy(ctx context.Context, src, dst string) error {
 		CopySource: aws.String(copySource(srcBucket, src)),
 	})
 	if err != nil {
-		return fmt.Errorf("R2 kopyalanamadi: %w", err)
+		return fmt.Errorf("R2 copy failed: %w", err)
 	}
 	return nil
 }

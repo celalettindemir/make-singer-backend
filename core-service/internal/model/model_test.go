@@ -8,12 +8,12 @@ import (
 
 func TestExpiresPtr_ZeroTimeIsNil(t *testing.T) {
 	if ExpiresPtr(time.Time{}) != nil {
-		t.Error("sifir zaman icin nil bekleniyordu")
+		t.Error("expected nil for the zero time")
 	}
 	expiry := time.Now().Add(time.Hour)
 	p := ExpiresPtr(expiry)
 	if p == nil || !p.Equal(expiry) {
-		t.Errorf("ExpiresPtr degeri kaybetti: %v", p)
+		t.Errorf("ExpiresPtr lost the value: %v", p)
 	}
 }
 
@@ -29,7 +29,7 @@ func TestUploadVocalResponse_ExpiringLinkHasExpiresAt(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if _, present := out["expiresAt"]; !present {
-		t.Errorf("expiresAt alani yok: %s", b)
+		t.Errorf("expiresAt field missing: %s", b)
 	}
 }
 
@@ -44,7 +44,7 @@ func TestExportResponse_PermanentLinkOmitsExpiresAt(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if _, present := out["expiresAt"]; present {
-		t.Errorf("kalici link icin expiresAt hic olmamali: %s", b)
+		t.Errorf("expiresAt must not be present at all for a permanent link: %s", b)
 	}
 }
 
@@ -59,6 +59,6 @@ func TestStemResult_ExpiresAtField(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if _, present := out["expiresAt"]; !present {
-		t.Errorf("expiresAt alani yok: %s", b)
+		t.Errorf("expiresAt field missing: %s", b)
 	}
 }

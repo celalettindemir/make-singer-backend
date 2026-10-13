@@ -32,7 +32,7 @@ func SocialKey(pubID string, parts ...string) (string, error) {
 		return "", ErrInvalidSegment
 	}
 	if len(parts) == 0 {
-		return "", fmt.Errorf("%w: dosya adi yok", ErrInvalidSegment)
+		return "", fmt.Errorf("%w: file name missing", ErrInvalidSegment)
 	}
 	for _, p := range parts {
 		if !segmentPattern.MatchString(p) {
@@ -65,7 +65,7 @@ func ResolveOwnedKeyOrURL(raw, userID string, cfg *config.R2Config) (string, err
 	}
 	segments := strings.Split(raw, "/")
 	if len(segments) < 3 || !ownedKinds[segments[0]] {
-		return "", fmt.Errorf("%w: anahtar ya da adres degil", ErrInvalidURL)
+		return "", fmt.Errorf("%w: neither a key nor a URL", ErrInvalidURL)
 	}
 	if err := VerifyKeyOwner(raw, userID); err != nil {
 		return "", err

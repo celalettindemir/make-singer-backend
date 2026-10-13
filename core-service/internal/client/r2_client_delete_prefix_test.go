@@ -13,11 +13,11 @@ func TestDeletePrefix_RejectsUnsafePrefix(t *testing.T) {
 		PublicBucket: "pub", PrivateBucket: "priv", PublicURL: "https://cdn.ornek",
 	})
 	if err != nil {
-		t.Fatalf("istemci kurulamadi: %v", err)
+		t.Fatalf("could not set up client: %v", err)
 	}
 	for _, prefix := range []string{"", "vocals/", "vocals", "vocals/u1", "/u1/"} {
 		if _, err := c.DeletePrefix(context.Background(), prefix); err == nil {
-			t.Errorf("%q kabul edilmemeliydi", prefix)
+			t.Errorf("%q should not have been accepted", prefix)
 		}
 	}
 }

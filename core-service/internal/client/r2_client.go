@@ -42,13 +42,13 @@ func NewR2Client(cfg *config.R2Config) (*R2Client, error) {
 		return nil, fmt.Errorf("R2 configuration incomplete")
 	}
 	if cfg.PublicBucket == "" || cfg.PrivateBucket == "" {
-		return nil, fmt.Errorf("R2 bucket adlari eksik: public=%q private=%q", cfg.PublicBucket, cfg.PrivateBucket)
+		return nil, fmt.Errorf("R2 bucket names missing: public=%q private=%q", cfg.PublicBucket, cfg.PrivateBucket)
 	}
 	// R2_PUBLIC_URL is required: if empty, public keys produce neither a valid
 	// CDN URL nor a correct R2 URL, and KeyFromURL does not recognize CDN URLs.
 	// Failing at startup beats silently breaking in production.
 	if cfg.PublicURL == "" {
-		return nil, fmt.Errorf("R2_PUBLIC_URL eksik: public bucket icin CDN adresi zorunludur")
+		return nil, fmt.Errorf("R2_PUBLIC_URL missing: the CDN address is required for the public bucket")
 	}
 
 	endpoint := fmt.Sprintf("https://%s.r2.cloudflarestorage.com", cfg.AccountID)
@@ -163,7 +163,7 @@ var _ PrefixDeleter = (*R2Client)(nil)
 func (c *R2Client) DeletePrefix(ctx context.Context, prefix string) (int, error) {
 	segments := strings.Split(prefix, "/")
 	if !strings.HasSuffix(prefix, "/") || len(segments) != 3 || segments[0] == "" || segments[1] == "" {
-		return 0, fmt.Errorf("guvensiz onek reddedildi: %q", prefix)
+		return 0, fmt.Errorf("unsafe prefix rejected: %q", prefix)
 	}
 	bucket := aws.String(BucketFor(prefix, c.cfg))
 	paginator := s3.NewListObjectsV2Paginator(c.s3Client, &s3.ListObjectsV2Input{
@@ -174,7 +174,7 @@ func (c *R2Client) DeletePrefix(ctx context.Context, prefix string) (int, error)
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return deleted, fmt.Errorf("R2 listelenemedi: %w", err)
+			return deleted, fmt.Errorf("R2 listing failed: %w", err)
 		}
 		if len(page.Contents) == 0 {
 			continue
@@ -190,10 +190,10 @@ func (c *R2Client) DeletePrefix(ctx context.Context, prefix string) (int, error)
 			Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
 		})
 		if err != nil {
-			return deleted, fmt.Errorf("R2 silinemedi: %w", err)
+			return deleted, fmt.Errorf("R2 delete failed: %w", err)
 		}
 		if len(out.Errors) > 0 {
-			return deleted, fmt.Errorf("R2 %d nesneyi silemedi", len(out.Errors))
+			return deleted, fmt.Errorf("R2 could not delete %d objects", len(out.Errors))
 		}
 		deleted += len(objects)
 	}

@@ -1,5 +1,5 @@
-FILE	config-yaml	5ef4eb0fa7889b039c2bd6cfebcb1a87879bf5263632b6be51329bcef9b5cf66
-FILE	env-example	9e5f88eac673efbd7013037c35287f013d3acbf03cb052677b63dda1f4669dcc
+FILE	config-yaml	a2fe1295b0790cce5360049ccfb5ee7763f183dd47fb5e432b75e61ba94cdc2e
+FILE	env-example	7b6bb3615bc7c4a6e683f5a4cc20a83e8c1b0930c2305c51978d45878c91bfcd
 FILE	kimlik-migration-001	805c4a7704084d815a950e8fb3c14ca36de2cfc52e668355def91a7da38c024c
 FILE	kimlik-migration-002	1c8915357fd9a37ca07ca364f134e352d6e8afbabc5520df35d8a70163adfd9f
 FILE	kimlik-migration-003	fc96a44b344fe3e5f359fc07890bb62f09f6515ce2c23f49391391f0bc501401
@@ -1242,10 +1242,7 @@ STR	"fr"
 STR	"full"
 STR	"fx"
 STR	"fxUrl"
-STR	"gecersiz URL"
-STR	"gecersiz anahtar segmenti"
 STR	"gecersiz kullanici adi"
-STR	"gecersiz stem ayari"
 STR	"gecersiz_kullanici_adi"
 STR	"genre_length"
 STR	"giris"
@@ -1334,6 +1331,9 @@ STR	"instrumental"
 STR	"instrumental"
 STR	"internal"
 STR	"intro"
+STR	"invalid URL"
+STR	"invalid key segment"
+STR	"invalid stem settings"
 STR	"invalid_body"
 STR	"invalid_file_url"
 STR	"is sahibinin hesabi silindi"
@@ -1450,11 +1450,11 @@ STR	"name"
 STR	"name"
 STR	"neden must be spam, taciz, telif, uygunsuz or diger."
 STR	"neden spam, taciz, telif, uygunsuz ya da diger olmalı."
-STR	"nesne bu kullaniciya ait degil"
 STR	"no-store"
 STR	"nonce"
 STR	"none"
 STR	"null"
+STR	"object does not belong to this user"
 STR	"ok"
 STR	"onizleme.mp3"
 STR	"openai/gpt-oss-120b"

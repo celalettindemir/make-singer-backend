@@ -45,16 +45,16 @@ func NewOPAuthMiddleware(issuer, clientID string, publicKey *rsa.PublicKey) *Aut
 	d := &opVerifier{issuer: issuer, clientID: clientID, publicKey: publicKey}
 	switch {
 	case issuer == "":
-		d.setupErr = fmt.Errorf("OP auth yapilandirmasi eksik: issuer bos")
+		d.setupErr = fmt.Errorf("OP auth configuration incomplete: issuer is empty")
 	case clientID == "":
-		d.setupErr = fmt.Errorf("OP auth yapilandirmasi eksik: istemci (client ID) bos")
+		d.setupErr = fmt.Errorf("OP auth configuration incomplete: client ID is empty")
 	case publicKey == nil:
-		d.setupErr = fmt.Errorf("OP auth yapilandirmasi eksik: acik anahtar nil")
+		d.setupErr = fmt.Errorf("OP auth configuration incomplete: public key is nil")
 	}
 	if d.setupErr != nil {
 		// The error text carries no secret (it only says which field is
 		// empty), so it can be logged and should be.
-		log.Printf("Hata: %v — tum /api/* istekleri reddedilecek", d.setupErr)
+		log.Printf("Error: %v — all /api/* requests will be rejected", d.setupErr)
 	}
 	return &AuthMiddleware{op: d}
 }
@@ -83,13 +83,13 @@ func (d *opVerifier) verify(tokenString string) (string, string, string, error) 
 			// Do not rely on the library reading alg from the token; enforce
 			// the expected method here as well (two layers of defense).
 			if t.Method.Alg() != jwt.SigningMethodRS256.Alg() {
-				return nil, fmt.Errorf("beklenmeyen imza yontemi: %v", t.Header["alg"])
+				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 			}
 			// Defense in depth: a nil key leads to a PANIC inside crypto/rsa.
 			// Thanks to setupErr we should never get here with nil, but we
 			// check anyway.
 			if d.publicKey == nil {
-				return nil, fmt.Errorf("acik anahtar nil")
+				return nil, fmt.Errorf("public key is nil")
 			}
 			return d.publicKey, nil
 		}, options...)
@@ -97,7 +97,7 @@ func (d *opVerifier) verify(tokenString string) (string, string, string, error) 
 		return "", "", "", err
 	}
 	if !token.Valid {
-		return "", "", "", fmt.Errorf("jeton gecersiz")
+		return "", "", "", fmt.Errorf("token is invalid")
 	}
 	// The token's USAGE TYPE is checked: an id_token is NOT an access
 	// token and must not grant API access. Both are signed with the same
@@ -110,20 +110,20 @@ func (d *opVerifier) verify(tokenString string) (string, string, string, error) 
 	// minutes; also the id_token is handled more loosely on the client
 	// (cache, analytics, crash logs) and is not recorded on the OP side.
 	if jti, _ := claims["jti"].(string); strings.TrimSpace(jti) == "" {
-		return "", "", "", fmt.Errorf("jti claim'i yok: access token degil")
+		return "", "", "", fmt.Errorf("jti claim missing: not an access token")
 	}
 	if _, present := claims["azp"]; present {
-		return "", "", "", fmt.Errorf("azp claim'i var: id_token access token olarak kullanilamaz")
+		return "", "", "", fmt.Errorf("azp claim present: an id_token cannot be used as an access token")
 	}
 	if _, present := claims["at_hash"]; present {
-		return "", "", "", fmt.Errorf("at_hash claim'i var: id_token access token olarak kullanilamaz")
+		return "", "", "", fmt.Errorf("at_hash claim present: an id_token cannot be used as an access token")
 	}
 
 	sub, _ := claims["sub"].(string)
 	// Not only "" but also a whitespace-only sub is rejected: otherwise
 	// userId would be "   " and the rate limit key would become meaningless.
 	if strings.TrimSpace(sub) == "" {
-		return "", "", "", fmt.Errorf("sub claim'i bos")
+		return "", "", "", fmt.Errorf("sub claim is empty")
 	}
 	email, _ := claims["email"].(string)
 	name, _ := claims["name"].(string)
