@@ -76,7 +76,7 @@ Exact numeric limits are set via server configuration (`ratelimit.lyrics_per_min
 {
   "error": {
     "code": "RATE_LIMITED",
-    "message": "Rate limit exceeded"
+    "message": "Çok fazla istek gönderildi, lütfen biraz bekleyin."
   }
 }
 ```
@@ -98,6 +98,10 @@ All errors share the same envelope:
 ```
 
 `details` is included only when additional context is available (e.g. validation errors).
+
+### Message language
+
+`message` is localized. The server picks Turkish or English from `Accept-Language` (highest q value wins, region subtags are ignored, `q=0` and `*` never select a language) and defaults to Turkish (`tr`). Every error response carries `Content-Language: tr|en` and `Vary: Accept-Language`. Clients must branch on `code`, which never changes with the language. Keys in `details` are not localized: validation `details` keys are the Go field names of the request structs (for example `Genre`).
 
 ### Error Codes
 
@@ -123,7 +127,7 @@ When validation fails, `details` is an object mapping field names to the violate
 {
   "error": {
     "code": "VALIDATION_ERROR",
-    "message": "Validation failed",
+    "message": "Doğrulama başarısız.",
     "details": {
       "Genre": "required",
       "Vibes": "min"
