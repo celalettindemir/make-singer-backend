@@ -345,7 +345,7 @@ func (f *FederationPages) Start(w http.ResponseWriter, r *http.Request) {
 	// new binding would let an attacker obtain a binding in their own browser
 	// and send the link to the victim.
 	if _, err := verifySessionBinding(r.Context(), f.sessions, r, id); err != nil {
-		rejectSession(w, "federasyon-baslat", err)
+		rejectSession(w, "federation-start", err)
 		return
 	}
 	// The request must REALLY exist: going upstream with a nonexistent id would

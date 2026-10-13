@@ -492,7 +492,7 @@ func (s *Pages) loginGet(w http.ResponseWriter, r *http.Request) {
 	}
 	csrf, err := verifySessionBinding(r.Context(), s.sessions, r, id)
 	if err != nil {
-		rejectSession(w, "giris-get", err)
+		rejectSession(w, "login-get", err)
 		return
 	}
 	s.renderLogin(w, http.StatusOK, id, csrf, "", "")
@@ -511,7 +511,7 @@ func (s *Pages) loginPost(w http.ResponseWriter, r *http.Request) {
 	// Cookie binding + CSRF: BEFORE the password verification. A request
 	// rejected here NEVER touches the user store.
 	if err := s.enforceSession(r, id); err != nil {
-		rejectSession(w, "giris", err)
+		rejectSession(w, "login", err)
 		return
 	}
 	csrf := r.FormValue(fieldCSRF)
@@ -593,7 +593,7 @@ func (s *Pages) signupGet(w http.ResponseWriter, r *http.Request) {
 	}
 	csrf, err := verifySessionBinding(r.Context(), s.sessions, r, id)
 	if err != nil {
-		rejectSession(w, "kayit-get", err)
+		rejectSession(w, "signup-get", err)
 		return
 	}
 	s.renderSignup(w, http.StatusOK, id, csrf, "", "", "")
@@ -611,7 +611,7 @@ func (s *Pages) signupPost(w http.ResponseWriter, r *http.Request) {
 	}
 	// Cookie binding + CSRF: BEFORE the user is CREATED.
 	if err := s.enforceSession(r, id); err != nil {
-		rejectSession(w, "kayit", err)
+		rejectSession(w, "signup", err)
 		return
 	}
 	csrf := r.FormValue(fieldCSRF)

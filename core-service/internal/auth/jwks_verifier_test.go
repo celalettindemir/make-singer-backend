@@ -191,7 +191,7 @@ func TestUpstreamVerifier_PinsAlgorithm(t *testing.T) {
 	badToken.Header["kid"] = octKid
 	signedBad, err := badToken.SignedString(octSecret)
 	if err != nil {
-		t.Fatalf("saldirgan could not sign token: %v", err)
+		t.Fatalf("attacker could not sign token: %v", err)
 	}
 
 	if _, err := v.VerifyWithNonce(signedBad, "n-saldiri"); err == nil {

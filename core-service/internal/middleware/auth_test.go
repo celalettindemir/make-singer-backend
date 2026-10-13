@@ -200,10 +200,10 @@ func TestAuthenticate_MissingOrMalformedHeader(t *testing.T) {
 	privKey := testKey(t)
 	app := newApp(t, privKey)
 	for name, authHeader := range map[string]string{
-		"no header":  "",
-		"no Bearer":  "abc.def.ghi",
-		"empty token":   "Bearer ",
-		"yanlis sema": "Basic abc",
+		"no header":       "",
+		"no Bearer":       "abc.def.ghi",
+		"empty token":     "Bearer ",
+		"wrong scheme":    "Basic abc",
 		"malformed token": "Bearer not.a.jwt",
 	} {
 		if status, _ := doRequest(t, app, authHeader); status != 401 {
@@ -368,8 +368,8 @@ func TestNewOPAuthMiddleware_IncompleteConfigRejectsAll(t *testing.T) {
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	cases := map[string]*AuthMiddleware{
-		"empty client":      NewOPAuthMiddleware(testIssuer, "", &privKey.PublicKey),
-		"empty issuer":       NewOPAuthMiddleware("", testClientID, &privKey.PublicKey),
+		"empty client":   NewOPAuthMiddleware(testIssuer, "", &privKey.PublicKey),
+		"empty issuer":   NewOPAuthMiddleware("", testClientID, &privKey.PublicKey),
 		"nil public key": NewOPAuthMiddleware(testIssuer, testClientID, nil),
 	}
 	for name, mw := range cases {

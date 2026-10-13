@@ -21,12 +21,12 @@ func TestUserKey_Layout(t *testing.T) {
 
 func TestUserKey_RejectsInvalidSegment(t *testing.T) {
 	cases := map[string][]string{
-		"empty user":   {"", "p1", "t.wav"},
-		"slash":      {"kullanici-a", "p1/../b", "t.wav"},
-		"double dot":       {"kullanici-a", "..", "t.wav"},
+		"empty user":  {"", "p1", "t.wav"},
+		"slash":       {"kullanici-a", "p1/../b", "t.wav"},
+		"double dot":  {"kullanici-a", "..", "t.wav"},
 		"leading dot": {"kullanici-a", ".gizli", "t.wav"},
-		"space":          {"kullanici-a", "p 1", "t.wav"},
-		"too long":        {"kullanici-a", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "t.wav"},
+		"space":       {"kullanici-a", "p 1", "t.wav"},
+		"too long":    {"kullanici-a", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "t.wav"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

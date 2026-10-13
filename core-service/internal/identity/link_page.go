@@ -451,7 +451,7 @@ func (f *FederationPages) linkGet(w http.ResponseWriter, r *http.Request) {
 	pendingID := r.URL.Query().Get(fieldPendingID)
 	b, err := f.verifyLinkBinding(r, pendingID)
 	if err != nil {
-		rejectSession(w, "baglama-get", err)
+		rejectSession(w, "link-get", err)
 		return
 	}
 	f.renderLink(w, http.StatusOK, b, pendingID, "")
@@ -469,13 +469,13 @@ func (f *FederationPages) linkPost(w http.ResponseWriter, r *http.Request) {
 	// AFTER the password is verified (see verifyLinkBinding).
 	b, err := f.verifyLinkBinding(r, pendingID)
 	if err != nil {
-		rejectSession(w, "baglama", err)
+		rejectSession(w, "link", err)
 		return
 	}
 	// The CSRF token is stored on the SERVER in the record: the verification is
 	// effectively "did we issue this token for this pending record".
 	if !csrfEqual(b.CSRF, r.FormValue(fieldCSRF)) {
-		rejectSession(w, "baglama", ErrCSRF)
+		rejectSession(w, "link", ErrCSRF)
 		return
 	}
 
@@ -525,7 +525,7 @@ func (f *FederationPages) linkPost(w http.ResponseWriter, r *http.Request) {
 	// was entered once.
 	if _, err := f.flows.TakePendingLink(r.Context(), pendingID); err != nil {
 		// Race: the record was consumed in the meantime. We stop WITHOUT linking.
-		rejectSession(w, "baglama", err)
+		rejectSession(w, "link", err)
 		return
 	}
 
