@@ -173,7 +173,7 @@ func main() {
 	if r2Client != nil {
 		kopyalayici = r2Client
 	}
-	sosyalHandler := handler.NewSosyalHandler(
+	sosyalHandler := handler.NewSocialHandler(
 		social.NewService(sosyalDepo, asynqClient, storage, &cfg.R2).WithCopier(kopyalayici))
 	sosyalWorker := worker.NewSocialWorker(sosyalDepo, kopyalayici, audioClient, silici, deletionmark.NewRedisChecker(redisClient))
 
@@ -263,7 +263,7 @@ func main() {
 	// ve bu uc zinciri surdurmez, yani auth ve silinmis-kullanici kapisi
 	// hic calismaz. Sinir istemci IP'si basinadir (X-Real-Ip); web
 	// sunucusu X-Web-Anahtari ile ortak ve daha yuksek sinira gecer.
-	sosyalHandler.PublicRotalar(app.Group("/api/public"),
+	sosyalHandler.PublicRoutes(app.Group("/api/public"),
 		rateLimiter.LimitIP("public", cfg.RateLimit.PublicPerMin, time.Minute,
 			cfg.Social.WebKey, cfg.RateLimit.PublicWebPerMin))
 
@@ -310,9 +310,9 @@ func main() {
 
 	// Kesfet (sosyal) uclari. Limitler yalnizca ilgili uclardadir; yorum
 	// limiti sozlesme geregi 429 yavasla doner.
-	sosyalHandler.Rotalar(api.Group("/social"), handler.SosyalLimitleri{
-		Yayin: rateLimiter.Limit("sosyal-yayin", cfg.RateLimit.SocialPublicationPerHour, time.Hour),
-		Yorum: rateLimiter.LimitWithCode("sosyal-yorum", cfg.RateLimit.SocialCommentPerMin, time.Minute,
+	sosyalHandler.Routes(api.Group("/social"), handler.SocialLimits{
+		Publication: rateLimiter.Limit("sosyal-yayin", cfg.RateLimit.SocialPublicationPerHour, time.Hour),
+		Comment: rateLimiter.LimitWithCode("sosyal-yorum", cfg.RateLimit.SocialCommentPerMin, time.Minute,
 			"yavasla", "Biraz yavasla"),
 		Cover: rateLimiter.Limit("sosyal-cover", cfg.RateLimit.SocialCoverPerHour, time.Hour),
 	})
