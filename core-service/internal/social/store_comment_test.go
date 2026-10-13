@@ -10,39 +10,39 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// testYorumEkle, verilen zamanda bir yorum yazar ve kimligini doner.
-func testYorumEkle(t *testing.T, havuz *pgxpool.Pool, id, yayin, yazar string, zamanMs *int, olusturma time.Time) string {
+// testInsertComment writes a comment at the given time and returns its id.
+func testInsertComment(t *testing.T, pool *pgxpool.Pool, id, pub, author string, timeMs *int, createdAt time.Time) string {
 	t.Helper()
 	if id == "" {
 		id = uuid.NewString()
 	}
-	if _, err := havuz.Exec(context.Background(), `
+	if _, err := pool.Exec(context.Background(), `
 		INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin, zaman_ms, olusturma)
-		VALUES ($1, $2, $3, 'metin', $4, $5)`, id, yayin, yazar, zamanMs, olusturma); err != nil {
+		VALUES ($1, $2, $3, 'metin', $4, $5)`, id, pub, author, timeMs, createdAt); err != nil {
 		t.Fatalf("yorum eklenemedi: %v", err)
 	}
 	return id
 }
 
-// tumYorumSayfalari, yorum listesini limit'lik sayfalarla gezer; her
-// sayfanin imlecini servisin kurdugu gibi (son ogeden) kurar.
-func tumYorumSayfalari(t *testing.T, d *PostgresStore, yayin, izleyici string, limit int) []Comment {
+// allCommentPages walks the comment list in pages of limit; it builds each
+// page's cursor from the last item, as the service does.
+func allCommentPages(t *testing.T, store *PostgresStore, pub, viewer string, limit int) []Comment {
 	t.Helper()
 	var (
-		hepsi []Comment
-		imlec *CommentCursor
+		all    []Comment
+		cursor *CommentCursor
 	)
-	for sayfa := 0; sayfa < 20; sayfa++ {
-		ogeler, err := d.ListComments(context.Background(), yayin, izleyici, imlec, limit)
+	for pageNo := 0; pageNo < 20; pageNo++ {
+		items, err := store.ListComments(context.Background(), pub, viewer, cursor, limit)
 		if err != nil {
-			t.Fatalf("sayfa %d: %v", sayfa, err)
+			t.Fatalf("sayfa %d: %v", pageNo, err)
 		}
-		s := buildCommentPage(ogeler, limit)
-		hepsi = append(hepsi, s.Items...)
+		s := buildCommentPage(items, limit)
+		all = append(all, s.Items...)
 		if s.NextCursor == nil {
-			return hepsi
+			return all
 		}
-		if imlec, err = decodeCommentCursor(*s.NextCursor); err != nil {
+		if cursor, err = decodeCommentCursor(*s.NextCursor); err != nil {
 			t.Fatalf("imlec cozulemedi: %v", err)
 		}
 	}
@@ -50,122 +50,122 @@ func tumYorumSayfalari(t *testing.T, d *PostgresStore, yayin, izleyici string, l
 	return nil
 }
 
-func TestPostgresDepo_YorumSirasiVeSayfalama(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
-	sahip, yazar, izleyici := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	testProfilEkle(t, d, yazar, "yazar")
-	yayin := testYayinEkle(t, havuz, testYayin{SahipID: sahip})
-	baska := testYayinEkle(t, havuz, testYayin{SahipID: sahip})
+func TestPostgresStore_CommentOrderAndPaging(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
+	owner, author, viewer := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	testInsertProfile(t, store, author, "yazar")
+	pub := testInsertPublication(t, pool, testPublication{OwnerID: owner})
+	otherPub := testInsertPublication(t, pool, testPublication{OwnerID: owner})
 	t0 := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
 
-	// Beklenen sira: zamanlilar zaman_ms artan (esitlikte olusturma, id
-	// artan), sonra damgasizlar olusturma azalan (esitlikte id azalan).
-	z100a := testYorumEkle(t, havuz, "00000000-0000-4000-8000-0000000000a1", yayin, yazar, intp(100), t0)
-	z100b := testYorumEkle(t, havuz, "00000000-0000-4000-8000-0000000000a2", yayin, yazar, intp(100), t0)
-	z100c := testYorumEkle(t, havuz, "", yayin, sahip, intp(100), t0.Add(time.Second))
-	z0 := testYorumEkle(t, havuz, "", yayin, yazar, intp(0), t0.Add(5*time.Minute))
-	z900 := testYorumEkle(t, havuz, "", yayin, yazar, intp(900), t0.Add(-time.Minute))
-	yeni := testYorumEkle(t, havuz, "", yayin, yazar, nil, t0.Add(10*time.Minute))
-	ayniB := testYorumEkle(t, havuz, "ffffffff-0000-4000-8000-0000000000b1", yayin, yazar, nil, t0.Add(5*time.Minute))
-	ayniA := testYorumEkle(t, havuz, "00000000-0000-4000-8000-0000000000b1", yayin, sahip, nil, t0.Add(5*time.Minute))
-	eski := testYorumEkle(t, havuz, "", yayin, yazar, nil, t0)
-	// Listeye girmeyenler: silinmis yorum, baska yayinin yorumu.
-	silinen := testYorumEkle(t, havuz, "", yayin, yazar, intp(50), t0)
-	if err := d.DeleteComment(context.Background(), silinen); err != nil {
+	// Expected order: timed ones by time_ms ascending (ties: created, id
+	// ascending), then untimed ones by created descending (ties: id descending).
+	z100a := testInsertComment(t, pool, "00000000-0000-4000-8000-0000000000a1", pub, author, intp(100), t0)
+	z100b := testInsertComment(t, pool, "00000000-0000-4000-8000-0000000000a2", pub, author, intp(100), t0)
+	z100c := testInsertComment(t, pool, "", pub, owner, intp(100), t0.Add(time.Second))
+	z0 := testInsertComment(t, pool, "", pub, author, intp(0), t0.Add(5*time.Minute))
+	z900 := testInsertComment(t, pool, "", pub, author, intp(900), t0.Add(-time.Minute))
+	newest := testInsertComment(t, pool, "", pub, author, nil, t0.Add(10*time.Minute))
+	sameInstantB := testInsertComment(t, pool, "ffffffff-0000-4000-8000-0000000000b1", pub, author, nil, t0.Add(5*time.Minute))
+	sameInstantA := testInsertComment(t, pool, "00000000-0000-4000-8000-0000000000b1", pub, owner, nil, t0.Add(5*time.Minute))
+	oldest := testInsertComment(t, pool, "", pub, author, nil, t0)
+	// Not in the list: a deleted comment, a comment on another publication.
+	softDeleted := testInsertComment(t, pool, "", pub, author, intp(50), t0)
+	if err := store.DeleteComment(context.Background(), softDeleted); err != nil {
 		t.Fatal(err)
 	}
-	testYorumEkle(t, havuz, "", baska, yazar, nil, t0)
+	testInsertComment(t, pool, "", otherPub, author, nil, t0)
 
-	beklenen := []string{z0, z100a, z100b, z100c, z900, yeni, ayniB, ayniA, eski}
+	want := []string{z0, z100a, z100b, z100c, z900, newest, sameInstantB, sameInstantA, oldest}
 	for _, limit := range []int{1, 2, 3, 4, 50} {
-		var idler []string
-		for _, y := range tumYorumSayfalari(t, d, yayin, izleyici, limit) {
-			idler = append(idler, y.ID)
+		var ids []string
+		for _, pub := range allCommentPages(t, store, pub, viewer, limit) {
+			ids = append(ids, pub.ID)
 		}
-		esitSira(t, "yorum sirasi", idler, beklenen)
+		assertOrder(t, "yorum sirasi", ids, want)
 	}
 
-	// silebilirMiyim izleyiciye goredir: yazar kendi yorumunu, sahip hepsini.
-	for izleyiciID, beklenenSilebilir := range map[string]int{izleyici: 0, yazar: 7, sahip: 9} {
+	// canDelete depends on the viewer: the author their own comment, the owner all of them.
+	for viewerID, wantCanDelete := range map[string]int{viewer: 0, author: 7, owner: 9} {
 		n := 0
-		for _, y := range tumYorumSayfalari(t, d, yayin, izleyiciID, 50) {
-			if y.CanDelete {
+		for _, pub := range allCommentPages(t, store, pub, viewerID, 50) {
+			if pub.CanDelete {
 				n++
 			}
 		}
-		if n != beklenenSilebilir {
-			t.Errorf("izleyici %s: silinebilir %d, beklenen %d", izleyiciID, n, beklenenSilebilir)
+		if n != wantCanDelete {
+			t.Errorf("izleyici %s: silinebilir %d, beklenen %d", viewerID, n, wantCanDelete)
 		}
 	}
 
-	// yorumSayisi silinmisi saymaz.
-	k, err := d.GetPublication(context.Background(), yayin, izleyici)
-	if err != nil || k.CommentCount != 9 {
-		t.Fatalf("yorumSayisi = %d, %v; beklenen 9", k.CommentCount, err)
+	// commentCount does not count deleted ones.
+	rec, err := store.GetPublication(context.Background(), pub, viewer)
+	if err != nil || rec.CommentCount != 9 {
+		t.Fatalf("yorumSayisi = %d, %v; beklenen 9", rec.CommentCount, err)
 	}
 }
 
-func TestPostgresDepo_YorumEkleGetirSil(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+func TestPostgresStore_InsertGetDeleteComment(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	sahip, yazar := uuid.NewString(), uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	testProfilEkle(t, d, yazar, "yazar")
-	yayin := testYayinEkle(t, havuz, testYayin{SahipID: sahip})
+	owner, author := uuid.NewString(), uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	testInsertProfile(t, store, author, "yazar")
+	pub := testInsertPublication(t, pool, testPublication{OwnerID: owner})
 
 	id := uuid.NewString()
-	y, err := d.InsertComment(ctx, CommentInsert{ID: id, PublicationID: yayin, AuthorID: yazar, Text: "selam", TimeMs: intp(1200)})
+	ins, err := store.InsertComment(ctx, CommentInsert{ID: id, PublicationID: pub, AuthorID: author, Text: "selam", TimeMs: intp(1200)})
 	if err != nil {
 		t.Fatalf("YorumEkle: %v", err)
 	}
-	if y.ID != id || y.Text != "selam" || *y.TimeMs != 1200 || y.Author.Username != "yazar" ||
-		y.Author.AvatarColor != AvatarColor(yazar) || y.CreatedAt.IsZero() || y.CreatedAt.Location() != time.UTC {
-		t.Fatalf("yorum = %+v", y)
+	if ins.ID != id || ins.Text != "selam" || *ins.TimeMs != 1200 || ins.Author.Username != "yazar" ||
+		ins.Author.AvatarColor != AvatarColor(author) || ins.CreatedAt.IsZero() || ins.CreatedAt.Location() != time.UTC {
+		t.Fatalf("yorum = %+v", ins)
 	}
-	damgasiz, err := d.InsertComment(ctx, CommentInsert{ID: uuid.NewString(), PublicationID: yayin, AuthorID: yazar, Text: "a"})
-	if err != nil || damgasiz.TimeMs != nil {
-		t.Fatalf("damgasiz = %+v, %v", damgasiz, err)
+	untimed, err := store.InsertComment(ctx, CommentInsert{ID: uuid.NewString(), PublicationID: pub, AuthorID: author, Text: "a"})
+	if err != nil || untimed.TimeMs != nil {
+		t.Fatalf("damgasiz = %+v, %v", untimed, err)
 	}
 
-	k, err := d.GetComment(ctx, id)
-	if err != nil || k.PublicationID != yayin || k.AuthorID != yazar || k.PublicationOwnerID != sahip || k.Deleted {
-		t.Fatalf("kayit = %+v, %v", k, err)
+	rec, err := store.GetComment(ctx, id)
+	if err != nil || rec.PublicationID != pub || rec.AuthorID != author || rec.PublicationOwnerID != owner || rec.Deleted {
+		t.Fatalf("kayit = %+v, %v", rec, err)
 	}
-	if err := d.DeleteComment(ctx, id); err != nil {
+	if err := store.DeleteComment(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.DeleteComment(ctx, id); !errors.Is(err, ErrNotFound) {
+	if err := store.DeleteComment(ctx, id); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("tekrar silme: %v", err)
 	}
-	if k, err := d.GetComment(ctx, id); err != nil || !k.Deleted {
-		t.Fatalf("silinmis kayit = %+v, %v", k, err)
+	if rec, err := store.GetComment(ctx, id); err != nil || !rec.Deleted {
+		t.Fatalf("silinmis kayit = %+v, %v", rec, err)
 	}
-	if _, err := d.GetComment(ctx, uuid.NewString()); !errors.Is(err, ErrNotFound) {
+	if _, err := store.GetComment(ctx, uuid.NewString()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("olmayan yorum: %v", err)
 	}
-	if _, err := d.InsertComment(ctx, CommentInsert{ID: uuid.NewString(), PublicationID: yayin, AuthorID: yazar, Text: "x", TimeMs: intp(-1)}); err == nil {
+	if _, err := store.InsertComment(ctx, CommentInsert{ID: uuid.NewString(), PublicationID: pub, AuthorID: author, Text: "x", TimeMs: intp(-1)}); err == nil {
 		t.Fatal("negatif zaman_ms CHECK kisitina takilmali")
 	}
 }
 
-// Profili olmayan (silinmekte olan) yazarin yorumu listeye girmez.
-func TestPostgresDepo_YorumlarProfilsizYazariGizler(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
-	sahip, yazar, profilsiz := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	testProfilEkle(t, d, yazar, "yazar")
-	yayin := testYayinEkle(t, havuz, testYayin{SahipID: sahip})
+// A comment by an author with no profile (being deleted) is not listed.
+func TestPostgresStore_ListCommentsHidesAuthorWithoutProfile(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
+	owner, author, noProfile := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	testInsertProfile(t, store, author, "yazar")
+	pub := testInsertPublication(t, pool, testPublication{OwnerID: owner})
 	t0 := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
-	gorunen := testYorumEkle(t, havuz, "", yayin, yazar, nil, t0)
-	testYorumEkle(t, havuz, "", yayin, profilsiz, nil, t0.Add(time.Minute))
-	testYorumEkle(t, havuz, "", yayin, profilsiz, intp(10), t0)
+	visible := testInsertComment(t, pool, "", pub, author, nil, t0)
+	testInsertComment(t, pool, "", pub, noProfile, nil, t0.Add(time.Minute))
+	testInsertComment(t, pool, "", pub, noProfile, intp(10), t0)
 
-	ogeler := tumYorumSayfalari(t, d, yayin, sahip, 20)
-	if len(ogeler) != 1 || ogeler[0].ID != gorunen {
-		t.Fatalf("yorumlar = %+v, beklenen yalnizca %s", ogeler, gorunen)
+	items := allCommentPages(t, store, pub, owner, 20)
+	if len(items) != 1 || items[0].ID != visible {
+		t.Fatalf("yorumlar = %+v, beklenen yalnizca %s", items, visible)
 	}
 }

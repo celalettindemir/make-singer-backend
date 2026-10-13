@@ -13,382 +13,382 @@ import (
 )
 
 const (
-	yayinX = "9a1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
-	yayinY = "9b1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
+	pubX = "9a1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
+	pubY = "9b1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
 )
 
-func profilliDepo() *sahteDepo {
-	d := yeniSahteDepo()
-	d.profiller[kullaniciA] = &ProfileRecord{UserID: kullaniciA, Username: "ali", DisplayName: "Ali"}
-	return d
+func storeWithProfile() *fakeStore {
+	store := newFakeStore()
+	store.profiles[userA] = &ProfileRecord{UserID: userA, Username: "ali", DisplayName: "Ali"}
+	return store
 }
 
-func sahteYayin(id, sahip, gorunurluk, durum string) *PublicationRecord {
-	k := &PublicationRecord{OwnerID: sahip}
-	k.ID, k.Slug, k.Title = id, "Ab3dEf9h", "Orijinal"
-	k.Owner = ProfileSummary{Username: "sahip"}
-	k.Visibility, k.Status, k.BackingEnabled, k.HasStems = gorunurluk, durum, true, true
-	return k
+func fakePublication(id, owner, visibility, status string) *PublicationRecord {
+	rec := &PublicationRecord{OwnerID: owner}
+	rec.ID, rec.Slug, rec.Title = id, "Ab3dEf9h", "Orijinal"
+	rec.Owner = ProfileSummary{Username: "sahip"}
+	rec.Visibility, rec.Status, rec.BackingEnabled, rec.HasStems = visibility, status, true, true
+	return rec
 }
 
-// yayinIstegiA, kullaniciA'nin kendi dosyalariyla gecerli bir istek.
-func yayinIstegiA() PublicationRequest {
-	ist := gecerliIstek()
-	ist.MasterURL = "https://makeasinger-private.hesap123.r2.cloudflarestorage.com/masters/" + kullaniciA + "/p1/m1.wav?X-Amz-Signature=x"
-	ist.Stems[0].URL = "stems/" + kullaniciA + "/p1/drums.mp3"
-	return ist
+// publicationRequestA is a valid request using userA's own files.
+func publicationRequestA() PublicationRequest {
+	req := validRequest()
+	req.MasterURL = "https://makeasinger-private.hesap123.r2.cloudflarestorage.com/masters/" + userA + "/p1/m1.wav?X-Amz-Signature=x"
+	req.Stems[0].URL = "stems/" + userA + "/p1/drums.mp3"
+	return req
 }
 
-func secenek(opts []asynq.Option, tur asynq.OptionType) any {
-	for _, o := range opts {
-		if o.Type() == tur {
-			return o.Value()
+func optionValue(opts []asynq.Option, optType asynq.OptionType) any {
+	for _, opt := range opts {
+		if opt.Type() == optType {
+			return opt.Value()
 		}
 	}
 	return nil
 }
 
-func TestServis_YayinOlustur_ProfilYok(t *testing.T) {
-	s, q := testServisi(yeniSahteDepo())
-	if _, err := s.CreatePublication(context.Background(), kullaniciA, yayinIstegiA()); !errors.Is(err, ErrNoProfile) {
+func TestService_CreatePublication_NoProfile(t *testing.T) {
+	s, q := newTestService(newFakeStore())
+	if _, err := s.CreatePublication(context.Background(), userA, publicationRequestA()); !errors.Is(err, ErrNoProfile) {
 		t.Fatalf("ErrProfilYok bekleniyordu: %v", err)
 	}
-	if len(q.gorevler) != 0 {
+	if len(q.tasks) != 0 {
 		t.Fatal("profil yokken is kurulmamali")
 	}
 }
 
-func TestServis_YayinOlustur_KaydederVeKuyrugaKoyar(t *testing.T) {
-	d := profilliDepo()
-	s, q := testServisi(d)
-	yanit, err := s.CreatePublication(context.Background(), kullaniciA, yayinIstegiA())
+func TestService_CreatePublication_SavesAndEnqueues(t *testing.T) {
+	store := storeWithProfile()
+	s, q := newTestService(store)
+	resp, err := s.CreatePublication(context.Background(), userA, publicationRequestA())
 	if err != nil {
 		t.Fatalf("YayinOlustur: %v", err)
 	}
-	if yanit.Status != StatusPreparing || !ValidSlug(yanit.Slug) {
-		t.Fatalf("yanit = %+v", yanit)
+	if resp.Status != StatusPreparing || !ValidSlug(resp.Slug) {
+		t.Fatalf("yanit = %+v", resp)
 	}
-	if len(d.eklenen) != 1 {
-		t.Fatalf("tek yayin eklenmeli: %d", len(d.eklenen))
+	if len(store.inserted) != 1 {
+		t.Fatalf("tek yayin eklenmeli: %d", len(store.inserted))
 	}
-	y := d.eklenen[0]
-	if y.ID != yanit.ID || y.Slug != yanit.Slug || y.OwnerID != kullaniciA || !y.BackingEnabled || y.SourcePublicationID != "" {
-		t.Fatalf("yeni yayin = %+v", y)
+	pub := store.inserted[0]
+	if pub.ID != resp.ID || pub.Slug != resp.Slug || pub.OwnerID != userA || !pub.BackingEnabled || pub.SourcePublicationID != "" {
+		t.Fatalf("yeni yayin = %+v", pub)
 	}
-	if y.Preparation.MasterKey != "masters/"+kullaniciA+"/p1/m1.wav" {
-		t.Fatalf("master anahtari = %q", y.Preparation.MasterKey)
+	if pub.Preparation.MasterKey != "masters/"+userA+"/p1/m1.wav" {
+		t.Fatalf("master anahtari = %q", pub.Preparation.MasterKey)
 	}
-	if len(y.Preparation.Stems) != 1 || y.Preparation.Stems[0] != (PreparationStem{ID: "drums", Instrument: "drums", Duration: 184, Key: "stems/" + kullaniciA + "/p1/drums.mp3"}) {
-		t.Fatalf("stemler = %+v", y.Preparation.Stems)
+	if len(pub.Preparation.Stems) != 1 || pub.Preparation.Stems[0] != (PreparationStem{ID: "drums", Instrument: "drums", Duration: 184, Key: "stems/" + userA + "/p1/drums.mp3"}) {
+		t.Fatalf("stemler = %+v", pub.Preparation.Stems)
 	}
-	if len(q.gorevler) != 1 || q.gorevler[0].Type() != TaskTypePrepare {
-		t.Fatalf("hazirla isi kurulmali: %v", q.gorevler)
+	if len(q.tasks) != 1 || q.tasks[0].Type() != TaskTypePrepare {
+		t.Fatalf("hazirla isi kurulmali: %v", q.tasks)
 	}
-	var yuk TaskPayload
-	if err := json.Unmarshal(q.gorevler[0].Payload(), &yuk); err != nil || yuk.PublicationID != yanit.ID {
-		t.Fatalf("yuk = %s", q.gorevler[0].Payload())
+	var payload TaskPayload
+	if err := json.Unmarshal(q.tasks[0].Payload(), &payload); err != nil || payload.PublicationID != resp.ID {
+		t.Fatalf("yuk = %s", q.tasks[0].Payload())
 	}
-	opts := q.secenekler[0]
-	if secenek(opts, asynq.QueueOpt) != QueueSocial || secenek(opts, asynq.MaxRetryOpt) != 3 || secenek(opts, asynq.RetentionOpt) != 24*time.Hour {
+	opts := q.options[0]
+	if optionValue(opts, asynq.QueueOpt) != QueueSocial || optionValue(opts, asynq.MaxRetryOpt) != 3 || optionValue(opts, asynq.RetentionOpt) != 24*time.Hour {
 		t.Fatalf("secenekler = %v", opts)
 	}
 }
 
-func TestServis_YayinOlustur_AdresHatalari(t *testing.T) {
-	durumlar := []struct {
-		ad   string
-		boz  func(*PublicationRequest)
-		hata error
+func TestService_CreatePublication_URLErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*PublicationRequest)
+		wantErr error
 	}{
-		{"yabanci master", func(i *PublicationRequest) { i.MasterURL = "masters/" + kullaniciB + "/p/m.wav" }, ErrOwnership},
-		{"yabanci stem", func(i *PublicationRequest) { i.Stems[0].URL = "stems/" + kullaniciB + "/p/s.mp3" }, ErrOwnership},
+		{"yabanci master", func(i *PublicationRequest) { i.MasterURL = "masters/" + userB + "/p/m.wav" }, ErrOwnership},
+		{"yabanci stem", func(i *PublicationRequest) { i.Stems[0].URL = "stems/" + userB + "/p/s.mp3" }, ErrOwnership},
 		{"bozuk adres", func(i *PublicationRequest) { i.MasterURL = "https://kotu.example.com/masters/x/m.wav" }, ErrValidation},
 		{"ciplak anlamsiz", func(i *PublicationRequest) { i.MasterURL = "merhaba" }, ErrValidation},
-		{"public dosya", func(i *PublicationRequest) { i.MasterURL = "exports/" + kullaniciA + "/e1.mp3" }, ErrValidation},
+		{"public dosya", func(i *PublicationRequest) { i.MasterURL = "exports/" + userA + "/e1.mp3" }, ErrValidation},
 	}
-	for _, dr := range durumlar {
-		d := profilliDepo()
-		s, q := testServisi(d)
-		ist := yayinIstegiA()
-		dr.boz(&ist)
-		if _, err := s.CreatePublication(context.Background(), kullaniciA, ist); !errors.Is(err, dr.hata) {
-			t.Errorf("%s: %v bekleniyordu, gelen %v", dr.ad, dr.hata, err)
+	for _, tc := range cases {
+		store := storeWithProfile()
+		s, q := newTestService(store)
+		req := publicationRequestA()
+		tc.mutate(&req)
+		if _, err := s.CreatePublication(context.Background(), userA, req); !errors.Is(err, tc.wantErr) {
+			t.Errorf("%s: %v bekleniyordu, gelen %v", tc.name, tc.wantErr, err)
 		}
-		if len(d.eklenen) != 0 || len(q.gorevler) != 0 {
-			t.Errorf("%s: hatali istek kaydedilmemeli", dr.ad)
+		if len(store.inserted) != 0 || len(q.tasks) != 0 {
+			t.Errorf("%s: hatali istek kaydedilmemeli", tc.name)
 		}
 	}
 }
 
-func TestServis_YayinOlustur_SlugCakismasiYenidenDenenir(t *testing.T) {
-	d := profilliDepo()
-	d.slugCakismasi = 2
-	s, _ := testServisi(d)
-	if _, err := s.CreatePublication(context.Background(), kullaniciA, yayinIstegiA()); err != nil {
+func TestService_CreatePublication_RetriesOnSlugConflict(t *testing.T) {
+	store := storeWithProfile()
+	store.slugConflicts = 2
+	s, _ := newTestService(store)
+	if _, err := s.CreatePublication(context.Background(), userA, publicationRequestA()); err != nil {
 		t.Fatalf("iki cakismadan sonra basarmali: %v", err)
 	}
-	d = profilliDepo()
-	d.slugCakismasi = 5
-	s, _ = testServisi(d)
-	if _, err := s.CreatePublication(context.Background(), kullaniciA, yayinIstegiA()); err == nil {
+	store = storeWithProfile()
+	store.slugConflicts = 5
+	s, _ = newTestService(store)
+	if _, err := s.CreatePublication(context.Background(), userA, publicationRequestA()); err == nil {
 		t.Fatal("bes cakismada vazgecmeli")
 	}
 }
 
-func TestServis_YayinOlustur_KuyrukHatasindaGeriAlinir(t *testing.T) {
-	d := profilliDepo()
-	s, q := testServisi(d)
-	q.hata = errors.New("redis kapali")
-	if _, err := s.CreatePublication(context.Background(), kullaniciA, yayinIstegiA()); err == nil {
+func TestService_CreatePublication_RollsBackOnQueueError(t *testing.T) {
+	store := storeWithProfile()
+	s, q := newTestService(store)
+	q.err = errors.New("redis kapali")
+	if _, err := s.CreatePublication(context.Background(), userA, publicationRequestA()); err == nil {
 		t.Fatal("kuyruk hatasi donmeli")
 	}
-	if len(d.kaldirilan) != 1 || d.kaldirilan[0] != d.eklenen[0].ID {
-		t.Fatalf("eklenen yayin geri alinmali: %v", d.kaldirilan)
+	if len(store.removed) != 1 || store.removed[0] != store.inserted[0].ID {
+		t.Fatalf("eklenen yayin geri alinmali: %v", store.removed)
 	}
 }
 
-// Istek baglami kuyruk hatasi sirasinda iptal edilse de geri alma yapilir.
-func TestServis_YayinOlustur_IptalEdilenBaglamdaGeriAlinir(t *testing.T) {
-	d := profilliDepo()
-	s, q := testServisi(d)
-	ctx, iptal := context.WithCancel(context.Background())
-	defer iptal()
-	q.once = iptal
-	q.hata = errors.New("redis kapali")
-	if _, err := s.CreatePublication(ctx, kullaniciA, yayinIstegiA()); err == nil {
+// Rollback happens even if the request context is canceled during the queue error.
+func TestService_CreatePublication_RollsBackOnCanceledContext(t *testing.T) {
+	store := storeWithProfile()
+	s, q := newTestService(store)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	q.before = cancel
+	q.err = errors.New("redis kapali")
+	if _, err := s.CreatePublication(ctx, userA, publicationRequestA()); err == nil {
 		t.Fatal("kuyruk hatasi donmeli")
 	}
-	if len(d.kaldirilan) != 1 || d.kaldirilan[0] != d.eklenen[0].ID {
-		t.Fatalf("iptal edilen baglamda da yayin geri alinmali: %v", d.kaldirilan)
+	if len(store.removed) != 1 || store.removed[0] != store.inserted[0].ID {
+		t.Fatalf("iptal edilen baglamda da yayin geri alinmali: %v", store.removed)
 	}
 }
 
-func TestServis_YayinOlustur_Cover(t *testing.T) {
-	coverIstegi := func(kaynak string) PublicationRequest {
-		ist := yayinIstegiA()
-		ist.SourcePublicationID = &kaynak
-		return ist
+func TestService_CreatePublication_Cover(t *testing.T) {
+	coverRequest := func(sourceID string) PublicationRequest {
+		req := publicationRequestA()
+		req.SourcePublicationID = &sourceID
+		return req
 	}
-	durumlar := []struct {
-		ad     string
-		kaynak *PublicationRecord
-		kimlik string
-		hata   error
+	cases := []struct {
+		name     string
+		source   *PublicationRecord
+		sourceID string
+		wantErr  error
 	}{
-		{"yok", nil, yayinX, ErrSourceNotFound},
+		{"yok", nil, pubX, ErrSourceNotFound},
 		{"gecersiz kimlik", nil, "x", ErrSourceNotFound},
-		{"gizli", sahteYayin(yayinX, kullaniciB, VisibilityFollowers, StatusPublished), yayinX, ErrSourceNotFound},
-		{"hazirlaniyor", sahteYayin(yayinX, kullaniciB, VisibilityEveryone, StatusPreparing), yayinX, ErrSourceNotFound},
+		{"gizli", fakePublication(pubX, userB, VisibilityFollowers, StatusPublished), pubX, ErrSourceNotFound},
+		{"hazirlaniyor", fakePublication(pubX, userB, VisibilityEveryone, StatusPreparing), pubX, ErrSourceNotFound},
 		{"cover'in cover'i", func() *PublicationRecord {
-			k := sahteYayin(yayinX, kullaniciB, VisibilityEveryone, StatusPublished)
-			k.SourcePublicationID = yayinY
-			return k
-		}(), yayinX, ErrSourceNotFound},
+			rec := fakePublication(pubX, userB, VisibilityEveryone, StatusPublished)
+			rec.SourcePublicationID = pubY
+			return rec
+		}(), pubX, ErrSourceNotFound},
 		{"altyapi kapali", func() *PublicationRecord {
-			k := sahteYayin(yayinX, kullaniciB, VisibilityEveryone, StatusPublished)
-			k.BackingEnabled = false
-			return k
-		}(), yayinX, ErrBackingDisabled},
+			rec := fakePublication(pubX, userB, VisibilityEveryone, StatusPublished)
+			rec.BackingEnabled = false
+			return rec
+		}(), pubX, ErrBackingDisabled},
 	}
-	for _, dr := range durumlar {
-		d := profilliDepo()
-		if dr.kaynak != nil {
-			d.yayinlar[dr.kaynak.ID] = dr.kaynak
+	for _, tc := range cases {
+		store := storeWithProfile()
+		if tc.source != nil {
+			store.publications[tc.source.ID] = tc.source
 		}
-		s, _ := testServisi(d)
-		if _, err := s.CreatePublication(context.Background(), kullaniciA, coverIstegi(dr.kimlik)); !errors.Is(err, dr.hata) {
-			t.Errorf("%s: %v bekleniyordu, gelen %v", dr.ad, dr.hata, err)
+		s, _ := newTestService(store)
+		if _, err := s.CreatePublication(context.Background(), userA, coverRequest(tc.sourceID)); !errors.Is(err, tc.wantErr) {
+			t.Errorf("%s: %v bekleniyordu, gelen %v", tc.name, tc.wantErr, err)
 		}
 	}
 
-	d := profilliDepo()
-	d.yayinlar[yayinX] = sahteYayin(yayinX, kullaniciB, VisibilityLink, StatusPublished)
-	s, _ := testServisi(d)
-	if _, err := s.CreatePublication(context.Background(), kullaniciA, coverIstegi(yayinX)); err != nil {
+	store := storeWithProfile()
+	store.publications[pubX] = fakePublication(pubX, userB, VisibilityLink, StatusPublished)
+	s, _ := newTestService(store)
+	if _, err := s.CreatePublication(context.Background(), userA, coverRequest(pubX)); err != nil {
 		t.Fatalf("link yayini cover'lanabilir: %v", err)
 	}
-	y := d.eklenen[0]
-	if y.BackingEnabled || len(y.Preparation.Stems) != 0 || y.SourcePublicationID != yayinX || y.SourceTitle != "Orijinal" || y.SourceOwnerUsername != "sahip" {
-		t.Fatalf("cover = %+v", y)
+	pub := store.inserted[0]
+	if pub.BackingEnabled || len(pub.Preparation.Stems) != 0 || pub.SourcePublicationID != pubX || pub.SourceTitle != "Orijinal" || pub.SourceOwnerUsername != "sahip" {
+		t.Fatalf("cover = %+v", pub)
 	}
 }
 
-func TestServis_YayinGosterGorunurluk(t *testing.T) {
-	d := yeniSahteDepo()
-	d.yayinlar[yayinX] = sahteYayin(yayinX, kullaniciA, VisibilityEveryone, StatusFailed)
-	d.yayinlar[yayinY] = sahteYayin(yayinY, kullaniciA, VisibilityLink, StatusPublished)
-	d.yayinlar[yayinY].Slug = "Zz9yYx8w"
-	s, _ := testServisi(d)
+func TestService_PublicationVisibility(t *testing.T) {
+	store := newFakeStore()
+	store.publications[pubX] = fakePublication(pubX, userA, VisibilityEveryone, StatusFailed)
+	store.publications[pubY] = fakePublication(pubY, userA, VisibilityLink, StatusPublished)
+	store.publications[pubY].Slug = "Zz9yYx8w"
+	s, _ := newTestService(store)
 	ctx := context.Background()
 
-	if y, err := s.Publication(ctx, kullaniciA, yayinX); err != nil || !y.IsMine || y.Status != StatusFailed {
-		t.Fatalf("sahip hata yayinini gormeli: %+v, %v", y, err)
+	if pub, err := s.Publication(ctx, userA, pubX); err != nil || !pub.IsMine || pub.Status != StatusFailed {
+		t.Fatalf("sahip hata yayinini gormeli: %+v, %v", pub, err)
 	}
-	if _, err := s.Publication(ctx, kullaniciB, yayinX); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Publication(ctx, userB, pubX); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("yabanci hata yayinini gormemeli: %v", err)
 	}
-	if y, err := s.Publication(ctx, kullaniciB, yayinY); err != nil || y.IsMine {
-		t.Fatalf("link detayda gorunur: %+v, %v", y, err)
+	if pub, err := s.Publication(ctx, userB, pubY); err != nil || pub.IsMine {
+		t.Fatalf("link detayda gorunur: %+v, %v", pub, err)
 	}
-	if _, err := s.Publication(ctx, kullaniciB, "x"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Publication(ctx, userB, "x"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("gecersiz id: %v", err)
 	}
-	if y, err := s.PublicationBySlug(ctx, kullaniciB, "Zz9yYx8w"); err != nil || y.ID != yayinY {
-		t.Fatalf("slug: %+v, %v", y, err)
+	if pub, err := s.PublicationBySlug(ctx, userB, "Zz9yYx8w"); err != nil || pub.ID != pubY {
+		t.Fatalf("slug: %+v, %v", pub, err)
 	}
-	if _, err := s.PublicationBySlug(ctx, kullaniciB, "kisa"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.PublicationBySlug(ctx, userB, "kisa"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("gecersiz slug: %v", err)
 	}
 }
 
-func TestServis_YayinGuncelle(t *testing.T) {
-	d := yeniSahteDepo()
-	kapali := sahteYayin(yayinX, kullaniciA, VisibilityEveryone, StatusPublished)
-	kapali.BackingEnabled = false
-	d.yayinlar[yayinX] = kapali
-	s, _ := testServisi(d)
+func TestService_UpdatePublication(t *testing.T) {
+	store := newFakeStore()
+	disabled := fakePublication(pubX, userA, VisibilityEveryone, StatusPublished)
+	disabled.BackingEnabled = false
+	store.publications[pubX] = disabled
+	s, _ := newTestService(store)
 	ctx := context.Background()
-	ac, link := true, VisibilityLink
+	backingOn, link := true, VisibilityLink
 
-	if _, err := s.UpdatePublication(ctx, kullaniciB, yayinX, PublicationPatch{Visibility: &link}); !errors.Is(err, ErrNotFound) {
+	if _, err := s.UpdatePublication(ctx, userB, pubX, PublicationPatch{Visibility: &link}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("baskasi guncelleyemez: %v", err)
 	}
-	// Stem kopyasi var: altyapi yeniden acilabilir.
-	y, err := s.UpdatePublication(ctx, kullaniciA, yayinX, PublicationPatch{BackingEnabled: &ac, Visibility: &link})
-	if err != nil || !y.BackingEnabled || y.Visibility != VisibilityLink {
-		t.Fatalf("guncelle = %+v, %v", y, err)
+	// A stem copy exists: backing can be re-enabled.
+	patch, err := s.UpdatePublication(ctx, userA, pubX, PublicationPatch{BackingEnabled: &backingOn, Visibility: &link})
+	if err != nil || !patch.BackingEnabled || patch.Visibility != VisibilityLink {
+		t.Fatalf("guncelle = %+v, %v", patch, err)
 	}
 
-	stemsiz := sahteYayin(yayinY, kullaniciA, VisibilityEveryone, StatusPublished)
-	stemsiz.BackingEnabled, stemsiz.HasStems = false, false
-	d.yayinlar[yayinY] = stemsiz
-	if _, err := s.UpdatePublication(ctx, kullaniciA, yayinY, PublicationPatch{BackingEnabled: &ac}); !errors.Is(err, ErrNoStems) {
+	noStems := fakePublication(pubY, userA, VisibilityEveryone, StatusPublished)
+	noStems.BackingEnabled, noStems.HasStems = false, false
+	store.publications[pubY] = noStems
+	if _, err := s.UpdatePublication(ctx, userA, pubY, PublicationPatch{BackingEnabled: &backingOn}); !errors.Is(err, ErrNoStems) {
 		t.Fatalf("stemsiz yayin: %v", err)
 	}
-	stemsiz.HasStems, stemsiz.SourcePublicationID = true, yayinX
-	if _, err := s.UpdatePublication(ctx, kullaniciA, yayinY, PublicationPatch{BackingEnabled: &ac}); !errors.Is(err, ErrNoStems) {
+	noStems.HasStems, noStems.SourcePublicationID = true, pubX
+	if _, err := s.UpdatePublication(ctx, userA, pubY, PublicationPatch{BackingEnabled: &backingOn}); !errors.Is(err, ErrNoStems) {
 		t.Fatalf("cover'in altyapisi acilamaz: %v", err)
 	}
-	kotu := "gizli"
-	if _, err := s.UpdatePublication(ctx, kullaniciA, yayinX, PublicationPatch{Visibility: &kotu}); !errors.Is(err, ErrValidation) {
+	bad := "gizli"
+	if _, err := s.UpdatePublication(ctx, userA, pubX, PublicationPatch{Visibility: &bad}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("gecersiz gorunurluk: %v", err)
 	}
 }
 
-func TestServis_YayinSil(t *testing.T) {
-	d := yeniSahteDepo()
-	d.yayinlar[yayinX] = sahteYayin(yayinX, kullaniciA, VisibilityEveryone, StatusPublished)
-	s, q := testServisi(d)
+func TestService_DeletePublication(t *testing.T) {
+	store := newFakeStore()
+	store.publications[pubX] = fakePublication(pubX, userA, VisibilityEveryone, StatusPublished)
+	s, q := newTestService(store)
 	ctx := context.Background()
-	if err := s.DeletePublication(ctx, kullaniciB, yayinX); !errors.Is(err, ErrNotFound) {
+	if err := s.DeletePublication(ctx, userB, pubX); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("baskasi silemez: %v", err)
 	}
-	if err := s.DeletePublication(ctx, kullaniciA, yayinX); err != nil {
+	if err := s.DeletePublication(ctx, userA, pubX); err != nil {
 		t.Fatalf("sil: %v", err)
 	}
-	if len(q.gorevler) != 1 || q.gorevler[0].Type() != TaskTypeDeleteFiles {
-		t.Fatalf("dosya silme isi kurulmali: %v", q.gorevler)
+	if len(q.tasks) != 1 || q.tasks[0].Type() != TaskTypeDeleteFiles {
+		t.Fatalf("dosya silme isi kurulmali: %v", q.tasks)
 	}
-	opts := q.secenekler[0]
-	if secenek(opts, asynq.QueueOpt) != "bakim" || secenek(opts, asynq.ProcessInOpt) != 24*time.Hour {
+	opts := q.options[0]
+	if optionValue(opts, asynq.QueueOpt) != "bakim" || optionValue(opts, asynq.ProcessInOpt) != 24*time.Hour {
 		t.Fatalf("secenekler = %v", opts)
 	}
-	if err := s.DeletePublication(ctx, kullaniciA, yayinX); !errors.Is(err, ErrNotFound) {
+	if err := s.DeletePublication(ctx, userA, pubX); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("ikinci silme 404: %v", err)
 	}
-	if _, err := s.Publication(ctx, kullaniciA, yayinX); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Publication(ctx, userA, pubX); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("silinen yayin sahibine de gorunmez: %v", err)
 	}
 
-	d.yayinlar[yayinY] = sahteYayin(yayinY, kullaniciA, VisibilityEveryone, StatusPublished)
-	q.hata = errors.New("redis kapali")
-	if err := s.DeletePublication(ctx, kullaniciA, yayinY); err != nil {
+	store.publications[pubY] = fakePublication(pubY, userA, VisibilityEveryone, StatusPublished)
+	q.err = errors.New("redis kapali")
+	if err := s.DeletePublication(ctx, userA, pubY); err != nil {
 		t.Fatalf("kuyruk hatasi silmeyi bozmamali: %v", err)
 	}
 }
 
-func TestServis_TekrarDene(t *testing.T) {
-	d := yeniSahteDepo()
-	d.yayinlar[yayinX] = sahteYayin(yayinX, kullaniciA, VisibilityEveryone, StatusFailed)
-	d.yayinlar[yayinY] = sahteYayin(yayinY, kullaniciA, VisibilityEveryone, StatusPublished)
-	s, q := testServisi(d)
+func TestService_Retry(t *testing.T) {
+	store := newFakeStore()
+	store.publications[pubX] = fakePublication(pubX, userA, VisibilityEveryone, StatusFailed)
+	store.publications[pubY] = fakePublication(pubY, userA, VisibilityEveryone, StatusPublished)
+	s, q := newTestService(store)
 	ctx := context.Background()
-	if _, err := s.Retry(ctx, kullaniciB, yayinX); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Retry(ctx, userB, pubX); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("baskasi: %v", err)
 	}
-	if _, err := s.Retry(ctx, kullaniciA, yayinY); !errors.Is(err, ErrInvalidStatus) {
+	if _, err := s.Retry(ctx, userA, pubY); !errors.Is(err, ErrInvalidStatus) {
 		t.Fatalf("yayindaki yayin: %v", err)
 	}
-	y, err := s.Retry(ctx, kullaniciA, yayinX)
-	if err != nil || y.Status != StatusPreparing || y.ID != yayinX {
-		t.Fatalf("tekrar dene = %+v, %v", y, err)
+	pub, err := s.Retry(ctx, userA, pubX)
+	if err != nil || pub.Status != StatusPreparing || pub.ID != pubX {
+		t.Fatalf("tekrar dene = %+v, %v", pub, err)
 	}
-	if len(q.gorevler) != 1 || q.gorevler[0].Type() != TaskTypePrepare {
-		t.Fatalf("hazirla isi yeniden kurulmali: %v", q.gorevler)
+	if len(q.tasks) != 1 || q.tasks[0].Type() != TaskTypePrepare {
+		t.Fatalf("hazirla isi yeniden kurulmali: %v", q.tasks)
 	}
 
-	d.yayinlar[yayinX].Status = StatusFailed
-	q.hata = errors.New("redis kapali")
-	if _, err := s.Retry(ctx, kullaniciA, yayinX); err == nil {
+	store.publications[pubX].Status = StatusFailed
+	q.err = errors.New("redis kapali")
+	if _, err := s.Retry(ctx, userA, pubX); err == nil {
 		t.Fatal("kuyruk hatasi donmeli")
 	}
-	if d.yayinlar[yayinX].Status != StatusFailed {
-		t.Fatalf("kuyruga girmeyen yayin hataya donmeli: %s", d.yayinlar[yayinX].Status)
+	if store.publications[pubX].Status != StatusFailed {
+		t.Fatalf("kuyruga girmeyen yayin hataya donmeli: %s", store.publications[pubX].Status)
 	}
 }
 
-// Istek baglami kuyruk hatasi sirasinda iptal edilse de yayin hataya doner.
-func TestServis_TekrarDene_IptalEdilenBaglamdaHatayaDoner(t *testing.T) {
-	d := yeniSahteDepo()
-	d.yayinlar[yayinX] = sahteYayin(yayinX, kullaniciA, VisibilityEveryone, StatusFailed)
-	s, q := testServisi(d)
-	ctx, iptal := context.WithCancel(context.Background())
-	defer iptal()
-	q.once = iptal
-	q.hata = errors.New("redis kapali")
-	if _, err := s.Retry(ctx, kullaniciA, yayinX); err == nil {
+// The publication fails even if the request context is canceled during the queue error.
+func TestService_Retry_MarksFailedOnCanceledContext(t *testing.T) {
+	store := newFakeStore()
+	store.publications[pubX] = fakePublication(pubX, userA, VisibilityEveryone, StatusFailed)
+	s, q := newTestService(store)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	q.before = cancel
+	q.err = errors.New("redis kapali")
+	if _, err := s.Retry(ctx, userA, pubX); err == nil {
 		t.Fatal("kuyruk hatasi donmeli")
 	}
-	if d.yayinlar[yayinX].Status != StatusFailed {
-		t.Fatalf("iptal edilen baglamda da yayin hataya donmeli: %s", d.yayinlar[yayinX].Status)
+	if store.publications[pubX].Status != StatusFailed {
+		t.Fatalf("iptal edilen baglamda da yayin hataya donmeli: %s", store.publications[pubX].Status)
 	}
 }
 
-type imzaliDepolama struct{}
+type signingStorage struct{}
 
-func (imzaliDepolama) Upload(context.Context, string, io.Reader, string) (string, time.Time, error) {
+func (signingStorage) Upload(context.Context, string, io.Reader, string) (string, time.Time, error) {
 	return "", time.Time{}, nil
 }
-func (imzaliDepolama) Delete(context.Context, string) error { return nil }
-func (imzaliDepolama) GetSignedURL(context.Context, string, time.Duration) (string, error) {
+func (signingStorage) Delete(context.Context, string) error { return nil }
+func (signingStorage) GetSignedURL(context.Context, string, time.Duration) (string, error) {
 	return "", nil
 }
-func (imzaliDepolama) URLFor(_ context.Context, key string) (string, time.Time, error) {
+func (signingStorage) URLFor(_ context.Context, key string) (string, time.Time, error) {
 	return "https://imzali.example/" + key, time.Date(2026, 10, 12, 13, 0, 0, 0, time.UTC), nil
 }
 
-func TestServis_Dosyalar(t *testing.T) {
-	d := yeniSahteDepo()
-	hazir := sahteYayin(yayinX, kullaniciA, VisibilityEveryone, StatusPublished)
-	hazir.MasterKey = "sosyal/" + yayinX + "/master.wav"
-	d.yayinlar[yayinX] = hazir
-	d.yayinlar[yayinY] = sahteYayin(yayinY, kullaniciA, VisibilityEveryone, StatusPreparing)
+func TestService_Files(t *testing.T) {
+	store := newFakeStore()
+	ready := fakePublication(pubX, userA, VisibilityEveryone, StatusPublished)
+	ready.MasterKey = "sosyal/" + pubX + "/master.wav"
+	store.publications[pubX] = ready
+	store.publications[pubY] = fakePublication(pubY, userA, VisibilityEveryone, StatusPreparing)
 	ctx := context.Background()
 
-	s, _ := testServisi(d)
-	dosya, err := s.Files(ctx, kullaniciB, yayinX)
-	if err != nil || !strings.HasSuffix(dosya.Master.URL, "/sosyal/"+yayinX+"/master.wav") || dosya.Master.ExpiresAt != nil {
-		t.Fatalf("R2'siz adres = %+v, %v", dosya, err)
+	s, _ := newTestService(store)
+	files, err := s.Files(ctx, userB, pubX)
+	if err != nil || !strings.HasSuffix(files.Master.URL, "/sosyal/"+pubX+"/master.wav") || files.Master.ExpiresAt != nil {
+		t.Fatalf("R2'siz adres = %+v, %v", files, err)
 	}
-	imzali := NewService(d, &sahteKuyruk{}, imzaliDepolama{}, testR2())
-	dosya, err = imzali.Files(ctx, kullaniciB, yayinX)
-	if err != nil || dosya.Master.URL != "https://imzali.example/sosyal/"+yayinX+"/master.wav" || dosya.Master.ExpiresAt == nil {
-		t.Fatalf("imzali adres = %+v, %v", dosya, err)
+	signed := NewService(store, &fakeQueue{}, signingStorage{}, testR2())
+	files, err = signed.Files(ctx, userB, pubX)
+	if err != nil || files.Master.URL != "https://imzali.example/sosyal/"+pubX+"/master.wav" || files.Master.ExpiresAt == nil {
+		t.Fatalf("imzali adres = %+v, %v", files, err)
 	}
-	if _, err := s.Files(ctx, kullaniciA, yayinY); !errors.Is(err, ErrInvalidStatus) {
+	if _, err := s.Files(ctx, userA, pubY); !errors.Is(err, ErrInvalidStatus) {
 		t.Fatalf("hazirlanan yayinin dosyasi yok: %v", err)
 	}
-	if _, err := s.Files(ctx, kullaniciB, yayinY); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Files(ctx, userB, pubY); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("yabanci hazirlanan yayini gormez: %v", err)
 	}
 }

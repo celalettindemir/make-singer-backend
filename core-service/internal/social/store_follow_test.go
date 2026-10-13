@@ -10,136 +10,136 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// testBegeniEkle, verilen zamanda bir begeni yazar.
-func testBegeniEkle(t *testing.T, havuz *pgxpool.Pool, kullanici, yayin string, zaman time.Time) {
+// testInsertLikeAt writes a like at the given time.
+func testInsertLikeAt(t *testing.T, pool *pgxpool.Pool, user, pub string, at time.Time) {
 	t.Helper()
-	if _, err := havuz.Exec(context.Background(),
+	if _, err := pool.Exec(context.Background(),
 		`INSERT INTO sosyal.begeni (kullanici_id, yayin_id, olusturma) VALUES ($1, $2, $3)`,
-		kullanici, yayin, zaman); err != nil {
+		user, pub, at); err != nil {
 		t.Fatalf("begeni eklenemedi: %v", err)
 	}
 }
 
-func TestPostgresDepo_TakipTekrariGuvenli(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+func TestPostgresStore_FollowIdempotent(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
 	a, b, c := uuid.NewString(), uuid.NewString(), uuid.NewString()
 
 	for i := 0; i < 2; i++ {
-		if err := d.Follow(ctx, a, b); err != nil {
+		if err := store.Follow(ctx, a, b); err != nil {
 			t.Fatalf("TakipEt %d: %v", i, err)
 		}
 	}
-	if err := d.Follow(ctx, c, b); err != nil {
+	if err := store.Follow(ctx, c, b); err != nil {
 		t.Fatal(err)
 	}
-	durum, err := d.FollowStatus(ctx, a, b)
-	if err != nil || durum.Followers != 2 || !durum.FollowedByMe {
-		t.Fatalf("durum = %+v, %v", durum, err)
+	status, err := store.FollowStatus(ctx, a, b)
+	if err != nil || status.Followers != 2 || !status.FollowedByMe {
+		t.Fatalf("durum = %+v, %v", status, err)
 	}
-	ters, err := d.FollowStatus(ctx, b, a)
-	if err != nil || ters.Followers != 0 || ters.FollowedByMe {
-		t.Fatalf("ters yon = %+v, %v", ters, err)
+	reverse, err := store.FollowStatus(ctx, b, a)
+	if err != nil || reverse.Followers != 0 || reverse.FollowedByMe {
+		t.Fatalf("ters yon = %+v, %v", reverse, err)
 	}
 	for i := 0; i < 2; i++ {
-		if err := d.Unfollow(ctx, a, b); err != nil {
+		if err := store.Unfollow(ctx, a, b); err != nil {
 			t.Fatalf("TakibiBirak %d: %v", i, err)
 		}
 	}
-	durum, err = d.FollowStatus(ctx, a, b)
-	if err != nil || durum.Followers != 1 || durum.FollowedByMe {
-		t.Fatalf("birakmadan sonra = %+v, %v", durum, err)
+	status, err = store.FollowStatus(ctx, a, b)
+	if err != nil || status.Followers != 1 || status.FollowedByMe {
+		t.Fatalf("birakmadan sonra = %+v, %v", status, err)
 	}
-	if err := d.Follow(ctx, a, a); err == nil {
+	if err := store.Follow(ctx, a, a); err == nil {
 		t.Fatal("kendini takip CHECK kisitina takilmali")
 	}
 }
 
-func TestPostgresDepo_Oneriler(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+func TestPostgresStore_Suggestions(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	simdi := time.Now()
-	gun := 24 * time.Hour
+	now := time.Now()
+	day := 24 * time.Hour
 
-	profil := func(ad string) string {
+	profile := func(name string) string {
 		id := uuid.NewString()
-		testProfilEkle(t, d, id, ad)
+		testInsertProfile(t, store, id, name)
 		return id
 	}
-	begen := func(yayin string, n int, zaman time.Time) {
+	addLike := func(pub string, n int, at time.Time) {
 		for i := 0; i < n; i++ {
-			testBegeniEkle(t, havuz, uuid.NewString(), yayin, zaman)
+			testInsertLikeAt(t, pool, uuid.NewString(), pub, at)
 		}
 	}
 
-	ben := profil("ben")
-	takipEdilen := profil("takip_edilen")
-	cok := profil("cok_begenilen")
-	eski := profil("eski_begeniler")
-	sifir := profil("begenisiz")
-	takipcili := profil("takipcili")
-	linkci := profil("yalniz_link")
-	silinmis := profil("silinmis_yayin")
-	hazirlanan := profil("hazirlanan")
-	profil("yayinsiz")
+	me := profile("ben")
+	followee := profile("takip_edilen")
+	mostLiked := profile("cok_begenilen")
+	oldLikes := profile("eski_begeniler")
+	zeroLikes := profile("begenisiz")
+	withFollowers := profile("takipcili")
+	linkOnly := profile("yalniz_link")
+	deletedPub := profile("silinmis_yayin")
+	preparing := profile("hazirlanan")
+	profile("yayinsiz")
 
-	testTakipEkle(t, havuz, ben, takipEdilen)
-	begen(testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen}), 9, simdi)
-	begen(testYayinEkle(t, havuz, testYayin{SahipID: ben}), 9, simdi)
+	testInsertFollow(t, pool, me, followee)
+	addLike(testInsertPublication(t, pool, testPublication{OwnerID: followee}), 9, now)
+	addLike(testInsertPublication(t, pool, testPublication{OwnerID: me}), 9, now)
 
-	y := testYayinEkle(t, havuz, testYayin{SahipID: cok, Olusturma: simdi.Add(-40 * gun)})
-	begen(y, 5, simdi.Add(-29*gun))
-	testBegeniEkle(t, havuz, cok, y, simdi) // kendi begenisi sayilmaz
+	row := testInsertPublication(t, pool, testPublication{OwnerID: mostLiked, CreatedAt: now.Add(-40 * day)})
+	addLike(row, 5, now.Add(-29*day))
+	testInsertLikeAt(t, pool, mostLiked, row, now) // their own like is not counted
 
-	y = testYayinEkle(t, havuz, testYayin{SahipID: eski, Olusturma: simdi.Add(-40 * gun)})
-	begen(y, 10, simdi.Add(-31*gun))
-	begen(y, 1, simdi)
+	row = testInsertPublication(t, pool, testPublication{OwnerID: oldLikes, CreatedAt: now.Add(-40 * day)})
+	addLike(row, 10, now.Add(-31*day))
+	addLike(row, 1, now)
 
-	testYayinEkle(t, havuz, testYayin{SahipID: sifir, Olusturma: simdi.Add(-time.Hour)})
-	begen(testYayinEkle(t, havuz, testYayin{SahipID: takipcili, Gorunurluk: VisibilityFollowers}), 3, simdi)
-	begen(testYayinEkle(t, havuz, testYayin{SahipID: linkci, Gorunurluk: VisibilityLink}), 20, simdi)
-	begen(testYayinEkle(t, havuz, testYayin{SahipID: silinmis, Silindi: true}), 20, simdi)
-	begen(testYayinEkle(t, havuz, testYayin{SahipID: hazirlanan, Durum: StatusPreparing}), 20, simdi)
+	testInsertPublication(t, pool, testPublication{OwnerID: zeroLikes, CreatedAt: now.Add(-time.Hour)})
+	addLike(testInsertPublication(t, pool, testPublication{OwnerID: withFollowers, Visibility: VisibilityFollowers}), 3, now)
+	addLike(testInsertPublication(t, pool, testPublication{OwnerID: linkOnly, Visibility: VisibilityLink}), 20, now)
+	addLike(testInsertPublication(t, pool, testPublication{OwnerID: deletedPub, Deleted: true}), 20, now)
+	addLike(testInsertPublication(t, pool, testPublication{OwnerID: preparing, Status: StatusPreparing}), 20, now)
 
-	oneriler, err := d.Suggestions(ctx, ben, 10)
+	suggestions, err := store.Suggestions(ctx, me, 10)
 	if err != nil {
 		t.Fatalf("Oneriler: %v", err)
 	}
-	var adlar []string
-	for _, o := range oneriler {
-		adlar = append(adlar, o.Username)
+	var names []string
+	for _, out := range suggestions {
+		names = append(names, out.Username)
 	}
-	esitSira(t, "oneriler", adlar, []string{"cok_begenilen", "takipcili", "eski_begeniler", "begenisiz"})
+	assertOrder(t, "oneriler", names, []string{"cok_begenilen", "takipcili", "eski_begeniler", "begenisiz"})
 
-	ilk, err := d.Suggestions(ctx, ben, 2)
-	if err != nil || len(ilk) != 2 || ilk[0].Username != "cok_begenilen" {
-		t.Fatalf("limit 2 = %+v, %v", ilk, err)
+	first, err := store.Suggestions(ctx, me, 2)
+	if err != nil || len(first) != 2 || first[0].Username != "cok_begenilen" {
+		t.Fatalf("limit 2 = %+v, %v", first, err)
 	}
 }
 
-func TestPostgresDepo_OnerilerEsitlikteYeniYayinOnde(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
-	simdi := time.Now()
-	ben := uuid.NewString()
-	var beklenen []string
+func TestPostgresStore_SuggestionsTieBreaksOnNewestPublication(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
+	now := time.Now()
+	me := uuid.NewString()
+	var want []string
 	for i := 0; i < 12; i++ {
-		id, ad := uuid.NewString(), fmt.Sprintf("yayinci_%02d", i)
-		testProfilEkle(t, d, id, ad)
-		testYayinEkle(t, havuz, testYayin{SahipID: id, Olusturma: simdi.Add(-time.Duration(i) * time.Minute)})
+		id, name := uuid.NewString(), fmt.Sprintf("yayinci_%02d", i)
+		testInsertProfile(t, store, id, name)
+		testInsertPublication(t, pool, testPublication{OwnerID: id, CreatedAt: now.Add(-time.Duration(i) * time.Minute)})
 		if i < 10 {
-			beklenen = append(beklenen, ad)
+			want = append(want, name)
 		}
 	}
-	oneriler, err := d.Suggestions(context.Background(), ben, 10)
+	suggestions, err := store.Suggestions(context.Background(), me, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var adlar []string
-	for _, o := range oneriler {
-		adlar = append(adlar, o.Username)
+	var names []string
+	for _, out := range suggestions {
+		names = append(names, out.Username)
 	}
-	esitSira(t, "esitlik", adlar, beklenen)
+	assertOrder(t, "esitlik", names, want)
 }

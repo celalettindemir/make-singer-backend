@@ -2,7 +2,7 @@ package social
 
 import "testing"
 
-func TestHedefAnahtarlari(t *testing.T) {
+func TestDestKeys(t *testing.T) {
 	id := "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
 	if got, err := MasterDestKey(id, "masters/u/p/m1.wav"); err != nil || got != "sosyal/"+id+"/master.wav" {
 		t.Fatalf("master = %q, %v", got, err)

@@ -9,210 +9,210 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// tumSayfalar, bir zaman listesini limit'lik sayfalarla sonuna kadar
-// gezer ve id'leri sirayla doner.
-func tumSayfalar(t *testing.T, cek func(*TimeCursor) ([]PublicationSummary, error), limit int) []string {
+// allTimePages walks a time list to the end in pages of limit and
+// returns the ids in order.
+func allTimePages(t *testing.T, fetch func(*TimeCursor) ([]PublicationSummary, error), limit int) []string {
 	t.Helper()
 	var (
-		idler []string
-		imlec *TimeCursor
+		ids    []string
+		cursor *TimeCursor
 	)
-	for sayfa := 0; sayfa < 20; sayfa++ {
-		ogeler, err := cek(imlec)
+	for pageNo := 0; pageNo < 20; pageNo++ {
+		items, err := fetch(cursor)
 		if err != nil {
-			t.Fatalf("sayfa %d: %v", sayfa, err)
+			t.Fatalf("sayfa %d: %v", pageNo, err)
 		}
-		bitti := len(ogeler) <= limit
-		if !bitti {
-			ogeler = ogeler[:limit]
+		done := len(items) <= limit
+		if !done {
+			items = items[:limit]
 		}
-		for _, o := range ogeler {
-			idler = append(idler, o.ID)
+		for _, out := range items {
+			ids = append(ids, out.ID)
 		}
-		if bitti {
-			return idler
+		if done {
+			return ids
 		}
-		son := ogeler[len(ogeler)-1]
-		imlec = &TimeCursor{T: son.CreatedAt, ID: son.ID}
+		last := items[len(items)-1]
+		cursor = &TimeCursor{T: last.CreatedAt, ID: last.ID}
 	}
 	t.Fatal("sayfalama bitmedi")
 	return nil
 }
 
-func esitSira(t *testing.T, ad string, got, beklenen []string) {
+func assertOrder(t *testing.T, name string, got, want []string) {
 	t.Helper()
-	if len(got) != len(beklenen) {
-		t.Fatalf("%s: %d oge, beklenen %d (%v)", ad, len(got), len(beklenen), got)
+	if len(got) != len(want) {
+		t.Fatalf("%s: %d oge, beklenen %d (%v)", name, len(got), len(want), got)
 	}
 	for i := range got {
-		if got[i] != beklenen[i] {
-			t.Fatalf("%s: sira %d = %s, beklenen %s", ad, i, got[i], beklenen[i])
+		if got[i] != want[i] {
+			t.Fatalf("%s: sira %d = %s, beklenen %s", name, i, got[i], want[i])
 		}
 	}
 }
 
-func akisKurulumu(t *testing.T) (*pgxpool.Pool, *PostgresStore, string, string, string) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
-	ben, takipEdilen, yabanci := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	testProfilEkle(t, d, ben, "ben")
-	testProfilEkle(t, d, takipEdilen, "takip_edilen")
-	testProfilEkle(t, d, yabanci, "yabanci")
-	testTakipEkle(t, havuz, ben, takipEdilen)
-	return havuz, d, ben, takipEdilen, yabanci
+func setupFeed(t *testing.T) (*pgxpool.Pool, *PostgresStore, string, string, string) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
+	me, followee, stranger := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	testInsertProfile(t, store, me, "ben")
+	testInsertProfile(t, store, followee, "takip_edilen")
+	testInsertProfile(t, store, stranger, "yabanci")
+	testInsertFollow(t, pool, me, followee)
+	return pool, store, me, followee, stranger
 }
 
-func TestPostgresDepo_AkisYeniVeSayfalama(t *testing.T) {
-	havuz, d, ben, takipEdilen, yabanci := akisKurulumu(t)
+func TestPostgresStore_FeedNewPaging(t *testing.T) {
+	pool, store, me, followee, stranger := setupFeed(t)
 	ctx := context.Background()
 	t0 := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
-	ayniAn := t0.Add(10 * time.Minute)
-	// Beklenen sira: yeniden eskiye; ayni anda olusanlar id'ye gore azalan.
-	a := testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Olusturma: t0.Add(30 * time.Minute)})
-	b := testYayinEkle(t, havuz, testYayin{SahipID: ben, Olusturma: t0.Add(20 * time.Minute)})
-	c1 := testYayinEkle(t, havuz, testYayin{ID: "ffffffff-0000-4000-8000-000000000001", SahipID: takipEdilen, Olusturma: ayniAn})
-	c2 := testYayinEkle(t, havuz, testYayin{ID: "00000000-0000-4000-8000-000000000001", SahipID: takipEdilen, Olusturma: ayniAn})
-	e := testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Olusturma: t0})
-	// Akisa girmeyenler:
-	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Gorunurluk: VisibilityFollowers})
-	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Gorunurluk: VisibilityLink})
-	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Durum: StatusPreparing})
-	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Silindi: true})
+	sameInstant := t0.Add(10 * time.Minute)
+	// Expected order: newest to oldest; those created at the same instant by id descending.
+	a := testInsertPublication(t, pool, testPublication{OwnerID: stranger, CreatedAt: t0.Add(30 * time.Minute)})
+	b := testInsertPublication(t, pool, testPublication{OwnerID: me, CreatedAt: t0.Add(20 * time.Minute)})
+	c1 := testInsertPublication(t, pool, testPublication{ID: "ffffffff-0000-4000-8000-000000000001", OwnerID: followee, CreatedAt: sameInstant})
+	c2 := testInsertPublication(t, pool, testPublication{ID: "00000000-0000-4000-8000-000000000001", OwnerID: followee, CreatedAt: sameInstant})
+	tied := testInsertPublication(t, pool, testPublication{OwnerID: stranger, CreatedAt: t0})
+	// Not in the feed:
+	testInsertPublication(t, pool, testPublication{OwnerID: stranger, Visibility: VisibilityFollowers})
+	testInsertPublication(t, pool, testPublication{OwnerID: stranger, Visibility: VisibilityLink})
+	testInsertPublication(t, pool, testPublication{OwnerID: stranger, Status: StatusPreparing})
+	testInsertPublication(t, pool, testPublication{OwnerID: stranger, Deleted: true})
 
-	beklenen := []string{a, b, c1, c2, e}
+	want := []string{a, b, c1, c2, tied}
 	for _, limit := range []int{1, 2, 5, 50} {
-		got := tumSayfalar(t, func(im *TimeCursor) ([]PublicationSummary, error) { return d.FeedNew(ctx, ben, im, limit) }, limit)
-		esitSira(t, "yeni", got, beklenen)
+		got := allTimePages(t, func(cur *TimeCursor) ([]PublicationSummary, error) { return store.FeedNew(ctx, me, cur, limit) }, limit)
+		assertOrder(t, "yeni", got, want)
 	}
 }
 
-func TestPostgresDepo_AkisTakip(t *testing.T) {
-	havuz, d, ben, takipEdilen, yabanci := akisKurulumu(t)
+func TestPostgresStore_FeedFollowing(t *testing.T) {
+	pool, store, me, followee, stranger := setupFeed(t)
 	ctx := context.Background()
 	t0 := time.Now().Add(-time.Hour)
-	herkes := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Olusturma: t0.Add(2 * time.Minute)})
-	takipcilere := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Gorunurluk: VisibilityFollowers, Olusturma: t0.Add(time.Minute)})
-	testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Gorunurluk: VisibilityLink})
-	testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Durum: StatusFailed})
-	testYayinEkle(t, havuz, testYayin{SahipID: yabanci})
-	testYayinEkle(t, havuz, testYayin{SahipID: ben})
+	everyone := testInsertPublication(t, pool, testPublication{OwnerID: followee, CreatedAt: t0.Add(2 * time.Minute)})
+	followersOnly := testInsertPublication(t, pool, testPublication{OwnerID: followee, Visibility: VisibilityFollowers, CreatedAt: t0.Add(time.Minute)})
+	testInsertPublication(t, pool, testPublication{OwnerID: followee, Visibility: VisibilityLink})
+	testInsertPublication(t, pool, testPublication{OwnerID: followee, Status: StatusFailed})
+	testInsertPublication(t, pool, testPublication{OwnerID: stranger})
+	testInsertPublication(t, pool, testPublication{OwnerID: me})
 
-	got := tumSayfalar(t, func(im *TimeCursor) ([]PublicationSummary, error) { return d.FeedFollowing(ctx, ben, im, 20) }, 20)
-	esitSira(t, "takip", got, []string{herkes, takipcilere})
+	got := allTimePages(t, func(cur *TimeCursor) ([]PublicationSummary, error) { return store.FeedFollowing(ctx, me, cur, 20) }, 20)
+	assertOrder(t, "takip", got, []string{everyone, followersOnly})
 }
 
-func TestPostgresDepo_ProfilYayinlari(t *testing.T) {
-	havuz, d, ben, takipEdilen, yabanci := akisKurulumu(t)
+func TestPostgresStore_ListProfilePublications(t *testing.T) {
+	pool, store, me, followee, stranger := setupFeed(t)
 	ctx := context.Background()
 	t0 := time.Now().Add(-time.Hour)
-	herkes := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Olusturma: t0.Add(5 * time.Minute)})
-	takipcilere := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Gorunurluk: VisibilityFollowers, Olusturma: t0.Add(4 * time.Minute)})
-	link := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Gorunurluk: VisibilityLink, Olusturma: t0.Add(3 * time.Minute)})
-	hazirlanan := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Durum: StatusPreparing, Olusturma: t0.Add(2 * time.Minute)})
-	testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Silindi: true})
-	cover := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, KaynakID: herkes, Olusturma: t0.Add(time.Minute)})
+	everyone := testInsertPublication(t, pool, testPublication{OwnerID: followee, CreatedAt: t0.Add(5 * time.Minute)})
+	followersOnly := testInsertPublication(t, pool, testPublication{OwnerID: followee, Visibility: VisibilityFollowers, CreatedAt: t0.Add(4 * time.Minute)})
+	link := testInsertPublication(t, pool, testPublication{OwnerID: followee, Visibility: VisibilityLink, CreatedAt: t0.Add(3 * time.Minute)})
+	preparing := testInsertPublication(t, pool, testPublication{OwnerID: followee, Status: StatusPreparing, CreatedAt: t0.Add(2 * time.Minute)})
+	testInsertPublication(t, pool, testPublication{OwnerID: followee, Deleted: true})
+	cover := testInsertPublication(t, pool, testPublication{OwnerID: followee, SourceID: everyone, CreatedAt: t0.Add(time.Minute)})
 
-	liste := func(izleyici string, coverlar bool) []string {
-		return tumSayfalar(t, func(im *TimeCursor) ([]PublicationSummary, error) {
-			return d.ListProfilePublications(ctx, takipEdilen, izleyici, coverlar, im, 2)
+	listFor := func(viewer string, coversOnly bool) []string {
+		return allTimePages(t, func(cur *TimeCursor) ([]PublicationSummary, error) {
+			return store.ListProfilePublications(ctx, followee, viewer, coversOnly, cur, 2)
 		}, 2)
 	}
-	esitSira(t, "sahip", liste(takipEdilen, false), []string{herkes, takipcilere, link, hazirlanan})
-	esitSira(t, "takipci", liste(ben, false), []string{herkes, takipcilere})
-	esitSira(t, "yabanci", liste(yabanci, false), []string{herkes})
-	esitSira(t, "coverlar", liste(yabanci, true), []string{cover})
+	assertOrder(t, "sahip", listFor(followee, false), []string{everyone, followersOnly, link, preparing})
+	assertOrder(t, "takipci", listFor(me, false), []string{everyone, followersOnly})
+	assertOrder(t, "yabanci", listFor(stranger, false), []string{everyone})
+	assertOrder(t, "coverlar", listFor(stranger, true), []string{cover})
 
-	ogeler, _ := d.ListProfilePublications(ctx, takipEdilen, yabanci, true, nil, 20)
-	if ogeler[0].Source == nil || ogeler[0].Source.PublicationID != herkes || ogeler[0].Owner.Username != "takip_edilen" {
-		t.Fatalf("cover ozeti = %+v", ogeler[0])
+	items, _ := store.ListProfilePublications(ctx, followee, stranger, true, nil, 20)
+	if items[0].Source == nil || items[0].Source.PublicationID != everyone || items[0].Owner.Username != "takip_edilen" {
+		t.Fatalf("cover ozeti = %+v", items[0])
 	}
 }
 
-func begeniEkle(t *testing.T, havuz *pgxpool.Pool, yayinID string, adet int, zaman time.Time) {
+func insertLikes(t *testing.T, pool *pgxpool.Pool, pubID string, count int, at time.Time) {
 	t.Helper()
-	for i := 0; i < adet; i++ {
-		if _, err := havuz.Exec(context.Background(),
+	for i := 0; i < count; i++ {
+		if _, err := pool.Exec(context.Background(),
 			`INSERT INTO sosyal.begeni (kullanici_id, yayin_id, olusturma) VALUES ($1, $2, $3)`,
-			uuid.NewString(), yayinID, zaman); err != nil {
+			uuid.NewString(), pubID, at); err != nil {
 			t.Fatalf("begeni: %v", err)
 		}
 	}
 }
 
-func TestPostgresDepo_AkisSeninIcinPuanVeSayfalama(t *testing.T) {
-	havuz, d, ben, takipEdilen, yabanci := akisKurulumu(t)
+func TestPostgresStore_FeedForYouScoreAndPaging(t *testing.T) {
+	pool, store, me, followee, stranger := setupFeed(t)
 	ctx := context.Background()
-	referans := time.Now().Truncate(time.Millisecond)
+	refTime := time.Now().Truncate(time.Millisecond)
 
-	// Ayni yasta: daha cok begeni yukarida. Eski yayin asagida.
-	populer := testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Olusturma: referans.Add(-2 * time.Hour)})
-	begeniEkle(t, havuz, populer, 5, referans.Add(-time.Hour))
-	sakin := testYayinEkle(t, havuz, testYayin{SahipID: takipEdilen, Olusturma: referans.Add(-2 * time.Hour)})
-	eski := testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Olusturma: referans.Add(-72 * time.Hour)})
-	// 7 gunden eski begeniler ve referanstan sonraki begeniler sayilmaz.
-	begeniEkle(t, havuz, eski, 50, referans.Add(-8*24*time.Hour))
-	begeniEkle(t, havuz, sakin, 50, referans.Add(time.Hour))
-	// Akisa girmeyenler: kendi yayinim, referanstan sonra olusan, herkes olmayan.
-	testYayinEkle(t, havuz, testYayin{SahipID: ben, Olusturma: referans.Add(-time.Hour)})
-	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Olusturma: referans.Add(time.Minute)})
-	testYayinEkle(t, havuz, testYayin{SahipID: yabanci, Gorunurluk: VisibilityLink, Olusturma: referans.Add(-time.Hour)})
+	// Same age: more likes ranks higher. The old publication ranks lower.
+	popular := testInsertPublication(t, pool, testPublication{OwnerID: stranger, CreatedAt: refTime.Add(-2 * time.Hour)})
+	insertLikes(t, pool, popular, 5, refTime.Add(-time.Hour))
+	quiet := testInsertPublication(t, pool, testPublication{OwnerID: followee, CreatedAt: refTime.Add(-2 * time.Hour)})
+	oldPub := testInsertPublication(t, pool, testPublication{OwnerID: stranger, CreatedAt: refTime.Add(-72 * time.Hour)})
+	// Likes older than 7 days and likes after the reference are not counted.
+	insertLikes(t, pool, oldPub, 50, refTime.Add(-8*24*time.Hour))
+	insertLikes(t, pool, quiet, 50, refTime.Add(time.Hour))
+	// Not in the feed: my own publication, one created after the reference, a non-everyone one.
+	testInsertPublication(t, pool, testPublication{OwnerID: me, CreatedAt: refTime.Add(-time.Hour)})
+	testInsertPublication(t, pool, testPublication{OwnerID: stranger, CreatedAt: refTime.Add(time.Minute)})
+	testInsertPublication(t, pool, testPublication{OwnerID: stranger, Visibility: VisibilityLink, CreatedAt: refTime.Add(-time.Hour)})
 
-	hepsi, err := d.FeedForYou(ctx, ben, referans, nil, 50)
+	all, err := store.FeedForYou(ctx, me, refTime, nil, 50)
 	if err != nil {
 		t.Fatalf("AkisSeninIcin: %v", err)
 	}
-	var idler []string
-	for _, o := range hepsi {
-		idler = append(idler, o.ID)
+	var ids []string
+	for _, out := range all {
+		ids = append(ids, out.ID)
 	}
-	esitSira(t, "senin icin", idler, []string{populer, sakin, eski})
+	assertOrder(t, "senin icin", ids, []string{popular, quiet, oldPub})
 	// (1+5)/(2+2)^1.5 = 0.75
-	if p := hepsi[0].Score; p < 0.7499 || p > 0.7501 {
+	if p := all[0].Score; p < 0.7499 || p > 0.7501 {
 		t.Fatalf("populer puani = %v, beklenen 0.75", p)
 	}
 
-	// Tek ogelik sayfalarla ayni sira, tekrar yok.
+	// Same order with single-item pages, no repeats.
 	var (
-		gezilen []string
-		imlec   *ScoreCursor
+		visited []string
+		cursor  *ScoreCursor
 	)
 	for i := 0; i < 5; i++ {
-		ogeler, err := d.FeedForYou(ctx, ben, referans, imlec, 1)
+		items, err := store.FeedForYou(ctx, me, refTime, cursor, 1)
 		if err != nil {
 			t.Fatalf("sayfa: %v", err)
 		}
-		gezilen = append(gezilen, ogeler[0].ID)
-		if len(ogeler) == 1 {
+		visited = append(visited, items[0].ID)
+		if len(items) == 1 {
 			break
 		}
-		imlec = &ScoreCursor{Score: ogeler[0].Score, ID: ogeler[0].ID, RefMs: referans.UnixMilli()}
+		cursor = &ScoreCursor{Score: items[0].Score, ID: items[0].ID, RefMs: refTime.UnixMilli()}
 	}
-	esitSira(t, "senin icin sayfalari", gezilen, []string{populer, sakin, eski})
+	assertOrder(t, "senin icin sayfalari", visited, []string{popular, quiet, oldPub})
 }
 
-func TestPostgresDepo_Begeni(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+func TestPostgresStore_Like(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	sahip, ben := uuid.NewString(), uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	id := testYayinEkle(t, havuz, testYayin{SahipID: sahip})
+	owner, me := uuid.NewString(), uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	id := testInsertPublication(t, pool, testPublication{OwnerID: owner})
 	for i := 0; i < 2; i++ {
-		if err := d.Like(ctx, ben, id); err != nil {
+		if err := store.Like(ctx, me, id); err != nil {
 			t.Fatalf("Begen %d: %v", i, err)
 		}
 	}
-	k, _ := d.GetPublication(ctx, id, ben)
-	if k.LikeCount != 1 || !k.LikedByMe {
-		t.Fatalf("begeni tekrari guvenli olmali: %d %v", k.LikeCount, k.LikedByMe)
+	rec, _ := store.GetPublication(ctx, id, me)
+	if rec.LikeCount != 1 || !rec.LikedByMe {
+		t.Fatalf("begeni tekrari guvenli olmali: %d %v", rec.LikeCount, rec.LikedByMe)
 	}
 	for i := 0; i < 2; i++ {
-		if err := d.Unlike(ctx, ben, id); err != nil {
+		if err := store.Unlike(ctx, me, id); err != nil {
 			t.Fatalf("Kaldir %d: %v", i, err)
 		}
 	}
-	k, _ = d.GetPublication(ctx, id, ben)
-	if k.LikeCount != 0 || k.LikedByMe {
-		t.Fatalf("begeni kaldirilmali: %d %v", k.LikeCount, k.LikedByMe)
+	rec, _ = store.GetPublication(ctx, id, me)
+	if rec.LikeCount != 0 || rec.LikedByMe {
+		t.Fatalf("begeni kaldirilmali: %d %v", rec.LikeCount, rec.LikedByMe)
 	}
 }

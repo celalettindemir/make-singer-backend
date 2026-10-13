@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func gecerliIstek() PublicationRequest {
+func validRequest() PublicationRequest {
 	return PublicationRequest{
 		Title: "Gece", Description: "", Visibility: VisibilityEveryone, BackingEnabled: true, CommentsEnabled: true,
 		MasterURL: "masters/u/p/m.wav",
@@ -15,19 +15,19 @@ func gecerliIstek() PublicationRequest {
 	}
 }
 
-func TestYayinIsteginiDuzenle_Gecerli(t *testing.T) {
-	ist := gecerliIstek()
-	ist.Title = "  Gece  "
-	if err := normalizePublicationRequest(&ist); err != nil {
+func TestNormalizePublicationRequest_Valid(t *testing.T) {
+	req := validRequest()
+	req.Title = "  Gece  "
+	if err := normalizePublicationRequest(&req); err != nil {
 		t.Fatalf("gecerli istek reddedildi: %v", err)
 	}
-	if ist.Title != "Gece" || ist.Structure == nil || ist.Lyrics.Sections == nil {
-		t.Fatalf("duzenleme = %+v", ist)
+	if req.Title != "Gece" || req.Structure == nil || req.Lyrics.Sections == nil {
+		t.Fatalf("duzenleme = %+v", req)
 	}
 }
 
-func TestYayinIsteginiDuzenle_Hatalar(t *testing.T) {
-	durumlar := map[string]func(*PublicationRequest){
+func TestNormalizePublicationRequest_Errors(t *testing.T) {
+	cases := map[string]func(*PublicationRequest){
 		"bos baslik":       func(i *PublicationRequest) { i.Title = "  " },
 		"uzun baslik":      func(i *PublicationRequest) { i.Title = strings.Repeat("ş", 81) },
 		"uzun aciklama":    func(i *PublicationRequest) { i.Description = strings.Repeat("a", 301) },
@@ -52,116 +52,116 @@ func TestYayinIsteginiDuzenle_Hatalar(t *testing.T) {
 			i.Lyrics.Sections = []LyricsSection{{SectionID: "b", Lines: make([]string, 201)}}
 		},
 	}
-	for ad, boz := range durumlar {
-		ist := gecerliIstek()
-		boz(&ist)
-		if err := normalizePublicationRequest(&ist); !errors.Is(err, ErrValidation) {
-			t.Errorf("%s: ErrDogrulama bekleniyordu, gelen %v", ad, err)
+	for name, mutate := range cases {
+		req := validRequest()
+		mutate(&req)
+		if err := normalizePublicationRequest(&req); !errors.Is(err, ErrValidation) {
+			t.Errorf("%s: ErrDogrulama bekleniyordu, gelen %v", name, err)
 		}
 	}
 }
 
-func TestYayinIsteginiDuzenle_SinirDegerler(t *testing.T) {
-	ist := gecerliIstek()
-	ist.Title, ist.Description, ist.BPM = strings.Repeat("ş", 80), strings.Repeat("ğ", 300), 300
-	if err := normalizePublicationRequest(&ist); err != nil {
+func TestNormalizePublicationRequest_BoundaryValues(t *testing.T) {
+	req := validRequest()
+	req.Title, req.Description, req.BPM = strings.Repeat("ş", 80), strings.Repeat("ğ", 300), 300
+	if err := normalizePublicationRequest(&req); err != nil {
 		t.Fatalf("sinir degerler kabul edilmeli: %v", err)
 	}
-	ist = gecerliIstek()
-	ist.BPM = 20
-	if err := normalizePublicationRequest(&ist); err != nil {
+	req = validRequest()
+	req.BPM = 20
+	if err := normalizePublicationRequest(&req); err != nil {
 		t.Fatalf("bpm 20 kabul edilmeli: %v", err)
 	}
 }
 
-func TestYayinIsteginiDuzenle_CoverAltyapiKapanirStemlerAtilir(t *testing.T) {
-	ist := gecerliIstek()
-	kaynak := "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
-	ist.SourcePublicationID = &kaynak
-	ist.Stems[0].ID = "gecersiz.id" // yok sayilir, dogrulanmaz
-	if err := normalizePublicationRequest(&ist); err != nil {
+func TestNormalizePublicationRequest_CoverDisablesBackingDropsStems(t *testing.T) {
+	req := validRequest()
+	sourceID := "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
+	req.SourcePublicationID = &sourceID
+	req.Stems[0].ID = "gecersiz.id" // ignored, not validated
+	if err := normalizePublicationRequest(&req); err != nil {
 		t.Fatalf("cover: %v", err)
 	}
-	if ist.BackingEnabled || ist.Stems != nil {
-		t.Fatalf("cover altyapisi kapali ve stemsiz olmali: %+v", ist)
+	if req.BackingEnabled || req.Stems != nil {
+		t.Fatalf("cover altyapisi kapali ve stemsiz olmali: %+v", req)
 	}
 }
 
-func TestYayinIsteginiDuzenle_BosKaynakOrijinaldir(t *testing.T) {
-	ist := gecerliIstek()
-	bos := ""
-	ist.SourcePublicationID = &bos
-	if err := normalizePublicationRequest(&ist); err != nil || ist.SourcePublicationID != nil || !ist.BackingEnabled {
-		t.Fatalf("bos kaynak orijinal sayilmali: %v %+v", err, ist)
+func TestNormalizePublicationRequest_EmptySourceIsOriginal(t *testing.T) {
+	req := validRequest()
+	empty := ""
+	req.SourcePublicationID = &empty
+	if err := normalizePublicationRequest(&req); err != nil || req.SourcePublicationID != nil || !req.BackingEnabled {
+		t.Fatalf("bos kaynak orijinal sayilmali: %v %+v", err, req)
 	}
 }
 
-func TestYayinIsteginiDuzenle_KapaliAltyapiStemleriYokSayar(t *testing.T) {
-	ist := gecerliIstek()
-	ist.BackingEnabled = false
-	ist.Stems = []StemInput{{ID: "x.y"}}
-	if err := normalizePublicationRequest(&ist); err != nil || ist.Stems != nil {
-		t.Fatalf("kapali altyapi: %v %+v", err, ist.Stems)
+func TestNormalizePublicationRequest_DisabledBackingIgnoresStems(t *testing.T) {
+	req := validRequest()
+	req.BackingEnabled = false
+	req.Stems = []StemInput{{ID: "x.y"}}
+	if err := normalizePublicationRequest(&req); err != nil || req.Stems != nil {
+		t.Fatalf("kapali altyapi: %v %+v", err, req.Stems)
 	}
 }
 
-func TestYamayiDuzenle(t *testing.T) {
-	a, g := "  merhaba ", "link"
-	y := PublicationPatch{Description: &a, Visibility: &g}
-	if err := normalizePatch(&y); err != nil || *y.Description != "merhaba" {
-		t.Fatalf("yama = %v %v", err, *y.Description)
+func TestNormalizePatch(t *testing.T) {
+	description, vis := "  merhaba ", "link"
+	patch := PublicationPatch{Description: &description, Visibility: &vis}
+	if err := normalizePatch(&patch); err != nil || *patch.Description != "merhaba" {
+		t.Fatalf("yama = %v %v", err, *patch.Description)
 	}
-	kotu := "gizli"
-	if err := normalizePatch(&PublicationPatch{Visibility: &kotu}); !errors.Is(err, ErrValidation) {
+	bad := "gizli"
+	if err := normalizePatch(&PublicationPatch{Visibility: &bad}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("gecersiz gorunurluk: %v", err)
 	}
-	uzun := strings.Repeat("a", 301)
-	if err := normalizePatch(&PublicationPatch{Description: &uzun}); !errors.Is(err, ErrValidation) {
+	long := strings.Repeat("a", 301)
+	if err := normalizePatch(&PublicationPatch{Description: &long}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("uzun aciklama: %v", err)
 	}
 }
 
-func TestYayinIsteginiDuzenle_IcIceAlanSinirlari(t *testing.T) {
-	bolum := func(b LyricsSection) func(*PublicationRequest) {
+func TestNormalizePublicationRequest_NestedFieldLimits(t *testing.T) {
+	section := func(b LyricsSection) func(*PublicationRequest) {
 		return func(i *PublicationRequest) { i.Lyrics.Sections = []LyricsSection{b} }
 	}
-	durumlar := map[string]func(*PublicationRequest){
-		"uzun satir":     bolum(LyricsSection{SectionID: "b", Type: "verse", Lines: []string{strings.Repeat("ş", 201)}}),
-		"uzun bolum id":  bolum(LyricsSection{SectionID: strings.Repeat("b", 65), Type: "verse"}),
-		"uzun bolum tur": bolum(LyricsSection{SectionID: "b", Type: strings.Repeat("v", 65)}),
+	cases := map[string]func(*PublicationRequest){
+		"uzun satir":     section(LyricsSection{SectionID: "b", Type: "verse", Lines: []string{strings.Repeat("ş", 201)}}),
+		"uzun bolum id":  section(LyricsSection{SectionID: strings.Repeat("b", 65), Type: "verse"}),
+		"uzun bolum tur": section(LyricsSection{SectionID: "b", Type: strings.Repeat("v", 65)}),
 		"uzun yapi id": func(i *PublicationRequest) {
 			i.Structure = []StructureItem{{ID: strings.Repeat("s", 65), Type: "verse"}}
 		},
 		"uzun yapi tur": func(i *PublicationRequest) { i.Structure = []StructureItem{{ID: "s", Type: strings.Repeat("v", 65)}} },
 		"toplam satir": func(i *PublicationRequest) {
 			i.Lyrics.Sections = make([]LyricsSection, 6)
-			for k := range i.Lyrics.Sections {
-				i.Lyrics.Sections[k] = LyricsSection{SectionID: "b", Lines: make([]string, 167)} // 1002 satir
+			for idx := range i.Lyrics.Sections {
+				i.Lyrics.Sections[idx] = LyricsSection{SectionID: "b", Lines: make([]string, 167)} // 1002 lines
 			}
 		},
 	}
-	for ad, boz := range durumlar {
-		ist := gecerliIstek()
-		boz(&ist)
-		if err := normalizePublicationRequest(&ist); !errors.Is(err, ErrValidation) {
-			t.Errorf("%s: ErrDogrulama bekleniyordu, gelen %v", ad, err)
+	for name, mutate := range cases {
+		req := validRequest()
+		mutate(&req)
+		if err := normalizePublicationRequest(&req); !errors.Is(err, ErrValidation) {
+			t.Errorf("%s: ErrDogrulama bekleniyordu, gelen %v", name, err)
 		}
 	}
 
-	ist := gecerliIstek()
-	ist.Structure = []StructureItem{{ID: strings.Repeat("ş", 64), Type: strings.Repeat("ğ", 64)}}
-	ist.Lyrics.Sections = make([]LyricsSection, 5)
-	for k := range ist.Lyrics.Sections {
-		ist.Lyrics.Sections[k] = LyricsSection{SectionID: strings.Repeat("ş", 64), Type: strings.Repeat("ğ", 64), Lines: make([]string, 200)}
+	req := validRequest()
+	req.Structure = []StructureItem{{ID: strings.Repeat("ş", 64), Type: strings.Repeat("ğ", 64)}}
+	req.Lyrics.Sections = make([]LyricsSection, 5)
+	for idx := range req.Lyrics.Sections {
+		req.Lyrics.Sections[idx] = LyricsSection{SectionID: strings.Repeat("ş", 64), Type: strings.Repeat("ğ", 64), Lines: make([]string, 200)}
 	}
-	ist.Lyrics.Sections[0].Lines[0] = strings.Repeat("ş", 200)
-	if err := normalizePublicationRequest(&ist); err != nil {
+	req.Lyrics.Sections[0].Lines[0] = strings.Repeat("ş", 200)
+	if err := normalizePublicationRequest(&req); err != nil {
 		t.Fatalf("sinir degerler (1000 satir, 200/64 karakter) kabul edilmeli: %v", err)
 	}
 }
 
-func TestYayinIsteginiDuzenle_NULKarakteriReddedilir(t *testing.T) {
-	durumlar := map[string]func(*PublicationRequest){
+func TestNormalizePublicationRequest_RejectsNUL(t *testing.T) {
+	cases := map[string]func(*PublicationRequest){
 		"baslik":         func(i *PublicationRequest) { i.Title = "Ge\x00ce" },
 		"aciklama":       func(i *PublicationRequest) { i.Description = "a\x00" },
 		"tur":            func(i *PublicationRequest) { i.Genre = "p\x00p" },
@@ -177,16 +177,16 @@ func TestYayinIsteginiDuzenle_NULKarakteriReddedilir(t *testing.T) {
 		"yapi id":   func(i *PublicationRequest) { i.Structure = []StructureItem{{ID: "s\x00", Type: "verse"}} },
 		"yapi tur":  func(i *PublicationRequest) { i.Structure = []StructureItem{{ID: "s", Type: "v\x00"}} },
 	}
-	for ad, boz := range durumlar {
-		ist := gecerliIstek()
-		boz(&ist)
-		if err := normalizePublicationRequest(&ist); !errors.Is(err, ErrValidation) {
-			t.Errorf("%s: ErrDogrulama bekleniyordu, gelen %v", ad, err)
+	for name, mutate := range cases {
+		req := validRequest()
+		mutate(&req)
+		if err := normalizePublicationRequest(&req); !errors.Is(err, ErrValidation) {
+			t.Errorf("%s: ErrDogrulama bekleniyordu, gelen %v", name, err)
 		}
 	}
 }
 
-func TestYamayiDuzenle_NULKarakteriReddedilir(t *testing.T) {
+func TestNormalizePatch_RejectsNUL(t *testing.T) {
 	a := "mer\x00haba"
 	if err := normalizePatch(&PublicationPatch{Description: &a}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("NUL iceren aciklama: %v", err)

@@ -8,66 +8,66 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestPostgresDepo_OnizlemeYalnizcaHerkesVeLink(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+func TestPostgresStore_GetPreviewOnlyEveryoneAndLink(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	sahip := uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
+	owner := uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
 
-	durumlar := []struct {
-		y        testYayin
-		gorunur  bool
-		onizleme bool
+	cases := []struct {
+		row     testPublication
+		visible bool
+		preview bool
 	}{
-		{testYayin{Slug: "Herkes01", Gorunurluk: VisibilityEveryone}, true, true},
-		{testYayin{Slug: "Linkli01", Gorunurluk: VisibilityLink}, true, false},
-		{testYayin{Slug: "Takipci1", Gorunurluk: VisibilityFollowers}, false, false},
-		{testYayin{Slug: "Hazirla1", Durum: StatusPreparing}, false, false},
-		{testYayin{Slug: "Hatali01", Durum: StatusFailed}, false, false},
-		{testYayin{Slug: "Silinmis", Silindi: true}, false, false},
+		{testPublication{Slug: "Herkes01", Visibility: VisibilityEveryone}, true, true},
+		{testPublication{Slug: "Linkli01", Visibility: VisibilityLink}, true, false},
+		{testPublication{Slug: "Takipci1", Visibility: VisibilityFollowers}, false, false},
+		{testPublication{Slug: "Hazirla1", Status: StatusPreparing}, false, false},
+		{testPublication{Slug: "Hatali01", Status: StatusFailed}, false, false},
+		{testPublication{Slug: "Silinmis", Deleted: true}, false, false},
 	}
-	for _, c := range durumlar {
-		c.y.SahipID = sahip
-		id := testYayinEkle(t, havuz, c.y)
-		if c.onizleme {
-			if _, err := havuz.Exec(ctx, `UPDATE sosyal.yayin SET onizleme_anahtari = $2, dalga_formu = '[0.25, 1]' WHERE id = $1`,
+	for _, c := range cases {
+		c.row.OwnerID = owner
+		id := testInsertPublication(t, pool, c.row)
+		if c.preview {
+			if _, err := pool.Exec(ctx, `UPDATE sosyal.yayin SET onizleme_anahtari = $2, dalga_formu = '[0.25, 1]' WHERE id = $1`,
 				id, "sosyal/"+id+"/onizleme.mp3"); err != nil {
 				t.Fatal(err)
 			}
 		}
-		k, err := d.GetPreview(ctx, c.y.Slug)
-		if !c.gorunur {
+		rec, err := store.GetPreview(ctx, c.row.Slug)
+		if !c.visible {
 			if !errors.Is(err, ErrNotFound) {
-				t.Errorf("%s: %v, beklenen ErrBulunamadi", c.y.Slug, err)
+				t.Errorf("%s: %v, beklenen ErrBulunamadi", c.row.Slug, err)
 			}
 			continue
 		}
 		if err != nil {
-			t.Fatalf("%s: %v", c.y.Slug, err)
+			t.Fatalf("%s: %v", c.row.Slug, err)
 		}
-		if k.Title != "Baslik" || k.DurationSec != 180 || k.Genre != "pop" || k.OwnerID != sahip ||
-			k.Owner != (ProfileSummary{Username: "sahip", DisplayName: "sahip", AvatarColor: AvatarColor(sahip)}) {
-			t.Errorf("%s: kayit = %+v", c.y.Slug, k)
+		if rec.Title != "Baslik" || rec.DurationSec != 180 || rec.Genre != "pop" || rec.OwnerID != owner ||
+			rec.Owner != (ProfileSummary{Username: "sahip", DisplayName: "sahip", AvatarColor: AvatarColor(owner)}) {
+			t.Errorf("%s: kayit = %+v", c.row.Slug, rec)
 		}
-		if c.onizleme && (k.PreviewKey != "sosyal/"+id+"/onizleme.mp3" || len(k.Waveform) != 2) {
-			t.Errorf("%s: onizleme = %q dalga %v", c.y.Slug, k.PreviewKey, k.Waveform)
+		if c.preview && (rec.PreviewKey != "sosyal/"+id+"/onizleme.mp3" || len(rec.Waveform) != 2) {
+			t.Errorf("%s: onizleme = %q dalga %v", c.row.Slug, rec.PreviewKey, rec.Waveform)
 		}
-		if !c.onizleme && (k.PreviewKey != "" || k.Waveform == nil || len(k.Waveform) != 0) {
-			t.Errorf("%s: onizlemesiz = %q dalga %#v", c.y.Slug, k.PreviewKey, k.Waveform)
+		if !c.preview && (rec.PreviewKey != "" || rec.Waveform == nil || len(rec.Waveform) != 0) {
+			t.Errorf("%s: onizlemesiz = %q dalga %#v", c.row.Slug, rec.PreviewKey, rec.Waveform)
 		}
 	}
-	if _, err := d.GetPreview(ctx, "Yok12345"); !errors.Is(err, ErrNotFound) {
+	if _, err := store.GetPreview(ctx, "Yok12345"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("olmayan slug: %v", err)
 	}
 }
 
-// Profili olmayan sahibin herkes yayini da onizlenmez (404).
-func TestPostgresDepo_OnizlemeProfilsizSahip(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
-	testYayinEkle(t, havuz, testYayin{Slug: "Profsiz1", SahipID: uuid.NewString()})
-	if _, err := d.GetPreview(context.Background(), "Profsiz1"); !errors.Is(err, ErrNotFound) {
+// An everyone-visible publication by an owner with no profile is not previewable (404).
+func TestPostgresStore_GetPreviewOwnerWithoutProfile(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
+	testInsertPublication(t, pool, testPublication{Slug: "Profsiz1", OwnerID: uuid.NewString()})
+	if _, err := store.GetPreview(context.Background(), "Profsiz1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("profilsiz sahip: %v, beklenen ErrBulunamadi", err)
 	}
 }

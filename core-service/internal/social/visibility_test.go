@@ -2,13 +2,13 @@ package social
 
 import "testing"
 
-// Spec §4.9 tablosu, sahip olmayan izleyici icin.
-func TestGorunurlukTablosu(t *testing.T) {
-	durumlar := []struct {
-		gorunurluk  string
-		takipEdiyor bool
-		liste       bool
-		detay       bool
+// Spec §4.9 table, for a viewer who is not the owner.
+func TestVisibility_Table(t *testing.T) {
+	cases := []struct {
+		visibility string
+		following  bool
+		inList     bool
+		detail     bool
 	}{
 		{VisibilityEveryone, false, true, true},
 		{VisibilityEveryone, true, true, true},
@@ -17,50 +17,50 @@ func TestGorunurlukTablosu(t *testing.T) {
 		{VisibilityLink, false, false, true},
 		{VisibilityLink, true, false, true},
 	}
-	for _, d := range durumlar {
-		g := VisibilityInput{OwnerID: "s", ViewerID: "i", Visibility: d.gorunurluk, Status: StatusPublished, ViewerFollows: d.takipEdiyor}
-		if got := CanSeeInList(g); got != d.liste {
-			t.Errorf("%s takip=%v liste = %v, beklenen %v", d.gorunurluk, d.takipEdiyor, got, d.liste)
+	for _, tc := range cases {
+		in := VisibilityInput{OwnerID: "s", ViewerID: "i", Visibility: tc.visibility, Status: StatusPublished, ViewerFollows: tc.following}
+		if got := CanSeeInList(in); got != tc.inList {
+			t.Errorf("%s takip=%v liste = %v, beklenen %v", tc.visibility, tc.following, got, tc.inList)
 		}
-		if got := CanSeeDetail(g); got != d.detay {
-			t.Errorf("%s takip=%v detay = %v, beklenen %v", d.gorunurluk, d.takipEdiyor, got, d.detay)
+		if got := CanSeeDetail(in); got != tc.detail {
+			t.Errorf("%s takip=%v detay = %v, beklenen %v", tc.visibility, tc.following, got, tc.detail)
 		}
 	}
 }
 
-func TestGorunurluk_SahipHerDurumuGorur(t *testing.T) {
-	for _, gr := range []string{VisibilityEveryone, VisibilityFollowers, VisibilityLink} {
-		for _, durum := range []string{StatusPreparing, StatusPublished, StatusFailed} {
-			g := VisibilityInput{OwnerID: "s", ViewerID: "s", Visibility: gr, Status: durum}
-			if !CanSeeDetail(g) || !CanSeeInList(g) {
-				t.Errorf("sahip %s/%s yayinini gormeli", gr, durum)
+func TestVisibility_OwnerSeesEveryStatus(t *testing.T) {
+	for _, vis := range []string{VisibilityEveryone, VisibilityFollowers, VisibilityLink} {
+		for _, status := range []string{StatusPreparing, StatusPublished, StatusFailed} {
+			in := VisibilityInput{OwnerID: "s", ViewerID: "s", Visibility: vis, Status: status}
+			if !CanSeeDetail(in) || !CanSeeInList(in) {
+				t.Errorf("sahip %s/%s yayinini gormeli", vis, status)
 			}
 		}
 	}
 }
 
-func TestGorunurluk_YabanciHazirlanmayiVeHatayiGormez(t *testing.T) {
-	for _, durum := range []string{StatusPreparing, StatusFailed} {
-		g := VisibilityInput{OwnerID: "s", ViewerID: "i", Visibility: VisibilityEveryone, Status: durum, ViewerFollows: true}
-		if CanSeeDetail(g) || CanSeeInList(g) {
-			t.Errorf("yabanci %s yayini gormemeli", durum)
+func TestVisibility_StrangerCannotSeePreparingOrFailed(t *testing.T) {
+	for _, status := range []string{StatusPreparing, StatusFailed} {
+		in := VisibilityInput{OwnerID: "s", ViewerID: "i", Visibility: VisibilityEveryone, Status: status, ViewerFollows: true}
+		if CanSeeDetail(in) || CanSeeInList(in) {
+			t.Errorf("yabanci %s yayini gormemeli", status)
 		}
 	}
 }
 
-func TestGorunurluk_SilinmisiKimseGormez(t *testing.T) {
-	for _, izleyici := range []string{"s", "i"} {
-		g := VisibilityInput{OwnerID: "s", ViewerID: izleyici, Visibility: VisibilityEveryone, Status: StatusPublished, Deleted: true}
-		if CanSeeDetail(g) || CanSeeInList(g) {
-			t.Errorf("%s silinmis yayini gormemeli", izleyici)
+func TestVisibility_NobodySeesDeleted(t *testing.T) {
+	for _, viewer := range []string{"s", "i"} {
+		in := VisibilityInput{OwnerID: "s", ViewerID: viewer, Visibility: VisibilityEveryone, Status: StatusPublished, Deleted: true}
+		if CanSeeDetail(in) || CanSeeInList(in) {
+			t.Errorf("%s silinmis yayini gormemeli", viewer)
 		}
 	}
 }
 
-// Bos izleyici kimligi, sahip kimligi de bos olsa sahip sayilmaz.
-func TestGorunurluk_BosIzleyiciSahipSayilmaz(t *testing.T) {
-	g := VisibilityInput{OwnerID: "", ViewerID: "", Visibility: VisibilityEveryone, Status: StatusPreparing}
-	if CanSeeDetail(g) || CanSeeInList(g) {
+// An empty viewer id is not the owner even if the owner id is also empty.
+func TestVisibility_EmptyViewerIsNotOwner(t *testing.T) {
+	in := VisibilityInput{OwnerID: "", ViewerID: "", Visibility: VisibilityEveryone, Status: StatusPreparing}
+	if CanSeeDetail(in) || CanSeeInList(in) {
 		t.Fatal("bos izleyici hazirlanan yayini gormemeli")
 	}
 }

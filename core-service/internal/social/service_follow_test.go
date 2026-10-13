@@ -6,78 +6,78 @@ import (
 	"testing"
 )
 
-func takipDeposu() *sahteDepo {
-	d := profilliDepo()
-	d.profiller[kullaniciB] = &ProfileRecord{UserID: kullaniciB, Username: "berk", DisplayName: "Berk"}
-	return d
+func followStore() *fakeStore {
+	store := storeWithProfile()
+	store.profiles[userB] = &ProfileRecord{UserID: userB, Username: "berk", DisplayName: "Berk"}
+	return store
 }
 
-func TestServis_TakipEtVeBirak(t *testing.T) {
-	d := takipDeposu()
-	s, _ := testServisi(d)
+func TestService_FollowAndUnfollow(t *testing.T) {
+	store := followStore()
+	s, _ := newTestService(store)
 	ctx := context.Background()
 
-	for i := 0; i < 2; i++ { // tekrari guvenli
-		durum, err := s.SetFollow(ctx, kullaniciA, "berk", true)
-		if err != nil || durum.Followers != 1 || !durum.FollowedByMe {
-			t.Fatalf("takip %d = %+v, %v", i, durum, err)
+	for i := 0; i < 2; i++ { // repeating is safe
+		status, err := s.SetFollow(ctx, userA, "berk", true)
+		if err != nil || status.Followers != 1 || !status.FollowedByMe {
+			t.Fatalf("takip %d = %+v, %v", i, status, err)
 		}
 	}
-	if !d.takipler[[2]string{kullaniciA, kullaniciB}] {
+	if !store.follows[[2]string{userA, userB}] {
 		t.Fatal("takip A -> B yazilmali")
 	}
 	for i := 0; i < 2; i++ {
-		durum, err := s.SetFollow(ctx, kullaniciA, "berk", false)
-		if err != nil || durum.Followers != 0 || durum.FollowedByMe {
-			t.Fatalf("birakma %d = %+v, %v", i, durum, err)
+		status, err := s.SetFollow(ctx, userA, "berk", false)
+		if err != nil || status.Followers != 0 || status.FollowedByMe {
+			t.Fatalf("birakma %d = %+v, %v", i, status, err)
 		}
 	}
 }
 
-func TestServis_TakipHatalari(t *testing.T) {
-	d := takipDeposu()
-	s, _ := testServisi(d)
+func TestService_FollowErrors(t *testing.T) {
+	store := followStore()
+	s, _ := newTestService(store)
 	ctx := context.Background()
-	durumlar := []struct {
-		ad, kullanici string
-		takip         bool
-		beklenen      error
+	cases := []struct {
+		name, user string
+		follow     bool
+		want       error
 	}{
-		{"ali", kullaniciA, true, ErrSelfFollow},
-		{"ali", kullaniciA, false, ErrSelfFollow},
-		{"yok_biri", kullaniciA, true, ErrNotFound},
-		{".kotu", kullaniciA, true, ErrNotFound},
+		{"ali", userA, true, ErrSelfFollow},
+		{"ali", userA, false, ErrSelfFollow},
+		{"yok_biri", userA, true, ErrNotFound},
+		{".kotu", userA, true, ErrNotFound},
 		{"berk", "uuid-degil", true, ErrInvalidIdentity},
 	}
-	for _, c := range durumlar {
-		if _, err := s.SetFollow(ctx, c.kullanici, c.ad, c.takip); !errors.Is(err, c.beklenen) {
-			t.Errorf("%s/%v: %v, beklenen %v", c.ad, c.takip, err, c.beklenen)
+	for _, c := range cases {
+		if _, err := s.SetFollow(ctx, c.user, c.name, c.follow); !errors.Is(err, c.want) {
+			t.Errorf("%s/%v: %v, beklenen %v", c.name, c.follow, err, c.want)
 		}
 	}
-	if len(d.takipler) != 0 {
-		t.Fatalf("hatali isteklerde takip yazilmamali: %v", d.takipler)
+	if len(store.follows) != 0 {
+		t.Fatalf("hatali isteklerde takip yazilmamali: %v", store.follows)
 	}
 }
 
-func TestServis_OnerilerOzetVeSinir(t *testing.T) {
-	d := takipDeposu()
-	s, _ := testServisi(d)
+func TestService_SuggestionsSummaryAndLimit(t *testing.T) {
+	store := followStore()
+	s, _ := newTestService(store)
 	ctx := context.Background()
 
-	bos, err := s.Suggestions(ctx, kullaniciA)
-	if err != nil || bos == nil || len(bos) != 0 {
-		t.Fatalf("bos oneriler [] olmali: %#v, %v", bos, err)
+	empty, err := s.Suggestions(ctx, userA)
+	if err != nil || empty == nil || len(empty) != 0 {
+		t.Fatalf("bos oneriler [] olmali: %#v, %v", empty, err)
 	}
-	if d.sonOneri != [2]any{kullaniciA, 10} {
-		t.Fatalf("depo cagrisi = %v, beklenen {A, 10}", d.sonOneri)
+	if store.lastSuggestion != [2]any{userA, 10} {
+		t.Fatalf("depo cagrisi = %v, beklenen {A, 10}", store.lastSuggestion)
 	}
 
-	d.oneriKayitlar = []ProfileRecord{*d.profiller[kullaniciB]}
-	o, err := s.Suggestions(ctx, kullaniciA)
-	if err != nil || len(o) != 1 {
-		t.Fatalf("oneriler = %+v, %v", o, err)
+	store.suggestionRecords = []ProfileRecord{*store.profiles[userB]}
+	suggested, err := s.Suggestions(ctx, userA)
+	if err != nil || len(suggested) != 1 {
+		t.Fatalf("oneriler = %+v, %v", suggested, err)
 	}
-	if o[0] != (ProfileSummary{Username: "berk", DisplayName: "Berk", AvatarColor: AvatarColor(kullaniciB)}) {
-		t.Fatalf("ozet = %+v", o[0])
+	if suggested[0] != (ProfileSummary{Username: "berk", DisplayName: "Berk", AvatarColor: AvatarColor(userB)}) {
+		t.Fatalf("ozet = %+v", suggested[0])
 	}
 }

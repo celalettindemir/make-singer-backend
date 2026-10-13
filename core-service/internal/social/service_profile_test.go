@@ -7,106 +7,106 @@ import (
 )
 
 const (
-	kullaniciA = "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
-	kullaniciB = "7f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
+	userA = "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
+	userB = "7f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
 )
 
-func TestServis_ProfilBenYoksaProfilYok(t *testing.T) {
-	s, _ := testServisi(yeniSahteDepo())
-	if _, err := s.MyProfile(context.Background(), kullaniciA); !errors.Is(err, ErrNoProfile) {
+func TestService_MyProfileWithoutProfileReturnsNoProfile(t *testing.T) {
+	s, _ := newTestService(newFakeStore())
+	if _, err := s.MyProfile(context.Background(), userA); !errors.Is(err, ErrNoProfile) {
 		t.Fatalf("ErrProfilYok bekleniyordu: %v", err)
 	}
 }
 
-func TestServis_GecersizKimlik(t *testing.T) {
-	s, _ := testServisi(yeniSahteDepo())
+func TestService_InvalidIdentity(t *testing.T) {
+	s, _ := newTestService(newFakeStore())
 	if _, err := s.MyProfile(context.Background(), "kullanici-a"); !errors.Is(err, ErrInvalidIdentity) {
 		t.Fatalf("ErrKimlik bekleniyordu: %v", err)
 	}
 }
 
-func TestServis_ProfilKaydetVeBen(t *testing.T) {
-	d := yeniSahteDepo()
-	d.sayilar = ProfileCounts{Stats: Stats{Songs: 2, Followers: 5}}
-	s, _ := testServisi(d)
-	p, err := s.SaveProfile(context.Background(), kullaniciA, ProfileInput{Username: "ali", DisplayName: " Ali ", Bio: "selam"})
+func TestService_SaveProfileAndMyProfile(t *testing.T) {
+	store := newFakeStore()
+	store.counts = ProfileCounts{Stats: Stats{Songs: 2, Followers: 5}}
+	s, _ := newTestService(store)
+	p, err := s.SaveProfile(context.Background(), userA, ProfileInput{Username: "ali", DisplayName: " Ali ", Bio: "selam"})
 	if err != nil {
 		t.Fatalf("kaydet: %v", err)
 	}
 	if p.Username != "ali" || p.DisplayName != "Ali" || !p.IsMe || p.FollowedByMe || p.Stats.Songs != 2 {
 		t.Fatalf("profil = %+v", p)
 	}
-	if p.AvatarColor != AvatarColor(kullaniciA) {
+	if p.AvatarColor != AvatarColor(userA) {
 		t.Fatalf("avatar rengi = %d", p.AvatarColor)
 	}
-	ben, err := s.MyProfile(context.Background(), kullaniciA)
-	if err != nil || ben.Username != "ali" {
-		t.Fatalf("ben = %+v, %v", ben, err)
+	me, err := s.MyProfile(context.Background(), userA)
+	if err != nil || me.Username != "ali" {
+		t.Fatalf("ben = %+v, %v", me, err)
 	}
 }
 
-func TestServis_ProfilKaydetHatalari(t *testing.T) {
-	d := yeniSahteDepo()
-	s, _ := testServisi(d)
+func TestService_SaveProfileErrors(t *testing.T) {
+	store := newFakeStore()
+	s, _ := newTestService(store)
 	ctx := context.Background()
-	if _, err := s.SaveProfile(ctx, kullaniciA, ProfileInput{Username: ".ali", DisplayName: "A"}); !errors.Is(err, ErrInvalidUsername) {
+	if _, err := s.SaveProfile(ctx, userA, ProfileInput{Username: ".ali", DisplayName: "A"}); !errors.Is(err, ErrInvalidUsername) {
 		t.Fatalf("gecersiz ad: %v", err)
 	}
-	if _, err := s.SaveProfile(ctx, kullaniciA, ProfileInput{Username: "ali", DisplayName: ""}); !errors.Is(err, ErrValidation) {
+	if _, err := s.SaveProfile(ctx, userA, ProfileInput{Username: "ali", DisplayName: ""}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("bos gorunen ad: %v", err)
 	}
-	if _, err := s.SaveProfile(ctx, kullaniciA, ProfileInput{Username: "ali", DisplayName: "A"}); err != nil {
+	if _, err := s.SaveProfile(ctx, userA, ProfileInput{Username: "ali", DisplayName: "A"}); err != nil {
 		t.Fatalf("ilk kayit: %v", err)
 	}
-	if _, err := s.SaveProfile(ctx, kullaniciB, ProfileInput{Username: "ali", DisplayName: "B"}); !errors.Is(err, ErrUsernameTaken) {
+	if _, err := s.SaveProfile(ctx, userB, ProfileInput{Username: "ali", DisplayName: "B"}); !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("alinmis ad: %v", err)
 	}
 }
 
-func TestServis_AdUygunMu(t *testing.T) {
-	d := yeniSahteDepo()
-	d.profiller[kullaniciA] = &ProfileRecord{UserID: kullaniciA, Username: "ali"}
-	d.profiller[kullaniciB] = &ProfileRecord{UserID: kullaniciB, Username: "ali2"}
-	s, _ := testServisi(d)
+func TestService_CheckUsername(t *testing.T) {
+	store := newFakeStore()
+	store.profiles[userA] = &ProfileRecord{UserID: userA, Username: "ali"}
+	store.profiles[userB] = &ProfileRecord{UserID: userB, Username: "ali2"}
+	s, _ := newTestService(store)
 	ctx := context.Background()
 
-	bos, err := s.CheckUsername(ctx, kullaniciB, "veli")
-	if err != nil || !bos.Available || bos.Suggestion != nil {
-		t.Fatalf("bos ad = %+v, %v", bos, err)
+	empty, err := s.CheckUsername(ctx, userB, "veli")
+	if err != nil || !empty.Available || empty.Suggestion != nil {
+		t.Fatalf("bos ad = %+v, %v", empty, err)
 	}
-	kendi, err := s.CheckUsername(ctx, kullaniciA, "ali")
-	if err != nil || !kendi.Available {
-		t.Fatalf("kendi adi uygun olmali: %+v, %v", kendi, err)
+	own, err := s.CheckUsername(ctx, userA, "ali")
+	if err != nil || !own.Available {
+		t.Fatalf("kendi adi uygun olmali: %+v, %v", own, err)
 	}
-	// ali (A) ve ali2 (B) alinmis: C icin oneri ali3.
-	alinmis, err := s.CheckUsername(ctx, "8f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a", "ali")
-	if err != nil || alinmis.Available || alinmis.Suggestion == nil || *alinmis.Suggestion != "ali3" {
-		t.Fatalf("alinmis ad = %+v, %v", alinmis, err)
+	// ali (A) and ali2 (B) are taken: the suggestion for C is ali3.
+	taken, err := s.CheckUsername(ctx, "8f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a", "ali")
+	if err != nil || taken.Available || taken.Suggestion == nil || *taken.Suggestion != "ali3" {
+		t.Fatalf("alinmis ad = %+v, %v", taken, err)
 	}
-	// B icin ali2 kendi adi oldugundan oneri ali2'dir.
-	bIcin, err := s.CheckUsername(ctx, kullaniciB, "ali")
-	if err != nil || bIcin.Suggestion == nil || *bIcin.Suggestion != "ali2" {
-		t.Fatalf("B icin oneri = %+v, %v", bIcin, err)
+	// For B, ali2 is their own name, so the suggestion is ali2.
+	forB, err := s.CheckUsername(ctx, userB, "ali")
+	if err != nil || forB.Suggestion == nil || *forB.Suggestion != "ali2" {
+		t.Fatalf("B icin oneri = %+v, %v", forB, err)
 	}
-	if _, err := s.CheckUsername(ctx, kullaniciA, "A!"); !errors.Is(err, ErrInvalidUsername) {
+	if _, err := s.CheckUsername(ctx, userA, "A!"); !errors.Is(err, ErrInvalidUsername) {
 		t.Fatalf("gecersiz ad: %v", err)
 	}
 }
 
-func TestServis_ProfilGoster(t *testing.T) {
-	d := yeniSahteDepo()
-	d.profiller[kullaniciA] = &ProfileRecord{UserID: kullaniciA, Username: "ali", DisplayName: "Ali"}
-	d.sayilar = ProfileCounts{FollowedByMe: true}
-	s, _ := testServisi(d)
+func TestService_Profile(t *testing.T) {
+	store := newFakeStore()
+	store.profiles[userA] = &ProfileRecord{UserID: userA, Username: "ali", DisplayName: "Ali"}
+	store.counts = ProfileCounts{FollowedByMe: true}
+	s, _ := newTestService(store)
 	ctx := context.Background()
-	p, err := s.Profile(ctx, kullaniciB, "ali")
+	p, err := s.Profile(ctx, userB, "ali")
 	if err != nil || p.IsMe || !p.FollowedByMe {
 		t.Fatalf("profil = %+v, %v", p, err)
 	}
-	if _, err := s.Profile(ctx, kullaniciB, "yok"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Profile(ctx, userB, "yok"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("olmayan profil: %v", err)
 	}
-	if _, err := s.Profile(ctx, kullaniciB, "X"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Profile(ctx, userB, "X"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("gecersiz bicimli ad: %v", err)
 	}
 }

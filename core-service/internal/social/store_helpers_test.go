@@ -10,82 +10,82 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// testYayin, ham SQL ile eklenecek bir yayin satiridir. Bos alanlar
-// makul varsayilanlarla doldurulur; depo testleri boylece yayin ekleme
-// ucunu beklemeden kurulabilir.
-type testYayin struct {
-	ID          string
-	Slug        string
-	SahipID     string
-	Baslik      string
-	Gorunurluk  string
-	Durum       string
-	AltyapiAcik bool
-	KaynakID    string
-	Olusturma   time.Time
-	Silindi     bool
-	Hazirlik    string
+// testPublication is a publication row to insert with raw SQL. Empty fields
+// are filled with sensible defaults; so store tests can be built without
+// waiting for the publication-insert path.
+type testPublication struct {
+	ID             string
+	Slug           string
+	OwnerID        string
+	Title          string
+	Visibility     string
+	Status         string
+	BackingEnabled bool
+	SourceID       string
+	CreatedAt      time.Time
+	Deleted        bool
+	Preparation    string
 }
 
-var slugSayaci int
+var slugCounter int
 
-func testYayinEkle(t *testing.T, havuz *pgxpool.Pool, y testYayin) string {
+func testInsertPublication(t *testing.T, pool *pgxpool.Pool, row testPublication) string {
 	t.Helper()
-	if y.ID == "" {
-		y.ID = uuid.NewString()
+	if row.ID == "" {
+		row.ID = uuid.NewString()
 	}
-	if y.Slug == "" {
-		slugSayaci++
-		y.Slug = fmt.Sprintf("T%07d", slugSayaci)
+	if row.Slug == "" {
+		slugCounter++
+		row.Slug = fmt.Sprintf("T%07d", slugCounter)
 	}
-	if y.Baslik == "" {
-		y.Baslik = "Baslik"
+	if row.Title == "" {
+		row.Title = "Baslik"
 	}
-	if y.Gorunurluk == "" {
-		y.Gorunurluk = VisibilityEveryone
+	if row.Visibility == "" {
+		row.Visibility = VisibilityEveryone
 	}
-	if y.Durum == "" {
-		y.Durum = StatusPublished
+	if row.Status == "" {
+		row.Status = StatusPublished
 	}
-	if y.Olusturma.IsZero() {
-		y.Olusturma = time.Now()
+	if row.CreatedAt.IsZero() {
+		row.CreatedAt = time.Now()
 	}
-	if y.Hazirlik == "" {
-		y.Hazirlik = `{"masterKey":"masters/u/p/m.wav","stems":[]}`
+	if row.Preparation == "" {
+		row.Preparation = `{"masterKey":"masters/u/p/m.wav","stems":[]}`
 	}
-	var kaynak any
-	if y.KaynakID != "" {
-		kaynak = y.KaynakID
+	var source any
+	if row.SourceID != "" {
+		source = row.SourceID
 	}
-	var silinme any
-	if y.Silindi {
-		silinme = time.Now()
+	var deletedAt any
+	if row.Deleted {
+		deletedAt = time.Now()
 	}
-	_, err := havuz.Exec(context.Background(), `
+	_, err := pool.Exec(context.Background(), `
 		INSERT INTO sosyal.yayin (id, slug, sahip_id, baslik, tur, bpm, ton_tonik, ton_mod, sure_sn,
 			gorunurluk, altyapi_acik, yorum_acik, sozler, yapi, hazirlik, kaynak_yayin_id,
 			kaynak_baslik, kaynak_sahip_adi, durum, olusturma, silinme)
 		VALUES ($1, $2, $3, $4, 'pop', 120, 'A', 'minor', 180, $5, $6, true,
 			'{"bolumler":[]}', '[]', $7, $8, CASE WHEN $8::uuid IS NULL THEN NULL ELSE 'Eski baslik' END,
 			CASE WHEN $8::uuid IS NULL THEN NULL ELSE 'eski_ad' END, $9, $10, $11)`,
-		y.ID, y.Slug, y.SahipID, y.Baslik, y.Gorunurluk, y.AltyapiAcik, y.Hazirlik, kaynak, y.Durum, y.Olusturma, silinme)
+		row.ID, row.Slug, row.OwnerID, row.Title, row.Visibility, row.BackingEnabled, row.Preparation, source, row.Status, row.CreatedAt, deletedAt)
 	if err != nil {
 		t.Fatalf("test yayini eklenemedi: %v", err)
 	}
-	return y.ID
+	return row.ID
 }
 
-func testTakipEkle(t *testing.T, havuz *pgxpool.Pool, takipci, takipEdilen string) {
+func testInsertFollow(t *testing.T, pool *pgxpool.Pool, follower, followee string) {
 	t.Helper()
-	if _, err := havuz.Exec(context.Background(),
-		`INSERT INTO sosyal.takip (takipci_id, takip_edilen_id) VALUES ($1, $2)`, takipci, takipEdilen); err != nil {
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO sosyal.takip (takipci_id, takip_edilen_id) VALUES ($1, $2)`, follower, followee); err != nil {
 		t.Fatalf("takip eklenemedi: %v", err)
 	}
 }
 
-func testProfilEkle(t *testing.T, d *PostgresStore, id, ad string) {
+func testInsertProfile(t *testing.T, store *PostgresStore, id, name string) {
 	t.Helper()
-	if _, err := d.UpsertProfile(context.Background(), ProfileRecord{UserID: id, Username: ad, DisplayName: ad}); err != nil {
+	if _, err := store.UpsertProfile(context.Background(), ProfileRecord{UserID: id, Username: name, DisplayName: name}); err != nil {
 		t.Fatalf("profil eklenemedi: %v", err)
 	}
 }

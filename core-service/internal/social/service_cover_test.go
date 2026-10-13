@@ -8,165 +8,165 @@ import (
 	"testing"
 )
 
-// sahteKopyalayici, kopyalari kaydeder; hata doluysa her kopyada onu doner.
-type sahteKopyalayici struct {
-	kopyalar [][2]string
-	hata     error
+// fakeCopier records the copies; when err is set it returns it on every copy.
+type fakeCopier struct {
+	copies [][2]string
+	err    error
 }
 
-func (k *sahteKopyalayici) Copy(_ context.Context, kaynak, hedef string) error {
-	if k.hata != nil {
-		return k.hata
+func (rec *fakeCopier) Copy(_ context.Context, src, dst string) error {
+	if rec.err != nil {
+		return rec.err
 	}
-	k.kopyalar = append(k.kopyalar, [2]string{kaynak, hedef})
+	rec.copies = append(rec.copies, [2]string{src, dst})
 	return nil
 }
 
-// coverDeposu: yayinX kullaniciB'nin altyapisi acik, iki stem kopyasi
-// olan herkes yayinidir.
-func coverDeposu() *sahteDepo {
-	d := yeniSahteDepo()
-	k := sahteYayin(yayinX, kullaniciB, VisibilityEveryone, StatusPublished)
-	k.Genre, k.BPM, k.MusicalKey, k.DurationSec = "pop", 120, MusicalKey{Tonic: "A", Mode: "minor"}, 180
-	k.Structure = []StructureItem{{ID: "v1", Type: "verse", Bars: 8}}
-	k.Lyrics = Lyrics{Sections: []LyricsSection{{SectionID: "v1", Type: "verse", Lines: []string{"la"}}}}
-	d.yayinlar[yayinX] = k
-	d.stemListeleri = map[string][]StemRecord{yayinX: {
-		{ID: "drums", Instrument: "Davul", Duration: 180.5, Key: "sosyal/" + yayinX + "/stems/drums.mp3"},
-		{ID: "bass", Instrument: "Bas", Duration: 179, Key: "sosyal/" + yayinX + "/stems/bass"},
+// coverStore: pubX is userB's everyone-visible publication with backing
+// enabled and two stem copies.
+func coverStore() *fakeStore {
+	store := newFakeStore()
+	rec := fakePublication(pubX, userB, VisibilityEveryone, StatusPublished)
+	rec.Genre, rec.BPM, rec.MusicalKey, rec.DurationSec = "pop", 120, MusicalKey{Tonic: "A", Mode: "minor"}, 180
+	rec.Structure = []StructureItem{{ID: "v1", Type: "verse", Bars: 8}}
+	rec.Lyrics = Lyrics{Sections: []LyricsSection{{SectionID: "v1", Type: "verse", Lines: []string{"la"}}}}
+	store.publications[pubX] = rec
+	store.stemLists = map[string][]StemRecord{pubX: {
+		{ID: "drums", Instrument: "Davul", Duration: 180.5, Key: "sosyal/" + pubX + "/stems/drums.mp3"},
+		{ID: "bass", Instrument: "Bas", Duration: 179, Key: "sosyal/" + pubX + "/stems/bass"},
 	}}
-	return d
+	return store
 }
 
-func TestServis_CoverBaslat(t *testing.T) {
-	d := coverDeposu()
-	s, _ := testServisi(d)
-	kop := &sahteKopyalayici{}
-	s.WithCopier(kop)
+func TestService_StartCover(t *testing.T) {
+	store := coverStore()
+	s, _ := newTestService(store)
+	copier := &fakeCopier{}
+	s.WithCopier(copier)
 
-	b, err := s.StartCover(context.Background(), kullaniciA, yayinX)
+	b, err := s.StartCover(context.Background(), userA, pubX)
 	if err != nil {
 		t.Fatalf("CoverBaslat: %v", err)
 	}
-	if b.Source != (SourceSummary{PublicationID: yayinX, Title: "Orijinal", OwnerUsername: "sahip"}) {
+	if b.Source != (SourceSummary{PublicationID: pubX, Title: "Orijinal", OwnerUsername: "sahip"}) {
 		t.Fatalf("kaynak = %+v", b.Source)
 	}
 	if b.Genre != "pop" || b.BPM != 120 || b.MusicalKey.Mode != "minor" || b.DurationSec != 180 || len(b.Structure) != 1 || len(b.Lyrics.Sections) != 1 {
 		t.Fatalf("baslangic = %+v", b)
 	}
-	if len(kop.kopyalar) != 2 || len(b.Stems) != 2 {
-		t.Fatalf("kopyalar = %v, stemler = %+v", kop.kopyalar, b.Stems)
+	if len(copier.copies) != 2 || len(b.Stems) != 2 {
+		t.Fatalf("kopyalar = %v, stemler = %+v", copier.copies, b.Stems)
 	}
-	desen := regexp.MustCompile(`^stems/` + kullaniciA + `/([0-9a-f-]{36})/drums\.mp3$`)
-	m := desen.FindStringSubmatch(kop.kopyalar[0][1])
-	if kop.kopyalar[0][0] != "sosyal/"+yayinX+"/stems/drums.mp3" || m == nil {
-		t.Fatalf("ilk kopya = %v", kop.kopyalar[0])
+	pattern := regexp.MustCompile(`^stems/` + userA + `/([0-9a-f-]{36})/drums\.mp3$`)
+	m := pattern.FindStringSubmatch(copier.copies[0][1])
+	if copier.copies[0][0] != "sosyal/"+pubX+"/stems/drums.mp3" || m == nil {
+		t.Fatalf("ilk kopya = %v", copier.copies[0])
 	}
-	if kop.kopyalar[1][1] != "stems/"+kullaniciA+"/"+m[1]+"/bass" {
-		t.Fatalf("ikinci kopya ayni klasore, uzantisiz = %v", kop.kopyalar[1])
+	if copier.copies[1][1] != "stems/"+userA+"/"+m[1]+"/bass" {
+		t.Fatalf("ikinci kopya ayni klasore, uzantisiz = %v", copier.copies[1])
 	}
-	st := b.Stems[0]
-	if st.ID != "drums" || st.Instrument != "Davul" || st.Duration != 180.5 ||
-		!strings.HasSuffix(st.FileURL, "/"+kop.kopyalar[0][1]) || !strings.Contains(st.FileURL, "makeasinger-private") {
-		t.Fatalf("stem = %+v", st)
+	stem := b.Stems[0]
+	if stem.ID != "drums" || stem.Instrument != "Davul" || stem.Duration != 180.5 ||
+		!strings.HasSuffix(stem.FileURL, "/"+copier.copies[0][1]) || !strings.Contains(stem.FileURL, "makeasinger-private") {
+		t.Fatalf("stem = %+v", stem)
 	}
 
-	// Ikinci baslatma yeni bir klasore kopyalar.
-	if _, err := s.StartCover(context.Background(), kullaniciA, yayinX); err != nil {
+	// The second start copies into a new folder.
+	if _, err := s.StartCover(context.Background(), userA, pubX); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(kop.kopyalar[2][1], m[1]) {
-		t.Fatalf("her baslatma yeni klasor almali: %v", kop.kopyalar[2])
+	if strings.Contains(copier.copies[2][1], m[1]) {
+		t.Fatalf("her baslatma yeni klasor almali: %v", copier.copies[2])
 	}
 }
 
-func TestServis_CoverBaslatImzaliAdres(t *testing.T) {
-	d := coverDeposu()
-	s := NewService(d, &sahteKuyruk{}, imzaliDepolama{}, testR2()).WithCopier(&sahteKopyalayici{})
-	b, err := s.StartCover(context.Background(), kullaniciA, yayinX)
-	if err != nil || !strings.HasPrefix(b.Stems[0].FileURL, "https://imzali.example/stems/"+kullaniciA+"/") {
+func TestService_StartCoverSignedURL(t *testing.T) {
+	store := coverStore()
+	s := NewService(store, &fakeQueue{}, signingStorage{}, testR2()).WithCopier(&fakeCopier{})
+	b, err := s.StartCover(context.Background(), userA, pubX)
+	if err != nil || !strings.HasPrefix(b.Stems[0].FileURL, "https://imzali.example/stems/"+userA+"/") {
 		t.Fatalf("imzali adres = %+v, %v", b, err)
 	}
 }
 
-func TestServis_CoverBaslatKopyalayicisiz(t *testing.T) {
-	s, _ := testServisi(coverDeposu())
-	b, err := s.StartCover(context.Background(), kullaniciA, yayinX)
+func TestService_StartCoverWithoutCopier(t *testing.T) {
+	s, _ := newTestService(coverStore())
+	b, err := s.StartCover(context.Background(), userA, pubX)
 	if err != nil || len(b.Stems) != 2 {
 		t.Fatalf("R2'siz (dev) baslangic = %+v, %v", b, err)
 	}
 }
 
-func TestServis_CoverBaslatHatalari(t *testing.T) {
+func TestService_StartCoverErrors(t *testing.T) {
 	ctx := context.Background()
-	durumlar := []struct {
-		ad        string
-		hazirla   func(d *sahteDepo)
-		kullanici string
-		yayin     string
-		beklenen  error
+	cases := []struct {
+		name  string
+		setup func(store *fakeStore)
+		user  string
+		pub   string
+		want  error
 	}{
-		{"altyapi kapali", func(d *sahteDepo) { d.yayinlar[yayinX].BackingEnabled = false }, kullaniciA, yayinX, ErrBackingDisabled},
-		{"cover yayini", func(d *sahteDepo) { d.yayinlar[yayinX].SourcePublicationID = yayinY }, kullaniciA, yayinX, ErrBackingDisabled},
-		{"stem kopyasi yok", func(d *sahteDepo) { d.stemListeleri[yayinX] = []StemRecord{} }, kullaniciA, yayinX, ErrBackingDisabled},
-		{"gorunmeyen", func(d *sahteDepo) { d.yayinlar[yayinX].Visibility = VisibilityFollowers }, kullaniciA, yayinX, ErrNotFound},
-		{"olmayan", nil, kullaniciA, yayinY, ErrNotFound},
-		{"bozuk id", nil, kullaniciA, "x", ErrNotFound},
-		{"sahibinin hazirlanan yayini", func(d *sahteDepo) { d.yayinlar[yayinX].Status = StatusPreparing }, kullaniciB, yayinX, ErrInvalidStatus},
-		{"baskasinin hazirlanan yayini", func(d *sahteDepo) { d.yayinlar[yayinX].Status = StatusPreparing }, kullaniciA, yayinX, ErrNotFound},
+		{"altyapi kapali", func(store *fakeStore) { store.publications[pubX].BackingEnabled = false }, userA, pubX, ErrBackingDisabled},
+		{"cover yayini", func(store *fakeStore) { store.publications[pubX].SourcePublicationID = pubY }, userA, pubX, ErrBackingDisabled},
+		{"stem kopyasi yok", func(store *fakeStore) { store.stemLists[pubX] = []StemRecord{} }, userA, pubX, ErrBackingDisabled},
+		{"gorunmeyen", func(store *fakeStore) { store.publications[pubX].Visibility = VisibilityFollowers }, userA, pubX, ErrNotFound},
+		{"olmayan", nil, userA, pubY, ErrNotFound},
+		{"bozuk id", nil, userA, "x", ErrNotFound},
+		{"sahibinin hazirlanan yayini", func(store *fakeStore) { store.publications[pubX].Status = StatusPreparing }, userB, pubX, ErrInvalidStatus},
+		{"baskasinin hazirlanan yayini", func(store *fakeStore) { store.publications[pubX].Status = StatusPreparing }, userA, pubX, ErrNotFound},
 	}
-	for _, c := range durumlar {
-		d := coverDeposu()
-		if c.hazirla != nil {
-			c.hazirla(d)
+	for _, c := range cases {
+		store := coverStore()
+		if c.setup != nil {
+			c.setup(store)
 		}
-		s, _ := testServisi(d)
-		kop := &sahteKopyalayici{}
-		s.WithCopier(kop)
-		if _, err := s.StartCover(ctx, c.kullanici, c.yayin); !errors.Is(err, c.beklenen) {
-			t.Errorf("%s: %v, beklenen %v", c.ad, err, c.beklenen)
+		s, _ := newTestService(store)
+		copier := &fakeCopier{}
+		s.WithCopier(copier)
+		if _, err := s.StartCover(ctx, c.user, c.pub); !errors.Is(err, c.want) {
+			t.Errorf("%s: %v, beklenen %v", c.name, err, c.want)
 		}
-		if len(kop.kopyalar) != 0 {
-			t.Errorf("%s: kopya yapilmamali", c.ad)
+		if len(copier.copies) != 0 {
+			t.Errorf("%s: kopya yapilmamali", c.name)
 		}
 	}
 
-	s, _ := testServisi(coverDeposu())
-	s.WithCopier(&sahteKopyalayici{hata: errors.New("r2 kapali")})
-	if _, err := s.StartCover(ctx, kullaniciA, yayinX); err == nil || errors.Is(err, ErrBackingDisabled) {
+	s, _ := newTestService(coverStore())
+	s.WithCopier(&fakeCopier{err: errors.New("r2 kapali")})
+	if _, err := s.StartCover(ctx, userA, pubX); err == nil || errors.Is(err, ErrBackingDisabled) {
 		t.Fatalf("kopya hatasi sunucu hatasi olmali: %v", err)
 	}
 }
 
-func TestServis_Coverlar(t *testing.T) {
-	d := coverDeposu()
-	d.akisOgeleri = ozetler(3)
-	s, _ := testServisi(d)
+func TestService_Covers(t *testing.T) {
+	store := coverStore()
+	store.feedItems = sampleSummaries(3)
+	s, _ := newTestService(store)
 	ctx := context.Background()
 
-	sayfa, err := s.Covers(ctx, kullaniciA, strings.ToUpper(yayinX), "", 2)
-	if err != nil || len(sayfa.Items) != 2 || sayfa.NextCursor == nil {
-		t.Fatalf("sayfa = %+v, %v", sayfa, err)
+	page, err := s.Covers(ctx, userA, strings.ToUpper(pubX), "", 2)
+	if err != nil || len(page.Items) != 2 || page.NextCursor == nil {
+		t.Fatalf("sayfa = %+v, %v", page, err)
 	}
-	if d.sonAkis.tur != "cover" || d.sonAkis.sahip != yayinX || d.sonAkis.izleyici != kullaniciA || d.sonAkis.limit != 2 {
-		t.Fatalf("depo cagrisi = %+v", d.sonAkis)
+	if store.lastFeed.kind != "cover" || store.lastFeed.owner != pubX || store.lastFeed.viewer != userA || store.lastFeed.limit != 2 {
+		t.Fatalf("depo cagrisi = %+v", store.lastFeed)
 	}
 
-	d.sonAkis = akisCagrisi{}
-	d.yayinlar[yayinX].BackingEnabled = false
-	bos, err := s.Covers(ctx, kullaniciA, yayinX, "", 20)
-	if err != nil || bos.Items == nil || len(bos.Items) != 0 || bos.NextCursor != nil {
-		t.Fatalf("altyapi kapali bos sayfa = %+v, %v", bos, err)
+	store.lastFeed = feedCall{}
+	store.publications[pubX].BackingEnabled = false
+	empty, err := s.Covers(ctx, userA, pubX, "", 20)
+	if err != nil || empty.Items == nil || len(empty.Items) != 0 || empty.NextCursor != nil {
+		t.Fatalf("altyapi kapali bos sayfa = %+v, %v", empty, err)
 	}
-	if d.sonAkis.tur != "" {
+	if store.lastFeed.kind != "" {
 		t.Fatal("altyapi kapaliyken depo sorgulanmamali")
 	}
 
-	d.yayinlar[yayinX].Visibility = VisibilityFollowers
-	if _, err := s.Covers(ctx, kullaniciA, yayinX, "", 20); !errors.Is(err, ErrNotFound) {
+	store.publications[pubX].Visibility = VisibilityFollowers
+	if _, err := s.Covers(ctx, userA, pubX, "", 20); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("gorunmeyen kaynak: %v", err)
 	}
-	if _, err := s.Covers(ctx, kullaniciA, yayinX, "bozuk!", 20); !errors.Is(err, ErrValidation) {
+	if _, err := s.Covers(ctx, userA, pubX, "bozuk!", 20); !errors.Is(err, ErrValidation) {
 		t.Fatalf("bozuk imlec: %v", err)
 	}
 }

@@ -9,9 +9,9 @@ import (
 	"github.com/google/uuid"
 )
 
-func ornekYeniYayin(sahipID string) PublicationInsert {
+func samplePublicationInsert(ownerID string) PublicationInsert {
 	return PublicationInsert{
-		ID: uuid.NewString(), Slug: "Ab3dEf9h", OwnerID: sahipID,
+		ID: uuid.NewString(), Slug: "Ab3dEf9h", OwnerID: ownerID,
 		Title: "Gece", Description: "aciklama", Genre: "pop", BPM: 120,
 		MusicalKey: MusicalKey{Tonic: "A", Mode: "minor"}, DurationSec: 184,
 		Visibility: VisibilityEveryone, BackingEnabled: true, CommentsEnabled: true,
@@ -23,357 +23,357 @@ func ornekYeniYayin(sahipID string) PublicationInsert {
 	}
 }
 
-func TestPostgresDepo_YayinEkleVeGetir(t *testing.T) {
-	d := NewPostgresStore(testHavuz(t))
+func TestPostgresStore_InsertAndGetPublication(t *testing.T) {
+	store := NewPostgresStore(testPool(t))
 	ctx := context.Background()
-	sahip := uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	y := ornekYeniYayin(sahip)
-	if err := d.InsertPublication(ctx, y); err != nil {
+	owner := uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	ins := samplePublicationInsert(owner)
+	if err := store.InsertPublication(ctx, ins); err != nil {
 		t.Fatalf("YayinEkle: %v", err)
 	}
-	k, err := d.GetPublication(ctx, y.ID, sahip)
+	rec, err := store.GetPublication(ctx, ins.ID, owner)
 	if err != nil {
 		t.Fatalf("YayinGetir: %v", err)
 	}
-	if k.Title != "Gece" || k.Status != StatusPreparing || !k.IsMine || k.Visibility != VisibilityEveryone {
-		t.Fatalf("kayit = %+v", k)
+	if rec.Title != "Gece" || rec.Status != StatusPreparing || !rec.IsMine || rec.Visibility != VisibilityEveryone {
+		t.Fatalf("kayit = %+v", rec)
 	}
-	if k.Owner.Username != "sahip" || k.Owner.AvatarColor != AvatarColor(sahip) {
-		t.Fatalf("sahip = %+v", k.Owner)
+	if rec.Owner.Username != "sahip" || rec.Owner.AvatarColor != AvatarColor(owner) {
+		t.Fatalf("sahip = %+v", rec.Owner)
 	}
-	if k.MusicalKey != (MusicalKey{Tonic: "A", Mode: "minor"}) || k.DurationSec != 184 || k.BPM != 120 {
-		t.Fatalf("muzik alanlari = %+v", k.PublicationSummary)
+	if rec.MusicalKey != (MusicalKey{Tonic: "A", Mode: "minor"}) || rec.DurationSec != 184 || rec.BPM != 120 {
+		t.Fatalf("muzik alanlari = %+v", rec.PublicationSummary)
 	}
-	if k.Waveform == nil || len(k.Waveform) != 0 || k.Source != nil {
-		t.Fatalf("dalga formu bos dizi, kaynak nil olmali: %v %v", k.Waveform, k.Source)
+	if rec.Waveform == nil || len(rec.Waveform) != 0 || rec.Source != nil {
+		t.Fatalf("dalga formu bos dizi, kaynak nil olmali: %v %v", rec.Waveform, rec.Source)
 	}
-	if len(k.Lyrics.Sections) != 1 || k.Lyrics.Sections[0].Lines[1] != "iki" || len(k.Structure) != 1 || k.Structure[0].Bars != 8 {
-		t.Fatalf("sozler/yapi = %+v %+v", k.Lyrics, k.Structure)
+	if len(rec.Lyrics.Sections) != 1 || rec.Lyrics.Sections[0].Lines[1] != "iki" || len(rec.Structure) != 1 || rec.Structure[0].Bars != 8 {
+		t.Fatalf("sozler/yapi = %+v %+v", rec.Lyrics, rec.Structure)
 	}
-	if !k.HasStems || k.MasterKey != "" || k.Deleted || k.CreatedAt.Location().String() != "UTC" {
-		t.Fatalf("ic alanlar = stem %v master %q silindi %v", k.HasStems, k.MasterKey, k.Deleted)
+	if !rec.HasStems || rec.MasterKey != "" || rec.Deleted || rec.CreatedAt.Location().String() != "UTC" {
+		t.Fatalf("ic alanlar = stem %v master %q silindi %v", rec.HasStems, rec.MasterKey, rec.Deleted)
 	}
-	if s, err := d.GetPublicationBySlug(ctx, "Ab3dEf9h", uuid.NewString()); err != nil || s.ID != y.ID || s.IsMine {
+	if s, err := store.GetPublicationBySlug(ctx, "Ab3dEf9h", uuid.NewString()); err != nil || s.ID != ins.ID || s.IsMine {
 		t.Fatalf("slug ile = %+v, %v", s, err)
 	}
-	if _, err := d.GetPublication(ctx, uuid.NewString(), sahip); !errors.Is(err, ErrNotFound) {
+	if _, err := store.GetPublication(ctx, uuid.NewString(), owner); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("olmayan yayin: %v", err)
 	}
 }
 
-func TestPostgresDepo_SlugCakismasi(t *testing.T) {
-	d := NewPostgresStore(testHavuz(t))
+func TestPostgresStore_SlugConflict(t *testing.T) {
+	store := NewPostgresStore(testPool(t))
 	ctx := context.Background()
-	sahip := uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	if err := d.InsertPublication(ctx, ornekYeniYayin(sahip)); err != nil {
+	owner := uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	if err := store.InsertPublication(ctx, samplePublicationInsert(owner)); err != nil {
 		t.Fatalf("ilk: %v", err)
 	}
-	if err := d.InsertPublication(ctx, ornekYeniYayin(sahip)); !errors.Is(err, errSlugConflict) {
+	if err := store.InsertPublication(ctx, samplePublicationInsert(owner)); !errors.Is(err, errSlugConflict) {
 		t.Fatalf("errSlugCakisti bekleniyordu: %v", err)
 	}
 }
 
-// SQL kosulu ile Go kurali her kombinasyonda ayni karari vermeli.
-func TestPostgresDepo_GorunurlukSQLVeGoAyni(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+// The SQL condition and the Go rule must make the same decision for every combination.
+func TestPostgresStore_VisibilitySQLMatchesGo(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	sahip, takipci, yabanci := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	testTakipEkle(t, havuz, takipci, sahip)
+	owner, follower, stranger := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	testInsertFollow(t, pool, follower, owner)
 
-	var yayinlar []string
-	for _, gr := range []string{VisibilityEveryone, VisibilityFollowers, VisibilityLink} {
-		for _, durum := range []string{StatusPreparing, StatusPublished, StatusFailed} {
-			for _, silindi := range []bool{false, true} {
-				yayinlar = append(yayinlar, testYayinEkle(t, havuz, testYayin{SahipID: sahip, Gorunurluk: gr, Durum: durum, Silindi: silindi}))
+	var pubs []string
+	for _, vis := range []string{VisibilityEveryone, VisibilityFollowers, VisibilityLink} {
+		for _, status := range []string{StatusPreparing, StatusPublished, StatusFailed} {
+			for _, deleted := range []bool{false, true} {
+				pubs = append(pubs, testInsertPublication(t, pool, testPublication{OwnerID: owner, Visibility: vis, Status: status, Deleted: deleted}))
 			}
 		}
 	}
-	for _, izleyici := range []string{sahip, takipci, yabanci} {
-		for _, id := range yayinlar {
-			k, err := d.GetPublication(ctx, id, izleyici)
+	for _, viewer := range []string{owner, follower, stranger} {
+		for _, id := range pubs {
+			rec, err := store.GetPublication(ctx, id, viewer)
 			if err != nil {
 				t.Fatalf("YayinGetir: %v", err)
 			}
-			for _, detay := range []bool{true, false} {
-				var sqlKarari bool
-				if err := havuz.QueryRow(ctx, fmt.Sprintf(
+			for _, detail := range []bool{true, false} {
+				var sqlDecision bool
+				if err := pool.QueryRow(ctx, fmt.Sprintf(
 					`SELECT EXISTS (SELECT 1 FROM sosyal.yayin y WHERE y.id = $2 AND %s)`,
-					visibilityCondition("y", "$1", detay)), izleyici, id).Scan(&sqlKarari); err != nil {
+					visibilityCondition("y", "$1", detail)), viewer, id).Scan(&sqlDecision); err != nil {
 					t.Fatalf("kosul: %v", err)
 				}
-				goKarari := canSee(k.visibilityInput(izleyici), detay)
-				if sqlKarari != goKarari {
+				goDecision := canSee(rec.visibilityInput(viewer), detail)
+				if sqlDecision != goDecision {
 					t.Errorf("izleyici %s yayin %s/%s silindi=%v detay=%v: SQL %v, Go %v",
-						izleyici[:4], k.Visibility, k.Status, k.Deleted, detay, sqlKarari, goKarari)
+						viewer[:4], rec.Visibility, rec.Status, rec.Deleted, detail, sqlDecision, goDecision)
 				}
 			}
 		}
 	}
 }
 
-func TestPostgresDepo_SayaclarVeKaynak(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+func TestPostgresStore_CountersAndSource(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	sahip, coverci, izleyici := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	testProfilEkle(t, d, coverci, "coverci")
-	orijinal := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Baslik: "Orijinal", AltyapiAcik: true})
-	cover := testYayinEkle(t, havuz, testYayin{SahipID: coverci, KaynakID: orijinal})
-	testYayinEkle(t, havuz, testYayin{SahipID: coverci, KaynakID: orijinal, Gorunurluk: VisibilityLink})
-	testYayinEkle(t, havuz, testYayin{SahipID: coverci, KaynakID: orijinal, Durum: StatusFailed})
-	testYayinEkle(t, havuz, testYayin{SahipID: coverci, KaynakID: orijinal, Silindi: true})
-	for _, kisi := range []string{izleyici, coverci} {
-		if _, err := havuz.Exec(ctx, `INSERT INTO sosyal.begeni (kullanici_id, yayin_id) VALUES ($1, $2)`, kisi, orijinal); err != nil {
+	owner, coverOwner, viewer := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	testInsertProfile(t, store, coverOwner, "coverci")
+	original := testInsertPublication(t, pool, testPublication{OwnerID: owner, Title: "Orijinal", BackingEnabled: true})
+	cover := testInsertPublication(t, pool, testPublication{OwnerID: coverOwner, SourceID: original})
+	testInsertPublication(t, pool, testPublication{OwnerID: coverOwner, SourceID: original, Visibility: VisibilityLink})
+	testInsertPublication(t, pool, testPublication{OwnerID: coverOwner, SourceID: original, Status: StatusFailed})
+	testInsertPublication(t, pool, testPublication{OwnerID: coverOwner, SourceID: original, Deleted: true})
+	for _, person := range []string{viewer, coverOwner} {
+		if _, err := pool.Exec(ctx, `INSERT INTO sosyal.begeni (kullanici_id, yayin_id) VALUES ($1, $2)`, person, original); err != nil {
 			t.Fatalf("begeni: %v", err)
 		}
 	}
-	if _, err := havuz.Exec(ctx, `
+	if _, err := pool.Exec(ctx, `
 		INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin, silinme)
-		VALUES (gen_random_uuid(), $1, $2, 'a', NULL), (gen_random_uuid(), $1, $2, 'b', now())`, orijinal, izleyici); err != nil {
+		VALUES (gen_random_uuid(), $1, $2, 'a', NULL), (gen_random_uuid(), $1, $2, 'b', now())`, original, viewer); err != nil {
 		t.Fatalf("yorum: %v", err)
 	}
 
-	k, err := d.GetPublication(ctx, orijinal, izleyici)
+	rec, err := store.GetPublication(ctx, original, viewer)
 	if err != nil {
 		t.Fatalf("YayinGetir: %v", err)
 	}
-	// Cover sayaci: yayinda ve silinmemis (gorunurluk fark etmez) = 2.
-	if k.LikeCount != 2 || k.CommentCount != 1 || k.CoverCount != 2 || !k.LikedByMe {
-		t.Fatalf("sayaclar = begeni %d yorum %d cover %d begendim %v", k.LikeCount, k.CommentCount, k.CoverCount, k.LikedByMe)
+	// Cover counter: published and not deleted (visibility does not matter) = 2.
+	if rec.LikeCount != 2 || rec.CommentCount != 1 || rec.CoverCount != 2 || !rec.LikedByMe {
+		t.Fatalf("sayaclar = begeni %d yorum %d cover %d begendim %v", rec.LikeCount, rec.CommentCount, rec.CoverCount, rec.LikedByMe)
 	}
 
-	c, err := d.GetPublication(ctx, cover, izleyici)
+	c, err := store.GetPublication(ctx, cover, viewer)
 	if err != nil || c.Source == nil {
 		t.Fatalf("cover = %+v, %v", c, err)
 	}
-	if *c.Source != (SourceSummary{PublicationID: orijinal, Title: "Orijinal", OwnerUsername: "sahip", Deleted: false}) {
+	if *c.Source != (SourceSummary{PublicationID: original, Title: "Orijinal", OwnerUsername: "sahip", Deleted: false}) {
 		t.Fatalf("canli kaynak = %+v", *c.Source)
 	}
-	if c.SourcePublicationID != orijinal {
+	if c.SourcePublicationID != original {
 		t.Fatalf("KaynakYayinID = %q", c.SourcePublicationID)
 	}
 
-	// Yumusak silinen orijinal: son degerler + silindi.
-	if err := d.DeletePublication(ctx, orijinal, sahip); err != nil {
+	// Soft-deleted original: last values + deleted.
+	if err := store.DeletePublication(ctx, original, owner); err != nil {
 		t.Fatalf("YayinSil: %v", err)
 	}
-	c, _ = d.GetPublication(ctx, cover, izleyici)
+	c, _ = store.GetPublication(ctx, cover, viewer)
 	if !c.Source.Deleted || c.Source.Title != "Orijinal" {
 		t.Fatalf("silinen kaynak = %+v", *c.Source)
 	}
-	// Kalici silinen orijinal (hesap silme gibi): cover'daki anlik goruntu.
-	// YayinKaldir yalnizca hazirlaniyor satiri sildigi icin ham SQL.
-	if _, err := havuz.Exec(ctx, `DELETE FROM sosyal.yayin WHERE id = $1`, orijinal); err != nil {
+	// Hard-deleted original (like account deletion): the snapshot on the cover.
+	// RemovePublication deletes only preparing rows, hence raw SQL.
+	if _, err := pool.Exec(ctx, `DELETE FROM sosyal.yayin WHERE id = $1`, original); err != nil {
 		t.Fatalf("kalici silme: %v", err)
 	}
-	c, _ = d.GetPublication(ctx, cover, izleyici)
-	if *c.Source != (SourceSummary{PublicationID: orijinal, Title: "Eski baslik", OwnerUsername: "eski_ad", Deleted: true}) {
+	c, _ = store.GetPublication(ctx, cover, viewer)
+	if *c.Source != (SourceSummary{PublicationID: original, Title: "Eski baslik", OwnerUsername: "eski_ad", Deleted: true}) {
 		t.Fatalf("kalici silinen kaynak = %+v", *c.Source)
 	}
 }
 
-func TestPostgresDepo_GuncelleSilTekrarDene(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+func TestPostgresStore_UpdateDeleteRetry(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	sahip, baskasi := uuid.NewString(), uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	id := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: StatusFailed, AltyapiAcik: true})
+	owner, another := uuid.NewString(), uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	id := testInsertPublication(t, pool, testPublication{OwnerID: owner, Status: StatusFailed, BackingEnabled: true})
 
-	aciklama, kapali := "yeni", false
-	if err := d.UpdatePublication(ctx, id, sahip, PublicationPatch{Description: &aciklama, BackingEnabled: &kapali}); err != nil {
+	description, disabled := "yeni", false
+	if err := store.UpdatePublication(ctx, id, owner, PublicationPatch{Description: &description, BackingEnabled: &disabled}); err != nil {
 		t.Fatalf("guncelle: %v", err)
 	}
-	k, _ := d.GetPublication(ctx, id, sahip)
-	if k.Description != "yeni" || k.BackingEnabled || !k.CommentsEnabled || k.Visibility != VisibilityEveryone {
-		t.Fatalf("yalnizca gonderilen alanlar degismeli: %+v", k)
+	rec, _ := store.GetPublication(ctx, id, owner)
+	if rec.Description != "yeni" || rec.BackingEnabled || !rec.CommentsEnabled || rec.Visibility != VisibilityEveryone {
+		t.Fatalf("yalnizca gonderilen alanlar degismeli: %+v", rec)
 	}
-	if err := d.UpdatePublication(ctx, id, baskasi, PublicationPatch{Description: &aciklama}); !errors.Is(err, ErrNotFound) {
+	if err := store.UpdatePublication(ctx, id, another, PublicationPatch{Description: &description}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("baskasinin yamasi: %v", err)
 	}
 
-	if err := d.ResetForRetry(ctx, id, baskasi); !errors.Is(err, ErrNotFound) {
+	if err := store.ResetForRetry(ctx, id, another); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("baskasi tekrar deneyemez: %v", err)
 	}
-	if err := d.ResetForRetry(ctx, id, sahip); err != nil {
+	if err := store.ResetForRetry(ctx, id, owner); err != nil {
 		t.Fatalf("hata -> hazirlaniyor: %v", err)
 	}
-	if err := d.ResetForRetry(ctx, id, sahip); !errors.Is(err, ErrInvalidStatus) {
+	if err := store.ResetForRetry(ctx, id, owner); !errors.Is(err, ErrInvalidStatus) {
 		t.Fatalf("hazirlaniyor iken ErrDurum bekleniyordu: %v", err)
 	}
 
-	if err := d.DeletePublication(ctx, id, baskasi); !errors.Is(err, ErrNotFound) {
+	if err := store.DeletePublication(ctx, id, another); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("baskasi silemez: %v", err)
 	}
-	if err := d.DeletePublication(ctx, id, sahip); err != nil {
+	if err := store.DeletePublication(ctx, id, owner); err != nil {
 		t.Fatalf("sil: %v", err)
 	}
-	if err := d.DeletePublication(ctx, id, sahip); !errors.Is(err, ErrNotFound) {
+	if err := store.DeletePublication(ctx, id, owner); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("ikinci silme 404 olmali: %v", err)
 	}
-	if k, err := d.GetPublication(ctx, id, sahip); err != nil || !k.Deleted {
-		t.Fatalf("silinmis yayin isaretli donmeli: %+v, %v", k, err)
+	if rec, err := store.GetPublication(ctx, id, owner); err != nil || !rec.Deleted {
+		t.Fatalf("silinmis yayin isaretli donmeli: %+v, %v", rec, err)
 	}
-	if err := d.UpdatePublication(ctx, id, sahip, PublicationPatch{Description: &aciklama}); !errors.Is(err, ErrNotFound) {
+	if err := store.UpdatePublication(ctx, id, owner, PublicationPatch{Description: &description}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("silinmis yayin guncellenemez: %v", err)
 	}
-	if err := d.ResetForRetry(ctx, id, sahip); !errors.Is(err, ErrNotFound) {
+	if err := store.ResetForRetry(ctx, id, owner); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("silinmis yayin tekrar denenemez: %v", err)
 	}
 }
 
-func TestPostgresDepo_Hazirlik(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+func TestPostgresStore_Preparation(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	sahip := uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	y := ornekYeniYayin(sahip)
-	if err := d.InsertPublication(ctx, y); err != nil {
+	owner := uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	ins := samplePublicationInsert(owner)
+	if err := store.InsertPublication(ctx, ins); err != nil {
 		t.Fatalf("YayinEkle: %v", err)
 	}
-	h, err := d.GetPreparation(ctx, y.ID)
-	if err != nil || h.OwnerID != sahip || h.Status != StatusPreparing || h.Deleted {
-		t.Fatalf("hazirlik = %+v, %v", h, err)
+	prep, err := store.GetPreparation(ctx, ins.ID)
+	if err != nil || prep.OwnerID != owner || prep.Status != StatusPreparing || prep.Deleted {
+		t.Fatalf("hazirlik = %+v, %v", prep, err)
 	}
-	if h.Preparation.MasterKey != "masters/u/p/m.wav" || len(h.Preparation.Stems) != 1 || h.Preparation.Stems[0].Key != "stems/u/p/s1.mp3" {
-		t.Fatalf("hazirlik girdisi = %+v", h.Preparation)
+	if prep.Preparation.MasterKey != "masters/u/p/m.wav" || len(prep.Preparation.Stems) != 1 || prep.Preparation.Stems[0].Key != "stems/u/p/s1.mp3" {
+		t.Fatalf("hazirlik girdisi = %+v", prep.Preparation)
 	}
-	dalga := make([]float64, 64)
-	dalga[3] = 1
-	sonuc := PreparationResult{
-		MasterKey: "sosyal/" + y.ID + "/master.wav",
-		Stems:     []StemRecord{{ID: "s1", Instrument: "drums", Duration: 184, Key: "sosyal/" + y.ID + "/stems/s1.mp3"}},
-		Waveform:  dalga,
+	waveform := make([]float64, 64)
+	waveform[3] = 1
+	result := PreparationResult{
+		MasterKey: "sosyal/" + ins.ID + "/master.wav",
+		Stems:     []StemRecord{{ID: "s1", Instrument: "drums", Duration: 184, Key: "sosyal/" + ins.ID + "/stems/s1.mp3"}},
+		Waveform:  waveform,
 	}
-	if err := d.Publish(ctx, y.ID, sonuc); err != nil {
+	if err := store.Publish(ctx, ins.ID, result); err != nil {
 		t.Fatalf("Yayinla: %v", err)
 	}
-	k, _ := d.GetPublication(ctx, y.ID, sahip)
-	if k.Status != StatusPublished || len(k.Waveform) != 64 || k.Waveform[3] != 1 || k.MasterKey != sonuc.MasterKey {
-		t.Fatalf("yayinlanmis = durum %s dalga %d master %q", k.Status, len(k.Waveform), k.MasterKey)
+	rec, _ := store.GetPublication(ctx, ins.ID, owner)
+	if rec.Status != StatusPublished || len(rec.Waveform) != 64 || rec.Waveform[3] != 1 || rec.MasterKey != result.MasterKey {
+		t.Fatalf("yayinlanmis = durum %s dalga %d master %q", rec.Status, len(rec.Waveform), rec.MasterKey)
 	}
-	var stemler []StemRecord
-	var onizleme *string
-	if err := havuz.QueryRow(ctx, `SELECT stem_listesi, onizleme_anahtari FROM sosyal.yayin WHERE id = $1`, y.ID).Scan(&stemler, &onizleme); err != nil {
+	var stems []StemRecord
+	var preview *string
+	if err := pool.QueryRow(ctx, `SELECT stem_listesi, onizleme_anahtari FROM sosyal.yayin WHERE id = $1`, ins.ID).Scan(&stems, &preview); err != nil {
 		t.Fatalf("stem_listesi: %v", err)
 	}
-	if len(stemler) != 1 || stemler[0].Key != sonuc.Stems[0].Key || onizleme != nil {
-		t.Fatalf("stemler = %+v onizleme = %v", stemler, onizleme)
+	if len(stems) != 1 || stems[0].Key != result.Stems[0].Key || preview != nil {
+		t.Fatalf("stemler = %+v onizleme = %v", stems, preview)
 	}
-	// yayinda iken HataYap bir sey yapmaz.
-	if err := d.MarkFailed(ctx, y.ID); err != nil {
+	// MarkFailed does nothing while the publication is published.
+	if err := store.MarkFailed(ctx, ins.ID); err != nil {
 		t.Fatalf("HataYap: %v", err)
 	}
-	if k, _ := d.GetPublication(ctx, y.ID, sahip); k.Status != StatusPublished {
-		t.Fatalf("yayinda yayin hataya dusmemeli: %s", k.Status)
+	if rec, _ := store.GetPublication(ctx, ins.ID, owner); rec.Status != StatusPublished {
+		t.Fatalf("yayinda yayin hataya dusmemeli: %s", rec.Status)
 	}
-	if _, err := d.GetPreparation(ctx, uuid.NewString()); !errors.Is(err, ErrNotFound) {
+	if _, err := store.GetPreparation(ctx, uuid.NewString()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("olmayan hazirlik: %v", err)
 	}
 }
 
-func TestPostgresDepo_HataYapVeSilinmisYayinYayinlanmaz(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+func TestPostgresStore_MarkFailedAndDeletedNotPublished(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	sahip := uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	hatali := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: StatusPreparing})
-	if err := d.MarkFailed(ctx, hatali); err != nil {
+	owner := uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	failed := testInsertPublication(t, pool, testPublication{OwnerID: owner, Status: StatusPreparing})
+	if err := store.MarkFailed(ctx, failed); err != nil {
 		t.Fatalf("HataYap: %v", err)
 	}
-	if k, _ := d.GetPublication(ctx, hatali, sahip); k.Status != StatusFailed {
-		t.Fatalf("durum = %s", k.Status)
+	if rec, _ := store.GetPublication(ctx, failed, owner); rec.Status != StatusFailed {
+		t.Fatalf("durum = %s", rec.Status)
 	}
-	silinen := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: StatusPreparing, Silindi: true})
-	if err := d.Publish(ctx, silinen, PreparationResult{MasterKey: "m"}); err != nil {
+	softDeleted := testInsertPublication(t, pool, testPublication{OwnerID: owner, Status: StatusPreparing, Deleted: true})
+	if err := store.Publish(ctx, softDeleted, PreparationResult{MasterKey: "m"}); err != nil {
 		t.Fatalf("Yayinla: %v", err)
 	}
-	if k, _ := d.GetPublication(ctx, silinen, sahip); k.Status != StatusPreparing {
-		t.Fatalf("silinmis yayin yayinlanmamali: %s", k.Status)
+	if rec, _ := store.GetPublication(ctx, softDeleted, owner); rec.Status != StatusPreparing {
+		t.Fatalf("silinmis yayin yayinlanmamali: %s", rec.Status)
 	}
 }
 
-// Stems nil olsa bile kayit eklenir ve detay okunur.
-func TestPostgresDepo_NilStemlerleEkleVeGetir(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+// Even when Stems is nil, the record is inserted and the detail is read.
+func TestPostgresStore_InsertAndGetWithNilStems(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	sahip := uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	y := ornekYeniYayin(sahip)
-	y.Preparation.Stems = nil
-	if err := d.InsertPublication(ctx, y); err != nil {
+	owner := uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	ins := samplePublicationInsert(owner)
+	ins.Preparation.Stems = nil
+	if err := store.InsertPublication(ctx, ins); err != nil {
 		t.Fatalf("YayinEkle: %v", err)
 	}
-	k, err := d.GetPublication(ctx, y.ID, sahip)
+	rec, err := store.GetPublication(ctx, ins.ID, owner)
 	if err != nil {
 		t.Fatalf("YayinGetir: %v", err)
 	}
-	if k.HasStems {
+	if rec.HasStems {
 		t.Fatal("stem yokken StemVar false olmali")
 	}
-	var tip string
-	if err := havuz.QueryRow(ctx, `SELECT jsonb_typeof(hazirlik->'stems') FROM sosyal.yayin WHERE id = $1`, y.ID).Scan(&tip); err != nil || tip != "array" {
-		t.Fatalf("stems dizi olarak saklanmali: %q, %v", tip, err)
+	var kind string
+	if err := pool.QueryRow(ctx, `SELECT jsonb_typeof(hazirlik->'stems') FROM sosyal.yayin WHERE id = $1`, ins.ID).Scan(&kind); err != nil || kind != "array" {
+		t.Fatalf("stems dizi olarak saklanmali: %q, %v", kind, err)
 	}
 }
 
-// Ham {"stems":null} ve null satirlar iceren satir da detayda okunur.
-func TestPostgresDepo_NullStemVeSatirlarDetayiBozmaz(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+// A row with raw {"stems":null} and null values is also readable in the detail.
+func TestPostgresStore_NullStemsAndLinesKeepDetailValid(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	sahip := uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	id := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Hazirlik: `{"masterKey":"masters/u/p/m.wav","stems":null}`})
-	if _, err := havuz.Exec(ctx, `UPDATE sosyal.yayin SET sozler = '{"bolumler":[{"bolumId":"b1","tur":"verse","satirlar":null}]}' WHERE id = $1`, id); err != nil {
+	owner := uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	id := testInsertPublication(t, pool, testPublication{OwnerID: owner, Preparation: `{"masterKey":"masters/u/p/m.wav","stems":null}`})
+	if _, err := pool.Exec(ctx, `UPDATE sosyal.yayin SET sozler = '{"bolumler":[{"bolumId":"b1","tur":"verse","satirlar":null}]}' WHERE id = $1`, id); err != nil {
 		t.Fatalf("sozler: %v", err)
 	}
-	k, err := d.GetPublication(ctx, id, sahip)
+	rec, err := store.GetPublication(ctx, id, owner)
 	if err != nil {
 		t.Fatalf("YayinGetir: %v", err)
 	}
-	if k.HasStems {
+	if rec.HasStems {
 		t.Fatal("null stems StemVar false olmali")
 	}
-	if len(k.Lyrics.Sections) != 1 || k.Lyrics.Sections[0].Lines == nil {
-		t.Fatalf("satirlar bos dizi olmali: %+v", k.Lyrics)
+	if len(rec.Lyrics.Sections) != 1 || rec.Lyrics.Sections[0].Lines == nil {
+		t.Fatalf("satirlar bos dizi olmali: %+v", rec.Lyrics)
 	}
 }
 
-// HataYap silinmis yayina, YayinKaldir hazirlaniyor disindaki yayina dokunmaz.
-func TestPostgresDepo_HataYapVeKaldirKorumalari(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+// MarkFailed does not touch a deleted publication; RemovePublication does not touch one that is not preparing.
+func TestPostgresStore_MarkFailedAndRemoveGuards(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	sahip := uuid.NewString()
-	testProfilEkle(t, d, sahip, "sahip")
-	silinen := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: StatusPreparing, Silindi: true})
-	if err := d.MarkFailed(ctx, silinen); err != nil {
+	owner := uuid.NewString()
+	testInsertProfile(t, store, owner, "sahip")
+	softDeleted := testInsertPublication(t, pool, testPublication{OwnerID: owner, Status: StatusPreparing, Deleted: true})
+	if err := store.MarkFailed(ctx, softDeleted); err != nil {
 		t.Fatalf("HataYap: %v", err)
 	}
-	if k, _ := d.GetPublication(ctx, silinen, sahip); k.Status != StatusPreparing {
-		t.Fatalf("silinmis yayin hataya alinmamali: %s", k.Status)
+	if rec, _ := store.GetPublication(ctx, softDeleted, owner); rec.Status != StatusPreparing {
+		t.Fatalf("silinmis yayin hataya alinmamali: %s", rec.Status)
 	}
-	yayinda := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: StatusPublished})
-	if err := d.RemovePublication(ctx, yayinda); err != nil {
+	published := testInsertPublication(t, pool, testPublication{OwnerID: owner, Status: StatusPublished})
+	if err := store.RemovePublication(ctx, published); err != nil {
 		t.Fatalf("YayinKaldir: %v", err)
 	}
-	if _, err := d.GetPublication(ctx, yayinda, sahip); err != nil {
+	if _, err := store.GetPublication(ctx, published, owner); err != nil {
 		t.Fatalf("yayinda yayin kaldirilmamali: %v", err)
 	}
-	hazir := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: StatusPreparing})
-	if err := d.RemovePublication(ctx, hazir); err != nil {
+	ready := testInsertPublication(t, pool, testPublication{OwnerID: owner, Status: StatusPreparing})
+	if err := store.RemovePublication(ctx, ready); err != nil {
 		t.Fatalf("YayinKaldir: %v", err)
 	}
-	if _, err := d.GetPublication(ctx, hazir, sahip); !errors.Is(err, ErrNotFound) {
+	if _, err := store.GetPublication(ctx, ready, owner); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("hazirlaniyor yayin kaldirilmali: %v", err)
 	}
 }

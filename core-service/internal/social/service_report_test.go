@@ -7,87 +7,87 @@ import (
 	"testing"
 )
 
-func TestServis_SikayetYayinVeYorum(t *testing.T) {
-	d := yorumDeposu()
-	d.yorumKayitlari[yorum1] = &CommentRecord{ID: yorum1, PublicationID: yayinX, AuthorID: kullaniciB, PublicationOwnerID: kullaniciB}
-	s, _ := testServisi(d)
+func TestService_ReportPublicationAndComment(t *testing.T) {
+	store := commentStore()
+	store.commentRecords[comment1] = &CommentRecord{ID: comment1, PublicationID: pubX, AuthorID: userB, PublicationOwnerID: userB}
+	s, _ := newTestService(store)
 	ctx := context.Background()
 
-	if err := s.Report(ctx, kullaniciC, ReportInput{TargetType: "yayin", TargetID: strings.ToUpper(yayinX), Reason: "spam"}); err != nil {
+	if err := s.Report(ctx, userC, ReportInput{TargetType: "yayin", TargetID: strings.ToUpper(pubX), Reason: "spam"}); err != nil {
 		t.Fatalf("yayin sikayeti: %v", err)
 	}
-	if err := s.Report(ctx, kullaniciC, ReportInput{TargetType: "yorum", TargetID: yorum1, Reason: "taciz", Description: "  kaba  "}); err != nil {
+	if err := s.Report(ctx, userC, ReportInput{TargetType: "yorum", TargetID: comment1, Reason: "taciz", Description: "  kaba  "}); err != nil {
 		t.Fatalf("yorum sikayeti: %v", err)
 	}
-	if len(d.sikayetler) != 2 {
-		t.Fatalf("sikayetler = %+v", d.sikayetler)
+	if len(store.reports) != 2 {
+		t.Fatalf("sikayetler = %+v", store.reports)
 	}
-	y, c := d.sikayetler[0], d.sikayetler[1]
-	if y.ReporterID != kullaniciC || y.TargetID != yayinX || y.PublicationID != yayinX || y.Reason != "spam" || y.ID == "" {
-		t.Fatalf("yayin sikayeti = %+v", y)
+	pub, c := store.reports[0], store.reports[1]
+	if pub.ReporterID != userC || pub.TargetID != pubX || pub.PublicationID != pubX || pub.Reason != "spam" || pub.ID == "" {
+		t.Fatalf("yayin sikayeti = %+v", pub)
 	}
-	if c.TargetType != "yorum" || c.TargetID != yorum1 || c.PublicationID != yayinX || c.Description != "kaba" {
+	if c.TargetType != "yorum" || c.TargetID != comment1 || c.PublicationID != pubX || c.Description != "kaba" {
 		t.Fatalf("yorum sikayeti = %+v", c)
 	}
 }
 
-func TestServis_SikayetHatalari(t *testing.T) {
+func TestService_ReportErrors(t *testing.T) {
 	ctx := context.Background()
-	durumlar := []struct {
-		ad       string
-		hazirla  func(d *sahteDepo)
-		girdi    ReportInput
-		beklenen error
+	cases := []struct {
+		name  string
+		setup func(store *fakeStore)
+		input ReportInput
+		want  error
 	}{
-		{"bilinmeyen hedef turu", nil, ReportInput{TargetType: "profil", TargetID: yayinX, Reason: "spam"}, ErrValidation},
-		{"bilinmeyen neden", nil, ReportInput{TargetType: "yayin", TargetID: yayinX, Reason: "kotu"}, ErrValidation},
-		{"uzun aciklama", nil, ReportInput{TargetType: "yayin", TargetID: yayinX, Reason: "diger", Description: strings.Repeat("a", 301)}, ErrValidation},
-		{"NUL iceren aciklama", nil, ReportInput{TargetType: "yayin", TargetID: yayinX, Reason: "diger", Description: "kaba\x00"}, ErrValidation},
+		{"bilinmeyen hedef turu", nil, ReportInput{TargetType: "profil", TargetID: pubX, Reason: "spam"}, ErrValidation},
+		{"bilinmeyen neden", nil, ReportInput{TargetType: "yayin", TargetID: pubX, Reason: "kotu"}, ErrValidation},
+		{"uzun aciklama", nil, ReportInput{TargetType: "yayin", TargetID: pubX, Reason: "diger", Description: strings.Repeat("a", 301)}, ErrValidation},
+		{"NUL iceren aciklama", nil, ReportInput{TargetType: "yayin", TargetID: pubX, Reason: "diger", Description: "kaba\x00"}, ErrValidation},
 		{"bozuk kimlik", nil, ReportInput{TargetType: "yayin", TargetID: "x", Reason: "spam"}, ErrNotFound},
-		{"olmayan yayin", nil, ReportInput{TargetType: "yayin", TargetID: yayinY, Reason: "spam"}, ErrNotFound},
-		{"gorunmeyen yayin", func(d *sahteDepo) { d.yayinlar[yayinX].Visibility = VisibilityFollowers },
-			ReportInput{TargetType: "yayin", TargetID: yayinX, Reason: "spam"}, ErrNotFound},
-		{"olmayan yorum", nil, ReportInput{TargetType: "yorum", TargetID: yorumC, Reason: "spam"}, ErrNotFound},
-		{"silinmis yorum", func(d *sahteDepo) {
-			d.yorumKayitlari[yorum1] = &CommentRecord{ID: yorum1, PublicationID: yayinX, Deleted: true}
-		}, ReportInput{TargetType: "yorum", TargetID: yorum1, Reason: "spam"}, ErrNotFound},
-		{"gorunmeyen yayinin yorumu", func(d *sahteDepo) {
-			d.yorumKayitlari[yorum1] = &CommentRecord{ID: yorum1, PublicationID: yayinX}
-			d.yayinlar[yayinX].Deleted = true
-		}, ReportInput{TargetType: "yorum", TargetID: yorum1, Reason: "spam"}, ErrNotFound},
-		{"gizli (takipciler) yayinin yorumu", func(d *sahteDepo) {
-			d.yorumKayitlari[yorum1] = &CommentRecord{ID: yorum1, PublicationID: yayinX, AuthorID: kullaniciB, PublicationOwnerID: kullaniciB}
-			d.yayinlar[yayinX].Visibility = VisibilityFollowers
-		}, ReportInput{TargetType: "yorum", TargetID: yorum1, Reason: "spam"}, ErrNotFound},
+		{"olmayan yayin", nil, ReportInput{TargetType: "yayin", TargetID: pubY, Reason: "spam"}, ErrNotFound},
+		{"gorunmeyen yayin", func(store *fakeStore) { store.publications[pubX].Visibility = VisibilityFollowers },
+			ReportInput{TargetType: "yayin", TargetID: pubX, Reason: "spam"}, ErrNotFound},
+		{"olmayan yorum", nil, ReportInput{TargetType: "yorum", TargetID: commentC, Reason: "spam"}, ErrNotFound},
+		{"silinmis yorum", func(store *fakeStore) {
+			store.commentRecords[comment1] = &CommentRecord{ID: comment1, PublicationID: pubX, Deleted: true}
+		}, ReportInput{TargetType: "yorum", TargetID: comment1, Reason: "spam"}, ErrNotFound},
+		{"gorunmeyen yayinin yorumu", func(store *fakeStore) {
+			store.commentRecords[comment1] = &CommentRecord{ID: comment1, PublicationID: pubX}
+			store.publications[pubX].Deleted = true
+		}, ReportInput{TargetType: "yorum", TargetID: comment1, Reason: "spam"}, ErrNotFound},
+		{"gizli (takipciler) yayinin yorumu", func(store *fakeStore) {
+			store.commentRecords[comment1] = &CommentRecord{ID: comment1, PublicationID: pubX, AuthorID: userB, PublicationOwnerID: userB}
+			store.publications[pubX].Visibility = VisibilityFollowers
+		}, ReportInput{TargetType: "yorum", TargetID: comment1, Reason: "spam"}, ErrNotFound},
 	}
-	for _, c := range durumlar {
-		d := yorumDeposu()
-		if c.hazirla != nil {
-			c.hazirla(d)
+	for _, c := range cases {
+		store := commentStore()
+		if c.setup != nil {
+			c.setup(store)
 		}
-		s, _ := testServisi(d)
-		if err := s.Report(ctx, kullaniciC, c.girdi); !errors.Is(err, c.beklenen) {
-			t.Errorf("%s: %v, beklenen %v", c.ad, err, c.beklenen)
+		s, _ := newTestService(store)
+		if err := s.Report(ctx, userC, c.input); !errors.Is(err, c.want) {
+			t.Errorf("%s: %v, beklenen %v", c.name, err, c.want)
 		}
-		if len(d.sikayetler) != 0 {
-			t.Errorf("%s: sikayet yazilmamali", c.ad)
+		if len(store.reports) != 0 {
+			t.Errorf("%s: sikayet yazilmamali", c.name)
 		}
 	}
 }
 
-// Bozuk hedefId depoya hic gitmeden 404'tur: depo her cagride baska bir
-// hata doner, yani bir cagri sonucu ErrBulunamadi'dan ayirirdi.
-func TestServis_SikayetBozukKimlikDepoyaGitmez(t *testing.T) {
-	d := yorumDeposu()
-	d.hata = errors.New("depo cagrilmamali")
-	s, _ := testServisi(d)
-	for _, tur := range []string{"yayin", "yorum"} {
-		err := s.Report(context.Background(), kullaniciC, ReportInput{TargetType: tur, TargetID: "uuid-degil", Reason: "spam"})
+// A malformed targetId is a 404 without reaching the store: the store returns a
+// different error on every call, so a call result would be distinguishable from ErrNotFound.
+func TestService_ReportMalformedIDSkipsStore(t *testing.T) {
+	store := commentStore()
+	store.err = errors.New("depo cagrilmamali")
+	s, _ := newTestService(store)
+	for _, kind := range []string{"yayin", "yorum"} {
+		err := s.Report(context.Background(), userC, ReportInput{TargetType: kind, TargetID: "uuid-degil", Reason: "spam"})
 		if !errors.Is(err, ErrNotFound) {
-			t.Errorf("%s: %v, beklenen ErrBulunamadi (depo cagrilmadan)", tur, err)
+			t.Errorf("%s: %v, beklenen ErrBulunamadi (depo cagrilmadan)", kind, err)
 		}
 	}
-	if len(d.sikayetler) != 0 {
-		t.Fatalf("sikayet yazilmamali: %+v", d.sikayetler)
+	if len(store.reports) != 0 {
+		t.Fatalf("sikayet yazilmamali: %+v", store.reports)
 	}
 }

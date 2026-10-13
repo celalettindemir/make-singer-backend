@@ -8,90 +8,90 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestPostgresDepo_ProfilKaydetVeGetir(t *testing.T) {
-	d := NewPostgresStore(testHavuz(t))
+func TestPostgresStore_UpsertAndGetProfile(t *testing.T) {
+	store := NewPostgresStore(testPool(t))
 	ctx := context.Background()
 	id := uuid.NewString()
 
-	if _, err := d.GetProfile(ctx, id); !errors.Is(err, ErrNoProfile) {
+	if _, err := store.GetProfile(ctx, id); !errors.Is(err, ErrNoProfile) {
 		t.Fatalf("profil yokken ErrProfilYok bekleniyordu: %v", err)
 	}
-	k, err := d.UpsertProfile(ctx, ProfileRecord{UserID: id, Username: "ali", DisplayName: "Ali", Bio: "b"})
-	if err != nil || k.Username != "ali" || k.CreatedAt.IsZero() {
-		t.Fatalf("kaydet = %+v, %v", k, err)
+	rec, err := store.UpsertProfile(ctx, ProfileRecord{UserID: id, Username: "ali", DisplayName: "Ali", Bio: "b"})
+	if err != nil || rec.Username != "ali" || rec.CreatedAt.IsZero() {
+		t.Fatalf("kaydet = %+v, %v", rec, err)
 	}
-	// Ikinci kayit gunceller (PUT hem olusturur hem gunceller).
-	if _, err := d.UpsertProfile(ctx, ProfileRecord{UserID: id, Username: "ali2", DisplayName: "Ali Veli", Bio: ""}); err != nil {
+	// The second write updates (PUT both creates and updates).
+	if _, err := store.UpsertProfile(ctx, ProfileRecord{UserID: id, Username: "ali2", DisplayName: "Ali Veli", Bio: ""}); err != nil {
 		t.Fatalf("guncelle: %v", err)
 	}
-	k, err = d.GetProfile(ctx, id)
-	if err != nil || k.Username != "ali2" || k.DisplayName != "Ali Veli" || k.Bio != "" {
-		t.Fatalf("getir = %+v, %v", k, err)
+	rec, err = store.GetProfile(ctx, id)
+	if err != nil || rec.Username != "ali2" || rec.DisplayName != "Ali Veli" || rec.Bio != "" {
+		t.Fatalf("getir = %+v, %v", rec, err)
 	}
-	if _, err := d.GetProfileByUsername(ctx, "ali"); !errors.Is(err, ErrNotFound) {
+	if _, err := store.GetProfileByUsername(ctx, "ali"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("eski ad bulunmamali: %v", err)
 	}
-	if k, err := d.GetProfileByUsername(ctx, "ali2"); err != nil || k.UserID != id {
-		t.Fatalf("adla getir = %+v, %v", k, err)
+	if rec, err := store.GetProfileByUsername(ctx, "ali2"); err != nil || rec.UserID != id {
+		t.Fatalf("adla getir = %+v, %v", rec, err)
 	}
 }
 
-func TestPostgresDepo_AlinmisAd(t *testing.T) {
-	d := NewPostgresStore(testHavuz(t))
+func TestPostgresStore_UsernameTaken(t *testing.T) {
+	store := NewPostgresStore(testPool(t))
 	ctx := context.Background()
 	a, b := uuid.NewString(), uuid.NewString()
-	testProfilEkle(t, d, a, "ayse")
-	_, err := d.UpsertProfile(ctx, ProfileRecord{UserID: b, Username: "ayse", DisplayName: "Ayse"})
+	testInsertProfile(t, store, a, "ayse")
+	_, err := store.UpsertProfile(ctx, ProfileRecord{UserID: b, Username: "ayse", DisplayName: "Ayse"})
 	if !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("ErrKullaniciAdiAlinmis bekleniyordu: %v", err)
 	}
-	sahipler, err := d.UsernameOwners(ctx, []string{"ayse", "ayse2", "yok"})
-	if err != nil || len(sahipler) != 1 || sahipler["ayse"] != a {
-		t.Fatalf("AdSahipleri = %v, %v", sahipler, err)
+	owners, err := store.UsernameOwners(ctx, []string{"ayse", "ayse2", "yok"})
+	if err != nil || len(owners) != 1 || owners["ayse"] != a {
+		t.Fatalf("AdSahipleri = %v, %v", owners, err)
 	}
-	if bos, err := d.UsernameOwners(ctx, nil); err != nil || len(bos) != 0 {
-		t.Fatalf("bos liste = %v, %v", bos, err)
+	if empty, err := store.UsernameOwners(ctx, nil); err != nil || len(empty) != 0 {
+		t.Fatalf("bos liste = %v, %v", empty, err)
 	}
 }
 
-// sarki/cover sayaci gorunurluk kuralini ve durum=yayinda'yi uygular.
-func TestPostgresDepo_ProfilSayilari(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+// The song/cover counter applies the visibility rule and status=published.
+func TestPostgresStore_ProfileCounts(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	sahip, takipci, yabanci := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	owner, follower, stranger := uuid.NewString(), uuid.NewString(), uuid.NewString()
 
-	orijinal := testYayinEkle(t, havuz, testYayin{SahipID: sahip, Gorunurluk: VisibilityEveryone})
-	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Gorunurluk: VisibilityFollowers})
-	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Gorunurluk: VisibilityLink})
-	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: StatusPreparing})
-	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Durum: StatusFailed})
-	testYayinEkle(t, havuz, testYayin{SahipID: sahip, Silindi: true})
-	testYayinEkle(t, havuz, testYayin{SahipID: sahip, KaynakID: orijinal})
-	testTakipEkle(t, havuz, takipci, sahip)
-	testTakipEkle(t, havuz, sahip, yabanci)
+	original := testInsertPublication(t, pool, testPublication{OwnerID: owner, Visibility: VisibilityEveryone})
+	testInsertPublication(t, pool, testPublication{OwnerID: owner, Visibility: VisibilityFollowers})
+	testInsertPublication(t, pool, testPublication{OwnerID: owner, Visibility: VisibilityLink})
+	testInsertPublication(t, pool, testPublication{OwnerID: owner, Status: StatusPreparing})
+	testInsertPublication(t, pool, testPublication{OwnerID: owner, Status: StatusFailed})
+	testInsertPublication(t, pool, testPublication{OwnerID: owner, Deleted: true})
+	testInsertPublication(t, pool, testPublication{OwnerID: owner, SourceID: original})
+	testInsertFollow(t, pool, follower, owner)
+	testInsertFollow(t, pool, owner, stranger)
 
-	durumlar := []struct {
-		ad        string
-		izleyici  string
-		sarki     int
-		cover     int
-		takipEder bool
+	cases := []struct {
+		name         string
+		viewer       string
+		songs        int
+		cover        int
+		followedByMe bool
 	}{
-		{"sahip", sahip, 3, 1, false},
-		{"takipci", takipci, 2, 1, true},
-		{"yabanci", yabanci, 1, 1, false},
+		{"sahip", owner, 3, 1, false},
+		{"takipci", follower, 2, 1, true},
+		{"yabanci", stranger, 1, 1, false},
 	}
-	for _, dr := range durumlar {
-		s, err := d.ProfileCounts(ctx, sahip, dr.izleyici)
+	for _, tc := range cases {
+		s, err := store.ProfileCounts(ctx, owner, tc.viewer)
 		if err != nil {
-			t.Fatalf("%s: %v", dr.ad, err)
+			t.Fatalf("%s: %v", tc.name, err)
 		}
-		if s.Stats.Songs != dr.sarki || s.Stats.Covers != dr.cover || s.FollowedByMe != dr.takipEder {
-			t.Errorf("%s: %+v", dr.ad, s)
+		if s.Stats.Songs != tc.songs || s.Stats.Covers != tc.cover || s.FollowedByMe != tc.followedByMe {
+			t.Errorf("%s: %+v", tc.name, s)
 		}
 		if s.Stats.Followers != 1 || s.Stats.Following != 1 {
-			t.Errorf("%s takip sayaclari: %+v", dr.ad, s.Stats)
+			t.Errorf("%s takip sayaclari: %+v", tc.name, s.Stats)
 		}
 	}
 }

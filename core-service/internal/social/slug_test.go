@@ -2,8 +2,8 @@ package social
 
 import "testing"
 
-func TestSlugUret_BicimVeCesitlilik(t *testing.T) {
-	gorulen := map[string]bool{}
+func TestGenerateSlug_FormatAndVariety(t *testing.T) {
+	seen := map[string]bool{}
 	for i := 0; i < 200; i++ {
 		s, err := generateSlug()
 		if err != nil {
@@ -12,14 +12,14 @@ func TestSlugUret_BicimVeCesitlilik(t *testing.T) {
 		if !ValidSlug(s) {
 			t.Fatalf("gecersiz slug %q", s)
 		}
-		gorulen[s] = true
+		seen[s] = true
 	}
-	if len(gorulen) < 199 {
-		t.Fatalf("slug'lar tekrar ediyor: %d farkli", len(gorulen))
+	if len(seen) < 199 {
+		t.Fatalf("slug'lar tekrar ediyor: %d farkli", len(seen))
 	}
 }
 
-func TestSlugGecerli(t *testing.T) {
+func TestValidSlug(t *testing.T) {
 	for _, s := range []string{"", "abc", "abcdefg!", "abcdefghi", "abcd-efg"} {
 		if ValidSlug(s) {
 			t.Errorf("%q gecersiz olmali", s)

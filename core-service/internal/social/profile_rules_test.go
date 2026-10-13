@@ -6,60 +6,60 @@ import (
 	"testing"
 )
 
-func TestKullaniciAdiGecerli(t *testing.T) {
-	gecerli := []string{"abc", "ali_veli", "a.b.c", "x123", "ab_", "_ab", "abcdefghijklmnopqrst"}
-	gecersiz := []string{"", "ab", ".abc", "abc.", "Abc", "ali veli", "ali-veli", "abcdefghijklmnopqrstu", "çağrı"}
-	for _, ad := range gecerli {
-		if !ValidUsername(ad) {
-			t.Errorf("%q gecerli olmaliydi", ad)
+func TestValidUsername(t *testing.T) {
+	valid := []string{"abc", "ali_veli", "a.b.c", "x123", "ab_", "_ab", "abcdefghijklmnopqrst"}
+	invalid := []string{"", "ab", ".abc", "abc.", "Abc", "ali veli", "ali-veli", "abcdefghijklmnopqrstu", "çağrı"}
+	for _, username := range valid {
+		if !ValidUsername(username) {
+			t.Errorf("%q gecerli olmaliydi", username)
 		}
 	}
-	for _, ad := range gecersiz {
-		if ValidUsername(ad) {
-			t.Errorf("%q gecersiz olmaliydi", ad)
+	for _, username := range invalid {
+		if ValidUsername(username) {
+			t.Errorf("%q gecersiz olmaliydi", username)
 		}
 	}
 }
 
-func TestAvatarRengi_SabitVeAralikta(t *testing.T) {
-	kimlik := "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
-	ilk := AvatarColor(kimlik)
-	if ilk < 0 || ilk > 7 {
-		t.Fatalf("renk araligin disinda: %d", ilk)
+func TestAvatarColor_StableAndInRange(t *testing.T) {
+	userID := "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
+	first := AvatarColor(userID)
+	if first < 0 || first > 7 {
+		t.Fatalf("renk araligin disinda: %d", first)
 	}
-	if AvatarColor(kimlik) != ilk {
+	if AvatarColor(userID) != first {
 		t.Fatal("ayni kimlik ayni rengi vermeli")
 	}
-	// fnv32a("6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a") % 8 = 2, bagimsiz
-	// hesaplanan sabit: formul degisirse herkesin rengi degisir.
-	if ilk != 2 {
-		t.Fatalf("renk = %d, beklenen 2", ilk)
+	// fnv32a("6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a") % 8 = 2, an independently
+	// computed constant: if the formula changes, everyone's color changes.
+	if first != 2 {
+		t.Fatalf("renk = %d, beklenen 2", first)
 	}
 }
 
-func TestAdAdaylari_SiraVeUzunluk(t *testing.T) {
-	adaylar := usernameCandidates("ali")
-	if len(adaylar) != 98 || adaylar[0] != "ali2" || adaylar[97] != "ali99" {
-		t.Fatalf("adaylar = %v ... (%d)", adaylar[:2], len(adaylar))
+func TestUsernameCandidates_OrderAndLength(t *testing.T) {
+	candidates := usernameCandidates("ali")
+	if len(candidates) != 98 || candidates[0] != "ali2" || candidates[97] != "ali99" {
+		t.Fatalf("adaylar = %v ... (%d)", candidates[:2], len(candidates))
 	}
-	uzun := strings.Repeat("a", 20)
-	for _, a := range usernameCandidates(uzun) {
+	long := strings.Repeat("a", 20)
+	for _, a := range usernameCandidates(long) {
 		if len(a) > 20 || !ValidUsername(a) {
 			t.Fatalf("gecersiz aday %q", a)
 		}
 	}
-	if got := usernameCandidates(uzun)[0]; got != strings.Repeat("a", 19)+"2" {
+	if got := usernameCandidates(long)[0]; got != strings.Repeat("a", 19)+"2" {
 		t.Fatalf("kirpilmis ilk aday = %q", got)
 	}
-	if got := usernameCandidates(uzun)[8]; got != strings.Repeat("a", 18)+"10" {
+	if got := usernameCandidates(long)[8]; got != strings.Repeat("a", 18)+"10" {
 		t.Fatalf("iki haneli ek = %q", got)
 	}
 }
 
-func TestProfilGirdisiniDuzenle(t *testing.T) {
-	g, err := normalizeProfileInput(ProfileInput{Username: "ali", DisplayName: "  Ali  ", Bio: " merhaba "})
-	if err != nil || g.DisplayName != "Ali" || g.Bio != "merhaba" {
-		t.Fatalf("g = %+v, err = %v", g, err)
+func TestNormalizeProfileInput(t *testing.T) {
+	norm, err := normalizeProfileInput(ProfileInput{Username: "ali", DisplayName: "  Ali  ", Bio: " merhaba "})
+	if err != nil || norm.DisplayName != "Ali" || norm.Bio != "merhaba" {
+		t.Fatalf("g = %+v, err = %v", norm, err)
 	}
 	if _, err := normalizeProfileInput(ProfileInput{Username: "A", DisplayName: "x"}); !errors.Is(err, ErrInvalidUsername) {
 		t.Fatalf("gecersiz ad: %v", err)
@@ -78,7 +78,7 @@ func TestProfilGirdisiniDuzenle(t *testing.T) {
 	}
 }
 
-func TestKimlikCoz(t *testing.T) {
+func TestParseID(t *testing.T) {
 	if got, ok := parseID("6F1C2A9E-1B2C-4D3E-8F9A-0B1C2D3E4F5A"); !ok || got != "6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a" {
 		t.Fatalf("kimlikCoz = %q, %v", got, ok)
 	}
@@ -87,7 +87,7 @@ func TestKimlikCoz(t *testing.T) {
 	}
 }
 
-func TestProfilGirdisiniDuzenle_NULKarakteriReddedilir(t *testing.T) {
+func TestNormalizeProfileInput_RejectsNUL(t *testing.T) {
 	if _, err := normalizeProfileInput(ProfileInput{Username: "ali", DisplayName: "A\x00li"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("NUL iceren gorunen ad: %v", err)
 	}

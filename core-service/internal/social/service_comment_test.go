@@ -10,194 +10,194 @@ import (
 )
 
 const (
-	kullaniciC = "8f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
-	yorum1     = "c11c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
-	yorumC     = "c21c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
+	userC    = "8f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
+	comment1 = "c11c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
+	commentC = "c21c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
 )
 
-// yorumDeposu: kullaniciA'nin profili var; yayinX kullaniciB'nin herkes
-// yayinidir (180 sn, yorumlar acik).
-func yorumDeposu() *sahteDepo {
-	d := profilliDepo()
-	k := sahteYayin(yayinX, kullaniciB, VisibilityEveryone, StatusPublished)
-	k.CommentsEnabled, k.DurationSec = true, 180
-	d.yayinlar[yayinX] = k
-	return d
+// commentStore: userA has a profile; pubX is userB's public
+// publication (180 s, comments enabled).
+func commentStore() *fakeStore {
+	store := storeWithProfile()
+	rec := fakePublication(pubX, userB, VisibilityEveryone, StatusPublished)
+	rec.CommentsEnabled, rec.DurationSec = true, 180
+	store.publications[pubX] = rec
+	return store
 }
 
 func intp(n int) *int { return &n }
 
-func TestServis_YorumYaz(t *testing.T) {
-	d := yorumDeposu()
-	s, _ := testServisi(d)
-	y, err := s.PostComment(context.Background(), kullaniciA, yayinX, CommentInput{Text: "  harika  ", TimeMs: intp(180000)})
+func TestService_PostComment(t *testing.T) {
+	store := commentStore()
+	s, _ := newTestService(store)
+	comment, err := s.PostComment(context.Background(), userA, pubX, CommentInput{Text: "  harika  ", TimeMs: intp(180000)})
 	if err != nil {
 		t.Fatalf("YorumYaz: %v", err)
 	}
-	if !y.CanDelete || y.Text != "harika" || y.Author.Username != "ali" || *y.TimeMs != 180000 {
-		t.Fatalf("yorum = %+v", y)
+	if !comment.CanDelete || comment.Text != "harika" || comment.Author.Username != "ali" || *comment.TimeMs != 180000 {
+		t.Fatalf("yorum = %+v", comment)
 	}
-	if len(d.eklenenYorumlar) != 1 || d.eklenenYorumlar[0].PublicationID != yayinX || d.eklenenYorumlar[0].AuthorID != kullaniciA {
-		t.Fatalf("eklenen = %+v", d.eklenenYorumlar)
+	if len(store.insertedComments) != 1 || store.insertedComments[0].PublicationID != pubX || store.insertedComments[0].AuthorID != userA {
+		t.Fatalf("eklenen = %+v", store.insertedComments)
 	}
-	if _, err := s.PostComment(context.Background(), kullaniciA, yayinX, CommentInput{Text: "damgasiz"}); err != nil {
+	if _, err := s.PostComment(context.Background(), userA, pubX, CommentInput{Text: "damgasiz"}); err != nil {
 		t.Fatalf("damgasiz yorum: %v", err)
 	}
-	if d.eklenenYorumlar[1].TimeMs != nil {
+	if store.insertedComments[1].TimeMs != nil {
 		t.Fatal("damgasiz yorumun zamani nil kalmali")
 	}
 }
 
-func TestServis_YorumYazHatalari(t *testing.T) {
+func TestService_PostCommentErrors(t *testing.T) {
 	ctx := context.Background()
-	durumlar := []struct {
-		ad        string
-		hazirla   func(d *sahteDepo)
-		kullanici string
-		yayin     string
-		girdi     CommentInput
-		beklenen  error
+	cases := []struct {
+		name  string
+		setup func(store *fakeStore)
+		user  string
+		pub   string
+		input CommentInput
+		want  error
 	}{
-		{"bos metin", nil, kullaniciA, yayinX, CommentInput{Text: "   "}, ErrValidation},
-		{"uzun metin", nil, kullaniciA, yayinX, CommentInput{Text: strings.Repeat("ş", 501)}, ErrValidation},
-		{"NUL iceren metin", nil, kullaniciA, yayinX, CommentInput{Text: "a\x00b"}, ErrValidation},
-		{"negatif zaman", nil, kullaniciA, yayinX, CommentInput{Text: "a", TimeMs: intp(-1)}, ErrValidation},
-		{"sureyi asan zaman", nil, kullaniciA, yayinX, CommentInput{Text: "a", TimeMs: intp(180001)}, ErrValidation},
-		{"int32'yi asan zaman", func(d *sahteDepo) { d.yayinlar[yayinX].DurationSec = 3_000_000 }, kullaniciA, yayinX, CommentInput{Text: "a", TimeMs: intp(math.MaxInt32 + 1)}, ErrValidation},
-		{"gorunmeyen yayin", func(d *sahteDepo) { d.yayinlar[yayinX].Visibility = VisibilityFollowers }, kullaniciA, yayinX, CommentInput{Text: "a"}, ErrNotFound},
-		{"olmayan yayin", nil, kullaniciA, yayinY, CommentInput{Text: "a"}, ErrNotFound},
-		{"bozuk yayin id", nil, kullaniciA, "x", CommentInput{Text: "a"}, ErrNotFound},
-		{"yorum kapali", func(d *sahteDepo) { d.yayinlar[yayinX].CommentsEnabled = false }, kullaniciA, yayinX, CommentInput{Text: "a"}, ErrCommentsDisabled},
-		{"yorum kapali, sahibi de yazamaz", func(d *sahteDepo) {
-			d.profiller[kullaniciB] = &ProfileRecord{UserID: kullaniciB, Username: "sahip"}
-			d.yayinlar[yayinX].CommentsEnabled = false
-		}, kullaniciB, yayinX, CommentInput{Text: "a"}, ErrCommentsDisabled},
-		{"profil yok", nil, kullaniciC, yayinX, CommentInput{Text: "a"}, ErrNoProfile},
+		{"bos metin", nil, userA, pubX, CommentInput{Text: "   "}, ErrValidation},
+		{"uzun metin", nil, userA, pubX, CommentInput{Text: strings.Repeat("ş", 501)}, ErrValidation},
+		{"NUL iceren metin", nil, userA, pubX, CommentInput{Text: "a\x00b"}, ErrValidation},
+		{"negatif zaman", nil, userA, pubX, CommentInput{Text: "a", TimeMs: intp(-1)}, ErrValidation},
+		{"sureyi asan zaman", nil, userA, pubX, CommentInput{Text: "a", TimeMs: intp(180001)}, ErrValidation},
+		{"int32'yi asan zaman", func(store *fakeStore) { store.publications[pubX].DurationSec = 3_000_000 }, userA, pubX, CommentInput{Text: "a", TimeMs: intp(math.MaxInt32 + 1)}, ErrValidation},
+		{"gorunmeyen yayin", func(store *fakeStore) { store.publications[pubX].Visibility = VisibilityFollowers }, userA, pubX, CommentInput{Text: "a"}, ErrNotFound},
+		{"olmayan yayin", nil, userA, pubY, CommentInput{Text: "a"}, ErrNotFound},
+		{"bozuk yayin id", nil, userA, "x", CommentInput{Text: "a"}, ErrNotFound},
+		{"yorum kapali", func(store *fakeStore) { store.publications[pubX].CommentsEnabled = false }, userA, pubX, CommentInput{Text: "a"}, ErrCommentsDisabled},
+		{"yorum kapali, sahibi de yazamaz", func(store *fakeStore) {
+			store.profiles[userB] = &ProfileRecord{UserID: userB, Username: "sahip"}
+			store.publications[pubX].CommentsEnabled = false
+		}, userB, pubX, CommentInput{Text: "a"}, ErrCommentsDisabled},
+		{"profil yok", nil, userC, pubX, CommentInput{Text: "a"}, ErrNoProfile},
 	}
-	for _, c := range durumlar {
-		d := yorumDeposu()
-		if c.hazirla != nil {
-			c.hazirla(d)
+	for _, c := range cases {
+		store := commentStore()
+		if c.setup != nil {
+			c.setup(store)
 		}
-		s, _ := testServisi(d)
-		if _, err := s.PostComment(ctx, c.kullanici, c.yayin, c.girdi); !errors.Is(err, c.beklenen) {
-			t.Errorf("%s: %v, beklenen %v", c.ad, err, c.beklenen)
+		s, _ := newTestService(store)
+		if _, err := s.PostComment(ctx, c.user, c.pub, c.input); !errors.Is(err, c.want) {
+			t.Errorf("%s: %v, beklenen %v", c.name, err, c.want)
 		}
-		if len(d.eklenenYorumlar) != 0 {
-			t.Errorf("%s: yorum yazilmamali", c.ad)
+		if len(store.insertedComments) != 0 {
+			t.Errorf("%s: yorum yazilmamali", c.name)
 		}
 	}
 }
 
-// Yorum kapaliyken sahibi de 403 alir; gorunurluk yorum_kapali'dan once gelir.
-func TestServis_YorumlarKapaliVeGorunurluk(t *testing.T) {
-	d := yorumDeposu()
-	d.yayinlar[yayinX].CommentsEnabled = false
-	s, _ := testServisi(d)
+// With comments disabled the owner also gets 403; visibility is checked before comments_disabled.
+func TestService_CommentsDisabledAndVisibility(t *testing.T) {
+	store := commentStore()
+	store.publications[pubX].CommentsEnabled = false
+	s, _ := newTestService(store)
 	ctx := context.Background()
-	for _, k := range []string{kullaniciA, kullaniciB} {
-		if _, err := s.Comments(ctx, k, yayinX, "", 20); !errors.Is(err, ErrCommentsDisabled) {
-			t.Errorf("%s: %v, beklenen ErrYorumKapali", k, err)
+	for _, rec := range []string{userA, userB} {
+		if _, err := s.Comments(ctx, rec, pubX, "", 20); !errors.Is(err, ErrCommentsDisabled) {
+			t.Errorf("%s: %v, beklenen ErrYorumKapali", rec, err)
 		}
 	}
-	d.yayinlar[yayinX].Visibility = VisibilityFollowers
-	if _, err := s.Comments(ctx, kullaniciA, yayinX, "", 20); !errors.Is(err, ErrNotFound) {
+	store.publications[pubX].Visibility = VisibilityFollowers
+	if _, err := s.Comments(ctx, userA, pubX, "", 20); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("gorunmeyen yayin: %v", err)
 	}
 }
 
-func TestServis_YorumlarSayfaVeImlec(t *testing.T) {
-	d := yorumDeposu()
+func TestService_CommentsPageAndCursor(t *testing.T) {
+	store := commentStore()
 	t0 := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
-	d.yorumOgeleri = []Comment{
-		{ID: yorum1, TimeMs: intp(500), CreatedAt: t0},
-		{ID: yorumC, CreatedAt: t0.Add(time.Minute)},
+	store.commentItems = []Comment{
+		{ID: comment1, TimeMs: intp(500), CreatedAt: t0},
+		{ID: commentC, CreatedAt: t0.Add(time.Minute)},
 		{ID: "c31c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a", CreatedAt: t0},
 	}
-	s, _ := testServisi(d)
+	s, _ := newTestService(store)
 	ctx := context.Background()
 
-	sayfa, err := s.Comments(ctx, kullaniciA, yayinX, "", 1)
-	if err != nil || len(sayfa.Items) != 1 || sayfa.NextCursor == nil {
-		t.Fatalf("ilk sayfa = %+v, %v", sayfa, err)
+	page, err := s.Comments(ctx, userA, pubX, "", 1)
+	if err != nil || len(page.Items) != 1 || page.NextCursor == nil {
+		t.Fatalf("ilk sayfa = %+v, %v", page, err)
 	}
-	if _, err := s.Comments(ctx, kullaniciA, yayinX, *sayfa.NextCursor, 1); err != nil {
+	if _, err := s.Comments(ctx, userA, pubX, *page.NextCursor, 1); err != nil {
 		t.Fatal(err)
 	}
-	im := d.sonYorumImleci
-	if im == nil || im.Group != 0 || im.TimeMs == nil || *im.TimeMs != 500 || im.ID != yorum1 || !im.T.Equal(t0) {
-		t.Fatalf("zamanli imlec = %+v", im)
+	cur := store.lastCommentCursor
+	if cur == nil || cur.Group != 0 || cur.TimeMs == nil || *cur.TimeMs != 500 || cur.ID != comment1 || !cur.T.Equal(t0) {
+		t.Fatalf("zamanli imlec = %+v", cur)
 	}
 
-	sayfa, err = s.Comments(ctx, kullaniciA, yayinX, "", 2)
-	if err != nil || sayfa.NextCursor == nil {
+	page, err = s.Comments(ctx, userA, pubX, "", 2)
+	if err != nil || page.NextCursor == nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Comments(ctx, kullaniciA, yayinX, *sayfa.NextCursor, 2); err != nil {
+	if _, err := s.Comments(ctx, userA, pubX, *page.NextCursor, 2); err != nil {
 		t.Fatal(err)
 	}
-	im = d.sonYorumImleci
-	if im == nil || im.Group != 1 || im.TimeMs != nil || im.ID != yorumC {
-		t.Fatalf("damgasiz imlec = %+v", im)
+	cur = store.lastCommentCursor
+	if cur == nil || cur.Group != 1 || cur.TimeMs != nil || cur.ID != commentC {
+		t.Fatalf("damgasiz imlec = %+v", cur)
 	}
 
-	d.yorumOgeleri = nil
-	bos, err := s.Comments(ctx, kullaniciA, yayinX, "", 20)
-	if err != nil || bos.Items == nil || bos.NextCursor != nil {
-		t.Fatalf("bos sayfa = %+v, %v", bos, err)
+	store.commentItems = nil
+	empty, err := s.Comments(ctx, userA, pubX, "", 20)
+	if err != nil || empty.Items == nil || empty.NextCursor != nil {
+		t.Fatalf("bos sayfa = %+v, %v", empty, err)
 	}
 }
 
-func TestServis_YorumImleciDogrulama(t *testing.T) {
-	gecerliID := "c11c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
-	for _, ham := range []string{
+func TestService_CommentCursorValidation(t *testing.T) {
+	validID := "c11c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a"
+	for _, raw := range []string{
 		"bozuk!",
-		*encodeCursor(CommentCursor{Group: 0, T: time.Now(), ID: gecerliID}),                  // G=0 ama Z yok
-		*encodeCursor(CommentCursor{Group: 1, TimeMs: intp(3), T: time.Now(), ID: gecerliID}), // G=1 ama Z var
-		*encodeCursor(CommentCursor{Group: 2, T: time.Now(), ID: gecerliID}),
-		*encodeCursor(CommentCursor{Group: 0, TimeMs: intp(-1), T: time.Now(), ID: gecerliID}),
+		*encodeCursor(CommentCursor{Group: 0, T: time.Now(), ID: validID}),                  // G=0 but no Z
+		*encodeCursor(CommentCursor{Group: 1, TimeMs: intp(3), T: time.Now(), ID: validID}), // G=1 but Z present
+		*encodeCursor(CommentCursor{Group: 2, T: time.Now(), ID: validID}),
+		*encodeCursor(CommentCursor{Group: 0, TimeMs: intp(-1), T: time.Now(), ID: validID}),
 		*encodeCursor(CommentCursor{Group: 1, T: time.Now(), ID: "uuid-degil"}),
-		*encodeCursor(CommentCursor{Group: 1, ID: gecerliID}),
+		*encodeCursor(CommentCursor{Group: 1, ID: validID}),
 	} {
-		if _, err := decodeCommentCursor(ham); !errors.Is(err, ErrValidation) {
-			t.Errorf("%q: %v, beklenen ErrDogrulama", ham, err)
+		if _, err := decodeCommentCursor(raw); !errors.Is(err, ErrValidation) {
+			t.Errorf("%q: %v, beklenen ErrDogrulama", raw, err)
 		}
 	}
 }
 
-func TestServis_YorumSil(t *testing.T) {
+func TestService_DeleteComment(t *testing.T) {
 	ctx := context.Background()
-	kayit := func() *CommentRecord {
-		return &CommentRecord{ID: yorum1, PublicationID: yayinX, AuthorID: kullaniciA, PublicationOwnerID: kullaniciB}
+	newRecord := func() *CommentRecord {
+		return &CommentRecord{ID: comment1, PublicationID: pubX, AuthorID: userA, PublicationOwnerID: userB}
 	}
-	// Yazar ve yayin sahibi silebilir.
-	for _, k := range []string{kullaniciA, kullaniciB} {
-		d := yorumDeposu()
-		d.yorumKayitlari[yorum1] = kayit()
-		s, _ := testServisi(d)
-		if err := s.DeleteComment(ctx, k, yorum1); err != nil {
-			t.Fatalf("%s silemedi: %v", k, err)
+	// The author and the publication owner can delete.
+	for _, rec := range []string{userA, userB} {
+		store := commentStore()
+		store.commentRecords[comment1] = newRecord()
+		s, _ := newTestService(store)
+		if err := s.DeleteComment(ctx, rec, comment1); err != nil {
+			t.Fatalf("%s silemedi: %v", rec, err)
 		}
-		if err := s.DeleteComment(ctx, k, yorum1); !errors.Is(err, ErrNotFound) {
+		if err := s.DeleteComment(ctx, rec, comment1); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("tekrar silme 404 olmali: %v", err)
 		}
 	}
-	// Ucuncu kisi: yayini goruyorsa 403, gormuyorsa 404.
-	d := yorumDeposu()
-	d.yorumKayitlari[yorum1] = kayit()
-	s, _ := testServisi(d)
-	if err := s.DeleteComment(ctx, kullaniciC, yorum1); !errors.Is(err, ErrForbidden) {
+	// A third person: 403 if they can see the publication, 404 if not.
+	store := commentStore()
+	store.commentRecords[comment1] = newRecord()
+	s, _ := newTestService(store)
+	if err := s.DeleteComment(ctx, userC, comment1); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("baskasi: %v, beklenen ErrYetki", err)
 	}
-	d.yayinlar[yayinX].Visibility = VisibilityFollowers
-	if err := s.DeleteComment(ctx, kullaniciC, yorum1); !errors.Is(err, ErrNotFound) {
+	store.publications[pubX].Visibility = VisibilityFollowers
+	if err := s.DeleteComment(ctx, userC, comment1); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("gorunmeyen yayin: %v, beklenen ErrBulunamadi", err)
 	}
-	if len(d.silinenYorumlar) != 0 {
+	if len(store.deletedComments) != 0 {
 		t.Fatal("yetkisiz silme yazilmamali")
 	}
-	for _, id := range []string{"x", yorumC} {
-		if err := s.DeleteComment(ctx, kullaniciA, id); !errors.Is(err, ErrNotFound) {
+	for _, id := range []string{"x", commentC} {
+		if err := s.DeleteComment(ctx, userA, id); !errors.Is(err, ErrNotFound) {
 			t.Errorf("%s: %v, beklenen ErrBulunamadi", id, err)
 		}
 	}

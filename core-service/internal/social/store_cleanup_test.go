@@ -9,226 +9,226 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestPostgresDepo_KullaniciVerisiniSil(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+func TestPostgresStore_DeleteUserData(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	giden, kalan := uuid.NewString(), uuid.NewString()
-	testProfilEkle(t, d, giden, "giden")
-	testProfilEkle(t, d, kalan, "kalan")
+	leaver, stayer := uuid.NewString(), uuid.NewString()
+	testInsertProfile(t, store, leaver, "giden")
+	testInsertProfile(t, store, stayer, "kalan")
 
-	canli := testYayinEkle(t, havuz, testYayin{SahipID: giden, Baslik: "Orijinal"})
-	silinmis := testYayinEkle(t, havuz, testYayin{SahipID: giden, Silindi: true})
-	kalaninYayini := testYayinEkle(t, havuz, testYayin{SahipID: kalan})
-	cover := testYayinEkle(t, havuz, testYayin{SahipID: kalan, KaynakID: canli})
-	testTakipEkle(t, havuz, giden, kalan)
-	testTakipEkle(t, havuz, kalan, giden)
-	for _, sorgu := range []string{
-		`INSERT INTO sosyal.begeni (kullanici_id, yayin_id) VALUES ('` + giden + `', '` + kalaninYayini + `')`,
-		`INSERT INTO sosyal.begeni (kullanici_id, yayin_id) VALUES ('` + kalan + `', '` + canli + `')`,
-		`INSERT INTO sosyal.begeni (kullanici_id, yayin_id) VALUES ('` + kalan + `', '` + kalaninYayini + `')`,
-		`INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin) VALUES (gen_random_uuid(), '` + kalaninYayini + `', '` + giden + `', 'g')`,
-		`INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin) VALUES (gen_random_uuid(), '` + kalaninYayini + `', '` + kalan + `', 'k')`,
-		`INSERT INTO sosyal.sikayet (id, bildiren_id, hedef_turu, hedef_id, yayin_id, neden) VALUES (gen_random_uuid(), '` + giden + `', 'yayin', '` + kalaninYayini + `', '` + kalaninYayini + `', 'spam')`,
+	live := testInsertPublication(t, pool, testPublication{OwnerID: leaver, Title: "Orijinal"})
+	deleted := testInsertPublication(t, pool, testPublication{OwnerID: leaver, Deleted: true})
+	stayerPublication := testInsertPublication(t, pool, testPublication{OwnerID: stayer})
+	cover := testInsertPublication(t, pool, testPublication{OwnerID: stayer, SourceID: live})
+	testInsertFollow(t, pool, leaver, stayer)
+	testInsertFollow(t, pool, stayer, leaver)
+	for _, query := range []string{
+		`INSERT INTO sosyal.begeni (kullanici_id, yayin_id) VALUES ('` + leaver + `', '` + stayerPublication + `')`,
+		`INSERT INTO sosyal.begeni (kullanici_id, yayin_id) VALUES ('` + stayer + `', '` + live + `')`,
+		`INSERT INTO sosyal.begeni (kullanici_id, yayin_id) VALUES ('` + stayer + `', '` + stayerPublication + `')`,
+		`INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin) VALUES (gen_random_uuid(), '` + stayerPublication + `', '` + leaver + `', 'g')`,
+		`INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin) VALUES (gen_random_uuid(), '` + stayerPublication + `', '` + stayer + `', 'k')`,
+		`INSERT INTO sosyal.sikayet (id, bildiren_id, hedef_turu, hedef_id, yayin_id, neden) VALUES (gen_random_uuid(), '` + leaver + `', 'yayin', '` + stayerPublication + `', '` + stayerPublication + `', 'spam')`,
 	} {
-		if _, err := havuz.Exec(ctx, sorgu); err != nil {
+		if _, err := pool.Exec(ctx, query); err != nil {
 			t.Fatalf("kurulum: %v", err)
 		}
 	}
 
-	idler, err := d.ListPublicationIDs(ctx, giden)
+	ids, err := store.ListPublicationIDs(ctx, leaver)
 	if err != nil {
 		t.Fatalf("YayinlariListele: %v", err)
 	}
-	sort.Strings(idler)
-	beklenen := []string{canli, silinmis}
-	sort.Strings(beklenen)
-	if len(idler) != 2 || idler[0] != beklenen[0] || idler[1] != beklenen[1] {
-		t.Fatalf("silinmisler dahil iki yayin bekleniyordu: %v", idler)
+	sort.Strings(ids)
+	want := []string{live, deleted}
+	sort.Strings(want)
+	if len(ids) != 2 || ids[0] != want[0] || ids[1] != want[1] {
+		t.Fatalf("silinmisler dahil iki yayin bekleniyordu: %v", ids)
 	}
 
-	if err := d.DeleteUserData(ctx, giden); err != nil {
+	if err := store.DeleteUserData(ctx, leaver); err != nil {
 		t.Fatalf("KullaniciVerisiniSil: %v", err)
 	}
-	if err := d.DeleteUserData(ctx, giden); err != nil {
+	if err := store.DeleteUserData(ctx, leaver); err != nil {
 		t.Fatalf("tekrar silme hatasiz olmali: %v", err)
 	}
 
-	var gidenKalan int
-	if err := havuz.QueryRow(ctx, `
+	var leaverRemaining int
+	if err := pool.QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM sosyal.profil WHERE kullanici_id = $1)
 		     + (SELECT count(*) FROM sosyal.yayin WHERE sahip_id = $1)
 		     + (SELECT count(*) FROM sosyal.begeni WHERE kullanici_id = $1 OR yayin_id = $2)
 		     + (SELECT count(*) FROM sosyal.yorum WHERE yazar_id = $1)
 		     + (SELECT count(*) FROM sosyal.takip WHERE takipci_id = $1 OR takip_edilen_id = $1)
-		     + (SELECT count(*) FROM sosyal.sikayet WHERE bildiren_id = $1)`, giden, canli).Scan(&gidenKalan); err != nil {
+		     + (SELECT count(*) FROM sosyal.sikayet WHERE bildiren_id = $1)`, leaver, live).Scan(&leaverRemaining); err != nil {
 		t.Fatalf("sayim: %v", err)
 	}
-	if gidenKalan != 0 {
-		t.Fatalf("silinen kullanicinin %d kaydi kaldi", gidenKalan)
+	if leaverRemaining != 0 {
+		t.Fatalf("silinen kullanicinin %d kaydi kaldi", leaverRemaining)
 	}
 
-	// Baskalarinin verisi yerinde; cover kalir ve kaynagi silindi gorunur.
-	if _, err := d.GetProfile(ctx, kalan); err != nil {
+	// Other people's data is intact; the cover stays and its source shows as deleted.
+	if _, err := store.GetProfile(ctx, stayer); err != nil {
 		t.Fatalf("kalan profil silinmemeli: %v", err)
 	}
-	k, err := d.GetPublication(ctx, kalaninYayini, kalan)
-	if err != nil || k.LikeCount != 1 || k.CommentCount != 1 {
-		t.Fatalf("kalanin yayini = %+v, %v", k, err)
+	rec, err := store.GetPublication(ctx, stayerPublication, stayer)
+	if err != nil || rec.LikeCount != 1 || rec.CommentCount != 1 {
+		t.Fatalf("kalanin yayini = %+v, %v", rec, err)
 	}
-	c, err := d.GetPublication(ctx, cover, kalan)
-	if err != nil || c.Source == nil || !c.Source.Deleted || c.Source.PublicationID != canli {
+	c, err := store.GetPublication(ctx, cover, stayer)
+	if err != nil || c.Source == nil || !c.Source.Deleted || c.Source.PublicationID != live {
 		t.Fatalf("cover kalmali ve kaynagi silindi olmali: %+v, %v", c, err)
 	}
-	if bos, err := d.ListPublicationIDs(ctx, giden); err != nil || len(bos) != 0 {
-		t.Fatalf("silinen kullanicinin yayini kalmamali: %v %v", bos, err)
+	if empty, err := store.ListPublicationIDs(ctx, leaver); err != nil || len(empty) != 0 {
+		t.Fatalf("silinen kullanicinin yayini kalmamali: %v %v", empty, err)
 	}
 }
 
-// izSenaryosu: giden kullanicinin yorumuna kalanin sikayeti, gidenin
-// yayini, begenisi, takibi ve kendi sikayeti kurulur.
-type izSenaryosu struct {
-	giden, kalan, gidenYayini, kalaninYayini string
+// traceScenario: the stayer's report on the leaver's comment, the leaver's
+// publication, like, follow and own report are set up.
+type traceScenario struct {
+	leaving, staying, leavingPublication, stayingPublication string
 }
 
-func izSenaryosuKur(t *testing.T, d *PostgresStore) izSenaryosu {
+func setupTraceScenario(t *testing.T, store *PostgresStore) traceScenario {
 	t.Helper()
-	havuz := d.pool
-	s := izSenaryosu{giden: uuid.NewString(), kalan: uuid.NewString()}
-	testProfilEkle(t, d, s.giden, "giden")
-	testProfilEkle(t, d, s.kalan, "kalan")
-	s.gidenYayini = testYayinEkle(t, havuz, testYayin{SahipID: s.giden})
-	s.kalaninYayini = testYayinEkle(t, havuz, testYayin{SahipID: s.kalan})
-	testTakipEkle(t, havuz, s.giden, s.kalan)
-	testTakipEkle(t, havuz, s.kalan, s.giden)
-	gidenYorumu, kalanYorumu := uuid.NewString(), uuid.NewString()
-	for _, sorgu := range []string{
-		`INSERT INTO sosyal.begeni (kullanici_id, yayin_id) VALUES ('` + s.giden + `', '` + s.kalaninYayini + `')`,
-		`INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin) VALUES ('` + gidenYorumu + `', '` + s.kalaninYayini + `', '` + s.giden + `', 'g')`,
-		`INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin) VALUES ('` + kalanYorumu + `', '` + s.kalaninYayini + `', '` + s.kalan + `', 'k')`,
-		// kalan, gidenin yorumunu sikayet eder: yorum silinince bu da gitmeli.
-		`INSERT INTO sosyal.sikayet (id, bildiren_id, hedef_turu, hedef_id, yayin_id, neden) VALUES (gen_random_uuid(), '` + s.kalan + `', 'yorum', '` + gidenYorumu + `', '` + s.kalaninYayini + `', 'spam')`,
-		// kalanin kendi yorumuna sikayet (giden bildirdi) bildiren uzerinden gider.
-		`INSERT INTO sosyal.sikayet (id, bildiren_id, hedef_turu, hedef_id, yayin_id, neden) VALUES (gen_random_uuid(), '` + s.giden + `', 'yorum', '` + kalanYorumu + `', '` + s.kalaninYayini + `', 'spam')`,
-		// ucuncu bir kisinin kalanin yayinina sikayeti kalir.
-		`INSERT INTO sosyal.sikayet (id, bildiren_id, hedef_turu, hedef_id, yayin_id, neden) VALUES (gen_random_uuid(), gen_random_uuid(), 'yayin', '` + s.kalaninYayini + `', '` + s.kalaninYayini + `', 'spam')`,
+	pool := store.pool
+	s := traceScenario{leaving: uuid.NewString(), staying: uuid.NewString()}
+	testInsertProfile(t, store, s.leaving, "giden")
+	testInsertProfile(t, store, s.staying, "kalan")
+	s.leavingPublication = testInsertPublication(t, pool, testPublication{OwnerID: s.leaving})
+	s.stayingPublication = testInsertPublication(t, pool, testPublication{OwnerID: s.staying})
+	testInsertFollow(t, pool, s.leaving, s.staying)
+	testInsertFollow(t, pool, s.staying, s.leaving)
+	leaverComment, stayerComment := uuid.NewString(), uuid.NewString()
+	for _, query := range []string{
+		`INSERT INTO sosyal.begeni (kullanici_id, yayin_id) VALUES ('` + s.leaving + `', '` + s.stayingPublication + `')`,
+		`INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin) VALUES ('` + leaverComment + `', '` + s.stayingPublication + `', '` + s.leaving + `', 'g')`,
+		`INSERT INTO sosyal.yorum (id, yayin_id, yazar_id, metin) VALUES ('` + stayerComment + `', '` + s.stayingPublication + `', '` + s.staying + `', 'k')`,
+		// the stayer reports the leaver's comment: this must go when the comment is deleted.
+		`INSERT INTO sosyal.sikayet (id, bildiren_id, hedef_turu, hedef_id, yayin_id, neden) VALUES (gen_random_uuid(), '` + s.staying + `', 'yorum', '` + leaverComment + `', '` + s.stayingPublication + `', 'spam')`,
+		// a report on the stayer's own comment (filed by the leaver) goes via the reporter.
+		`INSERT INTO sosyal.sikayet (id, bildiren_id, hedef_turu, hedef_id, yayin_id, neden) VALUES (gen_random_uuid(), '` + s.leaving + `', 'yorum', '` + stayerComment + `', '` + s.stayingPublication + `', 'spam')`,
+		// a third person's report on the stayer's publication remains.
+		`INSERT INTO sosyal.sikayet (id, bildiren_id, hedef_turu, hedef_id, yayin_id, neden) VALUES (gen_random_uuid(), gen_random_uuid(), 'yayin', '` + s.stayingPublication + `', '` + s.stayingPublication + `', 'spam')`,
 	} {
-		if _, err := havuz.Exec(context.Background(), sorgu); err != nil {
+		if _, err := pool.Exec(context.Background(), query); err != nil {
 			t.Fatalf("kurulum: %v", err)
 		}
 	}
 	return s
 }
 
-func sikayetSayisi(t *testing.T, d *PostgresStore) int {
+func reportCount(t *testing.T, store *PostgresStore) int {
 	t.Helper()
 	var n int
-	if err := d.pool.QueryRow(context.Background(), `SELECT count(*) FROM sosyal.sikayet`).Scan(&n); err != nil {
+	if err := store.pool.QueryRow(context.Background(), `SELECT count(*) FROM sosyal.sikayet`).Scan(&n); err != nil {
 		t.Fatalf("sikayet sayimi: %v", err)
 	}
 	return n
 }
 
-// Iz silme profili ve etkilesimleri siler, yayin satirlarina dokunmaz;
-// silinen kullanicinin yorumlarina yapilan sikayetler de gider.
-func TestPostgresDepo_KullaniciIzleriniSil(t *testing.T) {
-	d := NewPostgresStore(testHavuz(t))
+// Trace deletion removes the profile and interactions, leaves the publication rows;
+// reports on the deleted user's comments also go.
+func TestPostgresStore_DeleteUserTraces(t *testing.T) {
+	store := NewPostgresStore(testPool(t))
 	ctx := context.Background()
-	s := izSenaryosuKur(t, d)
+	s := setupTraceScenario(t, store)
 
-	if err := d.DeleteUserTraces(ctx, s.giden); err != nil {
+	if err := store.DeleteUserTraces(ctx, s.leaving); err != nil {
 		t.Fatalf("KullaniciIzleriniSil: %v", err)
 	}
-	if err := d.DeleteUserTraces(ctx, s.giden); err != nil {
+	if err := store.DeleteUserTraces(ctx, s.leaving); err != nil {
 		t.Fatalf("tekrar iz silme hatasiz olmali: %v", err)
 	}
-	if _, err := d.GetProfile(ctx, s.giden); err == nil {
+	if _, err := store.GetProfile(ctx, s.leaving); err == nil {
 		t.Fatal("profil silinmeli")
 	}
-	if idler, err := d.ListPublicationIDs(ctx, s.giden); err != nil || len(idler) != 1 || idler[0] != s.gidenYayini {
-		t.Fatalf("yayin satirlari kalmali: %v %v", idler, err)
+	if ids, err := store.ListPublicationIDs(ctx, s.leaving); err != nil || len(ids) != 1 || ids[0] != s.leavingPublication {
+		t.Fatalf("yayin satirlari kalmali: %v %v", ids, err)
 	}
-	// Profil yokken yayin hicbir okuma yolunda gorunmez.
-	if _, err := d.GetPublication(ctx, s.gidenYayini, s.kalan); err == nil {
+	// Without a profile the publication is not visible on any read path.
+	if _, err := store.GetPublication(ctx, s.leavingPublication, s.staying); err == nil {
 		t.Fatal("profili silinen kullanicinin yayini gorunmemeli")
 	}
-	var kalanIz int
-	if err := d.pool.QueryRow(ctx, `
+	var stayerTraces int
+	if err := store.pool.QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM sosyal.begeni WHERE kullanici_id = $1)
 		     + (SELECT count(*) FROM sosyal.yorum WHERE yazar_id = $1)
-		     + (SELECT count(*) FROM sosyal.takip WHERE takipci_id = $1 OR takip_edilen_id = $1)`, s.giden).Scan(&kalanIz); err != nil {
+		     + (SELECT count(*) FROM sosyal.takip WHERE takipci_id = $1 OR takip_edilen_id = $1)`, s.leaving).Scan(&stayerTraces); err != nil {
 		t.Fatalf("sayim: %v", err)
 	}
-	if kalanIz != 0 {
-		t.Fatalf("gidenin %d izi kaldi", kalanIz)
+	if stayerTraces != 0 {
+		t.Fatalf("gidenin %d izi kaldi", stayerTraces)
 	}
-	if n := sikayetSayisi(t, d); n != 1 {
+	if n := reportCount(t, store); n != 1 {
 		t.Fatalf("yalnizca ucuncu kisinin sikayeti kalmali, kalan %d", n)
 	}
 }
 
-// Tam silme de silinen kullanicinin yorumlarina yapilan sikayetleri siler.
-func TestPostgresDepo_KullaniciVerisiniSil_YorumSikayetleri(t *testing.T) {
-	d := NewPostgresStore(testHavuz(t))
-	s := izSenaryosuKur(t, d)
-	if err := d.DeleteUserData(context.Background(), s.giden); err != nil {
+// Full deletion also removes reports on the deleted user's comments.
+func TestPostgresStore_DeleteUserData_CommentReports(t *testing.T) {
+	store := NewPostgresStore(testPool(t))
+	s := setupTraceScenario(t, store)
+	if err := store.DeleteUserData(context.Background(), s.leaving); err != nil {
 		t.Fatalf("KullaniciVerisiniSil: %v", err)
 	}
-	if n := sikayetSayisi(t, d); n != 1 {
+	if n := reportCount(t, store); n != 1 {
 		t.Fatalf("yalnizca ucuncu kisinin sikayeti kalmali, kalan %d", n)
 	}
 }
 
-// Silinen kullanicinin yorumlarina (baskasinin yayininda, soft-delete
-// edilmis olanlar dahil) yapilan sikayetler gider; yayin cascade'i ile
-// gidenler gider; baskalarinin yorum ve yayinlarina yapilanlar kalir.
-func TestPostgresDepo_KullaniciVerisiniSil_SilinmisYorumVeKalanSikayetler(t *testing.T) {
-	havuz := testHavuz(t)
-	d := NewPostgresStore(havuz)
+// Reports on the deleted user's comments (on others' publications, including
+// soft-deleted ones) go; those removed by the publication cascade go;
+// reports on others' comments and publications remain.
+func TestPostgresStore_DeleteUserData_DeletedCommentAndRemainingReports(t *testing.T) {
+	pool := testPool(t)
+	store := NewPostgresStore(pool)
 	ctx := context.Background()
-	giden, kalan, ucuncu := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	testProfilEkle(t, d, giden, "giden")
-	testProfilEkle(t, d, kalan, "kalan")
-	kalaninYayini := testYayinEkle(t, havuz, testYayin{SahipID: kalan})
-	gidenYayini := testYayinEkle(t, havuz, testYayin{SahipID: giden})
+	leaver, stayer, third := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	testInsertProfile(t, store, leaver, "giden")
+	testInsertProfile(t, store, stayer, "kalan")
+	stayerPublication := testInsertPublication(t, pool, testPublication{OwnerID: stayer})
+	leaverPublication := testInsertPublication(t, pool, testPublication{OwnerID: leaver})
 
-	gidenYorumu := testYorumEkle(t, havuz, "", kalaninYayini, giden, nil, time.Now())
-	silinmisYorum := testYorumEkle(t, havuz, "", kalaninYayini, giden, intp(5), time.Now())
-	if err := d.DeleteComment(ctx, silinmisYorum); err != nil {
+	leaverComment := testInsertComment(t, pool, "", stayerPublication, leaver, nil, time.Now())
+	deletedComment := testInsertComment(t, pool, "", stayerPublication, leaver, intp(5), time.Now())
+	if err := store.DeleteComment(ctx, deletedComment); err != nil {
 		t.Fatal(err)
 	}
-	kalanYorumu := testYorumEkle(t, havuz, "", kalaninYayini, kalan, nil, time.Now())
-	yorumAltinda := testYorumEkle(t, havuz, "", gidenYayini, kalan, nil, time.Now())
+	stayerComment := testInsertComment(t, pool, "", stayerPublication, stayer, nil, time.Now())
+	nestedComment := testInsertComment(t, pool, "", leaverPublication, stayer, nil, time.Now())
 
-	sikayet := func(bildiren, tur, hedef, yayin string) {
+	fileReport := func(reporter, kind, target, pub string) {
 		t.Helper()
-		if err := d.InsertReport(ctx, ReportInsert{ID: uuid.NewString(), ReporterID: bildiren, TargetType: tur,
-			TargetID: hedef, PublicationID: yayin, Reason: "spam"}); err != nil {
+		if err := store.InsertReport(ctx, ReportInsert{ID: uuid.NewString(), ReporterID: reporter, TargetType: kind,
+			TargetID: target, PublicationID: pub, Reason: "spam"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	sikayet(kalan, TargetComment, gidenYorumu, kalaninYayini)        // gider
-	sikayet(ucuncu, TargetComment, silinmisYorum, kalaninYayini)     // gider
-	sikayet(kalan, TargetPublication, gidenYayini, gidenYayini)      // cascade ile gider
-	sikayet(ucuncu, TargetComment, yorumAltinda, gidenYayini)        // cascade ile gider
-	sikayet(ucuncu, TargetComment, kalanYorumu, kalaninYayini)       // kalir
-	sikayet(ucuncu, TargetPublication, kalaninYayini, kalaninYayini) // kalir
+	fileReport(stayer, TargetComment, leaverComment, stayerPublication)         // goes
+	fileReport(third, TargetComment, deletedComment, stayerPublication)         // goes
+	fileReport(stayer, TargetPublication, leaverPublication, leaverPublication) // goes via cascade
+	fileReport(third, TargetComment, nestedComment, leaverPublication)          // goes via cascade
+	fileReport(third, TargetComment, stayerComment, stayerPublication)          // stays
+	fileReport(third, TargetPublication, stayerPublication, stayerPublication)  // stays
 
-	if err := d.DeleteUserData(ctx, giden); err != nil {
+	if err := store.DeleteUserData(ctx, leaver); err != nil {
 		t.Fatalf("KullaniciVerisiniSil: %v", err)
 	}
-	satirlar, err := havuz.Query(ctx, `SELECT hedef_id::text FROM sosyal.sikayet ORDER BY hedef_turu`)
+	rows, err := pool.Query(ctx, `SELECT hedef_id::text FROM sosyal.sikayet ORDER BY hedef_turu`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer satirlar.Close()
-	var hedefler []string
-	for satirlar.Next() {
-		var h string
-		if err := satirlar.Scan(&h); err != nil {
+	defer rows.Close()
+	var targets []string
+	for rows.Next() {
+		var targetID string
+		if err := rows.Scan(&targetID); err != nil {
 			t.Fatal(err)
 		}
-		hedefler = append(hedefler, h)
+		targets = append(targets, targetID)
 	}
-	esitSira(t, "kalan sikayetler", hedefler, []string{kalaninYayini, kalanYorumu})
+	assertOrder(t, "kalan sikayetler", targets, []string{stayerPublication, stayerComment})
 }
