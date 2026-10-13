@@ -37,7 +37,7 @@ func NewRenderHandler(svc *service.RenderService, v *validator.Validate) *Render
 // @Security     BearerAuth
 // @Router       /api/render/start [post]
 func (h *RenderHandler) Start(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -76,7 +76,7 @@ func (h *RenderHandler) Start(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/render/status/{jobId} [get]
 func (h *RenderHandler) Status(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -111,7 +111,7 @@ func (h *RenderHandler) Status(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/render/result/{jobId} [get]
 func (h *RenderHandler) Result(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -149,7 +149,7 @@ func (h *RenderHandler) Result(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/render/cancel/{jobId} [post]
 func (h *RenderHandler) Cancel(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}

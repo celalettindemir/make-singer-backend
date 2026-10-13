@@ -9,7 +9,7 @@ import (
 // Sikayet handles POST /api/social/sikayetler. 201, govdesiz; tekrar da
 // 201'dir (yeni kayit acilmaz).
 func (h *SosyalHandler) Sikayet(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}

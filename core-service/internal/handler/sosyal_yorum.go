@@ -8,7 +8,7 @@ import (
 
 // Yorumlar handles GET /api/social/yayinlar/:id/yorumlar (sayfali).
 func (h *SosyalHandler) Yorumlar(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -22,7 +22,7 @@ func (h *SosyalHandler) Yorumlar(c *fiber.Ctx) error {
 // YorumYaz handles POST /api/social/yayinlar/:id/yorumlar (201 Yorum).
 // Kullanici basina dakikalik limit (429 yavasla) rotada uygulanir.
 func (h *SosyalHandler) YorumYaz(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -39,7 +39,7 @@ func (h *SosyalHandler) YorumYaz(c *fiber.Ctx) error {
 
 // YorumSil handles DELETE /api/social/yorumlar/:id (204).
 func (h *SosyalHandler) YorumSil(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}

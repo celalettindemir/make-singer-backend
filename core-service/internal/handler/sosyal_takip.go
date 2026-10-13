@@ -16,7 +16,7 @@ func (h *SosyalHandler) TakibiBirak(c *fiber.Ctx) error {
 }
 
 func (h *SosyalHandler) takip(c *fiber.Ctx, takip bool) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -29,7 +29,7 @@ func (h *SosyalHandler) takip(c *fiber.Ctx, takip bool) error {
 
 // Oneriler handles GET /api/social/oneriler (en cok 10 ProfilOzeti, sayfasiz).
 func (h *SosyalHandler) Oneriler(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}

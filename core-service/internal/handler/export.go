@@ -39,7 +39,7 @@ func NewExportHandler(svc *service.ExportService, v *validator.Validate) *Export
 // @Security     BearerAuth
 // @Router       /api/export/mp3 [post]
 func (h *ExportHandler) MP3(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -83,7 +83,7 @@ func (h *ExportHandler) MP3(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/export/wav [post]
 func (h *ExportHandler) WAV(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -127,7 +127,7 @@ func (h *ExportHandler) WAV(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/export/stems [post]
 func (h *ExportHandler) Stems(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}

@@ -38,7 +38,7 @@ func NewMasterHandler(svc *service.MasterService, v *validator.Validate) *Master
 // @Security     BearerAuth
 // @Router       /api/master/preview [post]
 func (h *MasterHandler) Preview(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -76,7 +76,7 @@ func (h *MasterHandler) Preview(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/master/final [post]
 func (h *MasterHandler) Final(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -118,7 +118,7 @@ func (h *MasterHandler) Final(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/master/status/{jobId} [get]
 func (h *MasterHandler) Status(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -153,7 +153,7 @@ func (h *MasterHandler) Status(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/master/result/{jobId} [get]
 func (h *MasterHandler) Result(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}

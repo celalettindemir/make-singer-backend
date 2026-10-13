@@ -15,8 +15,8 @@ import (
 	"github.com/makeasinger/api/internal/service"
 )
 
-// kullaniciOlarak, auth middleware'in yerine gecip userId yazar.
-func kullaniciOlarak(userID string) fiber.Handler {
+// asUser stands in for the auth middleware and writes the userId.
+func asUser(userID string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if userID != "" {
 			c.Locals("userId", userID)
@@ -25,38 +25,38 @@ func kullaniciOlarak(userID string) fiber.Handler {
 	}
 }
 
-func renderUygulamasi(t *testing.T, userID string) *fiber.App {
+func renderApp(t *testing.T, userID string) *fiber.App {
 	t.Helper()
-	rdb := canliRedis(t)
-	ham, _ := json.Marshal(model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued, CreatedAt: time.Now()})
-	if err := rdb.Set(context.Background(), "job:is1", ham, time.Hour).Err(); err != nil {
+	rdb := liveRedis(t)
+	raw, _ := json.Marshal(model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued, CreatedAt: time.Now()})
+	if err := rdb.Set(context.Background(), "job:is1", raw, time.Hour).Err(); err != nil {
 		t.Fatalf("is yazilamadi: %v", err)
 	}
 	h := NewRenderHandler(service.NewRenderService(rdb, nil, nil, &config.R2Config{}), validator.New())
 	app := fiber.New()
-	app.Get("/status/:jobId", kullaniciOlarak(userID), h.Status)
-	app.Post("/cancel/:jobId", kullaniciOlarak(userID), h.Cancel)
+	app.Get("/status/:jobId", asUser(userID), h.Status)
+	app.Post("/cancel/:jobId", asUser(userID), h.Cancel)
 	return app
 }
 
-func TestRenderHandler_BaskasininIsi404(t *testing.T) {
-	app := renderUygulamasi(t, "kullanici-b")
-	for _, istek := range []*http.Request{
+func TestRenderHandler_OtherUsersJob404(t *testing.T) {
+	app := renderApp(t, "kullanici-b")
+	for _, req := range []*http.Request{
 		httptest.NewRequest(http.MethodGet, "/status/is1", nil),
 		httptest.NewRequest(http.MethodPost, "/cancel/is1", nil),
 	} {
-		resp, err := app.Test(istek)
+		resp, err := app.Test(req)
 		if err != nil {
 			t.Fatalf("istek: %v", err)
 		}
 		if resp.StatusCode != http.StatusNotFound {
-			t.Errorf("%s %s = %d, 404 bekleniyordu", istek.Method, istek.URL.Path, resp.StatusCode)
+			t.Errorf("%s %s = %d, 404 bekleniyordu", req.Method, req.URL.Path, resp.StatusCode)
 		}
 	}
 }
 
-func TestRenderHandler_SahibiOkur(t *testing.T) {
-	app := renderUygulamasi(t, "kullanici-a")
+func TestRenderHandler_OwnerReads(t *testing.T) {
+	app := renderApp(t, "kullanici-a")
 	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/status/is1", nil))
 	if err != nil {
 		t.Fatalf("istek: %v", err)
@@ -66,8 +66,8 @@ func TestRenderHandler_SahibiOkur(t *testing.T) {
 	}
 }
 
-func TestRenderHandler_KimliksizIstek401(t *testing.T) {
-	app := renderUygulamasi(t, "")
+func TestRenderHandler_Unauthenticated401(t *testing.T) {
+	app := renderApp(t, "")
 	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/status/is1", nil))
 	if err != nil {
 		t.Fatalf("istek: %v", err)

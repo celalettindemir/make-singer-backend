@@ -177,7 +177,7 @@ func sosyalUygulamasi(s *sahteSosyal, userID string) *fiber.App {
 // sosyalUygulamasiLimitli, verilen limitlerle kurar.
 func sosyalUygulamasiLimitli(s *sahteSosyal, userID string, l SosyalLimitleri) *fiber.App {
 	app := fiber.New()
-	grup := app.Group("/api/social", kullaniciOlarak(userID))
+	grup := app.Group("/api/social", asUser(userID))
 	NewSosyalHandler(s).Rotalar(grup, l)
 	return app
 }

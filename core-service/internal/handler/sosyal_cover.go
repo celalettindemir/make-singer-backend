@@ -9,7 +9,7 @@ import (
 // Coverlar handles GET /api/social/yayinlar/:id/coverlar (sayfali;
 // altyapi kapaliysa bos sayfa).
 func (h *SosyalHandler) Coverlar(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -23,7 +23,7 @@ func (h *SosyalHandler) Coverlar(c *fiber.Ctx) error {
 // CoverBaslat handles POST /api/social/yayinlar/:id/cover-baslat. Govde
 // yok sayilir; kullanici basina saatlik limit rotada uygulanir.
 func (h *SosyalHandler) CoverBaslat(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}

@@ -42,7 +42,7 @@ func NewUploadHandler(svc *service.UploadService, v *validator.Validate) *Upload
 // @Security     BearerAuth
 // @Router       /api/upload/vocal [post]
 func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -128,7 +128,7 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 // @Security     BearerAuth
 // @Router       /api/upload/vocal/{takeId} [delete]
 func (h *UploadHandler) DeleteVocal(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}

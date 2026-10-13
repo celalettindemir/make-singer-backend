@@ -35,7 +35,7 @@ func NewFileHandler(svc *service.FileService, v *validator.Validate) *FileHandle
 // @Security     BearerAuth
 // @Router       /api/files/sign [post]
 func (h *FileHandler) Sign(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}

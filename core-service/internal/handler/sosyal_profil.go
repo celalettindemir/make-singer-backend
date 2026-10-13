@@ -11,7 +11,7 @@ import (
 // ProfilBen handles GET /api/social/profil/ben. Profil yoksa 404
 // profil_yok (mobil bunu "henuz profil yok" olarak okur).
 func (h *SosyalHandler) ProfilBen(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -27,7 +27,7 @@ func (h *SosyalHandler) ProfilBen(c *fiber.Ctx) error {
 
 // ProfilKaydet handles PUT /api/social/profil/ben.
 func (h *SosyalHandler) ProfilKaydet(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -44,7 +44,7 @@ func (h *SosyalHandler) ProfilKaydet(c *fiber.Ctx) error {
 
 // AdUygun handles GET /api/social/profil/kullanici-adi/uygun?ad=
 func (h *SosyalHandler) AdUygun(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -57,7 +57,7 @@ func (h *SosyalHandler) AdUygun(c *fiber.Ctx) error {
 
 // Profil handles GET /api/social/profiller/:ad
 func (h *SosyalHandler) Profil(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}

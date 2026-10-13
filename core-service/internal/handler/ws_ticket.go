@@ -34,7 +34,7 @@ func NewWSTicketHandler(svc *service.WSTicketService, v *validator.Validate) *WS
 // @Security     BearerAuth
 // @Router       /api/ws/ticket [post]
 func (h *WSTicketHandler) Issue(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -56,8 +56,8 @@ func (h *WSTicketHandler) Issue(c *fiber.Ctx) error {
 	return response.OK(c, result)
 }
 
-// Gate, WebSocket upgrade'inden ONCE bileti tuketir. Upgrade sonrasi
-// reddetmek, HTTP durum kodu yerine kapanis cercevesi demek olurdu.
+// Gate consumes the ticket BEFORE the WebSocket upgrade. Rejecting after the
+// upgrade would mean a close frame instead of an HTTP status code.
 func (h *WSTicketHandler) Gate(c *fiber.Ctx) error {
 	err := h.service.Redeem(c.Context(), c.Query("ticket"), c.Params("jobId"))
 	if errors.Is(err, service.ErrInvalidTicket) {

@@ -165,7 +165,7 @@ func main() {
 
 	// Hesap silme: kullanici kaydi kendi OP'mizde tutulur.
 	hesapService := service.NewAccountService(kimlikSunucu, silici, redisClient, asynqClient, sosyalDepo)
-	hesapHandler := handler.NewHesapHandler(hesapService)
+	hesapHandler := handler.NewAccountHandler(hesapService)
 
 	// kopyalayici: arayuz degiskeni; r2Client nil iken dogrudan atamak
 	// tipli nil tuzagini kurar (bkz. storage).
@@ -306,7 +306,7 @@ func main() {
 	// Kayitli dosya adreslerini tazeler (imza 1 saatte dolar).
 	api.Post("/files/sign", rateLimiter.SignLimit(cfg.RateLimit.SignPerMin), fileHandler.Sign)
 
-	api.Delete("/account", hesapHandler.Sil)
+	api.Delete("/account", hesapHandler.Delete)
 
 	// Kesfet (sosyal) uclari. Limitler yalnizca ilgili uclardadir; yorum
 	// limiti sozlesme geregi 429 yavasla doner.

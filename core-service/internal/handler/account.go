@@ -8,15 +8,15 @@ import (
 	"github.com/makeasinger/api/pkg/response"
 )
 
-type HesapHandler struct {
+type AccountHandler struct {
 	service *service.AccountService
 }
 
-func NewHesapHandler(svc *service.AccountService) *HesapHandler {
-	return &HesapHandler{service: svc}
+func NewAccountHandler(svc *service.AccountService) *AccountHandler {
+	return &AccountHandler{service: svc}
 }
 
-// Sil handles DELETE /api/account
+// Delete handles DELETE /api/account
 // @Summary      Delete account
 // @Description  Permanently delete the caller's account, linked sign-ins, refresh tokens and every stored file. The same token is rejected afterwards.
 // @Tags         Account
@@ -26,8 +26,8 @@ func NewHesapHandler(svc *service.AccountService) *HesapHandler {
 // @Failure      500 {object} response.ErrorResponse
 // @Security     BearerAuth
 // @Router       /api/account [delete]
-func (h *HesapHandler) Sil(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+func (h *AccountHandler) Delete(c *fiber.Ctx) error {
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}

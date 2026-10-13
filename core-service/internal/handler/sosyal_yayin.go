@@ -9,7 +9,7 @@ import (
 // YayinOlustur handles POST /api/social/yayinlar (202). Profil yoksa 409
 // profil_yok.
 func (h *SosyalHandler) YayinOlustur(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -26,7 +26,7 @@ func (h *SosyalHandler) YayinOlustur(c *fiber.Ctx) error {
 
 // Yayin handles GET /api/social/yayinlar/:id
 func (h *SosyalHandler) Yayin(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -39,7 +39,7 @@ func (h *SosyalHandler) Yayin(c *fiber.Ctx) error {
 
 // Slug handles GET /api/social/s/:slug
 func (h *SosyalHandler) Slug(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -52,7 +52,7 @@ func (h *SosyalHandler) Slug(c *fiber.Ctx) error {
 
 // YayinGuncelle handles PATCH /api/social/yayinlar/:id
 func (h *SosyalHandler) YayinGuncelle(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -69,7 +69,7 @@ func (h *SosyalHandler) YayinGuncelle(c *fiber.Ctx) error {
 
 // YayinSil handles DELETE /api/social/yayinlar/:id (204). Govde yok sayilir.
 func (h *SosyalHandler) YayinSil(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -81,7 +81,7 @@ func (h *SosyalHandler) YayinSil(c *fiber.Ctx) error {
 
 // TekrarDene handles POST /api/social/yayinlar/:id/tekrar-dene (202).
 func (h *SosyalHandler) TekrarDene(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -94,7 +94,7 @@ func (h *SosyalHandler) TekrarDene(c *fiber.Ctx) error {
 
 // Dosyalar handles POST /api/social/yayinlar/:id/dosyalar
 func (h *SosyalHandler) Dosyalar(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}

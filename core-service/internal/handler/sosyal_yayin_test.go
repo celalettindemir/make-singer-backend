@@ -53,7 +53,7 @@ func TestSosyal_YayinOlusturHataKodlari(t *testing.T) {
 
 func TestSosyal_YayinOlusturHizSiniri(t *testing.T) {
 	app := fiber.New()
-	grup := app.Group("/api/social", kullaniciOlarak(sosyalKullanici))
+	grup := app.Group("/api/social", asUser(sosyalKullanici))
 	NewSosyalHandler(&sahteSosyal{}).Rotalar(grup, SosyalLimitleri{Yayin: func(c *fiber.Ctx) error {
 		return c.Status(http.StatusTooManyRequests).JSON(fiber.Map{"error": fiber.Map{"code": "RATE_LIMITED", "message": "x"}})
 	}, Yorum: gecir, Cover: gecir})

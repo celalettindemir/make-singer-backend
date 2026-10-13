@@ -8,7 +8,7 @@ import (
 
 // Akis handles GET /api/social/akis?sekme=senin-icin|takip|yeni&imlec=&limit=
 func (h *SosyalHandler) Akis(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -21,7 +21,7 @@ func (h *SosyalHandler) Akis(c *fiber.Ctx) error {
 
 // ProfilYayinlari handles GET /api/social/profiller/:ad/yayinlar?tur=sarkilar|coverlar
 func (h *SosyalHandler) ProfilYayinlari(c *fiber.Ctx) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
@@ -44,7 +44,7 @@ func (h *SosyalHandler) BegeniyiKaldir(c *fiber.Ctx) error {
 }
 
 func (h *SosyalHandler) begeni(c *fiber.Ctx, begen bool) error {
-	userID, ok := istekSahibi(c)
+	userID, ok := requestOwner(c)
 	if !ok {
 		return response.Unauthorized(c, "Kimlik dogrulanamadi")
 	}
