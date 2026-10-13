@@ -166,7 +166,7 @@ func (c *SunoClient) GenerateMusic(ctx context.Context, req *GenerateMusicReques
 // WaitMusic polls until the generation is SUCCESS and returns the first track.
 func (c *SunoClient) WaitMusic(ctx context.Context, taskID string, interval, maxWait time.Duration) (*Track, error) {
 	var result *Track
-	err := c.waitFor(ctx, interval, maxWait, "muzik", func() (bool, error) {
+	err := c.waitFor(ctx, interval, maxWait, "music", func() (bool, error) {
 		var data struct {
 			Status       string `json:"status"`
 			ErrorMessage string `json:"errorMessage"`
@@ -292,7 +292,7 @@ func (c *SunoClient) WaitIsolated(ctx context.Context, stemTaskID string, interv
 		Duration float64 `json:"duration"`
 	}
 	var result *IsolatedStem
-	err := c.waitFor(ctx, interval, maxWait, "ayirma", func() (bool, error) {
+	err := c.waitFor(ctx, interval, maxWait, "separation", func() (bool, error) {
 		var data struct {
 			SuccessFlag  string `json:"successFlag"`
 			ErrorMessage string `json:"errorMessage"`
