@@ -23,17 +23,17 @@ func TestRequestStore_StateSingleUse(t *testing.T) {
 		CodeVerifier:  "dogrulayici-1",
 	}
 	if err := d.WriteState(ctx, "state-1", requested); err != nil {
-		t.Fatalf("durum yazilamadi: %v", err)
+		t.Fatalf("could not write state: %v", err)
 	}
 	readBack, err := d.TakeState(ctx, "state-1")
 	if err != nil {
-		t.Fatalf("durum okunamadi: %v", err)
+		t.Fatalf("could not read state: %v", err)
 	}
 	if readBack != requested {
-		t.Errorf("okunan = %+v, beklenen %+v", readBack, requested)
+		t.Errorf("read = %+v, want %+v", readBack, requested)
 	}
 	if _, err := d.TakeState(ctx, "state-1"); !errors.Is(err, ErrStateNotFound) {
-		t.Errorf("ikinci okuma err = %v, beklenen ErrDurumYok", err)
+		t.Errorf("second read err = %v, want ErrStateNotFound", err)
 	}
 }
 
@@ -41,7 +41,7 @@ func TestRequestStore_UnknownStateNotFound(t *testing.T) {
 	rdb := testRedis(t)
 	d := NewRequestStore(rdb)
 	if _, err := d.TakeState(context.Background(), "hic-yazilmadi"); !errors.Is(err, ErrStateNotFound) {
-		t.Errorf("err = %v, beklenen ErrDurumYok", err)
+		t.Errorf("err = %v, want ErrStateNotFound", err)
 	}
 }
 
@@ -55,7 +55,7 @@ func TestUpstream_AuthorizeURLGoogle(t *testing.T) {
 	}
 	u, err := url.Parse(y.AuthorizeURL("st", "nn", "dogrulayici-en-az-43-karakter-olmali-ki-gecerli-olsun", "https://biz/federasyon/google/geri"))
 	if err != nil {
-		t.Fatalf("URL cozumlenemedi: %v", err)
+		t.Fatalf("could not parse URL: %v", err)
 	}
 	q := u.Query()
 	for field, want := range map[string]string{
@@ -68,15 +68,15 @@ func TestUpstream_AuthorizeURLGoogle(t *testing.T) {
 		"code_challenge_method": "S256",
 	} {
 		if q.Get(field) != want {
-			t.Errorf("%s = %q, beklenen %q", field, q.Get(field), want)
+			t.Errorf("%s = %q, want %q", field, q.Get(field), want)
 		}
 	}
 	// The S256 digest is sent, not the verifier ITSELF.
 	if q.Get("code_challenge") == "" {
-		t.Error("code_challenge bos")
+		t.Error("code_challenge is empty")
 	}
 	if strings.Contains(u.String(), "dogrulayici-en-az-43") {
-		t.Error("kod dogrulayicisi URL'de duz metin gonderilmis")
+		t.Error("the code verifier was sent in plain text in the URL")
 	}
 }
 
@@ -92,13 +92,13 @@ func TestUpstream_AuthorizeURLAppleOmitsPKCE(t *testing.T) {
 	u, _ := url.Parse(y.AuthorizeURL("st", "nn", "dogrulayici", "https://biz/federasyon/apple/geri"))
 	q := u.Query()
 	if q.Get("code_challenge") != "" || q.Get("code_challenge_method") != "" {
-		t.Error("Apple'a PKCE parametresi gonderilmis")
+		t.Error("a PKCE parameter was sent to Apple")
 	}
 	// When the name/email scope is requested, Apple returns with form_post;
 	// we ask for it EXPLICITLY because the callback handler has to expect
 	// a POST (see K2).
 	if q.Get("response_mode") != "form_post" {
-		t.Errorf("response_mode = %q, beklenen form_post", q.Get("response_mode"))
+		t.Errorf("response_mode = %q, want form_post", q.Get("response_mode"))
 	}
 }
 
@@ -109,19 +109,19 @@ func TestUpstream_AuthorizeURLAppleOmitsPKCE(t *testing.T) {
 func TestGenerateCodeVerifier(t *testing.T) {
 	d1, m1, err := generateCodeVerifier()
 	if err != nil {
-		t.Fatalf("kodDogrulayiciUret: %v", err)
+		t.Fatalf("generateCodeVerifier: %v", err)
 	}
 	if len(d1) < 43 {
-		t.Errorf("dogrulayici uzunlugu = %d, en az 43 olmali", len(d1))
+		t.Errorf("verifier length = %d, should be at least 43", len(d1))
 	}
 	if m1 == "" {
-		t.Error("meydan okuma bos")
+		t.Error("challenge is empty")
 	}
 	d2, _, err := generateCodeVerifier()
 	if err != nil {
-		t.Fatalf("ikinci kodDogrulayiciUret: %v", err)
+		t.Fatalf("second generateCodeVerifier: %v", err)
 	}
 	if d1 == d2 {
-		t.Error("iki cagri ayni dogrulayiciyi uretti")
+		t.Error("two calls produced the same verifier")
 	}
 }

@@ -26,20 +26,20 @@ func TestTokenStore_CreateAndGetRefresh(t *testing.T) {
 	ctx := context.Background()
 	token, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	if token == "" {
-		t.Fatal("bos jeton dondu")
+		t.Fatal("an empty token was returned")
 	}
 	record, err := store.GetRefresh(ctx, token)
 	if err != nil {
-		t.Fatalf("RefreshOku: %v", err)
+		t.Fatalf("GetRefresh: %v", err)
 	}
 	if record.UserID != "k1" {
 		t.Errorf("UserID = %q", record.UserID)
 	}
 	if record.FamilyID == "" {
-		t.Error("FamilyID bos")
+		t.Error("FamilyID is empty")
 	}
 }
 
@@ -49,17 +49,17 @@ func TestTokenStore_RotateInvalidatesOld(t *testing.T) {
 	ctx := context.Background()
 	old, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	fresh, err := store.RotateRefresh(ctx, old, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshDondur: %v", err)
+		t.Fatalf("RotateRefresh: %v", err)
 	}
 	if fresh == old {
-		t.Fatal("jeton donmemis, ayni deger geldi")
+		t.Fatal("the token did not rotate, the same value came back")
 	}
 	if _, err := store.GetRefresh(ctx, fresh); err != nil {
-		t.Errorf("yeni jeton okunamadi: %v", err)
+		t.Errorf("could not read the new token: %v", err)
 	}
 }
 
@@ -71,19 +71,19 @@ func TestTokenStore_UsedTokenRevokesFamily(t *testing.T) {
 	ctx := context.Background()
 	firstRecord, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	second, err := store.RotateRefresh(ctx, firstRecord, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshDondur: %v", err)
+		t.Fatalf("RotateRefresh: %v", err)
 	}
 	// The attacker presents the old token again.
 	if _, err := store.RotateRefresh(ctx, firstRecord, newRefresh("k1")); !errors.Is(err, ErrTokenReused) {
-		t.Fatalf("hata = %v, beklenen ErrJetonTekrar", err)
+		t.Fatalf("error = %v, want ErrTokenReused", err)
 	}
 	// The valid token in the real user's hands must be dead now too.
 	if _, err := store.GetRefresh(ctx, second); !errors.Is(err, ErrTokenNotFound) {
-		t.Errorf("aile iptal edilmemis, ikinci jeton hala gecerli (err=%v)", err)
+		t.Errorf("family was not revoked, the second token is still valid (err=%v)", err)
 	}
 }
 
@@ -94,17 +94,17 @@ func TestTokenStore_ExpiredRefreshRejected(t *testing.T) {
 	k.ExpiresAt = time.Now().UTC().Add(-time.Minute)
 	token, err := store.CreateRefresh(ctx, k)
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	if _, err := store.GetRefresh(ctx, token); !errors.Is(err, ErrTokenNotFound) {
-		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
+		t.Errorf("error = %v, want ErrTokenNotFound", err)
 	}
 }
 
 func TestTokenStore_MissingRefresh(t *testing.T) {
 	store := NewFakeTokenStore()
 	if _, err := store.GetRefresh(context.Background(), "uydurma"); !errors.Is(err, ErrTokenNotFound) {
-		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
+		t.Errorf("error = %v, want ErrTokenNotFound", err)
 	}
 }
 
@@ -121,18 +121,18 @@ func TestTokenStore_RevokeUserRevokesAll(t *testing.T) {
 	otherClient.ClientID = "makesinger-web"
 	d, _ := store.CreateRefresh(ctx, otherClient)
 	if err := store.RevokeUser(ctx, "k1", "makesinger-mobil"); err != nil {
-		t.Fatalf("KullaniciIptal: %v", err)
+		t.Fatalf("RevokeUser: %v", err)
 	}
 	for name, token := range map[string]string{"a": a, "b": b} {
 		if _, err := store.GetRefresh(ctx, token); !errors.Is(err, ErrTokenNotFound) {
-			t.Errorf("%s hala gecerli", name)
+			t.Errorf("%s is still valid", name)
 		}
 	}
 	if _, err := store.GetRefresh(ctx, c); err != nil {
-		t.Errorf("baska kullanicinin jetonu iptal edildi: %v", err)
+		t.Errorf("another user's token was revoked: %v", err)
 	}
 	if _, err := store.GetRefresh(ctx, d); err != nil {
-		t.Errorf("baska istemcinin jetonu iptal edildi: %v", err)
+		t.Errorf("another client's token was revoked: %v", err)
 	}
 }
 
@@ -142,11 +142,11 @@ func TestTokenStore_NoPlaintextToken(t *testing.T) {
 	ctx := context.Background()
 	token, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	for _, record := range store.AllRecords() {
 		if string(record.TokenHash) == token {
-			t.Fatal("jeton duz metin saklanmis")
+			t.Fatal("the token was stored in plain text")
 		}
 	}
 	// Looking field by field is not enough (the sha256 raw bytes can never
@@ -154,16 +154,16 @@ func TestTokenStore_NoPlaintextToken(t *testing.T) {
 	// the WHOLE record and verify that the token does not appear in any field.
 	data, err := json.Marshal(store.AllRecords())
 	if err != nil {
-		t.Fatalf("kayitlar serilenemedi: %v", err)
+		t.Fatalf("could not serialize records: %v", err)
 	}
 	if strings.Contains(string(data), token) {
-		t.Fatalf("jeton kayit icinde bir alanda duz metin gecmis: %s", data)
+		t.Fatalf("the token leaked in plain text into a field in the record: %s", data)
 	}
 	// The map keys must be digests too: if the fake store keeps the token as a
 	// key, the plain text still sits in memory.
 	for key := range store.refresh {
 		if strings.Contains(key, token) {
-			t.Fatal("jeton map anahtarinda duz metin saklanmis")
+			t.Fatal("the token was stored in plain text in the map key")
 		}
 	}
 }
@@ -175,19 +175,19 @@ func TestTokenStore_RotateChecksOwnership(t *testing.T) {
 	ctx := context.Background()
 	token, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	if _, err := store.RotateRefresh(ctx, token, newRefresh("k2")); !errors.Is(err, ErrTokenNotFound) {
-		t.Errorf("baska kullanici icin hata = %v, beklenen ErrJetonYok", err)
+		t.Errorf("error for another user = %v, want ErrTokenNotFound", err)
 	}
 	otherClient := newRefresh("k1")
 	otherClient.ClientID = "makesinger-web"
 	if _, err := store.RotateRefresh(ctx, token, otherClient); !errors.Is(err, ErrTokenNotFound) {
-		t.Errorf("baska istemci icin hata = %v, beklenen ErrJetonYok", err)
+		t.Errorf("error for another client = %v, want ErrTokenNotFound", err)
 	}
 	// Rejected attempts must not have consumed the token.
 	if _, err := store.GetRefresh(ctx, token); err != nil {
-		t.Errorf("gecerli jeton reddedilen denemeler sonrasi olmus: %v", err)
+		t.Errorf("the valid token was revoked after the rejected attempts: %v", err)
 	}
 }
 
@@ -200,17 +200,17 @@ func TestFakeTokenStore_ReturnsCopies(t *testing.T) {
 	input := newRefresh("k1")
 	token, err := store.CreateRefresh(ctx, input)
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	// Changing the slice in the caller's hands must not affect the store.
 	input.Scopes[0] = "BOZULDU"
 
 	record, err := store.GetRefresh(ctx, token)
 	if err != nil {
-		t.Fatalf("RefreshOku: %v", err)
+		t.Fatalf("GetRefresh: %v", err)
 	}
 	if record.Scopes[0] != "openid" {
-		t.Errorf("Scopes cagiranla paylasilmis: %v", record.Scopes)
+		t.Errorf("Scopes is shared with the caller: %v", record.Scopes)
 	}
 	// Corrupting the returned record must not affect the store either.
 	record.Scopes[0] = "BOZULDU"
@@ -221,28 +221,28 @@ func TestFakeTokenStore_ReturnsCopies(t *testing.T) {
 
 	again, err := store.GetRefresh(ctx, token)
 	if err != nil {
-		t.Fatalf("donen kayit mutasyonu depoyu bozdu: %v", err)
+		t.Fatalf("mutating the returned record corrupted the store: %v", err)
 	}
 	if again.Scopes[0] != "openid" || again.UserID != "k1" || again.RevokedAt != nil {
-		t.Errorf("dahili kayit mutasyona ugradi: %+v", again)
+		t.Errorf("internal record picked up the mutation: %+v", again)
 	}
 
 	// The same isolation for the access record.
 	scope := []string{"openid"}
 	if err := store.SaveAccess(ctx, "at1", "k1", "makesinger-mobil", scope, time.Now().UTC().Add(time.Minute)); err != nil {
-		t.Fatalf("AccessKaydet: %v", err)
+		t.Fatalf("SaveAccess: %v", err)
 	}
 	scope[0] = "BOZULDU"
 	accessRecord, err := store.GetAccess(ctx, "at1")
 	if err != nil {
-		t.Fatalf("AccessOku: %v", err)
+		t.Fatalf("GetAccess: %v", err)
 	}
 	if accessRecord.Scopes[0] != "openid" {
-		t.Errorf("access Scopes cagiranla paylasilmis: %v", accessRecord.Scopes)
+		t.Errorf("access Scopes is shared with the caller: %v", accessRecord.Scopes)
 	}
 	accessRecord.UserID = "saldirgan"
 	if accessRecord2, err := store.GetAccess(ctx, "at1"); err != nil || accessRecord2.UserID != "k1" {
-		t.Errorf("dahili access kaydi mutasyona ugradi: %+v (err=%v)", accessRecord2, err)
+		t.Errorf("internal access record picked up the mutation: %+v (err=%v)", accessRecord2, err)
 	}
 }
 
@@ -252,7 +252,7 @@ func TestFakeTokenStore_AllRecordsReturnsCopies(t *testing.T) {
 	ctx := context.Background()
 	token, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	for _, record := range store.AllRecords() {
 		record.UserID = "saldirgan"
@@ -260,10 +260,10 @@ func TestFakeTokenStore_AllRecordsReturnsCopies(t *testing.T) {
 	}
 	record, err := store.GetRefresh(ctx, token)
 	if err != nil {
-		t.Fatalf("RefreshOku: %v", err)
+		t.Fatalf("GetRefresh: %v", err)
 	}
 	if record.UserID != "k1" || record.Scopes[0] != "openid" {
-		t.Errorf("TumKayitlar dahili isaretci dondurmus: %+v", record)
+		t.Errorf("AllRecords returned an internal pointer: %+v", record)
 	}
 }
 
@@ -272,16 +272,16 @@ func TestTokenStore_SaveAndGetAccess(t *testing.T) {
 	ctx := context.Background()
 	last := time.Now().UTC().Add(15 * time.Minute)
 	if err := store.SaveAccess(ctx, "at1", "k1", "makesinger-mobil", []string{"openid"}, last); err != nil {
-		t.Fatalf("AccessKaydet: %v", err)
+		t.Fatalf("SaveAccess: %v", err)
 	}
 	record, err := store.GetAccess(ctx, "at1")
 	if err != nil {
-		t.Fatalf("AccessOku: %v", err)
+		t.Fatalf("GetAccess: %v", err)
 	}
 	if record.UserID != "k1" {
 		t.Errorf("UserID = %q", record.UserID)
 	}
 	if _, err := store.GetAccess(ctx, "yok"); !errors.Is(err, ErrTokenNotFound) {
-		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
+		t.Errorf("error = %v, want ErrTokenNotFound", err)
 	}
 }

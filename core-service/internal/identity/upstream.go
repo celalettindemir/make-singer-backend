@@ -86,7 +86,7 @@ const codeVerifierBytes = 32
 func generateCodeVerifier() (verifier, challenge string, err error) {
 	b := make([]byte, codeVerifierBytes)
 	if _, err := rand.Read(b); err != nil {
-		return "", "", fmt.Errorf("kod dogrulayicisi uretilemedi: %w", err)
+		return "", "", fmt.Errorf("could not generate the code verifier: %w", err)
 	}
 	verifier = base64.RawURLEncoding.EncodeToString(b)
 	sum := sha256.Sum256([]byte(verifier))
@@ -123,7 +123,7 @@ type FederationState struct {
 
 // ErrStateNotFound: there is no FederationState recorded for the state
 // (never created, expired, or already consumed).
-var ErrStateNotFound = errors.New("federasyon durumu bulunamadi")
+var ErrStateNotFound = errors.New("federation state not found")
 
 // StateStore defines writing and single-use reading of the federation
 // "state" record. Like SessionStore, it is implemented by RequestStore.
@@ -147,10 +147,10 @@ func stateKey(state string) string { return "kimlik:fed:" + state }
 func (d *RequestStore) WriteState(ctx context.Context, state string, record FederationState) error {
 	data, err := json.Marshal(record)
 	if err != nil {
-		return fmt.Errorf("federasyon durumu serilenemedi: %w", err)
+		return fmt.Errorf("could not serialize the federation state: %w", err)
 	}
 	if err := d.rdb.Set(ctx, stateKey(state), data, federationStateTTL).Err(); err != nil {
-		return fmt.Errorf("federasyon durumu yazilamadi: %w", err)
+		return fmt.Errorf("could not write the federation state: %w", err)
 	}
 	return nil
 }
@@ -166,11 +166,11 @@ func (d *RequestStore) TakeState(ctx context.Context, state string) (FederationS
 		return FederationState{}, ErrStateNotFound
 	}
 	if err != nil {
-		return FederationState{}, fmt.Errorf("federasyon durumu okunamadi: %w", err)
+		return FederationState{}, fmt.Errorf("could not read the federation state: %w", err)
 	}
 	var record FederationState
 	if err := json.Unmarshal(data, &record); err != nil {
-		return FederationState{}, fmt.Errorf("federasyon durumu cozumlenemedi: %w", err)
+		return FederationState{}, fmt.Errorf("could not decode the federation state: %w", err)
 	}
 	return record, nil
 }

@@ -31,11 +31,11 @@ const (
 // ErrRequestNotFound is returned when the requested auth request (or code)
 // cannot be found in Redis. It may have expired, never been created, or (for
 // a code) already been consumed.
-var ErrRequestNotFound = errors.New("auth istegi bulunamadi")
+var ErrRequestNotFound = errors.New("auth request not found")
 
 // ErrRequestAlreadyCompleted is returned when an already-completed auth
 // request is asked to be bound to ANOTHER user again (see MarkDone).
-var ErrRequestAlreadyCompleted = errors.New("auth istegi zaten tamamlandi")
+var ErrRequestAlreadyCompleted = errors.New("auth request is already completed")
 
 // AuthRequest is the authorization request record that satisfies the
 // op.AuthRequest interface and is stored in Redis as JSON. All fields MUST
@@ -191,10 +191,10 @@ func (d *RequestStore) Create(ctx context.Context, req *oidc.AuthRequest, hintSu
 func (d *RequestStore) write(ctx context.Context, request *AuthRequest, ttl time.Duration) error {
 	data, err := json.Marshal(request)
 	if err != nil {
-		return fmt.Errorf("istek serilenemedi: %w", err)
+		return fmt.Errorf("could not serialize the request: %w", err)
 	}
 	if err := d.rdb.Set(ctx, requestKey(request.ID), data, ttl).Err(); err != nil {
-		return fmt.Errorf("istek yazilamadi: %w", err)
+		return fmt.Errorf("could not write the request: %w", err)
 	}
 	return nil
 }
@@ -206,11 +206,11 @@ func (d *RequestStore) GetByID(ctx context.Context, id string) (*AuthRequest, er
 		return nil, ErrRequestNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("istek okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the request: %w", err)
 	}
 	var request AuthRequest
 	if err := json.Unmarshal(data, &request); err != nil {
-		return nil, fmt.Errorf("istek cozumlenemedi: %w", err)
+		return nil, fmt.Errorf("could not decode the request: %w", err)
 	}
 	return &request, nil
 }
@@ -219,7 +219,7 @@ func (d *RequestStore) GetByID(ctx context.Context, id string) (*AuthRequest, er
 // the request id. The code becomes invalid on its own after 60 seconds.
 func (d *RequestStore) SaveCode(ctx context.Context, id string, code string) error {
 	if err := d.rdb.Set(ctx, codeKey(code), id, codeTTL).Err(); err != nil {
-		return fmt.Errorf("kod kaydedilemedi: %w", err)
+		return fmt.Errorf("could not save the code: %w", err)
 	}
 	return nil
 }
@@ -234,7 +234,7 @@ func (d *RequestStore) GetByCode(ctx context.Context, code string) (*AuthRequest
 		return nil, ErrRequestNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("kod okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the code: %w", err)
 	}
 	return d.GetByID(ctx, id)
 }
@@ -243,7 +243,7 @@ func (d *RequestStore) GetByCode(ctx context.Context, code string) (*AuthRequest
 // when the code exchange completes).
 func (d *RequestStore) Delete(ctx context.Context, id string) error {
 	if err := d.rdb.Del(ctx, requestKey(id)).Err(); err != nil {
-		return fmt.Errorf("istek silinemedi: %w", err)
+		return fmt.Errorf("could not delete the request: %w", err)
 	}
 	return nil
 }
@@ -281,7 +281,7 @@ func (d *RequestStore) MarkDone(ctx context.Context, id string, userID string, a
 	}
 	ttl, err := d.rdb.TTL(ctx, requestKey(id)).Result()
 	if err != nil {
-		return fmt.Errorf("TTL okunamadi: %w", err)
+		return fmt.Errorf("could not read the TTL: %w", err)
 	}
 	if ttl <= 0 {
 		ttl = requestTTL
@@ -307,10 +307,10 @@ var _ SessionStore = (*RequestStore)(nil)
 func (d *RequestStore) WriteSession(ctx context.Context, session string, binding SessionBinding, ttl time.Duration) error {
 	data, err := json.Marshal(binding)
 	if err != nil {
-		return fmt.Errorf("oturum serilenemedi: %w", err)
+		return fmt.Errorf("could not serialize the session: %w", err)
 	}
 	if err := d.rdb.Set(ctx, sessionKey(session), data, ttl).Err(); err != nil {
-		return fmt.Errorf("oturum yazilamadi: %w", err)
+		return fmt.Errorf("could not write the session: %w", err)
 	}
 	return nil
 }
@@ -323,11 +323,11 @@ func (d *RequestStore) ReadSession(ctx context.Context, session string) (Session
 		return SessionBinding{}, ErrSessionNotFound
 	}
 	if err != nil {
-		return SessionBinding{}, fmt.Errorf("oturum okunamadi: %w", err)
+		return SessionBinding{}, fmt.Errorf("could not read the session: %w", err)
 	}
 	var binding SessionBinding
 	if err := json.Unmarshal(data, &binding); err != nil {
-		return SessionBinding{}, fmt.Errorf("oturum cozumlenemedi: %w", err)
+		return SessionBinding{}, fmt.Errorf("could not decode the session: %w", err)
 	}
 	return binding, nil
 }

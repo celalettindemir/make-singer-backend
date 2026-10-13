@@ -17,7 +17,7 @@ import (
 // a missing id_token / {"error":...} that came with a 200. The error body
 // itself is never added to this error (see ExchangeCode): it may contain
 // pieces of the code or client_secret.
-var ErrUpstreamResponse = errors.New("yukari akis saglayicisi beklenmeyen yanit verdi")
+var ErrUpstreamResponse = errors.New("upstream provider gave an unexpected response")
 
 // upstreamTimeout is the upper bound applied to the upstream token endpoint.
 // A provider that does not respond without a timeout accumulates the
@@ -46,7 +46,7 @@ func (ic *Upstream) ExchangeCode(
 		// K5: regenerated on every exchange, not cached.
 		secret, err = appleClientSecret(ic.AppleTeamID, ic.AppleKeyID, ic.ClientID, ic.AppleKeyP8, time.Now())
 		if err != nil {
-			return "", fmt.Errorf("apple client_secret uretilemedi: %w", err)
+			return "", fmt.Errorf("could not generate the apple client_secret: %w", err)
 		}
 	}
 
@@ -62,13 +62,13 @@ func (ic *Upstream) ExchangeCode(
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, ic.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", fmt.Errorf("istek kurulamadi: %w", err)
+		return "", fmt.Errorf("could not build the request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	response, err := client.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("yukari akisa ulasilamadi: %w", err)
+		return "", fmt.Errorf("could not reach the upstream: %w", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 
@@ -76,25 +76,25 @@ func (ic *Upstream) ExchangeCode(
 	// cannot fill memory.
 	body, err := io.ReadAll(io.LimitReader(response.Body, upstreamResponseLimit))
 	if err != nil {
-		return "", fmt.Errorf("yanit okunamadi: %w", err)
+		return "", fmt.Errorf("could not read the response: %w", err)
 	}
 	if response.StatusCode != http.StatusOK {
 		// THE ERROR BODY IS NOT LOGGED and NOT SHOWN TO THE USER: it may contain
 		// pieces of the code or secrets. Only the status code.
-		return "", fmt.Errorf("%w: durum %d", ErrUpstreamResponse, response.StatusCode)
+		return "", fmt.Errorf("%w: status %d", ErrUpstreamResponse, response.StatusCode)
 	}
 	var decoded struct {
 		IDToken string `json:"id_token"`
 		Error   string `json:"error"`
 	}
 	if err := json.Unmarshal(body, &decoded); err != nil {
-		return "", fmt.Errorf("%w: govde cozumlenemedi", ErrUpstreamResponse)
+		return "", fmt.Errorf("%w: could not decode the body", ErrUpstreamResponse)
 	}
 	// 200 + {"error":...} is a REAL situation; counting a 200 as success
 	// without looking at the body would mean sending an empty id_token to
 	// verification.
 	if decoded.Error != "" || decoded.IDToken == "" {
-		return "", fmt.Errorf("%w: id_token yok", ErrUpstreamResponse)
+		return "", fmt.Errorf("%w: no id_token", ErrUpstreamResponse)
 	}
 	return decoded.IDToken, nil
 }

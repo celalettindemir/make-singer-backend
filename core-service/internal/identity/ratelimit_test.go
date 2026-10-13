@@ -30,7 +30,7 @@ func TestClientIP_ResolvesByTrustedProxyCount(t *testing.T) {
 		want           string
 	}{
 		{
-			name: "proxy yok: XFF HIC okunmaz",
+			name: "no proxy: XFF is NEVER read",
 			// Without a proxy the header is entirely under the client's control.
 			xff:            "1.2.3.4",
 			remoteAddr:     "203.0.113.9:51234",
@@ -38,14 +38,14 @@ func TestClientIP_ResolvesByTrustedProxyCount(t *testing.T) {
 			want:           "203.0.113.9",
 		},
 		{
-			name:           "tek proxy (Traefik): son eleman alinir",
+			name:           "one proxy (Traefik): the last element is taken",
 			xff:            "198.51.100.7",
 			remoteAddr:     "10.0.0.1:40000",
 			trustedProxies: 1,
 			want:           "198.51.100.7",
 		},
 		{
-			name: "tek proxy + UYDURMA on ekler: yine son eleman alinir",
+			name: "one proxy + FORGED prefixes: the last element is still taken",
 			// Whatever the attacker writes on the left, Traefik appends the address it
 			// saw at the END; the limit cannot be bypassed.
 			xff:            "1.1.1.1, 2.2.2.2, 198.51.100.7",
@@ -54,14 +54,14 @@ func TestClientIP_ResolvesByTrustedProxyCount(t *testing.T) {
 			want:           "198.51.100.7",
 		},
 		{
-			name:           "iki proxy: sondan ikinci eleman alinir",
+			name:           "two proxies: the second from the end is taken",
 			xff:            "1.1.1.1, 198.51.100.7, 10.0.0.5",
 			remoteAddr:     "10.0.0.1:40000",
 			trustedProxies: 2,
 			want:           "198.51.100.7",
 		},
 		{
-			name: "beklenenden kisa XFF: RemoteAddr'a dusulur",
+			name: "XFF shorter than expected: falls back to RemoteAddr",
 			// If the chain is shorter than expected, the header is not coming from our
 			// proxies; a forged value is not trusted.
 			xff:            "198.51.100.7",
@@ -70,14 +70,14 @@ func TestClientIP_ResolvesByTrustedProxyCount(t *testing.T) {
 			want:           "10.0.0.1",
 		},
 		{
-			name:           "secilen eleman gecerli IP degil: RemoteAddr'a dusulur",
+			name:           "selected element is not a valid IP: falls back to RemoteAddr",
 			xff:            "1.1.1.1, bu-bir-ip-degil",
 			remoteAddr:     "10.0.0.1:40000",
 			trustedProxies: 1,
 			want:           "10.0.0.1",
 		},
 		{
-			name: "IKI AYRI XFF SATIRI: satirlar birlestirilir, en sagdaki alinir",
+			name: "TWO SEPARATE XFF LINES: the lines are joined, the rightmost is taken",
 			// Header.Get reads only the FIRST line; an attacker can add their own line
 			// and make the right-to-left count happen on their own value, and the
 			// reviewer got "9.9.9.9" this way. RFC 7230 3.2.2: multiple lines are
@@ -88,7 +88,7 @@ func TestClientIP_ResolvesByTrustedProxyCount(t *testing.T) {
 			want:           "198.51.100.7",
 		},
 		{
-			name: "IKI AYRI XFF SATIRI + proxy yok: yine RemoteAddr",
+			name: "TWO SEPARATE XFF LINES + no proxy: RemoteAddr again",
 			// While trustedProxies == 0 the header is NEVER read.
 			xffLines:       []string{"9.9.9.9", "1.1.1.1"},
 			remoteAddr:     "203.0.113.9:51234",
@@ -96,7 +96,7 @@ func TestClientIP_ResolvesByTrustedProxyCount(t *testing.T) {
 			want:           "203.0.113.9",
 		},
 		{
-			name:           "baslik yok: RemoteAddr",
+			name:           "no header: RemoteAddr",
 			xff:            "",
 			remoteAddr:     "192.0.2.33:1234",
 			trustedProxies: 1,
@@ -114,7 +114,7 @@ func TestClientIP_ResolvesByTrustedProxyCount(t *testing.T) {
 				r.Header.Add("X-Forwarded-For", line)
 			}
 			if got := clientIP(r, d.trustedProxies); got != d.want {
-				t.Errorf("istemciIP = %q, beklenen %q", got, d.want)
+				t.Errorf("clientIP = %q, want %q", got, d.want)
 			}
 		})
 	}
@@ -138,17 +138,17 @@ func TestNewRateLimiter_RejectsInvalidConfig(t *testing.T) {
 		cfg  RateLimitConfig
 		key  []byte
 	}{
-		{"redis yok", nil, valid, []byte("anahtar")},
-		{"giris ip siniri 0", rdb, broken(func(a *RateLimitConfig) { a.LoginIPPerMin = 0 }), []byte("anahtar")},
-		{"giris eposta siniri 0", rdb, broken(func(a *RateLimitConfig) { a.LoginEmailPerHour = 0 }), []byte("anahtar")},
-		{"kayit ip siniri 0", rdb, broken(func(a *RateLimitConfig) { a.SignupIPPerHour = 0 }), []byte("anahtar")},
-		{"guvenilen proxy negatif", rdb, broken(func(a *RateLimitConfig) { a.TrustedProxies = -1 }), []byte("anahtar")},
-		{"eposta ozet anahtari bos", rdb, valid, nil},
+		{"no redis", nil, valid, []byte("anahtar")},
+		{"login ip limit 0", rdb, broken(func(a *RateLimitConfig) { a.LoginIPPerMin = 0 }), []byte("anahtar")},
+		{"login email limit 0", rdb, broken(func(a *RateLimitConfig) { a.LoginEmailPerHour = 0 }), []byte("anahtar")},
+		{"signup ip limit 0", rdb, broken(func(a *RateLimitConfig) { a.SignupIPPerHour = 0 }), []byte("anahtar")},
+		{"trusted proxy negative", rdb, broken(func(a *RateLimitConfig) { a.TrustedProxies = -1 }), []byte("anahtar")},
+		{"email digest key empty", rdb, valid, nil},
 	}
 	for _, d := range statuses {
 		t.Run(d.name, func(t *testing.T) {
 			if _, err := NewRateLimiter(d.rdb, d.cfg, d.key); err == nil {
-				t.Error("gecersiz ayarla hiz limiti kuruldu")
+				t.Error("rate limiter was set up with an invalid config")
 			}
 		})
 	}
@@ -171,7 +171,7 @@ func TestRateLimiter_FailsClosedWithoutRedis(t *testing.T) {
 		LoginIPPerMin: 100, LoginEmailPerHour: 100, SignupIPPerHour: 100,
 	}, []byte(testCryptoKey))
 	if err != nil {
-		t.Fatalf("NewHizLimit: %v", err)
+		t.Fatalf("NewRateLimiter: %v", err)
 	}
 
 	wasCalled := false
@@ -180,10 +180,10 @@ func TestRateLimiter_FailsClosedWithoutRedis(t *testing.T) {
 	h.ServeHTTP(w, loginPostRequest("kurban@ornek.com", "198.51.100.7"))
 
 	if w.Code != http.StatusServiceUnavailable {
-		t.Errorf("durum = %d, beklenen 503 (fail-closed)", w.Code)
+		t.Errorf("status = %d, want 503 (fail-closed)", w.Code)
 	}
 	if wasCalled {
-		t.Error("Redis yokken istek handler'a gecti (fail-open)")
+		t.Error("request reached the handler while Redis was down (fail-open)")
 	}
 }
 
@@ -194,7 +194,7 @@ func newTestRateLimiter(t *testing.T, cfg RateLimitConfig) (*RateLimiter, *redis
 	rdb := testRedis(t) // Skipped here if there is no Redis
 	limiter, err := NewRateLimiter(rdb, cfg, []byte(testCryptoKey))
 	if err != nil {
-		t.Fatalf("NewHizLimit: %v", err)
+		t.Fatalf("NewRateLimiter: %v", err)
 	}
 	return limiter, rdb
 }
@@ -242,10 +242,10 @@ func TestRateLimiter_LoginPerIP(t *testing.T) {
 		return loginPostRequest(string(rune('a'+i))+"@ornek.com", "198.51.100.7")
 	})
 	if passed != 3 {
-		t.Errorf("gecen istek = %d, beklenen 3", passed)
+		t.Errorf("requests passed = %d, want 3", passed)
 	}
 	if lastStatus != http.StatusTooManyRequests {
-		t.Errorf("son durum = %d, beklenen 429", lastStatus)
+		t.Errorf("last status = %d, want 429", lastStatus)
 	}
 }
 
@@ -262,10 +262,10 @@ func TestRateLimiter_LoginPerEmail(t *testing.T) {
 		return loginPostRequest("kurban@ornek.com", "198.51.100."+string(rune('1'+i)))
 	})
 	if passed != 3 {
-		t.Errorf("gecen istek = %d, beklenen 3", passed)
+		t.Errorf("requests passed = %d, want 3", passed)
 	}
 	if lastStatus != http.StatusTooManyRequests {
-		t.Errorf("son durum = %d, beklenen 429", lastStatus)
+		t.Errorf("last status = %d, want 429", lastStatus)
 	}
 }
 
@@ -281,14 +281,14 @@ func TestRateLimiter_LoginEmailCountersIndependent(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, loginPostRequest("birinci@ornek.com", "198.51.100.7"))
 		if w.Code != http.StatusOK {
-			t.Fatalf("birinci hesap %d. istekte durum = %d", i+1, w.Code)
+			t.Fatalf("first account status = %d on request %d", i+1, w.Code)
 		}
 	}
 	// The first account's counter is full; the second account must NOT BE AFFECTED.
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, loginPostRequest("ikinci@ornek.com", "198.51.100.7"))
 	if w.Code != http.StatusOK {
-		t.Errorf("ikinci hesap durumu = %d, beklenen 200 (sayaclar ayrismali)", w.Code)
+		t.Errorf("second account status = %d, want 200 (counters must be separate)", w.Code)
 	}
 }
 
@@ -306,10 +306,10 @@ func TestRateLimiter_SignupPerIP(t *testing.T) {
 		return r
 	})
 	if passed != 2 {
-		t.Errorf("gecen istek = %d, beklenen 2", passed)
+		t.Errorf("requests passed = %d, want 2", passed)
 	}
 	if lastStatus != http.StatusTooManyRequests {
-		t.Errorf("son durum = %d, beklenen 429", lastStatus)
+		t.Errorf("last status = %d, want 429", lastStatus)
 	}
 }
 
@@ -325,10 +325,10 @@ func TestRateLimiter_429HasRetryAfter(t *testing.T) {
 		h.ServeHTTP(w, loginPostRequest("kurban@ornek.com", "198.51.100.7"))
 		if i == 1 {
 			if w.Code != http.StatusTooManyRequests {
-				t.Fatalf("durum = %d, beklenen 429", w.Code)
+				t.Fatalf("status = %d, want 429", w.Code)
 			}
 			if w.Header().Get("Retry-After") == "" {
-				t.Error("429 yanitinda Retry-After yok")
+				t.Error("no Retry-After in the 429 response")
 			}
 		}
 	}
@@ -345,7 +345,7 @@ func TestRateLimiter_NoPlaintextEmailInRedisKey(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, loginPostRequest(email, "198.51.100.7"))
 	if w.Code != http.StatusOK {
-		t.Fatalf("durum = %d, beklenen 200", w.Code)
+		t.Fatalf("status = %d, want 200", w.Code)
 	}
 
 	keyList, err := rdb.Keys(context.Background(), rateLimitPrefix+"*").Result()
@@ -353,13 +353,13 @@ func TestRateLimiter_NoPlaintextEmailInRedisKey(t *testing.T) {
 		t.Fatalf("Keys: %v", err)
 	}
 	if len(keyList) == 0 {
-		t.Fatal("hic hiz limiti anahtari yazilmamis")
+		t.Fatal("no rate limit key was written at all")
 	}
 	for _, a := range keyList {
 		if strings.Contains(strings.ToLower(a), "gizli") ||
 			strings.Contains(strings.ToLower(a), "ornek.com") ||
 			strings.Contains(strings.ToLower(a), email) {
-			t.Errorf("Redis anahtari e-postayi duz metin tasiyor: %q", a)
+			t.Errorf("Redis key carries the email in plain text: %q", a)
 		}
 	}
 }
@@ -388,9 +388,9 @@ func TestBuildMux_LoginRateLimitActive(t *testing.T) {
 		resp := o.submitLogin(t, c, id, csrf, "kurban@ornek.com", "yanlisSifre12")
 		switch {
 		case i < 3 && resp.StatusCode != http.StatusUnauthorized:
-			t.Fatalf("%d. deneme durumu = %d, beklenen 401", i, resp.StatusCode)
+			t.Fatalf("attempt %d status = %d, want 401", i, resp.StatusCode)
 		case i == 3 && resp.StatusCode != http.StatusTooManyRequests:
-			t.Fatalf("%d. deneme durumu = %d, beklenen 429 (hiz limiti)", i, resp.StatusCode)
+			t.Fatalf("attempt %d status = %d, want 429 (rate limit)", i, resp.StatusCode)
 		}
 	}
 }
@@ -418,10 +418,10 @@ func TestRateLimiter_LoginEmailCaseInsensitive(t *testing.T) {
 		return loginPostRequest(writes[i], "198.51.100."+strconv.Itoa(i+1))
 	})
 	if passed != 2 {
-		t.Errorf("gecen istek = %d, beklenen 2 (harf varyantlari AYNI sayaca dusmeli)", passed)
+		t.Errorf("requests passed = %d, want 2 (letter-case variants must fall into the SAME counter)", passed)
 	}
 	if lastStatus != http.StatusTooManyRequests {
-		t.Errorf("son durum = %d, beklenen 429", lastStatus)
+		t.Errorf("last status = %d, want 429", lastStatus)
 	}
 }
 
@@ -444,10 +444,10 @@ func TestRateLimiter_MultipleXFFLinesCannotBypass(t *testing.T) {
 		return r
 	})
 	if passed != 2 {
-		t.Errorf("gecen istek = %d, beklenen 2 (coklu XFF satiri sayaci atlatmamali)", passed)
+		t.Errorf("requests passed = %d, want 2 (multiple XFF lines must not get around the counter)", passed)
 	}
 	if lastStatus != http.StatusTooManyRequests {
-		t.Errorf("son durum = %d, beklenen 429", lastStatus)
+		t.Errorf("last status = %d, want 429", lastStatus)
 	}
 }
 
@@ -467,10 +467,10 @@ func TestRateLimiter_PageGetLimited(t *testing.T) {
 				return r
 			})
 			if passed != 2 {
-				t.Errorf("gecen istek = %d, beklenen 2", passed)
+				t.Errorf("requests passed = %d, want 2", passed)
 			}
 			if lastStatus != http.StatusTooManyRequests {
-				t.Errorf("son durum = %d, beklenen 429", lastStatus)
+				t.Errorf("last status = %d, want 429", lastStatus)
 			}
 		})
 	}
@@ -493,7 +493,7 @@ func TestRateLimiter_PageGetCounterSeparateFromPost(t *testing.T) {
 		r.RemoteAddr = ip + ":40000"
 		getH.ServeHTTP(w, r)
 		if i == 1 && w.Code != http.StatusTooManyRequests {
-			t.Fatalf("GET butcesi dolmadi, durum = %d", w.Code)
+			t.Fatalf("GET budget did not run out, status = %d", w.Code)
 		}
 	}
 
@@ -501,7 +501,7 @@ func TestRateLimiter_PageGetCounterSeparateFromPost(t *testing.T) {
 	w := httptest.NewRecorder()
 	limiter.WrapLogin(allowHandler()).ServeHTTP(w, loginPostRequest("kurban@ornek.com", ip))
 	if w.Code != http.StatusOK {
-		t.Errorf("POST durumu = %d, beklenen 200 (GET sayaci POST butcesini tuketmemeli)", w.Code)
+		t.Errorf("POST status = %d, want 200 (the GET counter must not consume the POST budget)", w.Code)
 	}
 }
 
@@ -521,9 +521,9 @@ func TestBuildMux_GetRateLimitActive(t *testing.T) {
 		resp := mustGet(t, c, address)
 		switch {
 		case i < 3 && resp.StatusCode != http.StatusOK:
-			t.Fatalf("%d. GET durumu = %d, beklenen 200", i, resp.StatusCode)
+			t.Fatalf("GET %d status = %d, want 200", i, resp.StatusCode)
 		case i == 3 && resp.StatusCode != http.StatusTooManyRequests:
-			t.Fatalf("%d. GET durumu = %d, beklenen 429 (hiz limiti)", i, resp.StatusCode)
+			t.Fatalf("GET %d status = %d, want 429 (rate limit)", i, resp.StatusCode)
 		}
 	}
 }

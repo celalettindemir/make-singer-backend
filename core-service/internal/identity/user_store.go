@@ -74,7 +74,7 @@ func (s *PostgresUserStore) Create(ctx context.Context, email, name, password st
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return nil, ErrEmailInUse
 		}
-		return nil, fmt.Errorf("kullanici olusturulamadi: %w", err)
+		return nil, fmt.Errorf("could not create the user: %w", err)
 	}
 	return u, nil
 }
@@ -101,7 +101,7 @@ func (s *PostgresUserStore) Delete(ctx context.Context, id string) error {
 	}
 	tag, err := s.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
 	if err != nil {
-		return fmt.Errorf("kullanici silinemedi: %w", err)
+		return fmt.Errorf("could not delete the user: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrUserNotFound
@@ -117,7 +117,7 @@ func (s *PostgresUserStore) queryOne(ctx context.Context, query string, arg any)
 		return nil, ErrUserNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("kullanici okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the user: %w", err)
 	}
 	return &u, nil
 }

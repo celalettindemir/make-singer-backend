@@ -99,16 +99,16 @@ func setupTestServerWithUpstream(
 
 	key, err := LoadSigningKey(testPEM(t))
 	if err != nil {
-		t.Fatalf("AnahtarYukle: %v", err)
+		t.Fatalf("LoadSigningKey: %v", err)
 	}
 	cryptoKey, err := CryptoKey(testCryptoKey)
 	if err != nil {
-		t.Fatalf("CryptoAnahtar: %v", err)
+		t.Fatalf("CryptoKey: %v", err)
 	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("dinleyici acilamadi: %v", err)
+		t.Fatalf("could not open listener: %v", err)
 	}
 	issuer := "http://" + listener.Addr().String()
 
@@ -137,7 +137,7 @@ func setupTestServerWithUpstream(
 
 	rateLimiter, err := NewRateLimiter(rdb, limits, []byte(testCryptoKey))
 	if err != nil {
-		t.Fatalf("NewHizLimit: %v", err)
+		t.Fatalf("NewRateLimiter: %v", err)
 	}
 
 	// Federation parameters: nil when federated=false (buildMux does NOT wire
@@ -206,7 +206,7 @@ func pkceS256(t *testing.T) (string, string) {
 	t.Helper()
 	verifier, err := randomToken()
 	if err != nil {
-		t.Fatalf("verifier uretilemedi: %v", err)
+		t.Fatalf("could not generate verifier: %v", err)
 	}
 	return verifier, oidc.NewSHACodeChallenge(verifier)
 }
@@ -243,7 +243,7 @@ func mustGet(t *testing.T, c *http.Client, address string) *http.Response {
 	t.Helper()
 	resp, err := c.Get(address)
 	if err != nil {
-		t.Fatalf("GET basarisiz: %v", err)
+		t.Fatalf("GET failed: %v", err)
 	}
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	return resp
@@ -253,7 +253,7 @@ func readBody(t *testing.T, resp *http.Response) string {
 	t.Helper()
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("govde okunamadi: %v", err)
+		t.Fatalf("could not read body: %v", err)
 	}
 	return string(b)
 }
@@ -263,18 +263,18 @@ func readBody(t *testing.T, resp *http.Response) string {
 func extractAuthRequestID(t *testing.T, resp *http.Response) string {
 	t.Helper()
 	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("/authorize durumu = %d, beklenen 302", resp.StatusCode)
+		t.Fatalf("/authorize status = %d, want 302", resp.StatusCode)
 	}
 	location, err := url.Parse(resp.Header.Get("Location"))
 	if err != nil {
-		t.Fatalf("Location cozulemedi: %v", err)
+		t.Fatalf("could not parse Location: %v", err)
 	}
 	if location.Path != pathLogin {
-		t.Fatalf("Location yolu = %q, beklenen %q", location.Path, pathLogin)
+		t.Fatalf("Location path = %q, want %q", location.Path, pathLogin)
 	}
 	id := location.Query().Get("authRequestID")
 	if id == "" {
-		t.Fatal("Location'da authRequestID yok")
+		t.Fatal("no authRequestID in Location")
 	}
 	return id
 }
@@ -298,7 +298,7 @@ func (o *flowEnv) tryLogin(t *testing.T, c *http.Client, id, email, password str
 	}
 	matches := flowCSRFPattern.FindStringSubmatch(readBody(t, formResp))
 	if matches == nil {
-		t.Fatal("giris formunda CSRF jetonu yok")
+		t.Fatal("no CSRF token in the login form")
 	}
 	form := url.Values{
 		"eposta": {email}, "sifre": {password},
@@ -318,11 +318,11 @@ func (o *flowEnv) openLoginForm(t *testing.T, c *http.Client, id string) string 
 	t.Helper()
 	formResp := mustGet(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
 	if formResp.StatusCode != http.StatusOK {
-		t.Fatalf("giris formu durumu = %d", formResp.StatusCode)
+		t.Fatalf("login form status = %d", formResp.StatusCode)
 	}
 	matches := flowCSRFPattern.FindStringSubmatch(readBody(t, formResp))
 	if matches == nil {
-		t.Fatal("giris formunda CSRF jetonu yok")
+		t.Fatal("no CSRF token in the login form")
 	}
 	return matches[1]
 }
@@ -349,7 +349,7 @@ func (o *flowEnv) login(t *testing.T, c *http.Client, id, email, password string
 	t.Helper()
 	resp, formStatus := o.tryLogin(t, c, id, email, password)
 	if formStatus != http.StatusOK {
-		t.Fatalf("giris formu durumu = %d", formStatus)
+		t.Fatalf("login form status = %d", formStatus)
 	}
 	return resp
 }
@@ -412,26 +412,26 @@ func TestFlow_S256EndToEnd(t *testing.T) {
 
 	loginResp := o.login(t, c, id, "kurban@ornek.com", "dogruSifre12")
 	if loginResp.StatusCode != http.StatusFound {
-		t.Fatalf("POST /giris durumu = %d, beklenen 302. govde: %s",
+		t.Fatalf("POST /giris status = %d, want 302. body: %s",
 			loginResp.StatusCode, readBody(t, loginResp))
 	}
 	callbackURL := loginResp.Header.Get("Location")
 	if !strings.Contains(callbackURL, "/authorize/callback") {
-		t.Fatalf("giris sonrasi Location beklenmedik: %q", callbackURL)
+		t.Fatalf("unexpected Location after sign-in: %q", callbackURL)
 	}
 
 	cbResp := mustGet(t, c, callbackURL)
 	if cbResp.StatusCode != http.StatusFound {
-		t.Fatalf("callback durumu = %d, beklenen 302. govde: %s",
+		t.Fatalf("callback status = %d, want 302. body: %s",
 			cbResp.StatusCode, readBody(t, cbResp))
 	}
 	last, err := url.Parse(cbResp.Header.Get("Location"))
 	if err != nil {
-		t.Fatalf("Location cozulemedi: %v", err)
+		t.Fatalf("could not parse Location: %v", err)
 	}
 	code := last.Query().Get("code")
 	if code == "" {
-		t.Fatalf("kod uretilmedi, Location: %q", last.String())
+		t.Fatalf("no code was issued, Location: %q", last.String())
 	}
 	if last.Query().Get("state") != "durum-1" {
 		t.Errorf("state = %q", last.Query().Get("state"))
@@ -439,13 +439,13 @@ func TestFlow_S256EndToEnd(t *testing.T) {
 
 	status, token := o.exchangeToken(t, code, verifier)
 	if status != http.StatusOK {
-		t.Fatalf("token durumu = %d, govde: %v", status, token)
+		t.Fatalf("token status = %d, body: %v", status, token)
 	}
 	if token["access_token"] == nil || token["access_token"] == "" {
-		t.Error("access_token yok")
+		t.Error("no access_token")
 	}
 	if token["refresh_token"] == nil || token["refresh_token"] == "" {
-		t.Error("offline_access istendi ama refresh_token yok")
+		t.Error("offline_access was requested but there is no refresh_token")
 	}
 	_ = users
 }
@@ -470,14 +470,14 @@ func TestFlow_S256EndToEnd(t *testing.T) {
 func assertNoTakeover(t *testing.T, o *flowEnv, id string, cbResp *http.Response) {
 	t.Helper()
 	if code := extractCode(t, cbResp); code != "" {
-		t.Fatalf("HESAP DEVRALMA: saldirgan kod aldi (durum %d)", cbResp.StatusCode)
+		t.Fatalf("ACCOUNT TAKEOVER: the attacker got a code (status %d)", cbResp.StatusCode)
 	}
 	req, err := o.requests.GetByID(context.Background(), id)
 	if err != nil {
-		t.Fatalf("IDileOku: %v", err)
+		t.Fatalf("GetByID: %v", err)
 	}
 	if req.Done() {
-		t.Fatal("HESAP DEVRALMA YOLU ACIK: saldirganin auth istegi bir kimlige baglandi")
+		t.Fatal("ACCOUNT TAKEOVER PATH IS OPEN: the attacker's auth request was bound to an identity")
 	}
 }
 
@@ -504,16 +504,16 @@ func TestExploit1_PreBindingCannotTakeOver(t *testing.T) {
 	// returns 200 (they started the flow, they have a binding) but does NOT log in.
 	attackerForm := mustGet(t, attacker, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
 	if attackerForm.StatusCode != http.StatusOK {
-		t.Fatalf("saldirganin kendi formu durumu = %d; senaryo kurulamadi", attackerForm.StatusCode)
+		t.Fatalf("attacker's own form status = %d; scenario could not be set up", attackerForm.StatusCode)
 	}
 
 	// 3) The victim opens the same link in a SEPARATE browser and tries to log in.
 	victimResp, formStatus := o.tryLogin(t, victim, id, "kurban@ornek.com", "dogruSifre12")
 	if formStatus != http.StatusForbidden {
-		t.Errorf("kurbanin GET /giris durumu = %d, beklenen 403 (baglamasi yok, form gosterilmemeli)", formStatus)
+		t.Errorf("victim's GET /giris status = %d, want 403 (no binding, the form must not be shown)", formStatus)
 	}
 	if victimResp.StatusCode == http.StatusFound {
-		t.Error("kurbanin girisi saldirganin istegini tamamladi")
+		t.Error("the victim's sign-in completed the attacker's request")
 	}
 
 	// 4) The attacker tries to collect the code in THEIR OWN browser.
@@ -539,10 +539,10 @@ func TestExploit2_PostLoginBindingCannotTakeOver(t *testing.T) {
 	// yet).
 	victimResp, formStatus := o.tryLogin(t, victim, id, "kurban@ornek.com", "dogruSifre12")
 	if formStatus != http.StatusForbidden {
-		t.Errorf("kurbanin GET /giris durumu = %d, beklenen 403", formStatus)
+		t.Errorf("victim's GET /giris status = %d, want 403", formStatus)
 	}
 	if victimResp.StatusCode == http.StatusFound {
-		t.Error("kurbanin girisi saldirganin istegini tamamladi")
+		t.Error("the victim's sign-in completed the attacker's request")
 	}
 
 	// 3) The attacker THEN opens the form (tries to get a binding) and collects
@@ -564,17 +564,17 @@ func TestBuildMux_LoginGetWithoutBindingRejected(t *testing.T) {
 
 	resp := mustGet(t, foreign, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("yabanci tarayici GET /giris durumu = %d, beklenen 403", resp.StatusCode)
+		t.Fatalf("foreign browser GET /giris status = %d, want 403", resp.StatusCode)
 	}
 	if strings.Contains(readBody(t, resp), `name="csrf"`) {
-		t.Error("reddedilen GET formu gosterdi")
+		t.Error("the rejected GET showed the form")
 	}
 
 	// NEGATIVE CONTROL: in the browser that started the flow the SAME link
 	// returns 200, i.e. the 403 is because of the binding (the endpoint is not
 	// fully closed).
 	if own := mustGet(t, starter, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id)); own.StatusCode != http.StatusOK {
-		t.Errorf("baslatan tarayicida GET /giris durumu = %d, beklenen 200", own.StatusCode)
+		t.Errorf("GET /giris status in the initiating browser = %d, want 200", own.StatusCode)
 	}
 }
 
@@ -597,7 +597,7 @@ func TestFlow_TwoParallelFlowsSameBrowser(t *testing.T) {
 	id1 := extractAuthRequestID(t, mustGet(t, c, o.authorizeURL(challenge1, "S256")))
 	id2 := extractAuthRequestID(t, mustGet(t, c, o.authorizeURL(challenge2, "S256")))
 	if id1 == id2 {
-		t.Fatal("iki /authorize ayni authRequestID uretti")
+		t.Fatal("two /authorize calls produced the same authRequestID")
 	}
 
 	// Tab 1 completes FIRST: the second /authorize must not have overwritten its
@@ -610,20 +610,20 @@ func TestFlow_TwoParallelFlowsSameBrowser(t *testing.T) {
 		t.Run(d.name, func(t *testing.T) {
 			loginResp := o.login(t, c, d.id, "kurban@ornek.com", "dogruSifre12")
 			if loginResp.StatusCode != http.StatusFound {
-				t.Fatalf("POST /giris durumu = %d, beklenen 302. govde: %s",
+				t.Fatalf("POST /giris status = %d, want 302. body: %s",
 					loginResp.StatusCode, readBody(t, loginResp))
 			}
 			cbResp := mustGet(t, c, loginResp.Header.Get("Location"))
 			code := extractCode(t, cbResp)
 			if code == "" {
-				t.Fatalf("kod uretilmedi (callback durumu %d)", cbResp.StatusCode)
+				t.Fatalf("no code was issued (callback status %d)", cbResp.StatusCode)
 			}
 			status, token := o.exchangeToken(t, code, d.verifier)
 			if status != http.StatusOK {
-				t.Fatalf("token durumu = %d, govde: %v", status, token)
+				t.Fatalf("token status = %d, body: %v", status, token)
 			}
 			if token["access_token"] == nil || token["access_token"] == "" {
-				t.Error("access_token yok")
+				t.Error("no access_token")
 			}
 		})
 	}
@@ -640,15 +640,15 @@ func TestFlow_OwnBrowserCompletes(t *testing.T) {
 	id := extractAuthRequestID(t, mustGet(t, c, o.authorizeURL(challenge, "S256")))
 	loginResp := o.login(t, c, id, "kurban@ornek.com", "dogruSifre12")
 	if loginResp.StatusCode != http.StatusFound {
-		t.Fatalf("giris durumu = %d", loginResp.StatusCode)
+		t.Fatalf("sign-in status = %d", loginResp.StatusCode)
 	}
 	cbResp := mustGet(t, c, loginResp.Header.Get("Location"))
 	if cbResp.StatusCode != http.StatusFound {
-		t.Fatalf("callback durumu = %d, beklenen 302", cbResp.StatusCode)
+		t.Fatalf("callback status = %d, want 302", cbResp.StatusCode)
 	}
 	location, _ := url.Parse(cbResp.Header.Get("Location"))
 	if location.Query().Get("code") == "" {
-		t.Error("kendi tarayicisinda kod uretilmedi; mesru akis kirildi")
+		t.Error("no code was issued in its own browser; the legitimate flow is broken")
 	}
 }
 
@@ -664,15 +664,15 @@ func assertPKCERejected(t *testing.T, resp *http.Response) {
 	case http.StatusFound:
 		location := resp.Header.Get("Location")
 		if strings.Contains(location, pathLogin) {
-			t.Fatalf("istek giris sayfasina yonlendirildi: %q", location)
+			t.Fatalf("request was redirected to the login page: %q", location)
 		}
 		if !strings.Contains(location, "error=invalid_request") {
-			t.Fatalf("Location'da error=invalid_request yok: %q", location)
+			t.Fatalf("no error=invalid_request in Location: %q", location)
 		}
 	case http.StatusBadRequest:
 		// Accepted: a direct error.
 	default:
-		t.Fatalf("durum = %d, red bekleniyordu", resp.StatusCode)
+		t.Fatalf("status = %d, a rejection was expected", resp.StatusCode)
 	}
 }
 
@@ -717,7 +717,7 @@ func TestAuthorize_S256Works(t *testing.T) {
 	c := newBrowser(t)
 	_, challenge := pkceS256(t)
 	if id := extractAuthRequestID(t, mustGet(t, c, o.authorizeURL(challenge, "S256"))); id == "" {
-		t.Error("authRequestID bos")
+		t.Error("authRequestID is empty")
 	}
 }
 
@@ -735,13 +735,13 @@ func TestToken_WrongVerifierRejected(t *testing.T) {
 	location, _ := url.Parse(cbResp.Header.Get("Location"))
 	code := location.Query().Get("code")
 	if code == "" {
-		t.Fatal("kod uretilmedi")
+		t.Fatal("no code was issued")
 	}
 
 	wrongVerifier, _ := pkceS256(t)
 	status, tokenBody := o.exchangeToken(t, code, wrongVerifier)
 	if status == http.StatusOK {
-		t.Fatalf("yanlis code_verifier ile jeton verildi: %v", tokenBody)
+		t.Fatalf("a token was issued with the wrong code_verifier: %v", tokenBody)
 	}
 }
 
@@ -767,19 +767,19 @@ func TestToken_PlainChallengeRejected(t *testing.T) {
 		State:               "durum-1",
 	}, "")
 	if err != nil {
-		t.Fatalf("Olustur: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
 	if err := o.requests.MarkDone(ctx, req.GetID(), users.ID, []string{amrPassword}); err != nil {
-		t.Fatalf("TamamlandiIsaretle: %v", err)
+		t.Fatalf("MarkDone: %v", err)
 	}
 	const code = "test-kod-plain"
 	if err := o.requests.SaveCode(ctx, req.GetID(), code); err != nil {
-		t.Fatalf("KodKaydet: %v", err)
+		t.Fatalf("SaveCode: %v", err)
 	}
 
 	status, tokenBody := o.exchangeToken(t, code, verifier)
 	if status == http.StatusOK {
-		t.Fatalf("plain challenge ile jeton verildi: %v", tokenBody)
+		t.Fatalf("a token was issued with a plain challenge: %v", tokenBody)
 	}
 }
 
@@ -789,16 +789,16 @@ func TestDiscovery_AdvertisesOnlyS256(t *testing.T) {
 	o := newTestServer(t)
 	resp := mustGet(t, newBrowser(t), o.issuer+"/.well-known/openid-configuration")
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("discovery durumu = %d", resp.StatusCode)
+		t.Fatalf("discovery status = %d", resp.StatusCode)
 	}
 	var doc struct {
 		Methods []string `json:"code_challenge_methods_supported"`
 	}
 	if err := json.Unmarshal([]byte(readBody(t, resp)), &doc); err != nil {
-		t.Fatalf("discovery cozulemedi: %v", err)
+		t.Fatalf("could not decode discovery: %v", err)
 	}
 	if len(doc.Methods) != 1 || doc.Methods[0] != "S256" {
-		t.Errorf("code_challenge_methods_supported = %v, beklenen [S256]", doc.Methods)
+		t.Errorf("code_challenge_methods_supported = %v, want [S256]", doc.Methods)
 	}
 }
 
@@ -814,7 +814,7 @@ func TestDiscovery_OmitsUnsupportedFlows(t *testing.T) {
 	o := newTestServer(t)
 	resp := mustGet(t, newBrowser(t), o.issuer+"/.well-known/openid-configuration")
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("discovery durumu = %d", resp.StatusCode)
+		t.Fatalf("discovery status = %d", resp.StatusCode)
 	}
 	var doc struct {
 		ResponseTypes  []string `json:"response_types_supported"`
@@ -825,21 +825,21 @@ func TestDiscovery_OmitsUnsupportedFlows(t *testing.T) {
 	}
 	raw := readBody(t, resp)
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
-		t.Fatalf("discovery cozulemedi: %v", err)
+		t.Fatalf("could not decode discovery: %v", err)
 	}
 
 	if len(doc.ResponseTypes) != 1 || doc.ResponseTypes[0] != "code" {
-		t.Errorf("response_types_supported = %v, beklenen [code]", doc.ResponseTypes)
+		t.Errorf("response_types_supported = %v, want [code]", doc.ResponseTypes)
 	}
 	for _, forbidden := range []string{"implicit", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:ietf:params:oauth:grant-type:device_code"} {
 		for _, g := range doc.GrantTypes {
 			if g == forbidden {
-				t.Errorf("grant_types_supported desteklenmeyen %q iceriyor: %v", forbidden, doc.GrantTypes)
+				t.Errorf("grant_types_supported contains unsupported %q: %v", forbidden, doc.GrantTypes)
 			}
 		}
 	}
 	if doc.DeviceEndpoint != "" {
-		t.Errorf("device_authorization_endpoint ilan edildi: %q", doc.DeviceEndpoint)
+		t.Errorf("device_authorization_endpoint was advertised: %q", doc.DeviceEndpoint)
 	}
 
 	// The REST of the document must not be broken: the issuer and the token
@@ -847,10 +847,10 @@ func TestDiscovery_OmitsUnsupportedFlows(t *testing.T) {
 	// together with the issuer resolved from the request context (does the
 	// interceptor.Handler wrapping work).
 	if doc.Issuer != o.issuer {
-		t.Errorf("issuer = %q, beklenen %q", doc.Issuer, o.issuer)
+		t.Errorf("issuer = %q, want %q", doc.Issuer, o.issuer)
 	}
 	if doc.TokenEndpoint != o.issuer+"/oauth/token" {
-		t.Errorf("token_endpoint = %q, beklenen %q", doc.TokenEndpoint, o.issuer+"/oauth/token")
+		t.Errorf("token_endpoint = %q, want %q", doc.TokenEndpoint, o.issuer+"/oauth/token")
 	}
 }
 
@@ -862,7 +862,7 @@ func getWithFetchSite(t *testing.T, c *http.Client, address, fetchSite string) *
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, address, nil)
 	if err != nil {
-		t.Fatalf("istek kurulamadi: %v", err)
+		t.Fatalf("could not build request: %v", err)
 	}
 	if fetchSite != "" {
 		req.Header.Set(headerFetchSite, fetchSite)
@@ -870,7 +870,7 @@ func getWithFetchSite(t *testing.T, c *http.Client, address, fetchSite string) *
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		t.Fatalf("GET basarisiz: %v", err)
+		t.Fatalf("GET failed: %v", err)
 	}
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	return resp
@@ -907,14 +907,14 @@ func TestLoginCSRF_CrossSiteInjectionCannotComplete(t *testing.T) {
 	_, attackerChallenge := pkceS256(t)
 	injectedID := extractAuthRequestID(t, getWithFetchSite(t, victim, o.authorizeURL(attackerChallenge, "S256"), fetchSiteCrossSite))
 	if injectedID == legitID {
-		t.Fatal("iki /authorize ayni authRequestID uretti")
+		t.Fatal("two /authorize calls produced the same authRequestID")
 	}
 
 	// 3) The victim CANNOT open the form with the injected id: no binding was
 	// set up -> 403.
 	_, formStatus := o.tryLogin(t, victim, injectedID, "kurban@ornek.com", "dogruSifre12")
 	if formStatus != http.StatusForbidden {
-		t.Fatalf("LOGIN-CSRF ACIK: enjekte id icin GET /giris durumu = %d, beklenen 403", formStatus)
+		t.Fatalf("LOGIN-CSRF IS OPEN: GET /giris status for the injected id = %d, want 403", formStatus)
 	}
 
 	// 4) So NO CODE IS PRODUCED for the attacker's request and the request is
@@ -927,18 +927,18 @@ func TestLoginCSRF_CrossSiteInjectionCannotComplete(t *testing.T) {
 	csrf := o.openLoginForm(t, victim, legitID)
 	loginResp := o.submitLogin(t, victim, legitID, csrf, "kurban@ornek.com", "dogruSifre12")
 	if loginResp.StatusCode != http.StatusFound {
-		t.Fatalf("kurbanin mesru POST /giris durumu = %d, beklenen 302", loginResp.StatusCode)
+		t.Fatalf("victim's legitimate POST /giris status = %d, want 302", loginResp.StatusCode)
 	}
 	code := extractCode(t, mustGet(t, victim, loginResp.Header.Get("Location")))
 	if code == "" {
-		t.Fatal("kurbanin mesru akisi kod uretmedi: kontrol mesru akisi kirdi")
+		t.Fatal("the victim's legitimate flow produced no code: the control broke the legitimate flow")
 	}
 	status, token := o.exchangeToken(t, code, victimVerifier)
 	if status != http.StatusOK {
-		t.Fatalf("kurbanin jeton degisimi durumu = %d, govde: %v", status, token)
+		t.Fatalf("victim's token exchange status = %d, body: %v", status, token)
 	}
 	if token["access_token"] == nil || token["access_token"] == "" {
-		t.Error("kurbanin mesru akisinda access_token yok")
+		t.Error("no access_token in the victim's legitimate flow")
 	}
 }
 
@@ -960,7 +960,7 @@ func TestAuthorize_CrossSiteKeepsExistingBindings(t *testing.T) {
 	_, attackerChallenge := pkceS256(t)
 	injectedID := extractAuthRequestID(t, getWithFetchSite(t, victim, o.authorizeURL(attackerChallenge, "S256"), fetchSiteCrossSite))
 	if g := mustGet(t, victim, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(injectedID)); g.StatusCode != http.StatusForbidden {
-		t.Fatalf("enjekte id icin GET /giris durumu = %d, beklenen 403", g.StatusCode)
+		t.Fatalf("GET /giris status for the injected id = %d, want 403", g.StatusCode)
 	}
 
 	// Both legitimate tabs must still be able to open their form and complete the login.
@@ -968,10 +968,10 @@ func TestAuthorize_CrossSiteKeepsExistingBindings(t *testing.T) {
 		csrf := o.openLoginForm(t, victim, id)
 		resp := o.submitLogin(t, victim, id, csrf, "kurban@ornek.com", "dogruSifre12")
 		if resp.StatusCode != http.StatusFound {
-			t.Fatalf("mesru sekme POST /giris durumu = %d, beklenen 302", resp.StatusCode)
+			t.Fatalf("legitimate tab POST /giris status = %d, want 302", resp.StatusCode)
 		}
 		if code := extractCode(t, mustGet(t, victim, resp.Header.Get("Location"))); code == "" {
-			t.Fatal("mesru sekme kod uretmedi: capraz-site istek baglamayi bozdu")
+			t.Fatal("legitimate tab produced no code: the cross-site request broke the binding")
 		}
 	}
 }
@@ -996,7 +996,7 @@ func TestBuildMux_NoFederationMountsNoEndpoints(t *testing.T) {
 	} {
 		resp := mustGet(t, c, o.issuer+path)
 		if resp.StatusCode != http.StatusNotFound {
-			t.Errorf("%s durumu = %d, beklenen 404 (uc baglanmamali)", path, resp.StatusCode)
+			t.Errorf("%s status = %d, want 404 (endpoint must not be mounted)", path, resp.StatusCode)
 		}
 	}
 
@@ -1005,14 +1005,14 @@ func TestBuildMux_NoFederationMountsNoEndpoints(t *testing.T) {
 	id := extractAuthRequestID(t, mustGet(t, c, o.authorizeURL(challenge, "S256")))
 	formResp := mustGet(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
 	if formResp.StatusCode != http.StatusOK {
-		t.Fatalf("giris formu durumu = %d, beklenen 200", formResp.StatusCode)
+		t.Fatalf("login form status = %d, want 200", formResp.StatusCode)
 	}
 	bodyText := readBody(t, formResp)
 	if !strings.Contains(bodyText, `name="sifre"`) {
-		t.Errorf("giris formu bozuldu:\n%s", bodyText)
+		t.Errorf("login form is broken:\n%s", bodyText)
 	}
 	if strings.Contains(bodyText, "/federasyon/") {
-		t.Errorf("federasyonsuz kurulumda buton cikti:\n%s", bodyText)
+		t.Errorf("a button appeared in a setup without federation:\n%s", bodyText)
 	}
 }
 
@@ -1048,7 +1048,7 @@ func TestBuildMux_FederationWiring(t *testing.T) {
 		SignupIPPerHour:   50,
 	}
 
-	t.Run("baslat ve baglama uclari mux'a bagli", func(t *testing.T) {
+	t.Run("start and link endpoints are mounted on the mux", func(t *testing.T) {
 		o := newTestServerFederated(t, relaxed)
 		c := newBrowser(t)
 
@@ -1059,22 +1059,22 @@ func TestBuildMux_FederationWiring(t *testing.T) {
 		// mux.Handle("/", provider).
 		start := mustGet(t, c, o.issuer+federationStartPath(providerGoogle))
 		if start.StatusCode == http.StatusNotFound {
-			t.Errorf("%s mux'a BAGLI DEGIL: 404 dondu", federationStartPath(providerGoogle))
+			t.Errorf("%s is NOT MOUNTED on the mux: it returned 404", federationStartPath(providerGoogle))
 		} else if start.StatusCode != http.StatusBadRequest {
-			t.Errorf("baslat durumu = %d, beklenen 400 (bos authRequestID)", start.StatusCode)
+			t.Errorf("start status = %d, want 400 (empty authRequestID)", start.StatusCode)
 		}
 
 		// NO pendingID: when the link GET handler finds no valid pending binding it
 		// returns 403 (session reject). A 404 would mean the endpoint was never wired.
 		binding := mustGet(t, c, o.issuer+pathLink)
 		if binding.StatusCode == http.StatusNotFound {
-			t.Errorf("%s mux'a BAGLI DEGIL: 404 dondu", pathLink)
+			t.Errorf("%s is NOT MOUNTED on the mux: it returned 404", pathLink)
 		} else if binding.StatusCode != http.StatusForbidden {
-			t.Errorf("baglama durumu = %d, beklenen 403 (bekleme yok)", binding.StatusCode)
+			t.Errorf("link status = %d, want 403 (no pending)", binding.StatusCode)
 		}
 	})
 
-	t.Run("giris sayfasindaki buton bagli ucun yoluna gider", func(t *testing.T) {
+	t.Run("the button on the login page goes to the mounted endpoint's path", func(t *testing.T) {
 		o := newTestServerFederated(t, relaxed)
 		c := newBrowser(t)
 		_, challenge := pkceS256(t)
@@ -1082,14 +1082,14 @@ func TestBuildMux_FederationWiring(t *testing.T) {
 
 		page := mustGet(t, c, o.issuer+pathLogin+"?authRequestID="+url.QueryEscape(id))
 		if page.StatusCode != http.StatusOK {
-			t.Fatalf("giris sayfasi durumu = %d", page.StatusCode)
+			t.Fatalf("login page status = %d", page.StatusCode)
 		}
 		// ALL buttons are checked: more than one provider may be configured in the
 		// setup (see wireFederation) and the path of every button MUST be the path of
 		// a wired endpoint.
 		allMatches := fedButtonPattern.FindAllStringSubmatch(readBody(t, page), -1)
 		if allMatches == nil {
-			t.Fatal("giris sayfasinda federasyon butonu yok")
+			t.Fatal("no federation button on the login page")
 		}
 		seen := map[string]bool{}
 		for _, matches := range allMatches {
@@ -1100,15 +1100,15 @@ func TestBuildMux_FederationWiring(t *testing.T) {
 			// The button's REAL href must get an answer on the same mux too.
 			resp := mustGet(t, c, o.issuer+html.UnescapeString(matches[1]))
 			if resp.StatusCode == http.StatusNotFound {
-				t.Errorf("buton href'i 404 dondu: %q", matches[1])
+				t.Errorf("button href returned 404: %q", matches[1])
 			}
 		}
 		if !seen[federationStartPath(providerGoogle)] {
-			t.Fatalf("Google butonu bagli ucun yoluna gitmiyor; gorulen yollar: %v", seen)
+			t.Fatalf("Google button does not go to the mounted endpoint's path; paths seen: %v", seen)
 		}
 	})
 
-	t.Run("baslat ucu hiz limitli", func(t *testing.T) {
+	t.Run("start endpoint is rate limited", func(t *testing.T) {
 		o := newTestServerFederated(t, RateLimitConfig{
 			LoginIPPerMin: 1, LoginEmailPerHour: 50, SignupIPPerHour: 50,
 		})
@@ -1116,14 +1116,14 @@ func TestBuildMux_FederationWiring(t *testing.T) {
 		path := o.issuer + federationStartPath(providerGoogle)
 
 		if first := mustGet(t, c, path); first.StatusCode == http.StatusTooManyRequests {
-			t.Fatal("ilk baslatma 429 aldi; sinir yanlis kurulmus")
+			t.Fatal("first start got 429; the limit is set up wrong")
 		}
 		if second := mustGet(t, c, path); second.StatusCode != http.StatusTooManyRequests {
-			t.Errorf("ikinci baslatma durumu = %d, beklenen 429", second.StatusCode)
+			t.Errorf("second start status = %d, want 429", second.StatusCode)
 		}
 	})
 
-	t.Run("baglama ucu hiz limitli", func(t *testing.T) {
+	t.Run("link endpoint is rate limited", func(t *testing.T) {
 		o := newTestServerFederated(t, RateLimitConfig{
 			LoginIPPerMin: 1, LoginEmailPerHour: 50, SignupIPPerHour: 50,
 		})
@@ -1131,10 +1131,10 @@ func TestBuildMux_FederationWiring(t *testing.T) {
 		path := o.issuer + pathLink
 
 		if first := mustGet(t, c, path); first.StatusCode == http.StatusTooManyRequests {
-			t.Fatal("ilk baglama 429 aldi; sinir yanlis kurulmus")
+			t.Fatal("first link got 429; the limit is set up wrong")
 		}
 		if second := mustGet(t, c, path); second.StatusCode != http.StatusTooManyRequests {
-			t.Errorf("ikinci baglama durumu = %d, beklenen 429", second.StatusCode)
+			t.Errorf("second link status = %d, want 429", second.StatusCode)
 		}
 	})
 }

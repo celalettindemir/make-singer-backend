@@ -19,24 +19,24 @@ var migrationFS embed.FS
 // lose user accounts.
 func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	if dsn == "" {
-		return nil, fmt.Errorf("auth veritabani DSN'i bos")
+		return nil, fmt.Errorf("auth database DSN is empty")
 	}
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("DSN cozulemedi: %w", err)
+		return nil, fmt.Errorf("could not parse DSN: %w", err)
 	}
 	cfg.MaxConns = 10
 	cfg.MaxConnLifetime = time.Hour
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("havuz kurulamadi: %w", err)
+		return nil, fmt.Errorf("could not create pool: %w", err)
 	}
 	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("veritabanina ulasilamadi: %w", err)
+		return nil, fmt.Errorf("could not reach the database: %w", err)
 	}
 	return pool, nil
 }
@@ -67,7 +67,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			applied_at timestamptz NOT NULL DEFAULT now()
 		)`)
 	if err != nil {
-		return fmt.Errorf("schema_migrations olusturulamadi: %w", err)
+		return fmt.Errorf("could not create schema_migrations: %w", err)
 	}
 
 	names, err := migrationNames()
@@ -80,30 +80,30 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)`, name,
 		).Scan(&exists)
 		if err != nil {
-			return fmt.Errorf("%s kontrol edilemedi: %w", name, err)
+			return fmt.Errorf("could not check %s: %w", name, err)
 		}
 		if exists {
 			continue
 		}
 		script, err := migrationFS.ReadFile("migrations/" + name)
 		if err != nil {
-			return fmt.Errorf("%s okunamadi: %w", name, err)
+			return fmt.Errorf("could not read %s: %w", name, err)
 		}
 		tx, err := pool.Begin(ctx)
 		if err != nil {
-			return fmt.Errorf("%s icin islem baslatilamadi: %w", name, err)
+			return fmt.Errorf("could not start a transaction for %s: %w", name, err)
 		}
 		if _, err := tx.Exec(ctx, string(script)); err != nil {
 			_ = tx.Rollback(ctx)
-			return fmt.Errorf("%s uygulanamadi: %w", name, err)
+			return fmt.Errorf("could not apply %s: %w", name, err)
 		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO schema_migrations (version) VALUES ($1)`, name); err != nil {
 			_ = tx.Rollback(ctx)
-			return fmt.Errorf("%s kaydedilemedi: %w", name, err)
+			return fmt.Errorf("could not record %s: %w", name, err)
 		}
 		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("%s commit edilemedi: %w", name, err)
+			return fmt.Errorf("could not commit %s: %w", name, err)
 		}
 	}
 	return nil

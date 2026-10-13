@@ -18,8 +18,8 @@ import (
 )
 
 var (
-	ErrTokenNotFound = errors.New("jeton bulunamadi")
-	ErrTokenReused   = errors.New("jeton yeniden kullanildi")
+	ErrTokenNotFound = errors.New("token not found")
+	ErrTokenReused   = errors.New("token was reused")
 )
 
 type AccessRecord struct {
@@ -77,7 +77,7 @@ type TokenStore interface {
 func generateToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("jeton uretilemedi: %w", err)
+		return "", fmt.Errorf("could not generate the token: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
@@ -116,7 +116,7 @@ func (s *PostgresTokenStore) SaveAccess(ctx context.Context, id, userID, clientI
 	}
 	data, err := json.Marshal(record)
 	if err != nil {
-		return fmt.Errorf("access kaydi serilenemedi: %w", err)
+		return fmt.Errorf("could not serialize the access record: %w", err)
 	}
 	// TTL = access lifetime: the record deletes itself and no permanent data
 	// is written to Redis. The read side still checks ExpiresAt (a defense
@@ -127,7 +127,7 @@ func (s *PostgresTokenStore) SaveAccess(ctx context.Context, id, userID, clientI
 		return nil
 	}
 	if err := s.rdb.Set(ctx, accessKey(id), data, ttl).Err(); err != nil {
-		return fmt.Errorf("access kaydi yazilamadi: %w", err)
+		return fmt.Errorf("could not write the access record: %w", err)
 	}
 	return nil
 }
@@ -138,11 +138,11 @@ func (s *PostgresTokenStore) GetAccess(ctx context.Context, id string) (*AccessR
 		return nil, ErrTokenNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("access kaydi okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the access record: %w", err)
 	}
 	var record AccessRecord
 	if err := json.Unmarshal(data, &record); err != nil {
-		return nil, fmt.Errorf("access kaydi cozumlenemedi: %w", err)
+		return nil, fmt.Errorf("could not decode the access record: %w", err)
 	}
 	if time.Now().UTC().After(record.ExpiresAt) {
 		return nil, ErrTokenNotFound
@@ -155,7 +155,7 @@ func (s *PostgresTokenStore) GetAccess(ctx context.Context, id string) (*AccessR
 // success.
 func (s *PostgresTokenStore) DeleteAccess(ctx context.Context, id string) error {
 	if err := s.rdb.Del(ctx, accessKey(id)).Err(); err != nil {
-		return fmt.Errorf("access kaydi silinemedi: %w", err)
+		return fmt.Errorf("could not delete the access record: %w", err)
 	}
 	return nil
 }
@@ -189,7 +189,7 @@ func (s *PostgresTokenStore) insertRefresh(ctx context.Context, c execer, r *Ref
 		uuid.NewString(), familyID, r.UserID, r.ClientID, hashToken(token),
 		r.Scopes, r.Audience, r.AMR, r.AuthTime, r.ExpiresAt)
 	if err != nil {
-		return fmt.Errorf("refresh jetonu yazilamadi: %w", err)
+		return fmt.Errorf("could not write the refresh token: %w", err)
 	}
 	return nil
 }
@@ -199,7 +199,7 @@ func (s *PostgresTokenStore) insertRefresh(ctx context.Context, c execer, r *Ref
 func (s *PostgresTokenStore) RotateRefresh(ctx context.Context, presented string, fresh *RefreshRecord) (string, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return "", fmt.Errorf("islem baslatilamadi: %w", err)
+		return "", fmt.Errorf("could not start a transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -221,7 +221,7 @@ func (s *PostgresTokenStore) RotateRefresh(ctx context.Context, presented string
 		return "", ErrTokenNotFound
 	}
 	if err != nil {
-		return "", fmt.Errorf("jeton okunamadi: %w", err)
+		return "", fmt.Errorf("could not read the token: %w", err)
 	}
 	// Order matters: a revoked token is already dead (once the family has
 	// been revoked), so the reuse alarm must not fire again; the reuse
@@ -234,12 +234,12 @@ func (s *PostgresTokenStore) RotateRefresh(ctx context.Context, presented string
 		if _, err := tx.Exec(ctx,
 			`UPDATE refresh_tokens SET revoked_at = now()
 			  WHERE family_id = $1 AND revoked_at IS NULL`, familyID); err != nil {
-			return "", fmt.Errorf("aile iptal edilemedi: %w", err)
+			return "", fmt.Errorf("could not revoke the family: %w", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
 			// A commit error must NOT swallow the reuse information: the
 			// caller must see through errors.Is that this is a theft alarm.
-			return "", fmt.Errorf("%w (iptal commit edilemedi: %v)", ErrTokenReused, err)
+			return "", fmt.Errorf("%w (revocation commit failed: %v)", ErrTokenReused, err)
 		}
 		return "", ErrTokenReused
 	}
@@ -260,7 +260,7 @@ func (s *PostgresTokenStore) RotateRefresh(ctx context.Context, presented string
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE refresh_tokens SET used_at = now() WHERE id = $1`, id); err != nil {
-		return "", fmt.Errorf("jeton tuketilemedi: %w", err)
+		return "", fmt.Errorf("could not consume the token: %w", err)
 	}
 	// The new record is added with the SAME family_id: the trace of the chain
 	// is preserved so that if a reuse is seen later the whole chain can be
@@ -269,7 +269,7 @@ func (s *PostgresTokenStore) RotateRefresh(ctx context.Context, presented string
 		return "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return "", fmt.Errorf("rotasyon commit edilemedi: %w", err)
+		return "", fmt.Errorf("could not commit the rotation: %w", err)
 	}
 	return token, nil
 }
@@ -302,7 +302,7 @@ func (s *PostgresTokenStore) GetRefresh(ctx context.Context, presented string) (
 		return nil, ErrTokenNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("jeton okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the token: %w", err)
 	}
 	if r.RevokedAt != nil {
 		return nil, ErrTokenNotFound
@@ -327,7 +327,7 @@ func (s *PostgresTokenStore) RefreshFamilyID(ctx context.Context, presented stri
 		return "", ErrTokenNotFound
 	}
 	if err != nil {
-		return "", fmt.Errorf("aile kimligi okunamadi: %w", err)
+		return "", fmt.Errorf("could not read the family id: %w", err)
 	}
 	return familyID, nil
 }
@@ -354,7 +354,7 @@ func (s *PostgresTokenStore) GetRefreshByID(ctx context.Context, id string) (*Re
 		return nil, ErrTokenNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("jeton okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read the token: %w", err)
 	}
 	return &r, nil
 }
@@ -364,7 +364,7 @@ func (s *PostgresTokenStore) RevokeFamily(ctx context.Context, familyID string) 
 	if _, err := s.pool.Exec(ctx,
 		`UPDATE refresh_tokens SET revoked_at = now()
 		  WHERE family_id = $1 AND revoked_at IS NULL`, familyID); err != nil {
-		return fmt.Errorf("aile iptal edilemedi: %w", err)
+		return fmt.Errorf("could not revoke the family: %w", err)
 	}
 	return nil
 }
@@ -376,7 +376,7 @@ func (s *PostgresTokenStore) RevokeUser(ctx context.Context, userID, clientID st
 		`UPDATE refresh_tokens SET revoked_at = now()
 		  WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL`,
 		userID, clientID); err != nil {
-		return fmt.Errorf("kullanici jetonlari iptal edilemedi: %w", err)
+		return fmt.Errorf("could not revoke the user's tokens: %w", err)
 	}
 	return nil
 }

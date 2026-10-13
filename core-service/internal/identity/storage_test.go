@@ -14,7 +14,7 @@ func newTestStorage(t *testing.T) *Storage {
 	t.Helper()
 	a, err := LoadSigningKey(testPEM(t))
 	if err != nil {
-		t.Fatalf("AnahtarYukle: %v", err)
+		t.Fatalf("LoadSigningKey: %v", err)
 	}
 	return NewStorage(testAuthCfg(), NewFakeUserStore(), NewFakeTokenStore(), nil, a)
 }
@@ -28,10 +28,10 @@ func TestStorage_UnknownClientRejected(t *testing.T) {
 	d := newTestStorage(t)
 	ctx := context.Background()
 	if _, err := d.GetClientByClientID(ctx, "baska-uygulama"); err == nil {
-		t.Error("tanimsiz istemci kabul edildi")
+		t.Error("an undefined client was accepted")
 	}
 	if _, err := d.GetClientByClientID(ctx, "makesinger-mobil"); err != nil {
-		t.Errorf("tanimli istemci reddedildi: %v", err)
+		t.Errorf("a defined client was rejected: %v", err)
 	}
 }
 
@@ -42,7 +42,7 @@ func TestStorage_ClientSecretAlwaysRejected(t *testing.T) {
 	ctx := context.Background()
 	for _, secret := range []string{"", "herhangi"} {
 		if err := d.AuthorizeClientIDSecret(ctx, "makesinger-mobil", secret); err == nil {
-			t.Errorf("secret %q kabul edildi", secret)
+			t.Errorf("secret %q was accepted", secret)
 		}
 	}
 }
@@ -54,20 +54,20 @@ func TestStorage_ReuseYieldsInvalidRefresh(t *testing.T) {
 	ctx := context.Background()
 	firstRecord, err := d.tokens.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	if _, err := d.tokens.RotateRefresh(ctx, firstRecord, newRefresh("k1")); err != nil {
-		t.Fatalf("RefreshDondur: %v", err)
+		t.Fatalf("RotateRefresh: %v", err)
 	}
 	if _, err := d.TokenRequestByRefreshToken(ctx, firstRecord); !errors.Is(err, op.ErrInvalidRefreshToken) {
-		t.Errorf("hata = %v, beklenen op.ErrInvalidRefreshToken", err)
+		t.Errorf("error = %v, want op.ErrInvalidRefreshToken", err)
 	}
 }
 
 func TestStorage_JWTProfileUnsupported(t *testing.T) {
 	d := newTestStorage(t)
 	if _, err := d.ValidateJWTProfileScopes(context.Background(), "k1", []string{"openid"}); err == nil {
-		t.Error("JWT profile kabul edildi")
+		t.Error("JWT profile was accepted")
 	}
 }
 
@@ -77,7 +77,7 @@ func TestStorage_JWTProfileUnsupported(t *testing.T) {
 func TestStorage_GetRefreshTokenInfoInvalidReturnsInvalidRefresh(t *testing.T) {
 	d := newTestStorage(t)
 	if _, _, err := d.GetRefreshTokenInfo(context.Background(), "makesinger-mobil", "uydurma"); !errors.Is(err, op.ErrInvalidRefreshToken) {
-		t.Errorf("hata = %v, beklenen op.ErrInvalidRefreshToken", err)
+		t.Errorf("error = %v, want op.ErrInvalidRefreshToken", err)
 	}
 }
 
@@ -88,17 +88,17 @@ func TestStorage_GetRefreshTokenInfoValid(t *testing.T) {
 	ctx := context.Background()
 	token, err := d.tokens.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	userID, tokenID, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", token)
 	if err != nil {
 		t.Fatalf("GetRefreshTokenInfo: %v", err)
 	}
 	if userID != "k1" {
-		t.Errorf("userID = %q, beklenen k1", userID)
+		t.Errorf("userID = %q, want k1", userID)
 	}
 	if tokenID == "" {
-		t.Error("tokenID bos")
+		t.Error("tokenID is empty")
 	}
 }
 
@@ -116,11 +116,11 @@ func TestStorage_RevokeTokenRefreshRevokesFamily(t *testing.T) {
 	ctx := context.Background()
 	firstRecord, err := d.tokens.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	second, err := d.tokens.RotateRefresh(ctx, firstRecord, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshDondur: %v", err)
+		t.Fatalf("RotateRefresh: %v", err)
 	}
 	// As the library really does: learn the ID first.
 	_, tokenID, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", second)
@@ -133,7 +133,7 @@ func TestStorage_RevokeTokenRefreshRevokesFamily(t *testing.T) {
 	}
 	// The targeted token must be dead...
 	if _, err := d.tokens.GetRefresh(ctx, second); !errors.Is(err, ErrTokenNotFound) {
-		t.Errorf("iptal edilen jeton hala gecerli (err=%v)", err)
+		t.Errorf("the revoked token is still valid (err=%v)", err)
 	}
 	// ...and another token of the SAME FAMILY, never named in the revoke call,
 	// must be dead too: family revocation closes the WHOLE chain, not a single token.
@@ -142,10 +142,10 @@ func TestStorage_RevokeTokenRefreshRevokesFamily(t *testing.T) {
 	// must fail too; this is a second proof for the question "is the family
 	// really dead".
 	if err == nil {
-		t.Fatalf("iptal edilmis ailede rotasyon basarili oldu, yeni jeton = %q", third)
+		t.Fatalf("rotation succeeded in a revoked family, new token = %q", third)
 	}
 	if !errors.Is(err, ErrTokenNotFound) {
-		t.Errorf("beklenmeyen hata turu: %v", err)
+		t.Errorf("unexpected error type: %v", err)
 	}
 }
 
@@ -154,13 +154,13 @@ func TestStorage_RevokeTokenDeletesAccessRecord(t *testing.T) {
 	d := newTestStorage(t)
 	ctx := context.Background()
 	if err := d.tokens.SaveAccess(ctx, "at1", "k1", "makesinger-mobil", []string{"openid"}, time.Now().UTC().Add(15*time.Minute)); err != nil {
-		t.Fatalf("AccessKaydet: %v", err)
+		t.Fatalf("SaveAccess: %v", err)
 	}
 	if oidcErr := d.RevokeToken(ctx, "at1", "k1", "makesinger-mobil"); oidcErr != nil {
 		t.Fatalf("RevokeToken: %v", oidcErr)
 	}
 	if _, err := d.tokens.GetAccess(ctx, "at1"); !errors.Is(err, ErrTokenNotFound) {
-		t.Errorf("iptal edilen access kaydi hala gecerli (err=%v)", err)
+		t.Errorf("the revoked access record is still valid (err=%v)", err)
 	}
 }
 
@@ -169,7 +169,7 @@ func TestStorage_RevokeTokenDeletesAccessRecord(t *testing.T) {
 func TestStorage_RevokeTokenUnknownSucceedsSilently(t *testing.T) {
 	d := newTestStorage(t)
 	if oidcErr := d.RevokeToken(context.Background(), "uydurma", "", "makesinger-mobil"); oidcErr != nil {
-		t.Errorf("RevokeToken hata dondu: %v", oidcErr)
+		t.Errorf("RevokeToken returned an error: %v", oidcErr)
 	}
 }
 
@@ -178,7 +178,7 @@ func TestStorage_RevokeTokenUnknownSucceedsSilently(t *testing.T) {
 func TestStorage_SetUserinfoFromScopesEmpty(t *testing.T) {
 	d := newTestStorage(t)
 	if err := d.SetUserinfoFromScopes(context.Background(), nil, "k1", "makesinger-mobil", []string{"profile"}); err != nil {
-		t.Errorf("SetUserinfoFromScopes hata dondu: %v", err)
+		t.Errorf("SetUserinfoFromScopes returned an error: %v", err)
 	}
 }
 
@@ -192,7 +192,7 @@ func TestStorage_SetUserinfoFromScopesEmpty(t *testing.T) {
 // called they return the SAME error, so they never silently look "successful".
 type failingByIDUserStore struct{}
 
-var errUserUnreadable = errors.New("kullanici satiri okunamadi")
+var errUserUnreadable = errors.New("user row could not be read")
 
 func (failingByIDUserStore) Create(context.Context, string, string, string) (*User, error) {
 	return nil, errUserUnreadable
@@ -241,7 +241,7 @@ func (s fakeIDTokenRequest) GetSubject() string   { return s.sub }
 func TestStorage_IDTokenFailsWhenUserUnreadable(t *testing.T) {
 	a, err := LoadSigningKey(testPEM(t))
 	if err != nil {
-		t.Fatalf("AnahtarYukle: %v", err)
+		t.Fatalf("LoadSigningKey: %v", err)
 	}
 	cfg := testAuthCfg()
 	req := fakeIDTokenRequest{sub: "k1"}
@@ -253,28 +253,28 @@ func TestStorage_IDTokenFailsWhenUserUnreadable(t *testing.T) {
 	healthy := NewStorage(cfg, NewFakeUserStore(), NewFakeTokenStore(), nil, a)
 	users, err := healthy.users.Create(ctx, "k@ornek.com", "K", "cok-gizli-sifre")
 	if err != nil {
-		t.Fatalf("kullanici olusturulamadi: %v", err)
+		t.Fatalf("could not create user: %v", err)
 	}
 	token, err := op.CreateIDToken(ctx, cfg.Issuer, fakeIDTokenRequest{sub: users.ID},
 		time.Hour, "", "", healthy, healthy.client)
 	if err != nil {
-		t.Fatalf("saglam depoyla id_token uretilemedi: %v", err)
+		t.Fatalf("could not produce an id_token with a healthy store: %v", err)
 	}
 	if token == "" {
-		t.Fatal("saglam depoyla bos id_token uretildi")
+		t.Fatal("an empty id_token was produced with a healthy store")
 	}
 
 	// 2) With a store whose ByID returns an error, token production must FAIL.
 	broken := NewStorage(cfg, failingByIDUserStore{}, NewFakeTokenStore(), nil, a)
 	brokenToken, err := op.CreateIDToken(ctx, cfg.Issuer, req, time.Hour, "", "", broken, broken.client)
 	if err == nil {
-		t.Fatalf("kullanici okunamazken id_token URETILDI: %q", brokenToken)
+		t.Fatalf("an id_token was PRODUCED while the user could not be read: %q", brokenToken)
 	}
 	if !errors.Is(err, errUserUnreadable) {
-		t.Errorf("hata = %v, beklenen depo hatasinin sarmalanmis hali", err)
+		t.Errorf("error = %v, want the store error wrapped", err)
 	}
 	if brokenToken != "" {
-		t.Errorf("hata ile birlikte jeton da dondu: %q", brokenToken)
+		t.Errorf("a token was returned together with the error: %q", brokenToken)
 	}
 }
 
@@ -284,7 +284,7 @@ func TestStorage_IDTokenFailsWhenUserUnreadable(t *testing.T) {
 func TestStorage_HealthWithoutDepsFails(t *testing.T) {
 	d := newTestStorage(t)
 	if err := d.Health(context.Background()); err == nil {
-		t.Error("Health, baglanti yokken basarili dondu (fail-closed olmali)")
+		t.Error("Health returned success without a connection (it must be fail-closed)")
 	}
 }
 
@@ -298,10 +298,10 @@ func TestStorage_GetRefreshTokenInfoOtherClientRejected(t *testing.T) {
 	otherClient.ClientID = "makesinger-web"
 	token, err := d.tokens.CreateRefresh(ctx, otherClient)
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	if _, _, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", token); !errors.Is(err, op.ErrInvalidRefreshToken) {
-		t.Errorf("hata = %v, beklenen op.ErrInvalidRefreshToken", err)
+		t.Errorf("error = %v, want op.ErrInvalidRefreshToken", err)
 	}
 }
 
@@ -323,18 +323,18 @@ func TestStorage_CreateAccessAndRefreshTokensStartsFamily(t *testing.T) {
 		t.Fatalf("CreateAccessAndRefreshTokens: %v", err)
 	}
 	if accessID == "" || refreshToken == "" {
-		t.Fatalf("bos deger dondu: accessID=%q refreshToken=%q", accessID, refreshToken)
+		t.Fatalf("empty value returned: accessID=%q refreshToken=%q", accessID, refreshToken)
 	}
 	if !exp.After(time.Now().UTC()) {
-		t.Errorf("access suresi gecmiste: %v", exp)
+		t.Errorf("access expiry is in the past: %v", exp)
 	}
 	if _, err := d.tokens.GetAccess(ctx, accessID); err != nil {
-		t.Errorf("access kaydi okunamadi: %v", err)
+		t.Errorf("could not read the access record: %v", err)
 	}
 	if record, err := d.tokens.GetRefresh(ctx, refreshToken); err != nil {
-		t.Errorf("refresh jetonu okunamadi: %v", err)
+		t.Errorf("could not read the refresh token: %v", err)
 	} else if record.UserID != "k1" || record.ClientID != "makesinger-mobil" {
-		t.Errorf("refresh kaydi yanlis doldu: %+v", record)
+		t.Errorf("refresh record was filled wrong: %+v", record)
 	}
 }
 
@@ -348,7 +348,7 @@ func TestStorage_CreateAccessAndRefreshTokensRotates(t *testing.T) {
 	ctx := context.Background()
 	old, err := d.tokens.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	req := &refreshRequest{userID: "k1", clientID: "makesinger-mobil", scopes: []string{"openid"}}
 	accessID, newToken, _, err := d.CreateAccessAndRefreshTokens(ctx, req, old)
@@ -356,15 +356,15 @@ func TestStorage_CreateAccessAndRefreshTokensRotates(t *testing.T) {
 		t.Fatalf("CreateAccessAndRefreshTokens: %v", err)
 	}
 	if accessID == "" || newToken == "" || newToken == old {
-		t.Fatalf("rotasyon beklenen sekilde calismadi: accessID=%q yeniJeton=%q", accessID, newToken)
+		t.Fatalf("rotation did not work as expected: accessID=%q newToken=%q", accessID, newToken)
 	}
 	if _, err := d.tokens.GetRefresh(ctx, newToken); err != nil {
-		t.Errorf("yeni jeton gecersiz: %v", err)
+		t.Errorf("the new token is invalid: %v", err)
 	}
 	// If the old token is presented AGAIN: stolen-token detection must fire and
 	// be converted to the right OAuth error (invalid_grant).
 	if _, _, _, err := d.CreateAccessAndRefreshTokens(ctx, req, old); !errors.Is(err, oidc.ErrInvalidGrant()) {
-		t.Errorf("hata = %v, beklenen oidc.ErrInvalidGrant()", err)
+		t.Errorf("error = %v, want oidc.ErrInvalidGrant()", err)
 	}
 }
 
@@ -396,35 +396,35 @@ func TestStorage_TokenRequestByRefreshTokenReuseRevokesFamily(t *testing.T) {
 	ctx := context.Background()
 	old, err := d.tokens.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	// The legitimate client rotates normally: the old token becomes "used", the
 	// rotated token is valid.
 	rotated, err := d.tokens.RotateRefresh(ctx, old, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshDondur: %v", err)
+		t.Fatalf("RotateRefresh: %v", err)
 	}
 	if _, err := d.tokens.GetRefresh(ctx, rotated); err != nil {
-		t.Fatalf("rotasyon sonrasi yeni jeton gecersiz: %v", err)
+		t.Fatalf("the new token is invalid after rotation: %v", err)
 	}
 
 	// The attacker presents the token they stole (now used).
 	if err := simulateRefreshFlow(t, d, old); !errors.Is(err, op.ErrInvalidRefreshToken) {
-		t.Fatalf("hata = %v, beklenen op.ErrInvalidRefreshToken", err)
+		t.Fatalf("error = %v, want op.ErrInvalidRefreshToken", err)
 	}
 
 	// What is really measured: the REST of the family must be dead too. The
 	// CURRENT token in the legitimate client's hands must no longer work.
 	if _, err := d.tokens.GetRefresh(ctx, rotated); !errors.Is(err, ErrTokenNotFound) {
-		t.Errorf("aile iptal edilmemis, guncel jeton hala gecerli (err=%v)", err)
+		t.Errorf("family was not revoked, the current token is still valid (err=%v)", err)
 	}
 	if err := simulateRefreshFlow(t, d, rotated); err == nil {
-		t.Error("iptal edilmis aileyle refresh akisi basarili oldu")
+		t.Error("the refresh flow succeeded with a revoked family")
 	}
 	// Every record in the store must be revoked: the family dies as a whole.
 	for _, record := range d.tokens.(*FakeTokenStore).AllRecords() {
 		if record.RevokedAt == nil {
-			t.Errorf("aile uyesi iptal edilmemis: id=%s", record.ID)
+			t.Errorf("a family member was not revoked: id=%s", record.ID)
 		}
 	}
 }
@@ -437,17 +437,17 @@ func TestStorage_TokenRequestByRefreshTokenErrorIndistinguishable(t *testing.T) 
 	ctx := context.Background()
 	old, err := d.tokens.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	if _, err := d.tokens.RotateRefresh(ctx, old, newRefresh("k1")); err != nil {
-		t.Fatalf("RefreshDondur: %v", err)
+		t.Fatalf("RotateRefresh: %v", err)
 	}
 	_, usedErr := d.TokenRequestByRefreshToken(ctx, old)
 	_, unknownErr := d.TokenRequestByRefreshToken(ctx, "uydurma-jeton")
 	if usedErr == nil || unknownErr == nil {
-		t.Fatalf("iki durumda da hata beklenir: kullanilmis=%v bilinmeyen=%v", usedErr, unknownErr)
+		t.Fatalf("an error is expected in both cases: used=%v unknown=%v", usedErr, unknownErr)
 	}
 	if usedErr.Error() != unknownErr.Error() {
-		t.Errorf("hatalar ayrisiyor: kullanilmis=%q bilinmeyen=%q", usedErr, unknownErr)
+		t.Errorf("the errors are distinguishable: used=%q unknown=%q", usedErr, unknownErr)
 	}
 }

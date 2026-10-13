@@ -322,7 +322,7 @@ func (s *Pages) WrapAuthorize(next http.Handler) http.Handler {
 				// GET /giris returns 403 and the request CANNOT BE COMPLETED.
 				//
 				// authRequestID, the cookie value and the CSRF token are NOT LOGGED.
-				log.Print("authorize: capraz-site navigasyon, oturum baglamasi kurulmadi")
+				log.Print("authorize: cross-site navigation, session binding was not set up")
 				return nil
 			}
 			return s.BindSession(w, r, id)
@@ -424,7 +424,7 @@ func (ic *bindingInterceptor) WriteHeader(status int) {
 	ic.wroteHeader = true
 	if err := ic.bind(status); err != nil {
 		// authRequestID, the cookie value and the CSRF token are NOT LOGGED.
-		log.Printf("authorize: oturum baglamasi kurulamadi: %v", err)
+		log.Printf("authorize: could not set up the session binding: %v", err)
 		ic.suppressed = true
 		ic.ResponseWriter.Header().Del("Location")
 		http.Error(ic.ResponseWriter, msgServerError, http.StatusInternalServerError)
@@ -466,7 +466,7 @@ func (s *Pages) enforceSession(r *http.Request, id string) error {
 // on the server side too the cookie value, CSRF token and authRequestID are
 // not logged, only the error kind is.
 func rejectSession(w http.ResponseWriter, where string, err error) {
-	log.Printf("%s: oturum baglamasi dogrulanamadi: %v", where, err)
+	log.Printf("%s: could not verify the session binding: %v", where, err)
 	http.Error(w, msgSessionInvalid, http.StatusForbidden)
 }
 
@@ -526,7 +526,7 @@ func (s *Pages) loginPost(w http.ResponseWriter, r *http.Request) {
 	if err != nil && !errors.Is(err, ErrUserNotFound) {
 		// The email is PII and is not logged here; the error itself is already
 		// enough for diagnosis.
-		log.Printf("giris: kullanici okunamadi: %v", err)
+		log.Printf("login: could not read the user: %v", err)
 	}
 	if !user.PasswordMatches(password) {
 		// We DELIBERATELY DO NOT DISTINGUISH whether the account exists: for the
@@ -545,7 +545,7 @@ func (s *Pages) loginPost(w http.ResponseWriter, r *http.Request) {
 		// authRequestID is not logged: combined with MarkDone it acts like an
 		// authorization token, valid for 10 minutes, that binds a pending request
 		// to a specific user.
-		log.Printf("giris: istek tamamlanamadi: %v", err)
+		log.Printf("login: could not complete the request: %v", err)
 		if errors.Is(err, ErrRequestAlreadyCompleted) {
 			// This request is bound to another identity; reject instead of overwriting.
 			http.Error(w, msgRequestAlreadyUsed, http.StatusConflict)
@@ -569,7 +569,7 @@ func (s *Pages) renderLogin(w http.ResponseWriter, status int, id, csrf, email, 
 	}
 	w.WriteHeader(status)
 	if err := templates.ExecuteTemplate(w, "giris.html", data); err != nil {
-		log.Printf("giris sablonu yazilamadi: %v", err)
+		log.Printf("could not write the login template: %v", err)
 	}
 }
 
@@ -630,7 +630,7 @@ func (s *Pages) signupPost(w http.ResponseWriter, r *http.Request) {
 		default:
 			// The email is PII and is not logged here; the error itself is already
 			// enough for diagnosis.
-			log.Printf("kayit: kullanici olusturulamadi: %v", err)
+			log.Printf("signup: could not create the user: %v", err)
 			s.renderSignup(w, http.StatusInternalServerError, id, csrf, email, name, msgServerError)
 		}
 		return
@@ -638,7 +638,7 @@ func (s *Pages) signupPost(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.requests.MarkDone(r.Context(), id, user.ID, []string{amrPassword}); err != nil {
 		// authRequestID is not logged (see the same note in loginPost).
-		log.Printf("kayit: istek tamamlanamadi: %v", err)
+		log.Printf("signup: could not complete the request: %v", err)
 		if errors.Is(err, ErrRequestAlreadyCompleted) {
 			// This request is already bound to another identity; Subject is NOT OVERWRITTEN.
 			http.Error(w, msgRequestAlreadyUsed, http.StatusConflict)
@@ -662,7 +662,7 @@ func (s *Pages) renderSignup(w http.ResponseWriter, status int, id, csrf, email,
 	}
 	w.WriteHeader(status)
 	if err := templates.ExecuteTemplate(w, "kayit.html", data); err != nil {
-		log.Printf("kayit sablonu yazilamadi: %v", err)
+		log.Printf("could not write the signup template: %v", err)
 	}
 }
 
@@ -684,7 +684,7 @@ func (s *Pages) renderSignup(w http.ResponseWriter, status int, id, csrf, email,
 // attacker's browser, and the cookie closes that.
 func (s *Pages) Callback(w http.ResponseWriter, r *http.Request) {
 	if s.callbackDelegate == nil {
-		log.Print("callback: delege baglanmamis")
+		log.Print("callback: delegate is not set")
 		http.Error(w, msgServerError, http.StatusInternalServerError)
 		return
 	}

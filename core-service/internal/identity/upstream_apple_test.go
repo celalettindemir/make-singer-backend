@@ -20,11 +20,11 @@ func generateTestP8(t *testing.T) (p8PEM string, publicKey *ecdsa.PublicKey) {
 	t.Helper()
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("test anahtari uretilemedi: %v", err)
+		t.Fatalf("could not generate test key: %v", err)
 	}
 	derBytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	if err != nil {
-		t.Fatalf("test anahtari PKCS8'e cevrilemedi: %v", err)
+		t.Fatalf("could not convert test key to PKCS8: %v", err)
 	}
 	block := &pem.Block{Type: "PRIVATE KEY", Bytes: derBytes}
 	return string(pem.EncodeToMemory(block)), &privateKey.PublicKey
@@ -39,7 +39,7 @@ func TestAppleClientSecret_Claims(t *testing.T) {
 
 	clientSecret, err := appleClientSecret("EKIP123", "ANAHTAR9", "tr.makesinger.giris", p8, now)
 	if err != nil {
-		t.Fatalf("client_secret uretilemedi: %v", err)
+		t.Fatalf("could not generate client_secret: %v", err)
 	}
 
 	// WithoutClaimsValidation is REQUIRED: jwt.Parse validates exp against
@@ -51,7 +51,7 @@ func TestAppleClientSecret_Claims(t *testing.T) {
 	token, err := jwt.Parse(clientSecret, func(t *jwt.Token) (any, error) { return publicKey, nil },
 		jwt.WithValidMethods([]string{"ES256"}), jwt.WithoutClaimsValidation())
 	if err != nil {
-		t.Fatalf("client_secret dogrulanamadi: %v", err)
+		t.Fatalf("could not verify client_secret: %v", err)
 	}
 	c := token.Claims.(jwt.MapClaims)
 	if c["iss"] != "EKIP123" {
@@ -79,7 +79,7 @@ func TestAppleClientSecret_Lifetime(t *testing.T) {
 
 	clientSecret, err := appleClientSecret("EKIP123", "ANAHTAR9", "tr.makesinger.giris", p8, now)
 	if err != nil {
-		t.Fatalf("client_secret uretilemedi: %v", err)
+		t.Fatalf("could not generate client_secret: %v", err)
 	}
 	// WithoutClaimsValidation: see the rationale in TestAppleClientSecret_Claims
 	// -- validating against the wall clock with a fixed `now` is a time
@@ -87,19 +87,19 @@ func TestAppleClientSecret_Lifetime(t *testing.T) {
 	token, err := jwt.Parse(clientSecret, func(t *jwt.Token) (any, error) { return publicKey, nil },
 		jwt.WithValidMethods([]string{"ES256"}), jwt.WithoutClaimsValidation())
 	if err != nil {
-		t.Fatalf("client_secret dogrulanamadi: %v", err)
+		t.Fatalf("could not verify client_secret: %v", err)
 	}
 	c := token.Claims.(jwt.MapClaims)
 	iat, _ := c.GetIssuedAt()
 	exp, _ := c.GetExpirationTime()
 	if iat == nil || exp == nil {
-		t.Fatalf("iat/exp eksik: iat=%v exp=%v", iat, exp)
+		t.Fatalf("iat/exp missing: iat=%v exp=%v", iat, exp)
 	}
 	if !iat.Equal(now) {
-		t.Errorf("iat = %v, beklenen %v", iat.Time, now)
+		t.Errorf("iat = %v, want %v", iat.Time, now)
 	}
 	if got := exp.Sub(iat.Time); got != 5*time.Minute {
-		t.Errorf("exp - iat = %v, beklenen 5m", got)
+		t.Errorf("exp - iat = %v, want 5m", got)
 	}
 }
 
@@ -107,23 +107,23 @@ func TestAppleClientSecret_Lifetime(t *testing.T) {
 func TestAppleClientSecret_RejectsWrongKeyType(t *testing.T) {
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("rsa anahtari uretilemedi: %v", err)
+		t.Fatalf("could not generate rsa key: %v", err)
 	}
 	derBytes, err := x509.MarshalPKCS8PrivateKey(rsaKey)
 	if err != nil {
-		t.Fatalf("rsa anahtari pkcs8'e cevrilemedi: %v", err)
+		t.Fatalf("could not convert rsa key to pkcs8: %v", err)
 	}
 	p8 := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: derBytes}))
 
 	_, err = appleClientSecret("EKIP123", "ANAHTAR9", "tr.makesinger.giris", p8, time.Now())
 	if err == nil {
-		t.Fatal("rsa anahtariyla ES256 imzalama basarili oldu, hata bekleniyordu")
+		t.Fatal("ES256 signing with an rsa key succeeded, an error was expected")
 	}
 }
 
 func TestAppleClientSecret_RejectsBadPEM(t *testing.T) {
 	_, err := appleClientSecret("EKIP123", "ANAHTAR9", "tr.makesinger.giris", "bu-pem-degil", time.Now())
 	if err == nil {
-		t.Fatal("bozuk PEM ile hata bekleniyordu, nil geldi")
+		t.Fatal("an error was expected with a corrupt PEM, got nil")
 	}
 }

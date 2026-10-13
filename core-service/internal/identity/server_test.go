@@ -17,7 +17,7 @@ func TestStart_EmptyIssuerFails(t *testing.T) {
 	cfg := testAuthCfg()
 	cfg.Issuer = ""
 	if _, err := Start(context.Background(), cfg, nil, "development"); err == nil {
-		t.Error("bos issuer ile baslatildi")
+		t.Error("started with an empty issuer")
 	}
 }
 
@@ -32,7 +32,7 @@ func TestStart_MissingSecretsFails(t *testing.T) {
 		return c
 	}
 	if _, err := Start(context.Background(), base(), nil, "development"); err == nil {
-		t.Error("gecersiz sirlarla baslatildi")
+		t.Error("started with invalid secrets")
 	}
 }
 
@@ -46,10 +46,10 @@ func TestValidateInsecureIssuer_LocalHTTPAllowed(t *testing.T) {
 	cfg.Issuer = "http://localhost:8001"
 	_, err := Start(context.Background(), cfg, nil, "development")
 	if err == nil {
-		t.Fatal("sirlar eksikken baslatildi (beklenmiyordu)")
+		t.Fatal("started with missing secrets (not expected)")
 	}
 	if strings.Contains(strings.ToLower(err.Error()), "https") {
-		t.Errorf("http+yerel+development icin https hatasi donmemeli, ama dondu: %v", err)
+		t.Errorf("http+local+development must not return an https error, but it did: %v", err)
 	}
 }
 
@@ -61,10 +61,10 @@ func TestValidateInsecureIssuer_RemoteHostRejected(t *testing.T) {
 	cfg.Issuer = "http://auth.example.com"
 	_, err := Start(context.Background(), cfg, nil, "development")
 	if err == nil {
-		t.Fatal("uzak host'lu http issuer ile baslatildi")
+		t.Fatal("started with an http issuer on a remote host")
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "https") {
-		t.Errorf("https zorunlu hatasi beklenirdi, gelen: %v", err)
+		t.Errorf("an https-required error was expected, got: %v", err)
 	}
 }
 
@@ -76,10 +76,10 @@ func TestValidateInsecureIssuer_ProductionRejected(t *testing.T) {
 	cfg.Issuer = "http://localhost:8001"
 	_, err := Start(context.Background(), cfg, nil, "production")
 	if err == nil {
-		t.Fatal("production ortaminda http issuer ile baslatildi")
+		t.Fatal("started with an http issuer in the production environment")
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "https") {
-		t.Errorf("https zorunlu hatasi beklenirdi, gelen: %v", err)
+		t.Errorf("an https-required error was expected, got: %v", err)
 	}
 }
 
@@ -100,9 +100,9 @@ func TestStart_InvalidTTLFails(t *testing.T) {
 		key    string
 	}{
 		{"access_ttl 0", func(c *config.AuthConfig) { c.AccessTTL = 0 }, "access_ttl"},
-		{"access_ttl negatif", func(c *config.AuthConfig) { c.AccessTTL = -time.Minute }, "access_ttl"},
+		{"access_ttl negative", func(c *config.AuthConfig) { c.AccessTTL = -time.Minute }, "access_ttl"},
 		{"refresh_ttl 0", func(c *config.AuthConfig) { c.RefreshTTL = 0 }, "refresh_ttl"},
-		{"refresh_ttl negatif", func(c *config.AuthConfig) { c.RefreshTTL = -time.Hour }, "refresh_ttl"},
+		{"refresh_ttl negative", func(c *config.AuthConfig) { c.RefreshTTL = -time.Hour }, "refresh_ttl"},
 	}
 	for _, d := range statuses {
 		t.Run(d.name, func(t *testing.T) {
@@ -110,13 +110,13 @@ func TestStart_InvalidTTLFails(t *testing.T) {
 			d.mutate(cfg)
 			_, err := Start(context.Background(), cfg, nil, "development")
 			if err == nil {
-				t.Fatal("gecersiz TTL ile baslatildi")
+				t.Fatal("started with an invalid TTL")
 			}
 			// Verify it is rejected FOR THE REASON THE TEST NAME SAYS:
 			// the secrets are missing in testAuthCfg too, so the "an error was
 			// returned" check would be vacuous.
 			if !strings.Contains(err.Error(), d.key) {
-				t.Errorf("hata %q icermeli, gelen: %v", d.key, err)
+				t.Errorf("error should contain %q, got: %v", d.key, err)
 			}
 		})
 	}
@@ -135,10 +135,10 @@ func TestStart_EmptyClientConfigFails(t *testing.T) {
 		mutate func(*config.AuthConfig)
 		key    string
 	}{
-		{"client_id bos", func(c *config.AuthConfig) { c.ClientID = "" }, "client_id"},
+		{"client_id empty", func(c *config.AuthConfig) { c.ClientID = "" }, "client_id"},
 		{"redirect_uris nil", func(c *config.AuthConfig) { c.RedirectURIs = nil }, "redirect_uris"},
-		{"redirect_uris bos dilim", func(c *config.AuthConfig) { c.RedirectURIs = []string{} }, "redirect_uris"},
-		{"redirect_uris bos girdi", func(c *config.AuthConfig) { c.RedirectURIs = []string{"  "} }, "redirect_uris"},
+		{"redirect_uris empty slice", func(c *config.AuthConfig) { c.RedirectURIs = []string{} }, "redirect_uris"},
+		{"redirect_uris empty entry", func(c *config.AuthConfig) { c.RedirectURIs = []string{"  "} }, "redirect_uris"},
 	}
 	for _, d := range statuses {
 		t.Run(d.name, func(t *testing.T) {
@@ -146,10 +146,10 @@ func TestStart_EmptyClientConfigFails(t *testing.T) {
 			d.mutate(cfg)
 			_, err := Start(context.Background(), cfg, nil, "development")
 			if err == nil {
-				t.Fatal("bos istemci yapilandirmasi ile baslatildi")
+				t.Fatal("started with an empty client configuration")
 			}
 			if !strings.Contains(err.Error(), d.key) {
-				t.Errorf("hata %q icermeli, gelen: %v", d.key, err)
+				t.Errorf("error should contain %q, got: %v", d.key, err)
 			}
 		})
 	}
@@ -159,7 +159,7 @@ func TestStart_EmptyClientConfigFails(t *testing.T) {
 // tests above would also hold for "everything is rejected".
 func TestValidateConfig_ValidPasses(t *testing.T) {
 	if err := validateConfig(testAuthCfg()); err != nil {
-		t.Errorf("gecerli yapilandirma reddedildi: %v", err)
+		t.Errorf("valid configuration was rejected: %v", err)
 	}
 }
 
@@ -172,16 +172,16 @@ func TestValidateConfig_AppleMissingFieldsFails(t *testing.T) {
 		name      string
 		federated config.FederationClient
 	}{
-		{"ekip id eksik", config.FederationClient{Name: "apple", ClientID: "tr.makesinger.giris", AppleKeyID: "AB12", AppleKeyP8: "pem-verisi"}},
-		{"anahtar id eksik", config.FederationClient{Name: "apple", ClientID: "tr.makesinger.giris", AppleTeamID: "TEAM1", AppleKeyP8: "pem-verisi"}},
-		{"anahtar p8 eksik", config.FederationClient{Name: "apple", ClientID: "tr.makesinger.giris", AppleTeamID: "TEAM1", AppleKeyID: "AB12"}},
+		{"team id missing", config.FederationClient{Name: "apple", ClientID: "tr.makesinger.giris", AppleKeyID: "AB12", AppleKeyP8: "pem-verisi"}},
+		{"key id missing", config.FederationClient{Name: "apple", ClientID: "tr.makesinger.giris", AppleTeamID: "TEAM1", AppleKeyP8: "pem-verisi"}},
+		{"key p8 missing", config.FederationClient{Name: "apple", ClientID: "tr.makesinger.giris", AppleTeamID: "TEAM1", AppleKeyID: "AB12"}},
 	}
 	for _, d := range statuses {
 		t.Run(d.name, func(t *testing.T) {
 			cfg := testAuthCfg()
 			cfg.Federation = []config.FederationClient{d.federated}
 			if err := validateConfig(cfg); err == nil {
-				t.Fatal("eksik apple alanlariyla dogrulama gecti")
+				t.Fatal("validation passed with missing apple fields")
 			}
 		})
 	}
@@ -201,7 +201,7 @@ func TestValidateConfig_AppleCompletePasses(t *testing.T) {
 		AppleTeamID: "TEAM1", AppleKeyID: "AB12", AppleKeyP8: p8,
 	}}
 	if err := validateConfig(cfg); err != nil {
-		t.Errorf("tam apple yapilandirmasi reddedildi: %v", err)
+		t.Errorf("complete apple configuration was rejected: %v", err)
 	}
 }
 
@@ -222,9 +222,9 @@ func TestValidateConfig_AppleP8ParsedAtStartup(t *testing.T) {
 		name string
 		p8   string
 	}{
-		{"literal \\n ile tek satira dusmus p8", escapedLiteral},
-		{"PEM olmayan yer tutucu", "pem-verisi"},
-		{"PEM govdesi bozuk", "-----BEGIN PRIVATE KEY-----\nbu-base64-degil\n-----END PRIVATE KEY-----\n"},
+		{"p8 collapsed to one line with a literal \\n", escapedLiteral},
+		{"non-PEM placeholder", "pem-verisi"},
+		{"corrupt PEM body", "-----BEGIN PRIVATE KEY-----\nbu-base64-degil\n-----END PRIVATE KEY-----\n"},
 	}
 	for _, d := range statuses {
 		t.Run(d.name, func(t *testing.T) {
@@ -235,15 +235,15 @@ func TestValidateConfig_AppleP8ParsedAtStartup(t *testing.T) {
 			}}
 			err := validateConfig(cfg)
 			if err == nil {
-				t.Fatal("ayristirilamayan .p8 ile dogrulama GECTI; baslangicta reddedilmeliydi")
+				t.Fatal("validation PASSED with an unparseable .p8; it should have been rejected at startup")
 			}
 			if !strings.Contains(err.Error(), "AUTH_FED_APPLE_KEY_P8") {
-				t.Errorf("hata operatore ne yapacagini soylemiyor: %v", err)
+				t.Errorf("the error does not tell the operator what to do: %v", err)
 			}
 			// The error message must not leak the key CONTENT: neither the raw value
 			// nor its base64 body should end up in logs/stderr.
 			if strings.Contains(err.Error(), d.p8) {
-				t.Errorf("hata mesaji anahtar icerigini sizdiriyor: %v", err)
+				t.Errorf("the error message leaks the key content: %v", err)
 			}
 		})
 	}
@@ -260,10 +260,10 @@ func TestValidateConfig_GoogleWithoutSecretFails(t *testing.T) {
 	}}
 	err := validateConfig(cfg)
 	if err == nil {
-		t.Fatal("client_secret bos iken dogrulama GECTI")
+		t.Fatal("validation PASSED while client_secret was empty")
 	}
 	if !strings.Contains(err.Error(), "AUTH_FED_GOOGLE_CLIENT_SECRET") {
-		t.Errorf("hata operatore ne yapacagini soylemiyor: %v", err)
+		t.Errorf("the error does not tell the operator what to do: %v", err)
 	}
 }
 
@@ -278,12 +278,12 @@ func TestValidateConfig_GoogleWithSecretPasses(t *testing.T) {
 		Name: "google", ClientID: "123.apps.googleusercontent.com", ClientSecret: "gizli",
 	}}
 	if err := validateConfig(cfg); err != nil {
-		t.Errorf("tam google yapilandirmasi reddedildi: %v", err)
+		t.Errorf("complete google configuration was rejected: %v", err)
 	}
 
 	cfg.Federation = nil
 	if err := validateConfig(cfg); err != nil {
-		t.Errorf("federasyon KAPALI yapilandirma reddedildi: %v", err)
+		t.Errorf("configuration with federation OFF was rejected: %v", err)
 	}
 }
 
@@ -295,21 +295,21 @@ func TestValidateConfig_GoogleWithSecretPasses(t *testing.T) {
 func TestServer_ReadyReflectsListener(t *testing.T) {
 	var missing *Server
 	if missing.Ready() {
-		t.Error("nil Sunucu hazir gorundu")
+		t.Error("nil Server looked ready")
 	}
 
 	s := &Server{}
 	if s.Ready() {
-		t.Error("baslatilmamis Sunucu hazir gorundu")
+		t.Error("an unstarted Server looked ready")
 	}
 	s.ready.Store(true)
 	if !s.Ready() {
-		t.Error("hazir=true iken Hazir() false dondu")
+		t.Error("Ready() returned false while ready=true")
 	}
 	// If the listener crashes (or closes) /health must see it.
 	s.ready.Store(false)
 	if s.Ready() {
-		t.Error("dinleyici durduktan sonra hala hazir gorunuyor")
+		t.Error("still looks ready after the listener stopped")
 	}
 }
 
@@ -348,15 +348,15 @@ func TestStart_FailsWhenRateLimiterInvalid(t *testing.T) {
 	// the limit.
 	server, err := Start(context.Background(), base(), rdb, "development")
 	if err != nil {
-		if strings.Contains(err.Error(), "veritabanina baglanilamadi") {
-			t.Skip("yerel Postgres yok, atlaniyor")
+		if strings.Contains(err.Error(), "could not connect to the database") {
+			t.Skip("no local Postgres, skipping")
 		}
-		t.Fatalf("gecerli yapilandirma hiz limitine gelemeden dustu: %v", err)
+		t.Fatalf("valid configuration failed before reaching the rate limiter: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if closeErr := server.Shutdown(ctx); closeErr != nil {
-		t.Fatalf("Kapat: %v", closeErr)
+		t.Fatalf("Shutdown: %v", closeErr)
 	}
 
 	// Now we break ONLY the limit value.
@@ -367,12 +367,12 @@ func TestStart_FailsWhenRateLimiterInvalid(t *testing.T) {
 		if s != nil {
 			_ = s.Shutdown(context.Background())
 		}
-		t.Fatal("hiz limiti kurulamadigi halde Start basarili oldu")
+		t.Fatal("Start succeeded although the rate limiter could not be set up")
 	}
 	if s != nil {
-		t.Error("Start hata dondu ama Sunucu da dondurdu")
+		t.Error("Start returned an error but also returned a Server")
 	}
-	if !strings.Contains(err.Error(), "hiz limiti kurulamadi") {
-		t.Errorf("hata hiz limitiyle ilgili degil: %v", err)
+	if !strings.Contains(err.Error(), "could not set up the rate limiter") {
+		t.Errorf("the error is not about the rate limiter: %v", err)
 	}
 }

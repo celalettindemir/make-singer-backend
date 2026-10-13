@@ -66,17 +66,17 @@ const maxSessionBindings = 10
 var (
 	// ErrSessionNotFound: there is no binding recorded for the cookie value
 	// (never created, expired, or a made-up cookie).
-	ErrSessionNotFound = errors.New("oturum baglamasi bulunamadi")
+	ErrSessionNotFound = errors.New("session binding not found")
 
 	// ErrSessionMismatch: the authRequestID bound to the cookie and the
 	// authRequestID in the request are not exactly the same.
-	ErrSessionMismatch = errors.New("oturum baglamasi istekle eslesmiyor")
+	ErrSessionMismatch = errors.New("session binding does not match the request")
 
 	// ErrSessionCookieMissing: there is no session cookie in the request at all.
-	ErrSessionCookieMissing = errors.New("oturum cerezi yok")
+	ErrSessionCookieMissing = errors.New("no session cookie")
 
 	// ErrCSRF: the form/request CSRF token does not match the token bound to the cookie.
-	ErrCSRF = errors.New("csrf jetonu gecersiz")
+	ErrCSRF = errors.New("csrf token is invalid")
 )
 
 // SessionEntry holds the binding for a single auth request: the request's
@@ -142,7 +142,7 @@ type SessionStore interface {
 func randomToken() (string, error) {
 	b := make([]byte, sessionTokenBytes)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("rasgele deger uretilemedi: %w", err)
+		return "", fmt.Errorf("could not generate a random value: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }

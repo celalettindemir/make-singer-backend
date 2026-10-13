@@ -14,8 +14,8 @@ import (
 )
 
 var (
-	ErrIdentityNotFound = errors.New("federe kimlik bulunamadi")
-	ErrIdentityInUse    = errors.New("federe kimlik baska hesaba bagli")
+	ErrIdentityNotFound = errors.New("federated identity not found")
+	ErrIdentityInUse    = errors.New("federated identity is linked to another account")
 )
 
 // FederatedStore manages the mapping between (provider, sub) and a user.
@@ -61,7 +61,7 @@ func (d *PostgresFederatedStore) UserByIdentity(ctx context.Context, provider, s
 		return nil, ErrIdentityNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("federe kimlik okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read federated identity: %w", err)
 	}
 	return &k, nil
 }
@@ -78,7 +78,7 @@ func (d *PostgresFederatedStore) Link(ctx context.Context, provider, sub, userID
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return ErrIdentityInUse
 		}
-		return fmt.Errorf("federe kimlik baglanamadi: %w", err)
+		return fmt.Errorf("could not link federated identity: %w", err)
 	}
 	return nil
 }
@@ -93,7 +93,7 @@ func (d *PostgresFederatedStore) CreateFederatedUser(
 ) (*User, error) {
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("islem acilamadi: %w", err)
+		return nil, fmt.Errorf("could not open a transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -114,7 +114,7 @@ func (d *PostgresFederatedStore) CreateFederatedUser(
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return nil, ErrEmailInUse
 		}
-		return nil, fmt.Errorf("federe kullanici olusturulamadi: %w", err)
+		return nil, fmt.Errorf("could not create federated user: %w", err)
 	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO federe_kimlikler (saglayici, sub, user_id) VALUES ($1, $2, $3)`,
@@ -123,10 +123,10 @@ func (d *PostgresFederatedStore) CreateFederatedUser(
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return nil, ErrIdentityInUse
 		}
-		return nil, fmt.Errorf("federe kimlik yazilamadi: %w", err)
+		return nil, fmt.Errorf("could not write federated identity: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("islem tamamlanamadi: %w", err)
+		return nil, fmt.Errorf("could not complete the transaction: %w", err)
 	}
 	return k, nil
 }
@@ -135,7 +135,7 @@ func (d *PostgresFederatedStore) ProvidersByUserID(ctx context.Context, userID s
 	lines, err := d.pool.Query(ctx,
 		`SELECT saglayici FROM federe_kimlikler WHERE user_id = $1 ORDER BY saglayici`, userID)
 	if err != nil {
-		return nil, fmt.Errorf("saglayicilar okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read providers: %w", err)
 	}
 	defer lines.Close()
 
@@ -143,12 +143,12 @@ func (d *PostgresFederatedStore) ProvidersByUserID(ctx context.Context, userID s
 	for lines.Next() {
 		var s string
 		if err := lines.Scan(&s); err != nil {
-			return nil, fmt.Errorf("saglayicilar okunamadi: %w", err)
+			return nil, fmt.Errorf("could not read providers: %w", err)
 		}
 		providers = append(providers, s)
 	}
 	if err := lines.Err(); err != nil {
-		return nil, fmt.Errorf("saglayicilar okunamadi: %w", err)
+		return nil, fmt.Errorf("could not read providers: %w", err)
 	}
 	return providers, nil
 }

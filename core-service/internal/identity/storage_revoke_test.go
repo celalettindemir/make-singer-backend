@@ -27,7 +27,7 @@ func newTestStorageWithTokens(t *testing.T, tokens TokenStore) *Storage {
 	t.Helper()
 	key, err := LoadSigningKey(testPEM(t))
 	if err != nil {
-		t.Fatalf("AnahtarYukle: %v", err)
+		t.Fatalf("LoadSigningKey: %v", err)
 	}
 	return NewStorage(testAuthCfg(), NewFakeUserStore(), tokens, nil, key)
 }
@@ -50,19 +50,19 @@ func TestStorage_TerminateSessionEmptyIDsSkipStore(t *testing.T) {
 	}
 	for _, c := range statuses {
 		if err := d.TerminateSession(ctx, c.userID, c.clientID); err != nil {
-			t.Errorf("TerminateSession(%q, %q) = %v, beklenen nil", c.userID, c.clientID, err)
+			t.Errorf("TerminateSession(%q, %q) = %v, want nil", c.userID, c.clientID, err)
 		}
 	}
 	if tracking.revokeUserCalls != 0 {
-		t.Errorf("bos kimlikle depo %d kez cagrildi, beklenen 0", tracking.revokeUserCalls)
+		t.Errorf("store was called %d times with an empty identity, want 0", tracking.revokeUserCalls)
 	}
 
 	// NEGATIVE CONTROL: the guard must not cut off a VALID call too.
 	if err := d.TerminateSession(ctx, "k1", "makesinger-mobil"); err != nil {
-		t.Fatalf("gecerli TerminateSession = %v", err)
+		t.Fatalf("valid TerminateSession = %v", err)
 	}
 	if tracking.revokeUserCalls != 1 {
-		t.Errorf("gecerli cagri sonrasi sayac = %d, beklenen 1", tracking.revokeUserCalls)
+		t.Errorf("counter after the valid call = %d, want 1", tracking.revokeUserCalls)
 	}
 }
 
@@ -77,27 +77,27 @@ func TestStorage_GetRefreshTokenInfoReuseRevokesFamily(t *testing.T) {
 
 	old, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	rotated, err := store.RotateRefresh(ctx, old, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshDondur: %v", err)
+		t.Fatalf("RotateRefresh: %v", err)
 	}
 	// After rotation the new token must be valid (the family is still alive).
 	if _, err := store.GetRefresh(ctx, rotated); err != nil {
-		t.Fatalf("rotasyon sonrasi yeni jeton gecersiz: %v", err)
+		t.Fatalf("the new token is invalid after rotation: %v", err)
 	}
 
 	// Present the USED token: by the library contract it must return
 	// op.ErrInvalidRefreshToken (the behavior must NOT CHANGE; /revoke
 	// should keep returning 200 per RFC 7009 §2.2).
 	if _, _, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", old); !errors.Is(err, op.ErrInvalidRefreshToken) {
-		t.Fatalf("hata = %v, beklenen op.ErrInvalidRefreshToken", err)
+		t.Fatalf("error = %v, want op.ErrInvalidRefreshToken", err)
 	}
 
 	// ... and the FAMILY must be revoked: the new token is now invalid too.
 	if _, err := store.GetRefresh(ctx, rotated); err == nil {
-		t.Error("yeniden kullanimdan sonra aile iptal edilmedi: yeni jeton hala gecerli")
+		t.Error("the family was not revoked after reuse: the new token is still valid")
 	}
 }
 
@@ -111,13 +111,13 @@ func TestStorage_GetRefreshTokenInfoUnknownTokenNoRevoke(t *testing.T) {
 
 	valid, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	if _, _, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", "boyle-bir-jeton-yok"); !errors.Is(err, op.ErrInvalidRefreshToken) {
-		t.Fatalf("hata = %v, beklenen op.ErrInvalidRefreshToken", err)
+		t.Fatalf("error = %v, want op.ErrInvalidRefreshToken", err)
 	}
 	if _, err := store.GetRefresh(ctx, valid); err != nil {
-		t.Errorf("bilinmeyen jeton yuzunden gecerli jeton iptal edildi: %v", err)
+		t.Errorf("a valid token was revoked because of an unknown token: %v", err)
 	}
 }
 
@@ -130,17 +130,17 @@ func TestStorage_GetRefreshTokenInfoReturnsValidToken(t *testing.T) {
 
 	token, err := store.CreateRefresh(ctx, newRefresh("k1"))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	userID, tokenID, err := d.GetRefreshTokenInfo(ctx, "makesinger-mobil", token)
 	if err != nil {
 		t.Fatalf("GetRefreshTokenInfo: %v", err)
 	}
 	if userID != "k1" {
-		t.Errorf("userID = %q, beklenen k1", userID)
+		t.Errorf("userID = %q, want k1", userID)
 	}
 	if tokenID == "" {
-		t.Error("tokenID bos dondu")
+		t.Error("tokenID came back empty")
 	}
 }
 
@@ -165,12 +165,12 @@ func TestTrimDiscovery_RemovesUnsupportedFlows(t *testing.T) {
 	trimDiscovery(doc)
 
 	if len(doc.ResponseTypesSupported) != 1 || doc.ResponseTypesSupported[0] != "code" {
-		t.Errorf("response_types_supported = %v, beklenen [code]", doc.ResponseTypesSupported)
+		t.Errorf("response_types_supported = %v, want [code]", doc.ResponseTypesSupported)
 	}
 	for _, forbidden := range []oidc.GrantType{oidc.GrantTypeImplicit, oidc.GrantTypeBearer, oidc.GrantTypeDeviceCode} {
 		for _, g := range doc.GrantTypesSupported {
 			if g == forbidden {
-				t.Errorf("grant_types_supported desteklenmeyen %q iceriyor: %v", forbidden, doc.GrantTypesSupported)
+				t.Errorf("grant_types_supported contains unsupported %q: %v", forbidden, doc.GrantTypesSupported)
 			}
 		}
 	}
@@ -183,13 +183,13 @@ func TestTrimDiscovery_RemovesUnsupportedFlows(t *testing.T) {
 			}
 		}
 		if !wasFound {
-			t.Errorf("grant_types_supported %q icermiyor: %v", required, doc.GrantTypesSupported)
+			t.Errorf("grant_types_supported does not contain %q: %v", required, doc.GrantTypesSupported)
 		}
 	}
 	if doc.DeviceAuthorizationEndpoint != "" {
-		t.Errorf("device_authorization_endpoint = %q, beklenen bos", doc.DeviceAuthorizationEndpoint)
+		t.Errorf("device_authorization_endpoint = %q, want empty", doc.DeviceAuthorizationEndpoint)
 	}
 	if len(doc.CodeChallengeMethodsSupported) != 1 {
-		t.Errorf("code_challenge_methods_supported bozuldu: %v", doc.CodeChallengeMethodsSupported)
+		t.Errorf("code_challenge_methods_supported is broken: %v", doc.CodeChallengeMethodsSupported)
 	}
 }

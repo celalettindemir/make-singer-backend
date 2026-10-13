@@ -12,8 +12,8 @@ import (
 const bcryptCost = 12
 
 var (
-	ErrUserNotFound     = errors.New("kullanici bulunamadi")
-	ErrEmailInUse       = errors.New("eposta kullanimda")
+	ErrUserNotFound     = errors.New("user not found")
+	ErrEmailInUse       = errors.New("email in use")
 	ErrPasswordTooShort = errors.New("sifre en az 10 karakter olmali")
 )
 

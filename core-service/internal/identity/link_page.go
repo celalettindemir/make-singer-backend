@@ -61,13 +61,13 @@ type PendingLink struct {
 
 // ErrPendingLinkNotFound means the expected link record does not exist (never
 // created, expired, or ALREADY CONSUMED).
-var ErrPendingLinkNotFound = errors.New("baglama beklemesi bulunamadi")
+var ErrPendingLinkNotFound = errors.New("pending link not found")
 
 // ErrUpstreamNoEmail is returned when a new federated account cannot be
 // opened because the upstream verified id_token carried no email (see the
 // rationale in resolveUser: at most ONE account can exist with an empty
 // email, and the second would lock the user out PERMANENTLY).
-var ErrUpstreamNoEmail = errors.New("yukari akis e-posta gondermedi")
+var ErrUpstreamNoEmail = errors.New("upstream did not send an email")
 
 // PendingLinkStore defines writing and reading the pending link record. In
 // production *RequestStore implements it.
@@ -91,14 +91,14 @@ func (d *RequestStore) WritePendingLink(ctx context.Context, id string, b Pendin
 	// A zero/negative TTL means a PERSISTENT key in Redis: a record that must
 	// be single-use would live forever.
 	if ttl <= 0 {
-		return fmt.Errorf("baglama beklemesi ttl pozitif olmali")
+		return fmt.Errorf("pending link ttl must be positive")
 	}
 	data, err := json.Marshal(b)
 	if err != nil {
-		return fmt.Errorf("baglama beklemesi serilenemedi: %w", err)
+		return fmt.Errorf("could not serialize the pending link: %w", err)
 	}
 	if err := d.rdb.Set(ctx, pendingLinkKey(id), data, ttl).Err(); err != nil {
-		return fmt.Errorf("baglama beklemesi yazilamadi: %w", err)
+		return fmt.Errorf("could not write the pending link: %w", err)
 	}
 	return nil
 }
@@ -121,11 +121,11 @@ func (d *RequestStore) decodePendingLink(data []byte, err error) (PendingLink, e
 		return PendingLink{}, ErrPendingLinkNotFound
 	}
 	if err != nil {
-		return PendingLink{}, fmt.Errorf("baglama beklemesi okunamadi: %w", err)
+		return PendingLink{}, fmt.Errorf("could not read the pending link: %w", err)
 	}
 	var b PendingLink
 	if err := json.Unmarshal(data, &b); err != nil {
-		return PendingLink{}, fmt.Errorf("baglama beklemesi cozumlenemedi: %w", err)
+		return PendingLink{}, fmt.Errorf("could not decode the pending link: %w", err)
 	}
 	return b, nil
 }
@@ -181,7 +181,7 @@ func (f *FederationPages) resolveUser(
 		return user, nil, nil
 	}
 	if !errors.Is(err, ErrIdentityNotFound) {
-		return nil, nil, fmt.Errorf("federe kimlik okunamadi: %w", err)
+		return nil, nil, fmt.Errorf("could not read federated identity: %w", err)
 	}
 
 	email := normalizeEmail(claims.Email)
@@ -211,7 +211,7 @@ func (f *FederationPages) resolveUser(
 				HasPassword:       false,
 			}, nil
 		case !errors.Is(err, ErrUserNotFound):
-			return nil, nil, fmt.Errorf("kullanici okunamadi: %w", err)
+			return nil, nil, fmt.Errorf("could not read the user: %w", err)
 		}
 	}
 
@@ -241,7 +241,7 @@ func (f *FederationPages) resolveUser(
 		return nil, &Conflict{Email: email, HasPassword: false}, nil
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("federe kullanici olusturulamadi: %w", err)
+		return nil, nil, fmt.Errorf("could not create federated user: %w", err)
 	}
 	return created, nil, nil
 }
@@ -253,7 +253,7 @@ func (f *FederationPages) resolveUser(
 func (f *FederationPages) linkedProviders(ctx context.Context, userID string) []string {
 	providers, err := f.federated.ProvidersByUserID(ctx, userID)
 	if err != nil {
-		log.Printf("federasyon: saglayici listesi okunamadi: %v", err)
+		log.Printf("federation: could not read the provider list: %v", err)
 		return nil
 	}
 	return providers
@@ -267,11 +267,11 @@ func (f *FederationPages) buildConflict(
 ) (*Conflict, error) {
 	pendingID, err := randomToken()
 	if err != nil {
-		return nil, fmt.Errorf("bekleme id uretilemedi: %w", err)
+		return nil, fmt.Errorf("could not generate the pending id: %w", err)
 	}
 	csrf, err := randomToken()
 	if err != nil {
-		return nil, fmt.Errorf("csrf uretilemedi: %w", err)
+		return nil, fmt.Errorf("could not generate csrf: %w", err)
 	}
 	return &Conflict{
 		PendingID:   pendingID,
@@ -304,7 +304,7 @@ func (f *FederationPages) handleConflict(
 	}
 	if err := f.flows.WritePendingLink(r.Context(), c.PendingID, pending, pendingLinkTTL); err != nil {
 		// pendingID, csrf and email are NOT LOGGED.
-		log.Printf("federasyon: baglama beklemesi yazilamadi: %v", err)
+		log.Printf("federation: could not write the pending link: %v", err)
 		f.errorPage(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
@@ -373,7 +373,7 @@ func (f *FederationPages) renderConflict(w http.ResponseWriter, authRequestID, e
 	}
 	w.WriteHeader(http.StatusConflict)
 	if err := templates.ExecuteTemplate(w, "cakisma.html", data); err != nil {
-		log.Printf("cakisma sablonu yazilamadi: %v", err)
+		log.Printf("could not write the conflict template: %v", err)
 	}
 }
 
@@ -387,7 +387,7 @@ func (f *FederationPages) renderLink(w http.ResponseWriter, status int, b Pendin
 	}
 	w.WriteHeader(status)
 	if err := templates.ExecuteTemplate(w, "baglama.html", data); err != nil {
-		log.Printf("baglama sablonu yazilamadi: %v", err)
+		log.Printf("could not write the link template: %v", err)
 	}
 }
 
@@ -482,7 +482,7 @@ func (f *FederationPages) linkPost(w http.ResponseWriter, r *http.Request) {
 	existing, err := f.users.ByID(r.Context(), b.UserID)
 	if err != nil {
 		// Email and user id are NOT LOGGED.
-		log.Printf("federasyon: baglanacak hesap okunamadi: %v", err)
+		log.Printf("federation: could not read the account to link: %v", err)
 		f.errorPage(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
@@ -492,7 +492,7 @@ func (f *FederationPages) linkPost(w http.ResponseWriter, r *http.Request) {
 	// would tell the user "you entered the wrong password" and the user would
 	// try forever on a form they can NEVER get through.
 	if existing.PasswordHash == "" {
-		log.Print("federasyon: sifresiz hesap icin baglama denendi")
+		log.Print("federation: a link was attempted for an account without a password")
 		f.renderConflict(w, b.AuthRequestID, b.Email, f.linkedProviders(r.Context(), existing.ID))
 		return
 	}
@@ -530,7 +530,7 @@ func (f *FederationPages) linkPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := f.federated.Link(r.Context(), b.Provider, b.Sub, b.UserID); err != nil {
-		log.Printf("federasyon: kimlik baglanamadi: %v", err)
+		log.Printf("federation: could not link the identity: %v", err)
 		if errors.Is(err, ErrIdentityInUse) {
 			// The identity was linked to another account in the meantime, or this
 			// account is already linked to this provider: we stop explicitly instead of
@@ -543,7 +543,7 @@ func (f *FederationPages) linkPost(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := f.requests.MarkDone(r.Context(), b.AuthRequestID, b.UserID, []string{amrFederation}); err != nil {
 		// authRequestID is NOT LOGGED.
-		log.Printf("federasyon: istek tamamlanamadi: %v", err)
+		log.Printf("federation: could not complete the request: %v", err)
 		// SAME classification as the callback leg: 409 / 400 (dropped by TTL) /
 		// 500. Since pendingLinkTTL and requestTTL overlap, this leg too can
 		// OUTLIVE the auth request.

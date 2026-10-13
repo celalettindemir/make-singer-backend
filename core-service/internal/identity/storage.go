@@ -120,7 +120,7 @@ type authTimeGetter interface{ GetAuthTime() time.Time }
 func (s *Storage) CreateAccessToken(ctx context.Context, request op.TokenRequest) (string, time.Time, error) {
 	getter, ok := request.(clientIDGetter)
 	if !ok {
-		return "", time.Time{}, fmt.Errorf("token istegi turu desteklenmiyor: %T", request)
+		return "", time.Time{}, fmt.Errorf("token request type is not supported: %T", request)
 	}
 	id := uuid.NewString()
 	expiresAt := time.Now().UTC().Add(s.cfg.AccessTTL)
@@ -138,7 +138,7 @@ func (s *Storage) CreateAccessToken(ctx context.Context, request op.TokenRequest
 func (s *Storage) CreateAccessAndRefreshTokens(ctx context.Context, request op.TokenRequest, currentRefreshToken string) (accessTokenID string, newRefreshToken string, expiration time.Time, err error) {
 	getter, ok := request.(clientIDGetter)
 	if !ok {
-		return "", "", time.Time{}, fmt.Errorf("token istegi turu desteklenmiyor: %T", request)
+		return "", "", time.Time{}, fmt.Errorf("token request type is not supported: %T", request)
 	}
 	clientID := getter.GetClientID()
 	userID := request.GetSubject()
@@ -276,15 +276,15 @@ func (s *Storage) revokeFamilyOf(ctx context.Context, refreshToken string) error
 		// through GetRefresh (records are never deleted), so not finding it
 		// now is not a normal situation and cannot be swallowed as "invalid
 		// token".
-		return oidc.ErrServerError().WithParent(fmt.Errorf("yeniden kullanim: aile kimligi bulunamadi: %w", err))
+		return oidc.ErrServerError().WithParent(fmt.Errorf("reuse: family id not found: %w", err))
 	}
 	if err := s.tokens.RevokeFamily(ctx, familyID); err != nil {
-		return oidc.ErrServerError().WithParent(fmt.Errorf("yeniden kullanim: aile iptal edilemedi: %w", err))
+		return oidc.ErrServerError().WithParent(fmt.Errorf("reuse: could not revoke the family: %w", err))
 	}
 	// Neither the token itself nor its hash is written to the log; only the
 	// event and the family ID (an ID generated on the server side, not a
 	// secret).
-	log.Printf("refresh yeniden kullanimi tespit edildi, aile iptal edildi: family_id=%s", familyID)
+	log.Printf("refresh reuse detected, family revoked: family_id=%s", familyID)
 	return nil
 }
 
@@ -425,14 +425,14 @@ func (s *Storage) GetRefreshTokenInfo(ctx context.Context, clientID string, toke
 			// revokeFamilyOf's own log and to the line below; neither the
 			// token nor its hash is written to the log.
 			if revokeErr := s.revokeFamilyOf(ctx, token); revokeErr != nil {
-				log.Printf("refresh yeniden kullanimi: aile iptal edilemedi (erisim yine reddedildi): %v", revokeErr)
+				log.Printf("refresh reuse: could not revoke the family (access was still denied): %v", revokeErr)
 			}
 			return "", "", op.ErrInvalidRefreshToken
 		}
 		if errors.Is(err, ErrTokenNotFound) {
 			return "", "", op.ErrInvalidRefreshToken
 		}
-		return "", "", fmt.Errorf("refresh jetonu okunamadi: %w", err)
+		return "", "", fmt.Errorf("could not read the refresh token: %w", err)
 	}
 	if record.ClientID != clientID {
 		return "", "", op.ErrInvalidRefreshToken
@@ -463,7 +463,7 @@ func (s *Storage) KeySet(ctx context.Context) ([]op.Key, error) {
 // be accepted without being defined here.
 func (s *Storage) GetClientByClientID(ctx context.Context, clientID string) (op.Client, error) {
 	if clientID != s.cfg.ClientID {
-		return nil, fmt.Errorf("istemci bulunamadi: %s", clientID)
+		return nil, fmt.Errorf("client not found: %s", clientID)
 	}
 	return s.client, nil
 }
@@ -472,7 +472,7 @@ func (s *Storage) GetClientByClientID(ctx context.Context, clientID string) (op.
 // public (native, AuthMethodNone) so it carries no secret. If it returned
 // success the client could be impersonated with an empty secret.
 func (s *Storage) AuthorizeClientIDSecret(ctx context.Context, clientID, clientSecret string) error {
-	return fmt.Errorf("istemci %q secret tasimaz (public client)", clientID)
+	return fmt.Errorf("client %q carries no secret (public client)", clientID)
 }
 
 // SetUserinfoFromScopes was declared deprecated by the library but has to
@@ -530,7 +530,7 @@ func (s *Storage) SetUserinfoFromToken(ctx context.Context, userinfo *oidc.UserI
 	// calling layer) -- we must not silently return someone else's
 	// information.
 	if record.UserID != subject {
-		return fmt.Errorf("jeton bu kullanici icin verilmemis")
+		return fmt.Errorf("token was not issued for this user")
 	}
 	return s.fillUserinfo(ctx, userinfo, record.UserID, record.Scopes)
 }
@@ -542,7 +542,7 @@ func (s *Storage) SetIntrospectionFromToken(ctx context.Context, introspection *
 		return err
 	}
 	if record.ClientID != clientID {
-		return fmt.Errorf("jeton bu istemci icin verilmemis")
+		return fmt.Errorf("token was not issued for this client")
 	}
 	introspection.Scope = record.Scopes
 	introspection.ClientID = record.ClientID
@@ -589,14 +589,14 @@ func (s *Storage) GetPrivateClaimsFromScopes(ctx context.Context, userID, client
 // authentication. Not supported: our single client is public and has no
 // secret.
 func (s *Storage) GetKeyByIDAndClientID(ctx context.Context, keyID, clientID string) (*jose.JSONWebKey, error) {
-	return nil, fmt.Errorf("private_key_jwt destegi yok")
+	return nil, fmt.Errorf("private_key_jwt is not supported")
 }
 
 // ValidateJWTProfileScopes is for the JWT Profile Authorization Grant
 // (RFC 7523). Not supported: makesinger only uses authorization code +
 // PKCE and refresh_token.
 func (s *Storage) ValidateJWTProfileScopes(ctx context.Context, userID string, scopes []string) ([]string, error) {
-	return nil, fmt.Errorf("JWT profile grant desteklenmiyor")
+	return nil, fmt.Errorf("JWT profile grant is not supported")
 }
 
 // Health is called by the /healthz of the secondary listener.
@@ -611,13 +611,13 @@ func (s *Storage) ValidateJWTProfileScopes(ctx context.Context, userID string, s
 // either call SetHealthDeps with real connections or expect this error.
 func (s *Storage) Health(ctx context.Context) error {
 	if s.pool == nil || s.rdb == nil {
-		return fmt.Errorf("saglik bagimliliklari baglanmadi: SaglikBagla cagrilmadi")
+		return fmt.Errorf("health dependencies are not wired: SetHealthDeps was not called")
 	}
 	if err := s.pool.Ping(ctx); err != nil {
-		return fmt.Errorf("postgres saglik kontrolu basarisiz: %w", err)
+		return fmt.Errorf("postgres health check failed: %w", err)
 	}
 	if err := s.rdb.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("redis saglik kontrolu basarisiz: %w", err)
+		return fmt.Errorf("redis health check failed: %w", err)
 	}
 	return nil
 }

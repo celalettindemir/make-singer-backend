@@ -139,14 +139,14 @@ func bindTestSession(t *testing.T, o *pagesEnv, id string, existing *http.Cookie
 		r.AddCookie(existing)
 	}
 	if err := o.pages.BindSession(w, r, id); err != nil {
-		t.Fatalf("BaglamaKur: %v", err)
+		t.Fatalf("BindSession: %v", err)
 	}
 	for _, c := range w.Result().Cookies() {
 		if c.Name == cookieNameSession && c.Value != "" {
 			return c
 		}
 	}
-	t.Fatal("BaglamaKur oturum cerezi vermedi")
+	t.Fatal("BindSession did not give a session cookie")
 	return nil
 }
 
@@ -164,11 +164,11 @@ func showForm(t *testing.T, o *pagesEnv, path, id string, cookie *http.Cookie) s
 	t.Helper()
 	w := formRequest(o, path, id, cookie)
 	if w.Code != http.StatusOK {
-		t.Fatalf("form acilamadi: durum = %d", w.Code)
+		t.Fatalf("could not open the form: status = %d", w.Code)
 	}
 	matches := csrfPattern.FindStringSubmatch(w.Body.String())
 	if matches == nil || matches[1] == "" {
-		t.Fatal("formda CSRF jetonu yok")
+		t.Fatal("no CSRF token in the form")
 	}
 	return matches[1]
 }
@@ -210,12 +210,12 @@ func TestLogin_ShowsForm(t *testing.T) {
 	cookie := bindTestSession(t, o, "abc", nil)
 	w := formRequest(o, pathLogin, "abc", cookie)
 	if w.Code != http.StatusOK {
-		t.Fatalf("durum = %d, beklenen 200", w.Code)
+		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	body := w.Body.String()
 	for _, want := range []string{`name="eposta"`, `name="sifre"`, `name="authRequestID"`, `name="csrf"`, "abc"} {
 		if !strings.Contains(body, want) {
-			t.Errorf("sayfa %q icermiyor", want)
+			t.Errorf("page does not contain %q", want)
 		}
 	}
 }
@@ -227,7 +227,7 @@ func TestWrapAuthorize_SetsSessionCookie(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/authorize", nil)
 	if err := o.pages.BindSession(w, r, "abc"); err != nil {
-		t.Fatalf("BaglamaKur: %v", err)
+		t.Fatalf("BindSession: %v", err)
 	}
 	var cookie *http.Cookie
 	for _, c := range w.Result().Cookies() {
@@ -236,32 +236,32 @@ func TestWrapAuthorize_SetsSessionCookie(t *testing.T) {
 		}
 	}
 	if cookie == nil {
-		t.Fatal("oturum cerezi yok")
+		t.Fatal("no session cookie")
 	}
 	if !cookie.HttpOnly {
-		t.Error("cerez HttpOnly degil")
+		t.Error("cookie is not HttpOnly")
 	}
 	if cookie.SameSite != http.SameSiteLaxMode {
-		t.Errorf("SameSite = %v, beklenen Lax", cookie.SameSite)
+		t.Errorf("SameSite = %v, want Lax", cookie.SameSite)
 	}
 	if cookie.Path != "/" {
-		t.Errorf("Path = %q, beklenen /", cookie.Path)
+		t.Errorf("Path = %q, want /", cookie.Path)
 	}
 	// 32 bytes -> 43 characters in base64 raw url.
 	if len(cookie.Value) < 43 {
-		t.Errorf("cerez degeri %d karakter, 32 bayt entropi bekleniyordu", len(cookie.Value))
+		t.Errorf("cookie value is %d characters, 32 bytes of entropy were expected", len(cookie.Value))
 	}
 	// The binding must have been written to the store.
 	binding, err := o.sessions.ReadSession(context.Background(), cookie.Value)
 	if err != nil {
-		t.Fatalf("OturumOku: %v", err)
+		t.Fatalf("ReadSession: %v", err)
 	}
 	csrf, isBound := binding.CSRFFor("abc")
 	if !isBound {
-		t.Fatalf("authRequestID baglanmamis, kayit sayisi = %d", len(binding.Entries))
+		t.Fatalf("authRequestID was not bound, entry count = %d", len(binding.Entries))
 	}
 	if csrf == "" {
-		t.Error("baglamada CSRF jetonu yok")
+		t.Error("no CSRF token in the binding")
 	}
 }
 
@@ -278,29 +278,29 @@ func TestFormGet_WithoutBindingRejected(t *testing.T) {
 			// (a) No cookie at all.
 			w := formRequest(o, path, "istek-A", nil)
 			if w.Code != http.StatusForbidden {
-				t.Errorf("cerezsiz GET durumu = %d, beklenen 403", w.Code)
+				t.Errorf("GET status without cookie = %d, want 403", w.Code)
 			}
 			if strings.Contains(w.Body.String(), `name="csrf"`) {
-				t.Error("reddedilen GET formu gosterdi")
+				t.Error("the rejected GET showed the form")
 			}
 			if len(w.Result().Cookies()) != 0 {
-				t.Error("reddedilen GET cerez yazdi (baglama mintlendi)")
+				t.Error("the rejected GET wrote a cookie (a binding was minted)")
 			}
 
 			// (b) A cookie bound to ANOTHER request.
 			cookieB := bindTestSession(t, o, "istek-B", nil)
 			w = formRequest(o, path, "istek-A", cookieB)
 			if w.Code != http.StatusForbidden {
-				t.Errorf("baska id'ye bagli cerezle GET durumu = %d, beklenen 403", w.Code)
+				t.Errorf("GET status with a cookie bound to another id = %d, want 403", w.Code)
 			}
 			if strings.Contains(w.Body.String(), `name="csrf"`) {
-				t.Error("eslesmeyen cerezle form gosterildi")
+				t.Error("the form was shown with a mismatched cookie")
 			}
 
 			// (c) A forged cookie value.
 			w = formRequest(o, path, "istek-A", &http.Cookie{Name: cookieNameSession, Value: "uydurma"})
 			if w.Code != http.StatusForbidden {
-				t.Errorf("uydurma cerezle GET durumu = %d, beklenen 403", w.Code)
+				t.Errorf("GET status with a made-up cookie = %d, want 403", w.Code)
 			}
 
 			// (d) NEGATIVE CONTROL: with the right binding the form REALLY opens, so
@@ -308,10 +308,10 @@ func TestFormGet_WithoutBindingRejected(t *testing.T) {
 			cookieA := bindTestSession(t, o, "istek-A", nil)
 			w = formRequest(o, path, "istek-A", cookieA)
 			if w.Code != http.StatusOK {
-				t.Fatalf("bagli cerezle GET durumu = %d, beklenen 200", w.Code)
+				t.Fatalf("GET status with a bound cookie = %d, want 200", w.Code)
 			}
 			if !strings.Contains(w.Body.String(), `name="csrf"`) {
-				t.Error("bagli cerezle form gosterilmedi")
+				t.Error("the form was not shown with a bound cookie")
 			}
 		})
 	}
@@ -327,21 +327,21 @@ func TestBindSession_TwoParallelRequestsSameCookie(t *testing.T) {
 	cookie := bindTestSession(t, o, "istek-1", nil)
 	cookie2 := bindTestSession(t, o, "istek-2", cookie)
 	if cookie2.Value != cookie.Value {
-		t.Fatalf("ikinci /authorize cerez degerini degistirdi: %q -> %q", cookie.Value, cookie2.Value)
+		t.Fatalf("second /authorize changed the cookie value: %q -> %q", cookie.Value, cookie2.Value)
 	}
 	binding, err := o.sessions.ReadSession(context.Background(), cookie2.Value)
 	if err != nil {
-		t.Fatalf("OturumOku: %v", err)
+		t.Fatalf("ReadSession: %v", err)
 	}
 	for _, id := range []string{"istek-1", "istek-2"} {
 		if _, isBound := binding.CSRFFor(id); !isBound {
-			t.Errorf("%s baglamada yok", id)
+			t.Errorf("%s is not in the binding", id)
 		}
 	}
 	// The forms of both tabs must be openable.
 	for _, id := range []string{"istek-1", "istek-2"} {
 		if w := formRequest(o, pathLogin, id, cookie2); w.Code != http.StatusOK {
-			t.Errorf("%s formu durumu = %d, beklenen 200", id, w.Code)
+			t.Errorf("%s form status = %d, want 200", id, w.Code)
 		}
 	}
 }
@@ -357,17 +357,17 @@ func TestBindSession_EnforcesMaxBindings(t *testing.T) {
 	}
 	binding, err := o.sessions.ReadSession(context.Background(), cookie.Value)
 	if err != nil {
-		t.Fatalf("OturumOku: %v", err)
+		t.Fatalf("ReadSession: %v", err)
 	}
 	if len(binding.Entries) != maxSessionBindings {
-		t.Fatalf("kayit sayisi = %d, beklenen %d", len(binding.Entries), maxSessionBindings)
+		t.Fatalf("entry count = %d, want %d", len(binding.Entries), maxSessionBindings)
 	}
 	// The oldest entries must have dropped and the newest must remain.
 	if _, isBound := binding.CSRFFor("istek-0"); isBound {
-		t.Error("ust sinir asildi ama en eski kayit dusmedi")
+		t.Error("the upper limit was exceeded but the oldest entry did not drop")
 	}
 	if _, isBound := binding.CSRFFor("istek-" + strconv.Itoa(total-1)); !isBound {
-		t.Error("en yeni kayit dusmus")
+		t.Error("the newest entry dropped")
 	}
 }
 
@@ -384,14 +384,14 @@ func TestSessionCookie_SecureFollowsIssuerScheme(t *testing.T) {
 				func(_ context.Context, id string) string { return "/bitti?id=" + id }, d.secure)
 			w := httptest.NewRecorder()
 			if err := s.BindSession(w, httptest.NewRequest(http.MethodGet, "/authorize", nil), "abc"); err != nil {
-				t.Fatalf("BaglamaKur: %v", err)
+				t.Fatalf("BindSession: %v", err)
 			}
 			cookieList := w.Result().Cookies()
 			if len(cookieList) == 0 {
-				t.Fatal("cerez yok")
+				t.Fatal("no cookie")
 			}
 			if cookieList[0].Secure != d.secure {
-				t.Errorf("Secure = %v, beklenen %v", cookieList[0].Secure, d.secure)
+				t.Errorf("Secure = %v, want %v", cookieList[0].Secure, d.secure)
 			}
 		})
 	}
@@ -403,7 +403,7 @@ func TestLogin_MissingAuthRequestIDRejected(t *testing.T) {
 	w := httptest.NewRecorder()
 	o.pages.Login(w, httptest.NewRequest(http.MethodGet, pathLogin, nil))
 	if w.Code != http.StatusBadRequest {
-		t.Errorf("durum = %d, beklenen 400 (authRequestID eksik)", w.Code)
+		t.Errorf("status = %d, want 400 (authRequestID missing)", w.Code)
 	}
 }
 
@@ -423,15 +423,15 @@ func TestLogin_NoCookieRejectedBeforePasswordCheck(t *testing.T) {
 	w := postForm(o, pathLogin, form, nil)
 
 	if w.Code != http.StatusForbidden {
-		t.Fatalf("durum = %d, beklenen 403 (cerezsiz POST reddedilmeli)", w.Code)
+		t.Fatalf("status = %d, want 403 (a POST without a cookie must be rejected)", w.Code)
 	}
 	afterByEmail, afterCreate := o.users.counts()
 	if afterByEmail != beforeByEmail || afterCreate != beforeCreate {
-		t.Errorf("kullanici deposuna dokunuldu (ByEmail %d->%d, Create %d->%d); red sifre dogrulamasindan SONRA olmus",
+		t.Errorf("user store was touched (ByEmail %d->%d, Create %d->%d); the rejection happened AFTER the password check",
 			beforeByEmail, afterByEmail, beforeCreate, afterCreate)
 	}
 	if w.Header().Get("Location") != "" {
-		t.Error("reddedilen POST yonlendirme dondu")
+		t.Error("the rejected POST returned a redirect")
 	}
 }
 
@@ -454,13 +454,13 @@ func TestLogin_OtherAuthRequestIDRejected(t *testing.T) {
 	}
 	w := postForm(o, pathLogin, form, cookieB)
 	if w.Code != http.StatusForbidden {
-		t.Fatalf("durum = %d, beklenen 403 (cereze bagli id ile form id'si eslesmiyor)", w.Code)
+		t.Fatalf("status = %d, want 403 (the id bound to the cookie does not match the form id)", w.Code)
 	}
 	if afterByEmail, _ := o.users.counts(); afterByEmail != beforeByEmail {
-		t.Error("eslesmeyen id'de sifre dogrulamasina gidildi")
+		t.Error("password check was reached with a mismatched id")
 	}
 	if o.completer.subject("istek-A") != "" {
-		t.Error("istek-A bir kullaniciya baglandi")
+		t.Error("request-A was bound to a user")
 	}
 }
 
@@ -474,7 +474,7 @@ func TestLogin_ForgedCookieRejected(t *testing.T) {
 	}
 	w := postForm(o, pathLogin, form, &http.Cookie{Name: cookieNameSession, Value: "uydurma-deger"})
 	if w.Code != http.StatusForbidden {
-		t.Fatalf("durum = %d, beklenen 403", w.Code)
+		t.Fatalf("status = %d, want 403", w.Code)
 	}
 }
 
@@ -490,9 +490,9 @@ func TestLogin_MissingOrWrongCSRFRejected(t *testing.T) {
 		name  string
 		token string
 	}{
-		{"eksik", ""},
-		{"yanlis", csrf + "x"},
-		{"baska-rasgele", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+		{"missing", ""},
+		{"wrong", csrf + "x"},
+		{"other-random", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
 	} {
 		t.Run(d.name, func(t *testing.T) {
 			beforeByEmail, _ := o.users.counts()
@@ -502,10 +502,10 @@ func TestLogin_MissingOrWrongCSRFRejected(t *testing.T) {
 			}
 			w := postForm(o, pathLogin, form, cookie)
 			if w.Code != http.StatusForbidden {
-				t.Fatalf("durum = %d, beklenen 403", w.Code)
+				t.Fatalf("status = %d, want 403", w.Code)
 			}
 			if afterByEmail, _ := o.users.counts(); afterByEmail != beforeByEmail {
-				t.Error("CSRF reddi sifre dogrulamasindan sonra olmus")
+				t.Error("CSRF rejection happened after the password check")
 			}
 		})
 	}
@@ -526,16 +526,16 @@ func TestLogin_ValidCookieWorks(t *testing.T) {
 	}
 	w := postForm(o, pathLogin, form, cookie)
 	if w.Code != http.StatusFound {
-		t.Fatalf("durum = %d, beklenen 302. govde: %s", w.Code, w.Body.String())
+		t.Fatalf("status = %d, want 302. body: %s", w.Code, w.Body.String())
 	}
 	if location := w.Header().Get("Location"); location != "/bitti?id=istek-1" {
 		t.Errorf("Location = %q", location)
 	}
 	if got := o.completer.subject("istek-1"); got != users.ID {
-		t.Errorf("istek baglanan subject = %q, beklenen kullanici ID", got)
+		t.Errorf("subject bound to the request = %q, want the user ID", got)
 	}
 	if got := o.completer.amrFor("istek-1"); !slices.Equal(got, []string{"pwd"}) {
-		t.Errorf("amr = %v, beklenen [pwd]", got)
+		t.Errorf("amr = %v, want [pwd]", got)
 	}
 }
 
@@ -548,10 +548,10 @@ func TestSignup_NoCookieRejectedNoUserCreated(t *testing.T) {
 	}
 	w := postForm(o, pathSignup, form, nil)
 	if w.Code != http.StatusForbidden {
-		t.Fatalf("durum = %d, beklenen 403", w.Code)
+		t.Fatalf("status = %d, want 403", w.Code)
 	}
 	if _, create := o.users.counts(); create != 0 {
-		t.Error("reddedilen kayit POST'unda kullanici olusturuldu")
+		t.Error("a user was created in the rejected signup POST")
 	}
 }
 
@@ -573,25 +573,25 @@ func TestSignup_SecondSignupKeepsSubject(t *testing.T) {
 	}
 
 	if w := signUp("birinci@ornek.com"); w.Code != http.StatusFound {
-		t.Fatalf("ilk kayit durumu = %d, beklenen 302. govde: %s", w.Code, w.Body.String())
+		t.Fatalf("first signup status = %d, want 302. body: %s", w.Code, w.Body.String())
 	}
 	firstSubject := o.completer.subject(id)
 	if firstSubject == "" {
-		t.Fatal("ilk kayit istegi baglamadi")
+		t.Fatal("the first signup request did not bind")
 	}
 	// The signup POST is the FOURTH amr call site (page.go:586). The login
 	// POST's assertion does NOT cover this line: it is a separate call and a
 	// separate constant.
 	if got := o.completer.amrFor(id); !slices.Equal(got, []string{"pwd"}) {
-		t.Errorf("kayit sonrasi amr = %v, beklenen [pwd]", got)
+		t.Errorf("amr after signup = %v, want [pwd]", got)
 	}
 
 	w := signUp("ikinci@ornek.com")
 	if w.Code == http.StatusFound {
-		t.Error("ikinci kayit 302 dondu; istek yeniden baglanabiliyor")
+		t.Error("second signup returned 302; the request can be bound again")
 	}
 	if last := o.completer.subject(id); last != firstSubject {
-		t.Errorf("Subject EZILDI: %q -> %q", firstSubject, last)
+		t.Errorf("Subject was OVERWRITTEN: %q -> %q", firstSubject, last)
 	}
 }
 
@@ -627,17 +627,17 @@ func TestLogin_FailureDoesNotRevealUserExistence(t *testing.T) {
 	b := tryLogin()
 
 	if a.Code != http.StatusUnauthorized {
-		t.Fatalf("durum A = %d, beklenen %d (giris basarisiz olmali, 403 ise cerez baglamasinda durmus)",
+		t.Fatalf("status A = %d, want %d (sign-in must fail; if 403 it stopped at the cookie binding)",
 			a.Code, http.StatusUnauthorized)
 	}
 	if a.Code != b.Code {
-		t.Fatalf("durum kodlari farkli: A=%d B=%d", a.Code, b.Code)
+		t.Fatalf("status codes differ: A=%d B=%d", a.Code, b.Code)
 	}
 	if a.Body.String() != b.Body.String() {
-		t.Error("iki govde farkli; hesabin varligi sizdiriliyor")
+		t.Error("the two bodies differ; the existence of the account is leaked")
 	}
 	if !reflect.DeepEqual(a.Header(), b.Header()) {
-		t.Error("iki yanitin header'lari farkli; hesabin varligi sizdiriliyor")
+		t.Error("the headers of the two responses differ; the existence of the account is leaked")
 	}
 }
 
@@ -651,13 +651,13 @@ func TestPages_EscapeInput(t *testing.T) {
 	cookie := bindTestSession(t, o, bad, nil)
 	w := formRequest(o, pathLogin, bad, cookie)
 	if w.Code != http.StatusOK {
-		t.Fatalf("durum = %d, beklenen 200 (sayfa gercekten uretildi mi?)", w.Code)
+		t.Fatalf("status = %d, want 200 (was the page really rendered?)", w.Code)
 	}
 	if strings.Contains(w.Body.String(), "<script>") {
-		t.Error("girdi kacirilmamis, XSS mumkun")
+		t.Error("input was not escaped, XSS is possible")
 	}
 	if !strings.Contains(w.Body.String(), "&lt;script&gt;") {
-		t.Error("kacislanmis <script> govdede yok; girdi hic yansitilmiyor olabilir")
+		t.Error("escaped <script> is not in the body; the input may not be reflected at all")
 	}
 }
 
@@ -675,18 +675,18 @@ func TestLogin_EchoedEmailEscaped(t *testing.T) {
 	}
 	w := postForm(o, pathLogin, form, cookie)
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("durum = %d, beklenen 401 (form gercekten islendi mi?)", w.Code)
+		t.Fatalf("status = %d, want 401 (was the form really processed?)", w.Code)
 	}
 
 	body := w.Body.String()
 	if strings.Contains(body, "<script>") {
-		t.Error("ham <script> govdede bulundu, XSS mumkun")
+		t.Error("raw <script> was found in the body, XSS is possible")
 	}
 	if !strings.Contains(body, "&lt;script&gt;") {
-		t.Error("kacislanmis <script> govdede bulunamadi; echo hic gorunmuyor olabilir")
+		t.Error("escaped <script> was not found in the body; the echo may not be visible at all")
 	}
 	if !strings.Contains(body, "&#34;") {
-		t.Error("kacislanmis cift tirnak govdede bulunamadi")
+		t.Error("escaped double quote was not found in the body")
 	}
 }
 
@@ -695,11 +695,11 @@ func TestSignup_ShowsForm(t *testing.T) {
 	cookie := bindTestSession(t, o, "abc", nil)
 	w := formRequest(o, pathSignup, "abc", cookie)
 	if w.Code != http.StatusOK {
-		t.Fatalf("durum = %d", w.Code)
+		t.Fatalf("status = %d", w.Code)
 	}
 	for _, want := range []string{`name="eposta"`, `name="sifre"`, `name="ad"`, `name="csrf"`} {
 		if !strings.Contains(w.Body.String(), want) {
-			t.Errorf("sayfa %q icermiyor", want)
+			t.Errorf("page does not contain %q", want)
 		}
 	}
 }
@@ -718,7 +718,7 @@ func TestSignup_EmailInUse(t *testing.T) {
 	}
 	w := postForm(o, pathSignup, form, cookie)
 	if w.Code != http.StatusConflict {
-		t.Errorf("durum = %d, beklenen 409 (e-posta kullanimda)", w.Code)
+		t.Errorf("status = %d, want 409 (email in use)", w.Code)
 	}
 }
 
@@ -753,10 +753,10 @@ func TestAuthorizeCallback_NoCookieRejected(t *testing.T) {
 
 	w := callbackRequest(o, "istek-1", nil)
 	if w.Code != http.StatusForbidden {
-		t.Fatalf("durum = %d, beklenen 403", w.Code)
+		t.Fatalf("status = %d, want 403", w.Code)
 	}
 	if spy.called {
-		t.Error("kutuphane callback handler'ina delege edildi")
+		t.Error("the request was delegated to the library's callback handler")
 	}
 }
 
@@ -769,10 +769,10 @@ func TestAuthorizeCallback_WrongCookieRejected(t *testing.T) {
 
 	w := callbackRequest(o, "istek-A", cookie)
 	if w.Code != http.StatusForbidden {
-		t.Fatalf("durum = %d, beklenen 403", w.Code)
+		t.Fatalf("status = %d, want 403", w.Code)
 	}
 	if spy.called {
-		t.Error("eslesmeyen cerezle delege edildi")
+		t.Error("delegated with a mismatched cookie")
 	}
 }
 
@@ -786,10 +786,10 @@ func TestAuthorizeCallback_ValidCookieDelegates(t *testing.T) {
 
 	w := callbackRequest(o, "istek-1", cookie)
 	if w.Code != http.StatusOK {
-		t.Fatalf("durum = %d, beklenen 200", w.Code)
+		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	if !spy.called {
-		t.Error("dogru cerezle delege edilmedi")
+		t.Error("not delegated with the correct cookie")
 	}
 }
 
@@ -801,10 +801,10 @@ func TestAuthorizeCallback_MissingIDRejected(t *testing.T) {
 	w := httptest.NewRecorder()
 	o.pages.Callback(w, httptest.NewRequest(http.MethodGet, "/authorize/callback", nil))
 	if w.Code != http.StatusBadRequest {
-		t.Errorf("durum = %d, beklenen 400", w.Code)
+		t.Errorf("status = %d, want 400", w.Code)
 	}
 	if spy.called {
-		t.Error("id olmadan delege edildi")
+		t.Error("delegated without an id")
 	}
 }
 
@@ -834,21 +834,21 @@ func TestLogin_WorksAfterSignupWithPaddedEmail(t *testing.T) {
 		"sifre":         {password},
 	}, cookie)
 	if w.Code != http.StatusFound {
-		t.Fatalf("kayit durumu = %d, beklenen 302 (govde: %s)", w.Code, w.Body.String())
+		t.Fatalf("signup status = %d, want 302 (body: %s)", w.Code, w.Body.String())
 	}
 
 	// The stored value must be normalized.
 	registered, err := o.users.ByEmail(context.Background(), unpadded)
 	if err != nil {
-		t.Fatalf("kayitli kullanici bulunamadi: %v", err)
+		t.Fatalf("could not find the registered user: %v", err)
 	}
 	if registered.Email != unpadded {
-		t.Errorf("saklanan e-posta = %q, beklenen %q", registered.Email, unpadded)
+		t.Errorf("stored email = %q, want %q", registered.Email, unpadded)
 	}
 
 	// Login: both inputs must WORK.
 	for _, input := range []string{padded, unpadded, "  BOSLUK@ORNEK.COM "} {
-		t.Run("giris girdisi="+strconv.Quote(input), func(t *testing.T) {
+		t.Run("sign-in input="+strconv.Quote(input), func(t *testing.T) {
 			id := "istek-giris-" + input
 			cookie, csrf := openForm(t, o, pathLogin, id)
 			w := postForm(o, pathLogin, url.Values{
@@ -858,7 +858,7 @@ func TestLogin_WorksAfterSignupWithPaddedEmail(t *testing.T) {
 				"sifre":         {password},
 			}, cookie)
 			if w.Code != http.StatusFound {
-				t.Errorf("giris durumu = %d, beklenen 302 (govde: %s)", w.Code, w.Body.String())
+				t.Errorf("sign-in status = %d, want 302 (body: %s)", w.Code, w.Body.String())
 			}
 		})
 	}
@@ -874,7 +874,7 @@ func TestLogin_WorksAfterSignupWithPaddedEmail(t *testing.T) {
 		"sifre":         {"yanlisSifre12"},
 	}, cookie)
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("yanlis sifre durumu = %d, beklenen 401", w.Code)
+		t.Errorf("wrong password status = %d, want 401", w.Code)
 	}
 }
 
@@ -931,26 +931,26 @@ func TestWrapAuthorize_CrossSiteAddsNoBinding(t *testing.T) {
 	// The request itself goes to the library (a 302 is written): instead of
 	// rejecting, only the binding is not set up.
 	if w.Code != http.StatusFound {
-		t.Fatalf("durum = %d, beklenen 302 (istek kutuphaneye gitmeli)", w.Code)
+		t.Fatalf("status = %d, want 302 (the request must go to the library)", w.Code)
 	}
 	// The cookie must be UNTOUCHED: no new Set-Cookie.
 	if cookieList := w.Result().Cookies(); len(cookieList) != 0 {
-		t.Errorf("capraz-site istek %d cerez yazdi, beklenen 0", len(cookieList))
+		t.Errorf("cross-site request wrote %d cookies, want 0", len(cookieList))
 	}
 	// The attacker's id must NOT have entered the victim's set.
 	if isBound(t, o, victimCookie.Value, "saldirgan-1") {
-		t.Fatal("capraz-site istek kurbanin kumesine baglama EKLEDI (login-CSRF acik)")
+		t.Fatal("the cross-site request ADDED a binding to the victim's set (login-CSRF is open)")
 	}
 	// The victim cannot open the form with that id: 403.
 	if g := formRequest(o, pathLogin, "saldirgan-1", victimCookie); g.Code != http.StatusForbidden {
-		t.Fatalf("enjekte id icin GET /giris durumu = %d, beklenen 403", g.Code)
+		t.Fatalf("GET /giris status for the injected id = %d, want 403", g.Code)
 	}
 	// The victim's EXISTING binding must NOT BE BROKEN (we did not turn it into a DoS).
 	if !isBound(t, o, victimCookie.Value, "mesru-1") {
-		t.Error("kurbanin mevcut baglamasi kayboldu")
+		t.Error("the victim's existing binding disappeared")
 	}
 	if g := formRequest(o, pathLogin, "mesru-1", victimCookie); g.Code != http.StatusOK {
-		t.Errorf("kurbanin mesru formu durumu = %d, beklenen 200", g.Code)
+		t.Errorf("the victim's legitimate form status = %d, want 200", g.Code)
 	}
 }
 
@@ -962,16 +962,16 @@ func TestWrapAuthorize_CrossSiteAddsNoBinding(t *testing.T) {
 // NO header: fail-open (rationale in the isCrossSite documentation).
 func TestWrapAuthorize_NonCrossSiteBinds(t *testing.T) {
 	for _, d := range []struct{ name, fetchSite string }{
-		{"none-native-uygulama", fetchSiteNone},
+		{"none-native-app", fetchSiteNone},
 		{"same-origin", fetchSiteSameOrigin},
 		{"same-site", fetchSiteSameSite},
-		{"baslik-yok-fail-open", ""},
+		{"no-header-fail-open", ""},
 	} {
 		t.Run(d.name, func(t *testing.T) {
 			o := newTestPages(t)
 			w := wrapAuthorize(o, d.fetchSite, "istek-1", nil)
 			if w.Code != http.StatusFound {
-				t.Fatalf("durum = %d, beklenen 302", w.Code)
+				t.Fatalf("status = %d, want 302", w.Code)
 			}
 			var session string
 			for _, c := range w.Result().Cookies() {
@@ -980,14 +980,14 @@ func TestWrapAuthorize_NonCrossSiteBinds(t *testing.T) {
 				}
 			}
 			if session == "" {
-				t.Fatal("oturum cerezi verilmedi (baglama kurulmamis)")
+				t.Fatal("no session cookie was given (no binding was set up)")
 			}
 			if !isBound(t, o, session, "istek-1") {
-				t.Fatal("baglama depoya yazilmamis")
+				t.Fatal("the binding was not written to the store")
 			}
 			// Happy path: the form must be openable.
 			if g := formRequest(o, pathLogin, "istek-1", &http.Cookie{Name: cookieNameSession, Value: session}); g.Code != http.StatusOK {
-				t.Fatalf("form durumu = %d, beklenen 200", g.Code)
+				t.Fatalf("form status = %d, want 200", g.Code)
 			}
 		})
 	}
@@ -1002,18 +1002,18 @@ func TestLogin_ShowsOnlyConfiguredProviders(t *testing.T) {
 	cookie := bindTestSession(t, o, "abc", nil)
 	w := formRequest(o, pathLogin, "abc", cookie)
 	if w.Code != http.StatusOK {
-		t.Fatalf("durum = %d, beklenen 200", w.Code)
+		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	body := w.Body.String()
 	if !strings.Contains(body, "/federasyon/google/baslat") {
-		t.Errorf("yapilandirilmis google butonu yok:\n%s", body)
+		t.Errorf("no configured google button:\n%s", body)
 	}
 	if !strings.Contains(body, "Google ile giris yap") {
-		t.Errorf("google butonunun etiketi yok:\n%s", body)
+		t.Errorf("no label on the google button:\n%s", body)
 	}
 	// "apple" must not appear AT ALL: neither the path nor the label.
 	if strings.Contains(strings.ToLower(body), providerApple) {
-		t.Errorf("yapilandirilmamis apple sayfada gecti:\n%s", body)
+		t.Errorf("an unconfigured apple passed on the page:\n%s", body)
 	}
 }
 
@@ -1028,25 +1028,25 @@ func TestLogin_ButtonCarriesAuthRequestID(t *testing.T) {
 	cookie := bindTestSession(t, o, id, nil)
 	w := formRequest(o, pathLogin, id, cookie)
 	if w.Code != http.StatusOK {
-		t.Fatalf("durum = %d, beklenen 200", w.Code)
+		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	body := w.Body.String()
 	pattern := regexp.MustCompile(`href="(/federasyon/google/baslat[^"]*)"`)
 	matches := pattern.FindStringSubmatch(body)
 	if matches == nil {
-		t.Fatalf("google buton baglantisi bulunamadi:\n%s", body)
+		t.Fatalf("google button link was not found:\n%s", body)
 	}
 	// The link is decoded the way the browser would see it: html/template's
 	// attribute escaping is undone, then the URL is parsed.
 	raw := html.UnescapeString(matches[1])
 	u, err := url.Parse(raw)
 	if err != nil {
-		t.Fatalf("buton baglantisi cozulemedi (%q): %v", raw, err)
+		t.Fatalf("could not parse button link (%q): %v", raw, err)
 	}
 	if matched := u.Query().Get("authRequestID"); matched != id {
-		t.Errorf("authRequestID = %q, beklenen %q (ham: %q)", matched, id, raw)
+		t.Errorf("authRequestID = %q, want %q (raw: %q)", matched, id, raw)
 	}
 	if u.Query().Get("yabanci") != "" {
-		t.Errorf("kacissiz birlestirme yabanci parametre sizdirdi: %q", raw)
+		t.Errorf("unescaped concatenation leaked a foreign parameter: %q", raw)
 	}
 }

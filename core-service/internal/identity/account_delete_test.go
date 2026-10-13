@@ -39,9 +39,9 @@ func TestServer_DeleteAccountCascades(t *testing.T) {
 	_ = pool.QueryRow(ctx, `SELECT count(*) FROM federe_kimlikler WHERE user_id = $1`, k.ID).Scan(&federatedCount)
 	_ = pool.QueryRow(ctx, `SELECT count(*) FROM refresh_tokens WHERE user_id = $1`, k.ID).Scan(&refreshCount)
 	if federatedCount != 0 || refreshCount != 0 {
-		t.Fatalf("cascade calismadi: federe=%d refresh=%d", federatedCount, refreshCount)
+		t.Fatalf("cascade did not work: federated=%d refresh=%d", federatedCount, refreshCount)
 	}
 	if err := userStore.Delete(ctx, k.ID); !errors.Is(err, ErrUserNotFound) {
-		t.Errorf("ikinci Sil = %v, beklenen ErrKullaniciYok", err)
+		t.Errorf("second Delete = %v, want ErrUserNotFound", err)
 	}
 }

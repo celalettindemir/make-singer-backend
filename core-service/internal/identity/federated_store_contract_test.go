@@ -38,11 +38,11 @@ type federatedSetupFactory struct {
 func federatedStoreSetups() []federatedSetupFactory {
 	return []federatedSetupFactory{
 		{
-			name: "sahte",
+			name: "fake",
 			build: func(t *testing.T) federatedSetup {
 				fakeUsers := NewFakeUserStore()
 				return federatedSetup{
-					name:  "sahte",
+					name:  "fake",
 					store: NewFakeFederatedStore(fakeUsers),
 					users: fakeUsers,
 				}
@@ -60,7 +60,7 @@ func federatedStoreSetups() []federatedSetupFactory {
 				defer cancel()
 				pool, err := Connect(ctx, dsn)
 				if err != nil {
-					t.Skip("yerel Postgres yok, atlaniyor")
+					t.Skip("no local Postgres, skipping")
 				}
 				if err := Migrate(ctx, pool); err != nil {
 					pool.Close()
@@ -68,7 +68,7 @@ func federatedStoreSetups() []federatedSetupFactory {
 				}
 				t.Cleanup(pool.Close)
 				if _, err := pool.Exec(ctx, `TRUNCATE federe_kimlikler, users CASCADE`); err != nil {
-					t.Fatalf("tablolar temizlenemedi: %v", err)
+					t.Fatalf("could not clean tables: %v", err)
 				}
 				return federatedSetup{
 					name:  "postgres",
@@ -88,75 +88,75 @@ func TestFederatedStore_Contract(t *testing.T) {
 
 			// An unknown identity returns ErrIdentityNotFound, not a nil user.
 			if _, err := k.store.UserByIdentity(ctx, "google", "yok-123"); !errors.Is(err, ErrIdentityNotFound) {
-				t.Fatalf("bilinmeyen kimlik icin err = %v, beklenen ErrKimlikYok", err)
+				t.Fatalf("for an unknown identity err = %v, want ErrIdentityNotFound", err)
 			}
 
 			// Creating a federated user: the password hash must be EMPTY, so
 			// PasswordMatches must return false for every password.
 			user, err := k.store.CreateFederatedUser(ctx, "google", "sub-1", "a@ornek.com", "Ali", true)
 			if err != nil {
-				t.Fatalf("federe kullanici olusturulamadi: %v", err)
+				t.Fatalf("could not create federated user: %v", err)
 			}
 			if user.PasswordHash != "" {
-				t.Error("federe hesaba sifre hash'i yazilmis")
+				t.Error("a password hash was written for the federated account")
 			}
 			if user.PasswordMatches("herhangi-bir-sifre-123") {
-				t.Error("sifresiz hesaba sifreyle girilebiliyor")
+				t.Error("can sign in with a password to an account that has none")
 			}
 			if !user.EmailVerified {
-				t.Error("epostaDogrulandi=true verildi ama EmailVerified false")
+				t.Error("emailVerified=true was given but EmailVerified is false")
 			}
 
 			// The created identity can now be found and returns the SAME user.
 			matched, err := k.store.UserByIdentity(ctx, "google", "sub-1")
 			if err != nil {
-				t.Fatalf("kimlik okunamadi: %v", err)
+				t.Fatalf("could not read identity: %v", err)
 			}
 			if matched.ID != user.ID {
-				t.Errorf("kullanici id = %q, beklenen %q", matched.ID, user.ID)
+				t.Errorf("user id = %q, want %q", matched.ID, user.ID)
 			}
 
 			// Provider separation: the same sub value at another provider is NOT
 			// the same person.
 			if _, err := k.store.UserByIdentity(ctx, "apple", "sub-1"); !errors.Is(err, ErrIdentityNotFound) {
-				t.Errorf("apple/sub-1 icin err = %v, beklenen ErrKimlikYok", err)
+				t.Errorf("for apple/sub-1 err = %v, want ErrIdentityNotFound", err)
 			}
 
 			// Linking to an existing (withPassword) account.
 			withPassword, err := k.users.Create(ctx, "b@ornek.com", "Veli", "cok-uzun-bir-sifre")
 			if err != nil {
-				t.Fatalf("sifreli hesap olusturulamadi: %v", err)
+				t.Fatalf("could not create account with password: %v", err)
 			}
 			if err := k.store.Link(ctx, "apple", "apple-sub-9", withPassword.ID); err != nil {
-				t.Fatalf("bagla: %v", err)
+				t.Fatalf("link: %v", err)
 			}
 			linked, err := k.store.UserByIdentity(ctx, "apple", "apple-sub-9")
 			if err != nil {
-				t.Fatalf("baglanan kimlik okunamadi: %v", err)
+				t.Fatalf("could not read linked identity: %v", err)
 			}
 			if linked.ID != withPassword.ID {
-				t.Error("bagli kimlik yanlis kullaniciyi donuyor")
+				t.Error("linked identity returns the wrong user")
 			}
 
 			// The SAME (provider, sub) cannot be linked to ANOTHER account:
 			// otherwise one Google account would be linked to two of our accounts
 			// and it would be unclear which one a login lands on.
 			if err := k.store.Link(ctx, "apple", "apple-sub-9", user.ID); !errors.Is(err, ErrIdentityInUse) {
-				t.Errorf("ikinci bagla err = %v, beklenen ErrKimlikKullanimda", err)
+				t.Errorf("second link err = %v, want ErrIdentityInUse", err)
 			}
 
 			// A user cannot be linked to the same provider twice.
 			if err := k.store.Link(ctx, "apple", "apple-sub-FARKLI", withPassword.ID); !errors.Is(err, ErrIdentityInUse) {
-				t.Errorf("ayni saglayiciya ikinci bagla err = %v, beklenen ErrKimlikKullanimda", err)
+				t.Errorf("second link to the same provider err = %v, want ErrIdentityInUse", err)
 			}
 
 			// ProvidersByUserID feeds the text of K1's 409 page.
 			providers, err := k.store.ProvidersByUserID(ctx, withPassword.ID)
 			if err != nil {
-				t.Fatalf("saglayicilar okunamadi: %v", err)
+				t.Fatalf("could not read providers: %v", err)
 			}
 			if len(providers) != 1 || providers[0] != "apple" {
-				t.Errorf("saglayicilar = %v, beklenen [apple]", providers)
+				t.Errorf("providers = %v, want [apple]", providers)
 			}
 		})
 	}

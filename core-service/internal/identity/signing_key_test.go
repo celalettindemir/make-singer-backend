@@ -16,7 +16,7 @@ func testPEM(t *testing.T) string {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("anahtar uretilemedi: %v", err)
+		t.Fatalf("could not generate key: %v", err)
 	}
 	block := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}
 	return string(pem.EncodeToMemory(block))
@@ -25,15 +25,15 @@ func testPEM(t *testing.T) string {
 func TestLoadSigningKey_SatisfiesInterfaces(t *testing.T) {
 	a, err := LoadSigningKey(testPEM(t))
 	if err != nil {
-		t.Fatalf("AnahtarYukle: %v", err)
+		t.Fatalf("LoadSigningKey: %v", err)
 	}
 	var _ op.SigningKey = a
 
 	if a.SignatureAlgorithm() != jose.RS256 {
-		t.Errorf("algoritma = %v, beklenen RS256", a.SignatureAlgorithm())
+		t.Errorf("algorithm = %v, want RS256", a.SignatureAlgorithm())
 	}
 	if a.ID() == "" {
-		t.Error("anahtar ID'si bos")
+		t.Error("key ID is empty")
 	}
 }
 
@@ -44,14 +44,14 @@ func TestSigningKey_IDStable(t *testing.T) {
 	p := testPEM(t)
 	a1, err := LoadSigningKey(p)
 	if err != nil {
-		t.Fatalf("AnahtarYukle: %v", err)
+		t.Fatalf("LoadSigningKey: %v", err)
 	}
 	a2, err := LoadSigningKey(p)
 	if err != nil {
-		t.Fatalf("AnahtarYukle: %v", err)
+		t.Fatalf("LoadSigningKey: %v", err)
 	}
 	if a1.ID() != a2.ID() {
-		t.Errorf("ayni PEM farkli kid verdi: %q, %q", a1.ID(), a2.ID())
+		t.Errorf("the same PEM gave a different kid: %q, %q", a1.ID(), a2.ID())
 	}
 }
 
@@ -59,18 +59,18 @@ func TestSigningKey_IDDiffersPerKey(t *testing.T) {
 	a1, _ := LoadSigningKey(testPEM(t))
 	a2, _ := LoadSigningKey(testPEM(t))
 	if a1.ID() == a2.ID() {
-		t.Error("farkli anahtarlar ayni kid verdi")
+		t.Error("different keys gave the same kid")
 	}
 }
 
 func TestLoadSigningKey_RejectsBadPEM(t *testing.T) {
 	for name, input := range map[string]string{
-		"bos":       "",
-		"cop":       "bu bir PEM degil",
-		"govde yok": "-----BEGIN RSA PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----\n",
+		"empty":   "",
+		"garbage": "bu bir PEM degil",
+		"no body": "-----BEGIN RSA PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----\n",
 	} {
 		if _, err := LoadSigningKey(input); err == nil {
-			t.Errorf("%s: hata beklenirken nil dondu", name)
+			t.Errorf("%s: nil was returned while an error was expected", name)
 		}
 	}
 }
@@ -79,15 +79,15 @@ func TestLoadSigningKey_RejectsBadPEM(t *testing.T) {
 // silently padded with zeros, the encryption would be weakened.
 func TestCryptoKey_Length(t *testing.T) {
 	if _, err := CryptoKey(strings.Repeat("a", 31)); err == nil {
-		t.Error("31 baytlik anahtar kabul edildi")
+		t.Error("a 31-byte key was accepted")
 	}
 	if _, err := CryptoKey(strings.Repeat("a", 33)); err == nil {
-		t.Error("33 baytlik anahtar kabul edildi")
+		t.Error("a 33-byte key was accepted")
 	}
 	secret := strings.Repeat("a", 32)
 	b, err := CryptoKey(secret)
 	if err != nil {
-		t.Fatalf("32 baytlik anahtar reddedildi: %v", err)
+		t.Fatalf("a 32-byte key was rejected: %v", err)
 	}
 	// The length assertion was an empty assertion: CryptoKey returns a
 	// [32]byte, so len(b) is the compile-time constant 32 and can never
@@ -95,7 +95,7 @@ func TestCryptoKey_Length(t *testing.T) {
 	// the copy is dropped, the key becomes all zeros and the encryption
 	// silently falls back to a constant key.
 	if string(b[:]) != secret {
-		t.Error("anahtar icerigi girdiyle ayni degil")
+		t.Error("key content is the same as the input")
 	}
 }
 
@@ -103,21 +103,21 @@ func TestCryptoKey_Length(t *testing.T) {
 func TestLoadSigningKey_AcceptsPKCS8(t *testing.T) {
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("anahtar uretilemedi: %v", err)
+		t.Fatalf("could not generate key: %v", err)
 	}
 	pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(rsaKey)
 	if err != nil {
-		t.Fatalf("PKCS#8 encode hatasi: %v", err)
+		t.Fatalf("PKCS#8 encode error: %v", err)
 	}
 	block := &pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8Bytes}
 	pemText := string(pem.EncodeToMemory(block))
 
 	a, err := LoadSigningKey(pemText)
 	if err != nil {
-		t.Fatalf("PKCS#8 anahtari yuklemedi: %v", err)
+		t.Fatalf("PKCS#8 key did not load: %v", err)
 	}
 	if a.ID() == "" {
-		t.Error("PKCS#8 anahtarinin ID'si bos")
+		t.Error("PKCS#8 key ID is empty")
 	}
 }
 
@@ -125,17 +125,17 @@ func TestLoadSigningKey_AcceptsPKCS8(t *testing.T) {
 func TestLoadSigningKey_RejectsShortKey(t *testing.T) {
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
-		t.Fatalf("anahtar uretilemedi: %v", err)
+		t.Fatalf("could not generate key: %v", err)
 	}
 	block := &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(rsaKey)}
 	pemText := string(pem.EncodeToMemory(block))
 
 	_, err = LoadSigningKey(pemText)
 	if err == nil {
-		t.Error("1024 bitlik anahtar kabul edildi")
+		t.Error("a 1024-bit key was accepted")
 	}
-	if err != nil && err.Error() != "anahtar 1024 bit, en az 2048 olmali" {
-		t.Errorf("hata mesaji beklenen metni icermiyor: %v", err)
+	if err != nil && err.Error() != "key is 1024 bits, must be at least 2048" {
+		t.Errorf("error message does not contain the expected text: %v", err)
 	}
 }
 
@@ -143,13 +143,13 @@ func TestLoadSigningKey_RejectsShortKey(t *testing.T) {
 func TestPublicKey_DoesNotLeakPrivateKey(t *testing.T) {
 	a, err := LoadSigningKey(testPEM(t))
 	if err != nil {
-		t.Fatalf("AnahtarYukle: %v", err)
+		t.Fatalf("LoadSigningKey: %v", err)
 	}
 	var _ op.Key = a.PublicKey()
 	switch a.PublicKey().Key().(type) {
 	case *rsa.PublicKey:
 		// correct
 	default:
-		t.Fatalf("AcikAnahtar().Key() tipi %T, *rsa.PublicKey olmali", a.PublicKey().Key())
+		t.Fatalf("PublicKey().Key() type is %T, want *rsa.PublicKey", a.PublicKey().Key())
 	}
 }

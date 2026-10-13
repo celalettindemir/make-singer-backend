@@ -27,15 +27,15 @@ const appleClientSecretTTL = 5 * time.Minute
 func appleClientSecret(teamID, keyID, clientID, p8PEM string, now time.Time) (string, error) {
 	block, _ := pem.Decode([]byte(p8PEM))
 	if block == nil {
-		return "", fmt.Errorf("apple .p8 anahtari PEM olarak cozumlenemedi")
+		return "", fmt.Errorf("apple .p8 key could not be parsed as PEM")
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return "", fmt.Errorf("apple .p8 anahtari okunamadi: %w", err)
+		return "", fmt.Errorf("could not read the apple .p8 key: %w", err)
 	}
 	key, ok := parsed.(*ecdsa.PrivateKey)
 	if !ok {
-		return "", fmt.Errorf("apple anahtari ECDSA degil (%T); ES256 imzalanamaz", parsed)
+		return "", fmt.Errorf("apple key is not ECDSA (%T); cannot sign with ES256", parsed)
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
 		"iss": teamID,

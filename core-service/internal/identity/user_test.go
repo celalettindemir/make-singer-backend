@@ -13,16 +13,16 @@ func TestUser_PasswordHashedAndVerified(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if k.PasswordHash == "" {
-		t.Fatal("PasswordHash bos")
+		t.Fatal("PasswordHash is empty")
 	}
 	if k.PasswordHash == "cokGizli123" {
-		t.Fatal("sifre duz metin saklanmis")
+		t.Fatal("the password was stored in plain text")
 	}
 	if !k.PasswordMatches("cokGizli123") {
-		t.Error("dogru sifre reddedildi")
+		t.Error("the correct password was rejected")
 	}
 	if k.PasswordMatches("yanlis") {
-		t.Error("yanlis sifre kabul edildi")
+		t.Error("the wrong password was accepted")
 	}
 }
 
@@ -32,10 +32,10 @@ func TestUser_PasswordHashedAndVerified(t *testing.T) {
 func TestUser_PasswordlessAcceptsNoPassword(t *testing.T) {
 	k := &User{ID: "1", Email: "f@ornek.com", PasswordHash: ""}
 	if k.PasswordMatches("") {
-		t.Error("bos sifre kabul edildi")
+		t.Error("an empty password was accepted")
 	}
 	if k.PasswordMatches("herhangi") {
-		t.Error("rastgele sifre kabul edildi")
+		t.Error("a random password was accepted")
 	}
 }
 
@@ -46,27 +46,27 @@ func TestUserStore_EmailCaseInsensitive(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if _, err := store.Create(ctx, "ali@ornek.COM", "Ali2", "sifre12345"); !errors.Is(err, ErrEmailInUse) {
-		t.Errorf("ikinci kayit hatasi = %v, beklenen ErrEpostaKullanimda", err)
+		t.Errorf("second registration error = %v, want ErrEmailInUse", err)
 	}
 	k, err := store.ByEmail(ctx, "ALI@ORNEK.COM")
 	if err != nil {
 		t.Fatalf("ByEmail: %v", err)
 	}
 	if k.Name != "Ali" {
-		t.Errorf("Name = %q, beklenen %q", k.Name, "Ali")
+		t.Errorf("Name = %q, want %q", k.Name, "Ali")
 	}
 }
 
 func TestUserStore_MissingUser(t *testing.T) {
 	store := NewFakeUserStore()
 	if _, err := store.ByEmail(context.Background(), "yok@ornek.com"); !errors.Is(err, ErrUserNotFound) {
-		t.Errorf("hata = %v, beklenen ErrKullaniciYok", err)
+		t.Errorf("error = %v, want ErrUserNotFound", err)
 	}
 }
 
 func TestUserStore_ShortPasswordRejected(t *testing.T) {
 	store := NewFakeUserStore()
 	if _, err := store.Create(context.Background(), "a@ornek.com", "A", "kisa"); !errors.Is(err, ErrPasswordTooShort) {
-		t.Errorf("hata = %v, beklenen ErrSifreKisa", err)
+		t.Errorf("error = %v, want ErrPasswordTooShort", err)
 	}
 }

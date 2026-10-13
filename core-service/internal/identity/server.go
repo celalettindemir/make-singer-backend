@@ -82,7 +82,7 @@ func (s *Server) Ready() bool {
 // can only be enabled in local development (see validateInsecureIssuer).
 func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env string) (*Server, error) {
 	if cfg.Issuer == "" {
-		return nil, fmt.Errorf("issuer bos: kimlik saglayicisi baslatilamaz")
+		return nil, fmt.Errorf("issuer is empty: the identity provider cannot start")
 	}
 
 	if err := validateInsecureIssuer(cfg.Issuer, env); err != nil {
@@ -95,22 +95,22 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 
 	signingKey, err := LoadSigningKey(cfg.SigningKeyPEM)
 	if err != nil {
-		return nil, fmt.Errorf("imzalama anahtari yuklenemedi: %w", err)
+		return nil, fmt.Errorf("could not load the signing key: %w", err)
 	}
 
 	cryptoKey, err := CryptoKey(cfg.CryptoKey)
 	if err != nil {
-		return nil, fmt.Errorf("crypto anahtari gecersiz: %w", err)
+		return nil, fmt.Errorf("crypto key is invalid: %w", err)
 	}
 
 	pool, err := Connect(ctx, cfg.DBURL)
 	if err != nil {
-		return nil, fmt.Errorf("veritabanina baglanilamadi: %w", err)
+		return nil, fmt.Errorf("could not connect to the database: %w", err)
 	}
 
 	if err := migrateLocked(ctx, pool); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("migration basarisiz: %w", err)
+		return nil, fmt.Errorf("migration failed: %w", err)
 	}
 
 	userStore := NewPostgresUserStore(pool)
@@ -154,7 +154,7 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 	provider, err := op.NewProvider(opCfg, storage, op.StaticIssuer(cfg.Issuer), opOpts...)
 	if err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("OpenID Provider kurulamadi: %w", err)
+		return nil, fmt.Errorf("could not set up the OpenID Provider: %w", err)
 	}
 
 	// The Secure flag of the cookie depends on the issuer: ON for https, OFF
@@ -191,7 +191,7 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 	if err != nil {
 		cancelFed()
 		pool.Close()
-		return nil, fmt.Errorf("hiz limiti kurulamadi: %w", err)
+		return nil, fmt.Errorf("could not set up the rate limiter: %w", err)
 	}
 
 	mux := buildMux(
@@ -208,7 +208,7 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 	if err != nil {
 		cancelFed()
 		pool.Close()
-		return nil, fmt.Errorf("kimlik dinleyicisi acilamadi (port %s): %w", cfg.Port, err)
+		return nil, fmt.Errorf("could not open the identity listener (port %s): %w", cfg.Port, err)
 	}
 
 	srv := &http.Server{
@@ -238,7 +238,7 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 			// "kimlik": false and the cluster does not count the pod as
 			// healthy.
 			server.ready.Store(false)
-			log.Printf("kimlik dinleyicisi durdu: %v", err)
+			log.Printf("identity listener stopped: %v", err)
 		}
 	}()
 
@@ -267,21 +267,21 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 // the default, it silently gives 0s (see the note in config.go).
 func validateConfig(cfg *config.AuthConfig) error {
 	if cfg.ClientID == "" {
-		return fmt.Errorf("client_id bos: AUTH_CLIENT_ID zorunlu (bos iken her /api/* istegi 401 reddedilir)")
+		return fmt.Errorf("client_id is empty: AUTH_CLIENT_ID is required (while it is empty every /api/* request is rejected with 401)")
 	}
 	if len(cfg.RedirectURIs) == 0 {
-		return fmt.Errorf("redirect_uris bos: AUTH_REDIRECT_URIS zorunlu (bos iken her /authorize reddedilir)")
+		return fmt.Errorf("redirect_uris is empty: AUTH_REDIRECT_URIS is required (while it is empty every /authorize is rejected)")
 	}
 	for _, uri := range cfg.RedirectURIs {
 		if strings.TrimSpace(uri) == "" {
-			return fmt.Errorf("redirect_uris bos bir girdi iceriyor: AUTH_REDIRECT_URIS degerini kontrol edin")
+			return fmt.Errorf("redirect_uris contains an empty entry: check the AUTH_REDIRECT_URIS value")
 		}
 	}
 	if cfg.AccessTTL <= 0 {
-		return fmt.Errorf("access_ttl pozitif olmali, cozulen deger: %s (AUTH_ACCESS_TTL gecerli bir sure olmali, orn. 15m)", cfg.AccessTTL)
+		return fmt.Errorf("access_ttl must be positive, resolved value: %s (AUTH_ACCESS_TTL must be a valid duration, e.g. 15m)", cfg.AccessTTL)
 	}
 	if cfg.RefreshTTL <= 0 {
-		return fmt.Errorf("refresh_ttl pozitif olmali, cozulen deger: %s (AUTH_REFRESH_TTL gecerli bir sure olmali, orn. 1440h)", cfg.RefreshTTL)
+		return fmt.Errorf("refresh_ttl must be positive, resolved value: %s (AUTH_REFRESH_TTL must be a valid duration, e.g. 1440h)", cfg.RefreshTTL)
 	}
 	// Apple cannot work unless ALL THREE fields are set: the client_secret
 	// is produced from these three with ES256 on every token exchange (see
@@ -292,7 +292,7 @@ func validateConfig(cfg *config.AuthConfig) error {
 	for _, f := range cfg.Federation {
 		if f.Name == providerApple {
 			if f.AppleTeamID == "" || f.AppleKeyID == "" || f.AppleKeyP8 == "" {
-				return fmt.Errorf("apple federasyonu yapilandirmasi eksik: AUTH_FED_APPLE_TEAM_ID, AUTH_FED_APPLE_KEY_ID ve AUTH_FED_APPLE_KEY_P8 ucu de zorunlu")
+				return fmt.Errorf("apple federation configuration is incomplete: all three of AUTH_FED_APPLE_TEAM_ID, AUTH_FED_APPLE_KEY_ID and AUTH_FED_APPLE_KEY_P8 are required")
 			}
 			// "Not empty" is NOT ENOUGH: the silent breakage that the comment
 			// above forbids was opening up exactly here. The most common real
@@ -312,7 +312,7 @@ func validateConfig(cfg *config.AuthConfig) error {
 				// The wrapped errors do not carry the key CONTENT (see
 				// appleClientSecret): only the error class and the key type.
 				// The message tells the operator WHAT to do.
-				return fmt.Errorf("apple .p8 anahtari kullanilamaz: AUTH_FED_APPLE_KEY_P8 PKCS#8 PEM bloklu bir ECDSA (P-256) ozel anahtari olmali; degeri GERCEK yeni satirlarla mount edin (tek satirda literal \\n dizisi PEM olarak cozulemez): %w", err)
+				return fmt.Errorf("apple .p8 key is unusable: AUTH_FED_APPLE_KEY_P8 must be an ECDSA (P-256) private key in a PKCS#8 PEM block; mount the value with REAL newlines (a literal \\n sequence on a single line cannot be parsed as PEM): %w", err)
 			}
 		}
 		// Google's only mandatory secret is client_secret and it was checked
@@ -327,7 +327,7 @@ func validateConfig(cfg *config.AuthConfig) error {
 		// buildFederationClients (see the silent-zero rule there) and that is
 		// NOT an error, it means "federation off".
 		if f.Name == providerGoogle && f.ClientSecret == "" {
-			return fmt.Errorf("google federasyonu yapilandirmasi eksik: AUTH_FED_GOOGLE_CLIENT_ID verildiyse AUTH_FED_GOOGLE_CLIENT_SECRET de zorunlu (bos iken token degisimi 401 invalid_client ile duser)")
+			return fmt.Errorf("google federation configuration is incomplete: if AUTH_FED_GOOGLE_CLIENT_ID is given, AUTH_FED_GOOGLE_CLIENT_SECRET is required too (while it is empty the token exchange fails with 401 invalid_client)")
 		}
 	}
 	return nil
@@ -394,7 +394,7 @@ func setupFederation(
 		defaults, ok := upstreamDefaults[f.Name]
 		if !ok {
 			cleanup()
-			return nil, nil, fmt.Errorf("bilinmeyen federasyon saglayicisi: %q (desteklenenler: %s, %s)", f.Name, providerApple, providerGoogle)
+			return nil, nil, fmt.Errorf("unknown federation provider: %q (supported: %s, %s)", f.Name, providerApple, providerGoogle)
 		}
 		upstream := defaults // copy: the fixed table is NOT MODIFIED
 		upstream.ClientID = f.ClientID
@@ -408,7 +408,7 @@ func setupFederation(
 		verifier, err := auth.NewUpstreamVerifier(ctx, upstream.JWKSURL, upstream.Issuer, upstream.ClientID)
 		if err != nil {
 			cleanup()
-			return nil, nil, fmt.Errorf("%s dogrulayicisi kurulamadi: %w", f.Name, err)
+			return nil, nil, fmt.Errorf("could not set up the %s verifier: %w", f.Name, err)
 		}
 		upstreams[f.Name] = &upstream
 		verifiers[f.Name] = verifier
@@ -587,17 +587,17 @@ func validateInsecureIssuer(issuer, env string) error {
 		return nil
 	}
 	if env == "production" {
-		return fmt.Errorf("issuer http: production ortaminda https zorunlu, guvensiz mod izinli degil: %s", issuer)
+		return fmt.Errorf("issuer http: https is required in the production environment, insecure mode is not allowed: %s", issuer)
 	}
 	u, err := url.Parse(issuer)
 	if err != nil {
-		return fmt.Errorf("issuer cozulemedi: %w", err)
+		return fmt.Errorf("could not parse the issuer: %w", err)
 	}
 	host := u.Hostname()
 	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-		return fmt.Errorf("issuer http: yalnizca localhost/127.0.0.1/::1 icin guvensiz moda izin verilir, https zorunlu: %s", issuer)
+		return fmt.Errorf("issuer http: insecure mode is only allowed for localhost/127.0.0.1/::1, https is required: %s", issuer)
 	}
-	log.Printf("UYARI: issuer http ve yerel, GUVENSIZ mod acik: %s", issuer)
+	log.Printf("WARNING: issuer is http and local, INSECURE mode is on: %s", issuer)
 	return nil
 }
 
@@ -609,19 +609,19 @@ func validateInsecureIssuer(issuer, env string) error {
 func migrateLocked(ctx context.Context, pool *pgxpool.Pool) error {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("migration icin baglanti alinamadi: %w", err)
+		return fmt.Errorf("could not get a connection for the migration: %w", err)
 	}
 	defer conn.Release()
 
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationLockKey); err != nil {
-		return fmt.Errorf("migration kilidi alinamadi: %w", err)
+		return fmt.Errorf("could not acquire the migration lock: %w", err)
 	}
 	defer func() {
 		// Release the lock on the same connection; a release error does not
 		// change the migration result but must not be swallowed silently, it
 		// has to leave a trace.
 		if _, err := conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationLockKey); err != nil {
-			log.Printf("migration kilidi birakilamadi: %v", err)
+			log.Printf("could not release the migration lock: %v", err)
 		}
 	}()
 
@@ -636,7 +636,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.ready.Store(false)
 	shutdownErr := s.srv.Shutdown(ctx)
 	if shutdownErr != nil {
-		shutdownErr = fmt.Errorf("dinleyici kapatilamadi: %w", shutdownErr)
+		shutdownErr = fmt.Errorf("could not close the listener: %w", shutdownErr)
 	}
 	s.pool.Close()
 	// The JWKS refresh goroutines live as long as the process does; they are
@@ -647,7 +647,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	for name, v := range s.verifiers {
 		if err := v.Close(); err != nil {
-			log.Printf("%s dogrulayicisi kapatilamadi: %v", name, err)
+			log.Printf("could not close the %s verifier: %v", name, err)
 		}
 	}
 	return shutdownErr

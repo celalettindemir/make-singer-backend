@@ -25,7 +25,7 @@ func testPostgresUserStore(t *testing.T) *PostgresUserStore {
 	defer cancel()
 	pool, err := Connect(ctx, dsn)
 	if err != nil {
-		t.Skip("yerel Postgres yok, atlaniyor")
+		t.Skip("no local Postgres, skipping")
 	}
 	if err := Migrate(ctx, pool); err != nil {
 		pool.Close()
@@ -50,13 +50,13 @@ func contractErr(err error) string {
 	case err == nil:
 		return ""
 	case errors.Is(err, ErrUserNotFound):
-		return "kullanici-yok"
+		return "user-missing"
 	case errors.Is(err, ErrEmailInUse):
-		return "eposta-kullanimda"
+		return "email-in-use"
 	case errors.Is(err, ErrPasswordTooShort):
-		return "sifre-kisa"
+		return "password-short"
 	default:
-		return "diger: " + err.Error()
+		return "other: " + err.Error()
 	}
 }
 
@@ -91,7 +91,7 @@ func TestUserStore_Contract(t *testing.T) {
 	}{
 		{
 			// Leading/trailing whitespace is trimmed before storing.
-			name: "Create bosluklu e-posta ve ad",
+			name: "Create email and name with spaces",
 			call: func(ctx context.Context, d UserStore) contractResult {
 				return result(d.Create(ctx, padded, "  Ad Soyad  ", password))
 			},
@@ -100,14 +100,14 @@ func TestUserStore_Contract(t *testing.T) {
 		{
 			// A REAL PRODUCTION BUG: the user must be able to log in with the SAME
 			// INPUT (padded) they signed up with.
-			name: "ByEmail bosluklu girdi ile bulur",
+			name: "ByEmail finds with padded input",
 			call: func(ctx context.Context, d UserStore) contractResult {
 				return result(d.ByEmail(ctx, padded))
 			},
 			want: contractResult{found: true, email: baseEmail, name: "Ad Soyad"},
 		},
 		{
-			name: "ByEmail bosluksuz girdi ile bulur",
+			name: "ByEmail finds with unpadded input",
 			call: func(ctx context.Context, d UserStore) contractResult {
 				return result(d.ByEmail(ctx, baseEmail))
 			},
@@ -116,7 +116,7 @@ func TestUserStore_Contract(t *testing.T) {
 		{
 			// "Email is unique, case-insensitive" is a binding
 			// constraint: UNIQUE (lower(email)) in Postgres.
-			name: "ByEmail buyuk harfli girdi ile bulur",
+			name: "ByEmail finds with uppercase input",
 			call: func(ctx context.Context, d UserStore) contractResult {
 				return result(d.ByEmail(ctx, upper))
 			},
@@ -124,35 +124,35 @@ func TestUserStore_Contract(t *testing.T) {
 		},
 		{
 			// The fake store used to CREATE the SECOND account.
-			name: "Create ayni e-postayi bosluk/harf farkiyla reddeder",
+			name: "Create rejects the same email with space/case differences",
 			call: func(ctx context.Context, d UserStore) contractResult {
 				return result(d.Create(ctx, " "+upper+" ", "Baska", password))
 			},
-			want: contractResult{err: "eposta-kullanimda"},
+			want: contractResult{err: "email-in-use"},
 		},
 		{
-			name: "ByEmail olmayan e-posta",
+			name: "ByEmail nonexistent email",
 			call: func(ctx context.Context, d UserStore) contractResult {
 				return result(d.ByEmail(ctx, "yok-"+uuid.NewString()+"@ornek.com"))
 			},
-			want: contractResult{err: "kullanici-yok"},
+			want: contractResult{err: "user-missing"},
 		},
 		{
-			name: "ByID olmayan kimlik",
+			name: "ByID nonexistent id",
 			call: func(ctx context.Context, d UserStore) contractResult {
 				return result(d.ByID(ctx, missingID))
 			},
-			want: contractResult{err: "kullanici-yok"},
+			want: contractResult{err: "user-missing"},
 		},
 		{
-			name: "Create kisa sifre",
+			name: "Create short password",
 			call: func(ctx context.Context, d UserStore) contractResult {
 				return result(d.Create(ctx, "kisa-"+uuid.NewString()+"@ornek.com", "Ad", "kisa"))
 			},
-			want: contractResult{err: "sifre-kisa"},
+			want: contractResult{err: "password-short"},
 		},
 		{
-			name: "Sil var olan kullaniciyi siler",
+			name: "Delete removes an existing user",
 			call: func(ctx context.Context, d UserStore) contractResult {
 				k, err := d.ByEmail(ctx, baseEmail)
 				if err != nil {
@@ -163,18 +163,18 @@ func TestUserStore_Contract(t *testing.T) {
 			want: contractResult{},
 		},
 		{
-			name: "ByEmail silinen kullaniciyi bulamaz",
+			name: "ByEmail cannot find a deleted user",
 			call: func(ctx context.Context, d UserStore) contractResult {
 				return result(d.ByEmail(ctx, baseEmail))
 			},
-			want: contractResult{err: "kullanici-yok"},
+			want: contractResult{err: "user-missing"},
 		},
 		{
-			name: "Sil olmayan kullanici icin ErrKullaniciYok",
+			name: "Delete for a nonexistent user returns ErrUserNotFound",
 			call: func(ctx context.Context, d UserStore) contractResult {
 				return contractResult{err: contractErr(d.Delete(ctx, missingID))}
 			},
-			want: contractResult{err: "kullanici-yok"},
+			want: contractResult{err: "user-missing"},
 		},
 	}
 
@@ -183,12 +183,12 @@ func TestUserStore_Contract(t *testing.T) {
 		for _, a := range steps {
 			got := a.call(ctx, store)
 			if got != a.want {
-				t.Errorf("%s: sonuc = %+v, beklenen %+v", a.name, got, a.want)
+				t.Errorf("%s: result = %+v, want %+v", a.name, got, a.want)
 			}
 		}
 	}
 
-	t.Run("sahte", func(t *testing.T) { run(t, NewFakeUserStore()) })
+	t.Run("fake", func(t *testing.T) { run(t, NewFakeUserStore()) })
 	t.Run("postgres", func(t *testing.T) { run(t, testPostgresUserStore(t)) })
 
 	// ByID must really find the ID that Create returned. We measure this
@@ -204,10 +204,10 @@ func TestUserStore_Contract(t *testing.T) {
 			t.Fatalf("ByID: %v", err)
 		}
 		if matched.ID != k.ID || matched.Email != k.Email {
-			t.Errorf("ByID = %+v, beklenen %+v", matched, k)
+			t.Errorf("ByID = %+v, want %+v", matched, k)
 		}
 	}
-	t.Run("sahte-byid", func(t *testing.T) { idRun(t, NewFakeUserStore()) })
+	t.Run("fake-byid", func(t *testing.T) { idRun(t, NewFakeUserStore()) })
 	t.Run("postgres-byid", func(t *testing.T) { idRun(t, testPostgresUserStore(t)) })
 }
 
@@ -234,7 +234,7 @@ func TestFakeUserStore_NoInternalPointers(t *testing.T) {
 		t.Fatalf("ByEmail: %v", err)
 	}
 	if first.Email != "kopya@ornek.com" || first.PasswordHash == "" {
-		t.Fatalf("Create'in dondurdugu kaydi mutasyona ugratmak depoyu bozdu: %+v", first)
+		t.Fatalf("mutating the record returned by Create corrupted the store: %+v", first)
 	}
 
 	// 2. Corrupting the record that ByEmail returned must not corrupt the store either.
@@ -242,10 +242,10 @@ func TestFakeUserStore_NoInternalPointers(t *testing.T) {
 	first.Name = "degisti"
 	second, err := store.ByEmail(ctx, "kopya@ornek.com")
 	if err != nil {
-		t.Fatalf("ByEmail (ikinci): %v", err)
+		t.Fatalf("ByEmail (second): %v", err)
 	}
 	if second.PasswordHash == "" || second.Name != "Ad Soyad" {
-		t.Errorf("ByEmail dahili isaretci dondurdu: %+v", second)
+		t.Errorf("ByEmail returned an internal pointer: %+v", second)
 	}
 
 	// 3. The same isolation for ByID.
@@ -256,10 +256,10 @@ func TestFakeUserStore_NoInternalPointers(t *testing.T) {
 	withID.Name = "yine degisti"
 	again, err := store.ByID(ctx, second.ID)
 	if err != nil {
-		t.Fatalf("ByID (ikinci): %v", err)
+		t.Fatalf("ByID (second): %v", err)
 	}
 	if again.Name != "Ad Soyad" {
-		t.Errorf("ByID dahili isaretci dondurdu: Name = %q", again.Name)
+		t.Errorf("ByID returned an internal pointer: Name = %q", again.Name)
 	}
 }
 
@@ -278,7 +278,7 @@ func TestNormalizeEmail(t *testing.T) {
 	}
 	for input, want := range statuses {
 		if got := normalizeEmail(input); got != want {
-			t.Errorf("epostaNormalize(%q) = %q, beklenen %q", input, got, want)
+			t.Errorf("normalizeEmail(%q) = %q, want %q", input, got, want)
 		}
 	}
 }

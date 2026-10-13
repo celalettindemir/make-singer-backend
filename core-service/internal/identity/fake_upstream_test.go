@@ -167,7 +167,7 @@ func (s *fakeOP) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	target, err := url.Parse(redirectURI)
 	if err != nil {
-		http.Error(w, "redirect_uri cozulemedi", http.StatusBadRequest)
+		http.Error(w, "could not parse redirect_uri", http.StatusBadRequest)
 		return
 	}
 	query := target.Query()
@@ -255,7 +255,7 @@ func (s *fakeOP) idToken(t *testing.T, nonce string) string {
 	token.Header["kid"] = fedKID(s.publishedKey)
 	signed, err := token.SignedString(signer)
 	if err != nil {
-		t.Fatalf("id_token imzalanamadi: %v", err)
+		t.Fatalf("could not sign id_token: %v", err)
 	}
 	return signed
 }
@@ -551,7 +551,7 @@ func (b *fedBrowser) do(
 	}
 	req, err := http.NewRequestWithContext(t.Context(), method, target, body)
 	if err != nil {
-		t.Fatalf("istek kurulamadi (%s %s): %v", method, target, err)
+		t.Fatalf("could not build request (%s %s): %v", method, target, err)
 	}
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -562,12 +562,12 @@ func (b *fedBrowser) do(
 	b.jar.setContext(ctx)
 	resp, err := b.client.Do(req)
 	if err != nil {
-		t.Fatalf("%s %s basarisiz: %v", method, target, err)
+		t.Fatalf("%s %s failed: %v", method, target, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("govde okunamadi: %v", err)
+		t.Fatalf("could not read body: %v", err)
 	}
 	return &responseRecord{
 		Status:     resp.StatusCode,
@@ -587,7 +587,7 @@ func (b *fedBrowser) getWithHeaders(
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), method, target, nil)
 	if err != nil {
-		t.Fatalf("istek kurulamadi (%s %s): %v", method, target, err)
+		t.Fatalf("could not build request (%s %s): %v", method, target, err)
 	}
 	for name, value := range headers {
 		req.Header.Set(name, value)
@@ -595,12 +595,12 @@ func (b *fedBrowser) getWithHeaders(
 	b.jar.setContext(ctxSameSite)
 	resp, err := b.client.Do(req)
 	if err != nil {
-		t.Fatalf("%s %s basarisiz: %v", method, target, err)
+		t.Fatalf("%s %s failed: %v", method, target, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("govde okunamadi: %v", err)
+		t.Fatalf("could not read body: %v", err)
 	}
 	return &responseRecord{
 		Status:     resp.StatusCode,
@@ -616,7 +616,7 @@ func decodeJSON(t *testing.T, body string) map[string]any {
 	t.Helper()
 	var m map[string]any
 	if err := json.Unmarshal([]byte(body), &m); err != nil {
-		t.Fatalf("JSON cozulemedi (%q): %v", body, err)
+		t.Fatalf("could not decode JSON (%q): %v", body, err)
 	}
 	return m
 }
@@ -666,7 +666,7 @@ func (b *fedBrowser) follow(t *testing.T, resp *responseRecord) *responseRecord 
 			}
 			target, err := source.Parse(resp.location)
 			if err != nil {
-				t.Fatalf("Location cozulemedi (%q): %v", resp.location, err)
+				t.Fatalf("could not parse Location (%q): %v", resp.location, err)
 			}
 			if target.Scheme != "http" && target.Scheme != "https" {
 				// The client's redirect_uri: the end of the flow.
@@ -681,13 +681,13 @@ func (b *fedBrowser) follow(t *testing.T, resp *responseRecord) *responseRecord 
 			}
 			target, err := source.Parse(action)
 			if err != nil {
-				t.Fatalf("form action cozulemedi (%q): %v", action, err)
+				t.Fatalf("could not parse form action (%q): %v", action, err)
 			}
 			resp = b.do(t, http.MethodPost, target.String(), fields, stepContext(source, target, http.MethodPost))
 			source = target
 		}
 	}
-	t.Fatalf("yonlendirme zinciri %d adimda bitmedi", maxRedirects)
+	t.Fatalf("redirect chain did not finish in %d steps", maxRedirects)
 	return nil
 }
 
@@ -740,18 +740,18 @@ func (b *fedBrowser) startAuthorizeWithScope(t *testing.T, scope, method string)
 	resp := b.do(t, http.MethodGet,
 		b.env.authorizeURLWithScope(challenge, method, scope), nil, ctxUserInitiated)
 	if resp.Status != http.StatusFound {
-		t.Fatalf("/authorize durumu = %d, beklenen 302. govde: %s", resp.Status, resp.Body())
+		t.Fatalf("/authorize status = %d, want 302. body: %s", resp.Status, resp.Body())
 	}
 	location, err := url.Parse(resp.Location())
 	if err != nil {
-		t.Fatalf("Location cozulemedi: %v", err)
+		t.Fatalf("could not parse Location: %v", err)
 	}
 	if location.Path != pathLogin {
-		t.Fatalf("Location yolu = %q, beklenen %q", location.Path, pathLogin)
+		t.Fatalf("Location path = %q, want %q", location.Path, pathLogin)
 	}
 	id := location.Query().Get("authRequestID")
 	if id == "" {
-		t.Fatal("Location'da authRequestID yok")
+		t.Fatal("no authRequestID in Location")
 	}
 	return id
 }
@@ -791,11 +791,11 @@ func (b *fedBrowser) ExchangeCode(t *testing.T, requestID string) (string, error
 		return "", err
 	}
 	if status != http.StatusOK {
-		return "", fmt.Errorf("jeton ucu durumu %d: %v", status, token)
+		return "", fmt.Errorf("token endpoint status %d: %v", status, token)
 	}
 	access, _ := token["access_token"].(string)
 	if access == "" {
-		return "", errors.New("access_token yok")
+		return "", errors.New("no access_token")
 	}
 	return access, nil
 }
@@ -810,7 +810,7 @@ func (b *fedBrowser) ExchangeCodeFull(t *testing.T, requestID string) (int, map[
 		nil, ctxSameSite)
 	code := resp.LocationCode()
 	if code == "" {
-		return 0, nil, fmt.Errorf("kod uretilmedi (callback durumu %d)", resp.Status)
+		return 0, nil, fmt.Errorf("no code was issued (callback status %d)", resp.Status)
 	}
 	status, body := b.env.exchangeToken(t, code, b.verifier)
 	return status, body, nil
@@ -825,11 +825,11 @@ func (b *fedBrowser) SubmitLink(t *testing.T, body, password string) *responseRe
 	t.Helper()
 	pendingMatch := pendingIDPattern.FindStringSubmatch(body)
 	if pendingMatch == nil {
-		t.Fatalf("baglama formunda beklemeID yok; govde: %s", body)
+		t.Fatalf("no beklemeID in the link form; body: %s", body)
 	}
 	csrfMatch := flowCSRFPattern.FindStringSubmatch(body)
 	if csrfMatch == nil {
-		t.Fatal("baglama formunda CSRF jetonu yok")
+		t.Fatal("no CSRF token in the link form")
 	}
 	return b.do(t, http.MethodPost, b.env.issuer+pathLink, url.Values{
 		fieldPendingID: {pendingMatch[1]},
@@ -909,7 +909,7 @@ func wireFederation(t *testing.T, cfg fakeOPConfig) (
 		d, err := auth.NewUpstreamVerifier(
 			t.Context(), s.server.URL+"/jwks", s.server.URL, s.clientID)
 		if err != nil {
-			t.Fatalf("%s dogrulayicisi kurulamadi: %v", name, err)
+			t.Fatalf("could not set up the %s verifier: %v", name, err)
 		}
 		t.Cleanup(func() { _ = d.Close() })
 		verifiers[name] = d
@@ -923,7 +923,7 @@ func (o *flowEnv) Upstream(t *testing.T, provider string) *fakeOP {
 	t.Helper()
 	s, exists := o.upstreams[provider]
 	if !exists {
-		t.Fatalf("%q icin sahte yukari akis kurulmamis", provider)
+		t.Fatalf("no fake upstream was set up for %q", provider)
 	}
 	return s
 }
@@ -939,18 +939,18 @@ func (o *flowEnv) SignUp(t *testing.T, email, name, password string) {
 	form := b.do(t, http.MethodGet,
 		o.issuer+pathSignup+"?"+url.Values{"authRequestID": {id}}.Encode(), nil, ctxSameSite)
 	if form.Status != http.StatusOK {
-		t.Fatalf("GET /kayit durumu = %d, beklenen 200", form.Status)
+		t.Fatalf("GET /kayit status = %d, want 200", form.Status)
 	}
 	csrfMatch := flowCSRFPattern.FindStringSubmatch(form.Body())
 	if csrfMatch == nil {
-		t.Fatal("kayit formunda CSRF jetonu yok")
+		t.Fatal("no CSRF token in the signup form")
 	}
 	resp := b.do(t, http.MethodPost, o.issuer+pathSignup, url.Values{
 		"eposta": {email}, "ad": {name}, "sifre": {password},
 		"authRequestID": {id}, fieldCSRF: {csrfMatch[1]},
 	}, ctxSameSite)
 	if resp.Status != http.StatusFound {
-		t.Fatalf("POST /kayit durumu = %d, beklenen 302. govde: %s", resp.Status, resp.Body())
+		t.Fatalf("POST /kayit status = %d, want 302. body: %s", resp.Status, resp.Body())
 	}
 }
 
@@ -997,7 +997,7 @@ func (o *flowEnv) RequestDone(t *testing.T, requestID string) bool {
 		return false
 	}
 	if err != nil {
-		t.Fatalf("IDileOku: %v", err)
+		t.Fatalf("GetByID: %v", err)
 	}
 	return req.Done()
 }
@@ -1007,7 +1007,7 @@ func (o *flowEnv) RequestDone(t *testing.T, requestID string) bool {
 func (o *flowEnv) FederatedLinkCount(t *testing.T) int {
 	t.Helper()
 	if o.federated == nil {
-		t.Fatal("federe depo kurulmamis")
+		t.Fatal("federated store was not set up")
 	}
 	return o.federated.linkCount()
 }
@@ -1034,16 +1034,16 @@ func jwtClaims(t *testing.T, token string) (map[string]any, map[string]any) {
 	t.Helper()
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		t.Fatalf("jeton JWT degil (%d parca)", len(parts))
+		t.Fatalf("token is not a JWT (%d parts)", len(parts))
 	}
 	decode := func(part string) map[string]any {
 		raw, err := base64.RawURLEncoding.DecodeString(part)
 		if err != nil {
-			t.Fatalf("jeton parcasi cozulemedi: %v", err)
+			t.Fatalf("could not decode token part: %v", err)
 		}
 		var m map[string]any
 		if err := json.Unmarshal(raw, &m); err != nil {
-			t.Fatalf("jeton parcasi JSON degil: %v", err)
+			t.Fatalf("token part is not JSON: %v", err)
 		}
 		return m
 	}

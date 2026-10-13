@@ -26,7 +26,7 @@ func testPostgres(t *testing.T) *PostgresTokenStore {
 	defer cancel()
 	pool, err := Connect(ctx, dsn)
 	if err != nil {
-		t.Skip("yerel Postgres yok, atlaniyor")
+		t.Skip("no local Postgres, skipping")
 	}
 	if err := Migrate(ctx, pool); err != nil {
 		pool.Close()
@@ -48,7 +48,7 @@ func pgTestUser(t *testing.T, s *PostgresTokenStore) string {
 	if _, err := s.pool.Exec(ctx,
 		`INSERT INTO users (id, email, password_hash) VALUES ($1, $2, $3)`,
 		id, id+"@test.invalid", "test-yerel-hash"); err != nil {
-		t.Fatalf("test kullanicisi eklenemedi: %v", err)
+		t.Fatalf("could not add test user: %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = s.pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, id)
@@ -68,49 +68,49 @@ func TestPostgresTokenStore_ReuseRevokesFamily(t *testing.T) {
 
 	key, err := LoadSigningKey(testPEM(t))
 	if err != nil {
-		t.Fatalf("AnahtarYukle: %v", err)
+		t.Fatalf("LoadSigningKey: %v", err)
 	}
 	d := NewStorage(testAuthCfg(), NewFakeUserStore(), s, nil, key)
 
 	record := newRefresh(userID)
 	old, err := s.CreateRefresh(ctx, record)
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	fresh, err := s.RotateRefresh(ctx, old, newRefresh(userID))
 	if err != nil {
-		t.Fatalf("RefreshDondur: %v", err)
+		t.Fatalf("RotateRefresh: %v", err)
 	}
 	if _, err := s.GetRefresh(ctx, fresh); err != nil {
-		t.Fatalf("rotasyon sonrasi yeni jeton gecersiz: %v", err)
+		t.Fatalf("the new token is invalid after rotation: %v", err)
 	}
 
 	// The used token must be rejected with the error the library sees...
 	if _, err := d.TokenRequestByRefreshToken(ctx, old); !errors.Is(err, op.ErrInvalidRefreshToken) {
-		t.Fatalf("hata = %v, beklenen op.ErrInvalidRefreshToken", err)
+		t.Fatalf("error = %v, want op.ErrInvalidRefreshToken", err)
 	}
 	// ...and the WHOLE family must be dead. Verify with SQL: how many rows
 	// are in the same family and how many are still alive.
 	familyID, err := s.RefreshFamilyID(ctx, old)
 	if err != nil {
-		t.Fatalf("RefreshAileID: %v", err)
+		t.Fatalf("RefreshFamilyID: %v", err)
 	}
 	var total, alive int
 	if err := s.pool.QueryRow(ctx,
 		`SELECT count(*), count(*) FILTER (WHERE revoked_at IS NULL)
 		   FROM refresh_tokens WHERE family_id = $1`, familyID).
 		Scan(&total, &alive); err != nil {
-		t.Fatalf("aile sorgulanamadi: %v", err)
+		t.Fatalf("could not query the family: %v", err)
 	}
 	if total != 2 {
-		t.Errorf("ailede %d satir var, beklenen 2", total)
+		t.Errorf("the family has %d rows, want 2", total)
 	}
 	if alive != 0 {
-		t.Errorf("ailede %d satir hala iptal edilmemis, beklenen 0", alive)
+		t.Errorf("%d rows in the family are still not revoked, want 0", alive)
 	}
 	// The current token in the legitimate client's hands must not work any more either.
 	if _, err := d.TokenRequestByRefreshToken(ctx, fresh); !errors.Is(err, op.ErrInvalidRefreshToken) {
-		t.Errorf("guncel jeton hala kabul ediliyor: %v", err)
+		t.Errorf("the current token is still accepted: %v", err)
 	}
 }
 
@@ -123,32 +123,32 @@ func TestPostgresTokenStore_GetRefreshErrorOrder(t *testing.T) {
 
 	old, err := s.CreateRefresh(ctx, newRefresh(userID))
 	if err != nil {
-		t.Fatalf("RefreshOlustur: %v", err)
+		t.Fatalf("CreateRefresh: %v", err)
 	}
 	if _, err := s.RotateRefresh(ctx, old, newRefresh(userID)); err != nil {
-		t.Fatalf("RefreshDondur: %v", err)
+		t.Fatalf("RotateRefresh: %v", err)
 	}
 	// used_at set, revoked_at empty: reuse.
 	if _, err := s.GetRefresh(ctx, old); !errors.Is(err, ErrTokenReused) {
-		t.Fatalf("hata = %v, beklenen ErrJetonTekrar", err)
+		t.Fatalf("error = %v, want ErrTokenReused", err)
 	}
 	// After the family is revoked the same token is now ErrTokenNotFound: the
 	// alarm does not ring again.
 	familyID, err := s.RefreshFamilyID(ctx, old)
 	if err != nil {
-		t.Fatalf("RefreshAileID: %v", err)
+		t.Fatalf("RefreshFamilyID: %v", err)
 	}
 	if err := s.RevokeFamily(ctx, familyID); err != nil {
-		t.Fatalf("AileIptal: %v", err)
+		t.Fatalf("RevokeFamily: %v", err)
 	}
 	if _, err := s.GetRefresh(ctx, old); !errors.Is(err, ErrTokenNotFound) {
-		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
+		t.Errorf("error = %v, want ErrTokenNotFound", err)
 	}
 	// Unknown token: neither a record nor a family.
 	if _, err := s.GetRefresh(ctx, "uydurma"); !errors.Is(err, ErrTokenNotFound) {
-		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
+		t.Errorf("error = %v, want ErrTokenNotFound", err)
 	}
 	if _, err := s.RefreshFamilyID(ctx, "uydurma"); !errors.Is(err, ErrTokenNotFound) {
-		t.Errorf("hata = %v, beklenen ErrJetonYok", err)
+		t.Errorf("error = %v, want ErrTokenNotFound", err)
 	}
 }

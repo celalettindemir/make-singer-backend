@@ -105,22 +105,22 @@ type RateLimiter struct {
 // is exactly the flaw we are trying to close.
 func NewRateLimiter(rdb *redis.Client, cfg RateLimitConfig, emailKey []byte) (*RateLimiter, error) {
 	if rdb == nil {
-		return nil, errors.New("hiz limiti: redis istemcisi yok")
+		return nil, errors.New("rate limit: no redis client")
 	}
 	if cfg.LoginIPPerMin <= 0 {
-		return nil, fmt.Errorf("hiz limiti: giris_ip_per_min pozitif olmali, gelen: %d", cfg.LoginIPPerMin)
+		return nil, fmt.Errorf("rate limit: login_ip_per_min must be positive, got: %d", cfg.LoginIPPerMin)
 	}
 	if cfg.LoginEmailPerHour <= 0 {
-		return nil, fmt.Errorf("hiz limiti: giris_eposta_per_saat pozitif olmali, gelen: %d", cfg.LoginEmailPerHour)
+		return nil, fmt.Errorf("rate limit: login_email_per_hour must be positive, got: %d", cfg.LoginEmailPerHour)
 	}
 	if cfg.SignupIPPerHour <= 0 {
-		return nil, fmt.Errorf("hiz limiti: kayit_ip_per_saat pozitif olmali, gelen: %d", cfg.SignupIPPerHour)
+		return nil, fmt.Errorf("rate limit: signup_ip_per_hour must be positive, got: %d", cfg.SignupIPPerHour)
 	}
 	if cfg.TrustedProxies < 0 {
-		return nil, fmt.Errorf("hiz limiti: guvenilen_proxy negatif olamaz, gelen: %d", cfg.TrustedProxies)
+		return nil, fmt.Errorf("rate limit: trusted_proxy must not be negative, got: %d", cfg.TrustedProxies)
 	}
 	if len(emailKey) == 0 {
-		return nil, errors.New("hiz limiti: e-posta ozet anahtari bos")
+		return nil, errors.New("rate limit: email digest key is empty")
 	}
 	return &RateLimiter{rdb: rdb, cfg: cfg, emailHMACKey: emailKey}, nil
 }
@@ -342,7 +342,7 @@ func (h *RateLimiter) allow(w http.ResponseWriter, r *http.Request, s counter) b
 		// content is not written: the key carries the email digest and the error
 		// text may contain the Redis address (which may carry a secret), so only a
 		// fixed message is printed.
-		log.Print("hiz limiti denetlenemedi, istek reddedildi (fail-closed)")
+		log.Print("rate limit check failed, request rejected (fail-closed)")
 		w.Header().Set("Retry-After", "5")
 		http.Error(w, msgRateLimitUnavailable, http.StatusServiceUnavailable)
 		return false

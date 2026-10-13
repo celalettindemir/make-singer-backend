@@ -15,7 +15,7 @@ func TestExchangeCode_SendsGoogleFields(t *testing.T) {
 	var captured url.Values
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			t.Errorf("metot = %s, beklenen POST", r.Method)
+			t.Errorf("method = %s, want POST", r.Method)
 		}
 		if ct := r.Header.Get("Content-Type"); ct != "application/x-www-form-urlencoded" {
 			t.Errorf("Content-Type = %q", ct)
@@ -30,7 +30,7 @@ func TestExchangeCode_SendsGoogleFields(t *testing.T) {
 	y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: server.URL, SupportsPKCE: true}
 	idToken, err := y.ExchangeCode(context.Background(), server.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
 	if err != nil {
-		t.Fatalf("degisim basarisiz: %v", err)
+		t.Fatalf("exchange failed: %v", err)
 	}
 	if idToken != "sahte.jwt.imza" {
 		t.Errorf("id_token = %q", idToken)
@@ -44,7 +44,7 @@ func TestExchangeCode_SendsGoogleFields(t *testing.T) {
 		"code_verifier": "dogrulayici-1",
 	} {
 		if captured.Get(field) != want {
-			t.Errorf("%s = %q, beklenen %q", field, captured.Get(field), want)
+			t.Errorf("%s = %q, want %q", field, captured.Get(field), want)
 		}
 	}
 }
@@ -62,10 +62,10 @@ func TestExchangeCode_NoVerifierWithoutPKCE(t *testing.T) {
 
 	y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: server.URL, SupportsPKCE: false}
 	if _, err := y.ExchangeCode(context.Background(), server.Client(), "kod-1", "dogrulayici-1", "https://biz/geri"); err != nil {
-		t.Fatalf("degisim basarisiz: %v", err)
+		t.Fatalf("exchange failed: %v", err)
 	}
 	if captured.Get("code_verifier") != "" {
-		t.Errorf("code_verifier = %q, PKCE desteklemeyen saglayiciya gonderilmemeli", captured.Get("code_verifier"))
+		t.Errorf("code_verifier = %q, must not be sent to a provider that does not support PKCE", captured.Get("code_verifier"))
 	}
 }
 
@@ -75,8 +75,8 @@ func TestExchangeCode_NoVerifierWithoutPKCE(t *testing.T) {
 // verification.
 func TestExchangeCode_MissingIDTokenFails(t *testing.T) {
 	statuses := map[string]string{
-		"id_token alani yok":   `{"access_token":"x"}`,
-		"200 ile hata govdesi": `{"error":"invalid_grant"}`,
+		"no id_token field":      `{"access_token":"x"}`,
+		"200 with an error body": `{"error":"invalid_grant"}`,
 	}
 	for name, body := range statuses {
 		t.Run(name, func(t *testing.T) {
@@ -89,10 +89,10 @@ func TestExchangeCode_MissingIDTokenFails(t *testing.T) {
 			y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: server.URL, SupportsPKCE: true}
 			idToken, err := y.ExchangeCode(context.Background(), server.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
 			if !errors.Is(err, ErrUpstreamResponse) {
-				t.Errorf("err = %v, beklenen ErrYukariAkisYanit", err)
+				t.Errorf("err = %v, want ErrUpstreamResponse", err)
 			}
 			if idToken != "" {
-				t.Errorf("idToken = %q, beklenen bos", idToken)
+				t.Errorf("idToken = %q, want empty", idToken)
 			}
 		})
 	}
@@ -110,10 +110,10 @@ func TestExchangeCode_HTTPErrorNotSwallowed(t *testing.T) {
 			y := &Upstream{Name: providerGoogle, ClientID: "ist", ClientSecret: "sir", TokenURL: server.URL, SupportsPKCE: true}
 			idToken, err := y.ExchangeCode(context.Background(), server.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
 			if err == nil {
-				t.Fatal("hata bekleniyordu, nil geldi")
+				t.Fatal("an error was expected, got nil")
 			}
 			if idToken != "" {
-				t.Errorf("idToken = %q, beklenen bos", idToken)
+				t.Errorf("idToken = %q, want empty", idToken)
 			}
 		})
 	}
@@ -136,12 +136,12 @@ func TestExchangeCode_AppliesTimeout(t *testing.T) {
 	began := time.Now()
 	_, err := y.ExchangeCode(ctx, server.Client(), "kod-1", "dogrulayici-1", "https://biz/geri")
 	if err == nil {
-		t.Fatal("zaman asimi hatasi bekleniyordu, nil geldi")
+		t.Fatal("a timeout error was expected, got nil")
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("err = %v, beklenen context.DeadlineExceeded zincirinde", err)
+		t.Errorf("err = %v, want it in the context.DeadlineExceeded chain", err)
 	}
 	if time.Since(began) > 1*time.Second {
-		t.Errorf("JetonDegis cok uzun surdu: %v", time.Since(began))
+		t.Errorf("ExchangeCode took too long: %v", time.Since(began))
 	}
 }

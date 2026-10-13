@@ -20,7 +20,7 @@ func testRedis(t *testing.T) *redis.Client {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		t.Skip("yerel Redis yok, atlaniyor")
+		t.Skip("no local Redis, skipping")
 	}
 	t.Cleanup(func() { _ = rdb.FlushDB(context.Background()).Err(); _ = rdb.Close() })
 	return rdb
@@ -44,17 +44,17 @@ func TestRequestStore_CreateAndGet(t *testing.T) {
 		Nonce:               "n1",
 	}, "")
 	if err != nil {
-		t.Fatalf("Olustur: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
 	readBack, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
-		t.Fatalf("IDileOku: %v", err)
+		t.Fatalf("GetByID: %v", err)
 	}
 	if readBack.GetNonce() != "n1" {
-		t.Errorf("nonce = %q, beklenen n1", readBack.GetNonce())
+		t.Errorf("nonce = %q, want n1", readBack.GetNonce())
 	}
 	if readBack.GetCodeChallenge() == nil || readBack.GetCodeChallenge().Challenge != "abc" {
-		t.Errorf("code challenge kaybolmus: %+v", readBack.GetCodeChallenge())
+		t.Errorf("code challenge was lost: %+v", readBack.GetCodeChallenge())
 	}
 }
 
@@ -68,23 +68,23 @@ func TestRequestStore_CodeSingleUse(t *testing.T) {
 		ResponseType: oidc.ResponseTypeCode,
 	}, "")
 	if err != nil {
-		t.Fatalf("Olustur: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
 	if err := store.SaveCode(ctx, req.GetID(), "kod123"); err != nil {
-		t.Fatalf("KodKaydet: %v", err)
+		t.Fatalf("SaveCode: %v", err)
 	}
 	if _, err := store.GetByCode(ctx, "kod123"); err != nil {
-		t.Fatalf("ilk okuma basarisiz: %v", err)
+		t.Fatalf("first read failed: %v", err)
 	}
 	if _, err := store.GetByCode(ctx, "kod123"); !errors.Is(err, ErrRequestNotFound) {
-		t.Errorf("ikinci okuma hatasi = %v, beklenen ErrIstekYok", err)
+		t.Errorf("second read error = %v, want ErrRequestNotFound", err)
 	}
 }
 
 func TestRequestStore_MissingRequest(t *testing.T) {
 	store := NewRequestStore(testRedis(t))
 	if _, err := store.GetByID(context.Background(), "yok"); !errors.Is(err, ErrRequestNotFound) {
-		t.Errorf("hata = %v, beklenen ErrIstekYok", err)
+		t.Errorf("error = %v, want ErrRequestNotFound", err)
 	}
 }
 
@@ -95,23 +95,23 @@ func TestAuthRequest_InitiallyNotDone(t *testing.T) {
 	ctx := context.Background()
 	req, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
-		t.Fatalf("Olustur: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
 	if req.Done() {
-		t.Error("yeni istek tamamlanmis gorunuyor")
+		t.Error("a new request looks completed")
 	}
 	if req.GetSubject() != "" {
-		t.Errorf("subject = %q, bos olmali", req.GetSubject())
+		t.Errorf("subject = %q, should be empty", req.GetSubject())
 	}
 	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
-		t.Fatalf("TamamlandiIsaretle: %v", err)
+		t.Fatalf("MarkDone: %v", err)
 	}
 	readBack, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
-		t.Fatalf("IDileOku: %v", err)
+		t.Fatalf("GetByID: %v", err)
 	}
 	if !readBack.Done() || readBack.GetSubject() != "kullanici-1" {
-		t.Errorf("tamamlanmis istek yanlis: done=%v subject=%q", readBack.Done(), readBack.GetSubject())
+		t.Errorf("completed request is wrong: done=%v subject=%q", readBack.Done(), readBack.GetSubject())
 	}
 }
 
@@ -122,23 +122,23 @@ func TestRequestStore_MarkDoneKeepsSubject(t *testing.T) {
 	ctx := context.Background()
 	req, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
-		t.Fatalf("Olustur: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
 	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
-		t.Fatalf("ilk TamamlandiIsaretle: %v", err)
+		t.Fatalf("first MarkDone: %v", err)
 	}
 	// Try 15 times in a row with other identities: all must be rejected.
 	for i := 0; i < 15; i++ {
 		if err := store.MarkDone(ctx, req.GetID(), "saldirgan", []string{amrPassword}); !errors.Is(err, ErrRequestAlreadyCompleted) {
-			t.Fatalf("%d. deneme hatasi = %v, beklenen ErrIstekZatenTamamlandi", i+1, err)
+			t.Fatalf("attempt %d error = %v, want ErrRequestAlreadyCompleted", i+1, err)
 		}
 	}
 	readBack, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
-		t.Fatalf("IDileOku: %v", err)
+		t.Fatalf("GetByID: %v", err)
 	}
 	if readBack.GetSubject() != "kullanici-1" {
-		t.Errorf("subject = %q, EZILMIS (beklenen kullanici-1)", readBack.GetSubject())
+		t.Errorf("subject = %q, OVERWRITTEN (want kullanici-1)", readBack.GetSubject())
 	}
 }
 
@@ -150,24 +150,24 @@ func TestRequestStore_MarkDoneSameUserNoOp(t *testing.T) {
 	ctx := context.Background()
 	req, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
-		t.Fatalf("Olustur: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
 	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
-		t.Fatalf("ilk TamamlandiIsaretle: %v", err)
+		t.Fatalf("first MarkDone: %v", err)
 	}
 	first, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
-		t.Fatalf("IDileOku: %v", err)
+		t.Fatalf("GetByID: %v", err)
 	}
 	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
-		t.Fatalf("ikinci TamamlandiIsaretle (ayni kullanici) hata dondu: %v", err)
+		t.Fatalf("second MarkDone (same user) returned an error: %v", err)
 	}
 	second, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
-		t.Fatalf("IDileOku: %v", err)
+		t.Fatalf("GetByID: %v", err)
 	}
 	if !second.GetAuthTime().Equal(first.GetAuthTime()) {
-		t.Error("AuthTime yeniden yazildi; no-op olmasi gerekirdi")
+		t.Error("AuthTime was rewritten; it should have been a no-op")
 	}
 }
 
@@ -180,25 +180,25 @@ func TestRequestStore_IDIsNotHintSubject(t *testing.T) {
 	const hint = "kullanici-42"
 	firstRecord, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, hint)
 	if err != nil {
-		t.Fatalf("Olustur: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
 	if firstRecord.GetID() == hint {
-		t.Fatal("istek ID'si id_token_hint sub'una esitlendi")
+		t.Fatal("request ID was made equal to the id_token_hint sub")
 	}
 	if firstRecord.HintSubject != hint {
-		t.Errorf("IpucuSubject = %q, beklenen %q", firstRecord.HintSubject, hint)
+		t.Errorf("HintSubject = %q, want %q", firstRecord.HintSubject, hint)
 	}
 	// The hint must not affect Done(): the user has not logged in yet.
 	if firstRecord.Done() || firstRecord.GetSubject() != "" {
-		t.Error("ipucu ile istek tamamlanmis gorunuyor")
+		t.Error("a request with a hint looks completed")
 	}
 	// A concurrent second flow must NOT overwrite the same key.
 	second, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, hint)
 	if err != nil {
-		t.Fatalf("ikinci Olustur: %v", err)
+		t.Fatalf("second Create: %v", err)
 	}
 	if second.GetID() == firstRecord.GetID() {
-		t.Fatal("ayni ipucu ile iki istek ayni ID'yi aldi")
+		t.Fatal("two requests with the same hint got the same ID")
 	}
 }
 
@@ -208,17 +208,17 @@ func TestAMR_PasswordLoginIsPwd(t *testing.T) {
 	ctx := context.Background()
 	req, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
-		t.Fatalf("Olustur: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
 	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
-		t.Fatalf("TamamlandiIsaretle: %v", err)
+		t.Fatalf("MarkDone: %v", err)
 	}
 	readBack, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
-		t.Fatalf("IDileOku: %v", err)
+		t.Fatalf("GetByID: %v", err)
 	}
 	if got := readBack.GetAMR(); len(got) != 1 || got[0] != "pwd" {
-		t.Errorf("GetAMR() = %v, beklenen [pwd]", got)
+		t.Errorf("GetAMR() = %v, want [pwd]", got)
 	}
 }
 
@@ -228,22 +228,22 @@ func TestAMR_FederationIsNotPwd(t *testing.T) {
 	ctx := context.Background()
 	req, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
-		t.Fatalf("Olustur: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
 	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrFederation}); err != nil {
-		t.Fatalf("TamamlandiIsaretle: %v", err)
+		t.Fatalf("MarkDone: %v", err)
 	}
 	readBack, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
-		t.Fatalf("IDileOku: %v", err)
+		t.Fatalf("GetByID: %v", err)
 	}
 	got := readBack.GetAMR()
 	if len(got) != 1 || got[0] != amrFederation {
-		t.Errorf("GetAMR() = %v, beklenen [%s]", got, amrFederation)
+		t.Errorf("GetAMR() = %v, want [%s]", got, amrFederation)
 	}
 	for _, v := range got {
 		if v == "pwd" {
-			t.Errorf("GetAMR() = %v, 'pwd' ICERMEMELI", got)
+			t.Errorf("GetAMR() = %v, must NOT contain 'pwd'", got)
 		}
 	}
 }
@@ -253,7 +253,7 @@ func TestAMR_FederationIsNotPwd(t *testing.T) {
 func TestAMR_DefaultIsNotPwd(t *testing.T) {
 	req := &AuthRequest{}
 	if len(req.GetAMR()) != 0 {
-		t.Errorf("GetAMR() = %v, beklenen bos", req.GetAMR())
+		t.Errorf("GetAMR() = %v, want empty", req.GetAMR())
 	}
 }
 
@@ -264,22 +264,22 @@ func TestAMR_NotOverwrittenOnNoOp(t *testing.T) {
 	ctx := context.Background()
 	req, err := store.Create(ctx, &oidc.AuthRequest{ClientID: "makesinger-mobil"}, "")
 	if err != nil {
-		t.Fatalf("Olustur: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
 	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrPassword}); err != nil {
-		t.Fatalf("ilk TamamlandiIsaretle: %v", err)
+		t.Fatalf("first MarkDone: %v", err)
 	}
 	// Even if the second call for the same user comes with a DIFFERENT amr it
 	// must be a NO-OP and must NOT overwrite the first amr.
 	if err := store.MarkDone(ctx, req.GetID(), "kullanici-1", []string{amrFederation}); err != nil {
-		t.Fatalf("ikinci TamamlandiIsaretle (no-op): %v", err)
+		t.Fatalf("second MarkDone (no-op): %v", err)
 	}
 	readBack, err := store.GetByID(ctx, req.GetID())
 	if err != nil {
-		t.Fatalf("IDileOku: %v", err)
+		t.Fatalf("GetByID: %v", err)
 	}
 	if got := readBack.GetAMR(); len(got) != 1 || got[0] != amrPassword {
-		t.Errorf("GetAMR() = %v, beklenen [%s] (ezilmemis olmali)", got, amrPassword)
+		t.Errorf("GetAMR() = %v, want [%s] (must not be overwritten)", got, amrPassword)
 	}
 }
 
@@ -306,10 +306,10 @@ func TestAMR_PreservedOnRefresh(t *testing.T) {
 	}
 	record, err := d.tokens.GetRefresh(ctx, refreshToken)
 	if err != nil {
-		t.Fatalf("RefreshOku: %v", err)
+		t.Fatalf("GetRefresh: %v", err)
 	}
 	if len(record.AMR) != 1 || record.AMR[0] != amrFederation {
-		t.Fatalf("ilk kayitta amr = %v, beklenen [%s]", record.AMR, amrFederation)
+		t.Fatalf("amr at the first record = %v, want [%s]", record.AMR, amrFederation)
 	}
 	// Imitate the library's real call order: in the refresh flow
 	// TokenRequestByRefreshToken produces the RefreshTokenRequest that carries
@@ -320,14 +320,14 @@ func TestAMR_PreservedOnRefresh(t *testing.T) {
 	}
 	_, rotatedRefreshToken, _, err := d.CreateAccessAndRefreshTokens(ctx, refreshReq, refreshToken)
 	if err != nil {
-		t.Fatalf("CreateAccessAndRefreshTokens (rotasyon): %v", err)
+		t.Fatalf("CreateAccessAndRefreshTokens (rotation): %v", err)
 	}
 	newRecord, err := d.tokens.GetRefresh(ctx, rotatedRefreshToken)
 	if err != nil {
-		t.Fatalf("RefreshOku (yeni): %v", err)
+		t.Fatalf("GetRefresh (new): %v", err)
 	}
 	if len(newRecord.AMR) != 1 || newRecord.AMR[0] != amrFederation {
-		t.Errorf("rotasyon sonrasi amr = %v, beklenen [%s]", newRecord.AMR, amrFederation)
+		t.Errorf("amr after rotation = %v, want [%s]", newRecord.AMR, amrFederation)
 	}
 }
 
@@ -345,25 +345,25 @@ func TestRequestStore_WriteAndReadSession(t *testing.T) {
 	binding.Add("istek-1", "csrf-1")
 	binding.Add("istek-2", "csrf-2")
 	if err := store.WriteSession(ctx, "oturum-1", binding, requestTTL); err != nil {
-		t.Fatalf("OturumYaz: %v", err)
+		t.Fatalf("WriteSession: %v", err)
 	}
 	readBack, err := store.ReadSession(ctx, "oturum-1")
 	if err != nil {
-		t.Fatalf("OturumOku: %v", err)
+		t.Fatalf("ReadSession: %v", err)
 	}
 	if !reflect.DeepEqual(readBack, binding) {
-		t.Errorf("baglama = %+v, beklenen %+v", readBack, binding)
+		t.Errorf("binding = %+v, want %+v", readBack, binding)
 	}
 	for _, d := range []struct{ id, csrf string }{{"istek-1", "csrf-1"}, {"istek-2", "csrf-2"}} {
 		csrf, isBound := readBack.CSRFFor(d.id)
 		if !isBound || csrf != d.csrf {
-			t.Errorf("CSRFBul(%q) = (%q, %v), beklenen (%q, true)", d.id, csrf, isBound, d.csrf)
+			t.Errorf("CSRFFor(%q) = (%q, %v), want (%q, true)", d.id, csrf, isBound, d.csrf)
 		}
 	}
 	if _, isBound := readBack.CSRFFor("istek-3"); isBound {
-		t.Error("baglanmamis id icin CSRFBul true dondu")
+		t.Error("CSRFFor returned true for an unbound id")
 	}
 	if _, err := store.ReadSession(ctx, "yok"); !errors.Is(err, ErrSessionNotFound) {
-		t.Errorf("hata = %v, beklenen ErrOturumYok", err)
+		t.Errorf("error = %v, want ErrSessionNotFound", err)
 	}
 }

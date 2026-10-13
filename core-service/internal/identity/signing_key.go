@@ -25,7 +25,7 @@ type SigningKey struct {
 func LoadSigningKey(pemText string) (*SigningKey, error) {
 	block, _ := pem.Decode([]byte(pemText))
 	if block == nil || len(block.Bytes) == 0 {
-		return nil, fmt.Errorf("gecerli bir PEM blogu bulunamadi")
+		return nil, fmt.Errorf("no valid PEM block found")
 	}
 	var private *rsa.PrivateKey
 	if k, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
@@ -33,16 +33,16 @@ func LoadSigningKey(pemText string) (*SigningKey, error) {
 	} else {
 		anyKey, err8 := x509.ParsePKCS8PrivateKey(block.Bytes)
 		if err8 != nil {
-			return nil, fmt.Errorf("RSA ozel anahtari cozulemedi (PKCS#1: %v, PKCS#8: %w)", err, err8)
+			return nil, fmt.Errorf("could not parse the RSA private key (PKCS#1: %v, PKCS#8: %w)", err, err8)
 		}
 		rsaKey, ok := anyKey.(*rsa.PrivateKey)
 		if !ok {
-			return nil, fmt.Errorf("anahtar RSA degil: %T", anyKey)
+			return nil, fmt.Errorf("key is not RSA: %T", anyKey)
 		}
 		private = rsaKey
 	}
 	if private.N.BitLen() < 2048 {
-		return nil, fmt.Errorf("anahtar %d bit, en az 2048 olmali", private.N.BitLen())
+		return nil, fmt.Errorf("key is %d bits, must be at least 2048", private.N.BitLen())
 	}
 	return &SigningKey{private: private, kid: deriveKID(&private.PublicKey)}, nil
 }
@@ -91,7 +91,7 @@ var (
 func CryptoKey(s string) ([32]byte, error) {
 	var b [32]byte
 	if len(s) != 32 {
-		return b, fmt.Errorf("crypto anahtari %d bayt, tam 32 olmali", len(s))
+		return b, fmt.Errorf("crypto key is %d bytes, must be exactly 32", len(s))
 	}
 	copy(b[:], s)
 	return b, nil

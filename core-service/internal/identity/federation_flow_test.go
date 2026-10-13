@@ -39,7 +39,7 @@ func (o *flowEnv) userinfo(t *testing.T, accessToken string) map[string]any {
 		"Authorization": "Bearer " + accessToken,
 	})
 	if resp.Status != http.StatusOK {
-		t.Fatalf("/userinfo durumu = %d, govde: %s", resp.Status, resp.Body())
+		t.Fatalf("/userinfo status = %d, body: %s", resp.Status, resp.Body())
 	}
 	return decodeJSON(t, resp.Body())
 }
@@ -53,7 +53,7 @@ func (o *flowEnv) federationCode(t *testing.T, provider string) (string, *fedBro
 	last := session.RunFederationFlow(t, provider, requestID)
 	code := last.LocationCode()
 	if code == "" {
-		t.Fatalf("%s akisi kod uretmedi; son durum %d, konum %q, govde: %s",
+		t.Fatalf("%s flow did not produce a code; last status %d, location %q, body: %s",
 			provider, last.Status, last.Location(), last.Body())
 	}
 	return code, session
@@ -68,7 +68,7 @@ func (o *flowEnv) federationTokens(
 	code, session := o.federationCode(t, provider)
 	status, token := o.exchangeToken(t, code, session.verifier)
 	if status != http.StatusOK {
-		t.Fatalf("token durumu = %d, govde: %v", status, token)
+		t.Fatalf("token status = %d, body: %v", status, token)
 	}
 	return token, session
 }
@@ -78,12 +78,12 @@ func accessTokenSub(t *testing.T, token map[string]any) string {
 	t.Helper()
 	access, _ := token["access_token"].(string)
 	if access == "" {
-		t.Fatal("access_token yok")
+		t.Fatal("no access_token")
 	}
 	_, claims := jwtClaims(t, access)
 	sub, _ := claims["sub"].(string)
 	if sub == "" {
-		t.Fatal("access token'da sub yok")
+		t.Fatal("no sub in the access token")
 	}
 	return sub
 }
@@ -96,23 +96,23 @@ func upstreamCallbackURL(t *testing.T, b *fedBrowser, provider, requestID string
 	t.Helper()
 	start := b.StartFederation(t, provider, requestID)
 	if start.Status != http.StatusFound {
-		t.Fatalf("baslat durumu = %d, beklenen 302. govde: %s", start.Status, start.Body())
+		t.Fatalf("start status = %d, want 302. body: %s", start.Status, start.Body())
 	}
 	if start.fedCookie() == nil {
-		t.Fatal("baslat federasyon cerezi yazmadi; senaryo kurulamadi")
+		t.Fatal("start did not write the federation cookie; scenario could not be set up")
 	}
 	// The user approves in the upstream flow (cross-site top-level GET).
 	upstream := b.do(t, http.MethodGet, start.Location(), nil, ctxCrossSiteGet)
 	if upstream.Status != http.StatusFound {
-		t.Fatalf("yukari akis /authorize durumu = %d, beklenen 302", upstream.Status)
+		t.Fatalf("upstream /authorize status = %d, want 302", upstream.Status)
 	}
 	callback := upstream.Location()
 	parsed, err := url.Parse(callback)
 	if err != nil {
-		t.Fatalf("geri adresi cozulemedi: %v", err)
+		t.Fatalf("could not parse callback address: %v", err)
 	}
 	if parsed.Query().Get("code") == "" || parsed.Query().Get("state") == "" {
-		t.Fatalf("yukari akis code+state dondurmedi: %q", callback)
+		t.Fatalf("upstream did not return code+state: %q", callback)
 	}
 	return callback
 }
@@ -143,23 +143,23 @@ func TestE2E_GoogleLogin(t *testing.T) {
 	// PKCE pair and nonce are visible there.
 	query := env.Upstream(t, providerGoogle).lastAuthorizeQuery()
 	if query.Get("code_challenge_method") != "S256" || query.Get("code_challenge") == "" {
-		t.Errorf("yukari akisa S256 PKCE gonderilmedi: %v", query)
+		t.Errorf("S256 PKCE was not sent upstream: %v", query)
 	}
 	if query.Get("nonce") == "" {
-		t.Error("yukari akisa nonce gonderilmedi")
+		t.Error("nonce was not sent upstream")
 	}
 
 	// 1) access_token: signed with RS256 and for OUR client.
 	access, _ := token["access_token"].(string)
 	if access == "" {
-		t.Fatal("access_token yok")
+		t.Fatal("no access_token")
 	}
 	header, accessClaims := jwtClaims(t, access)
 	if header["alg"] != "RS256" {
-		t.Errorf("access token alg = %v, beklenen RS256", header["alg"])
+		t.Errorf("access token alg = %v, want RS256", header["alg"])
 	}
 	if !audContains(accessClaims["aud"], "makesinger-mobil") {
-		t.Errorf("access token aud = %v, beklenen makesinger-mobil", accessClaims["aud"])
+		t.Errorf("access token aud = %v, want makesinger-mobil", accessClaims["aud"])
 	}
 
 	// 2) amr = ["fed"]: the fact that the user was verified through federation
@@ -168,12 +168,12 @@ func TestE2E_GoogleLogin(t *testing.T) {
 	// the report).
 	idToken, _ := token["id_token"].(string)
 	if idToken == "" {
-		t.Fatal("id_token yok")
+		t.Fatal("no id_token")
 	}
 	_, idClaim := jwtClaims(t, idToken)
 	amr := amrValues(idClaim["amr"])
 	if len(amr) != 1 || amr[0] != amrFederation {
-		t.Errorf("amr = %v, beklenen [%s]", amr, amrFederation)
+		t.Errorf("amr = %v, want [%s]", amr, amrFederation)
 	}
 
 	// 3) The id_token must CARRY the REQUIRED claim of OIDC Core 1.0 §2: sub
@@ -184,38 +184,38 @@ func TestE2E_GoogleLogin(t *testing.T) {
 	// Storage.SetUserinfoFromToken.
 	wantSub := accessTokenSub(t, token)
 	if idSub, _ := idClaim["sub"].(string); idSub != wantSub {
-		t.Errorf("id_token sub = %v, beklenen %q (access token'in sub'u)", idClaim["sub"], wantSub)
+		t.Errorf("id_token sub = %v, want %q (the access token's sub)", idClaim["sub"], wantSub)
 	}
 	if idClaim["email"] != email {
-		t.Errorf("id_token email = %v, beklenen %q", idClaim["email"], email)
+		t.Errorf("id_token email = %v, want %q", idClaim["email"], email)
 	}
 
 	// 4) Federation resolved the RIGHT user: the upstream's email and our sub
 	// are set in the userinfo.
 	info := env.userinfo(t, access)
 	if info["sub"] == "" || info["sub"] == nil {
-		t.Error("userinfo'da sub yok")
+		t.Error("no sub in userinfo")
 	}
 	if info["email"] != email {
-		t.Errorf("userinfo email = %v, beklenen %q", info["email"], email)
+		t.Errorf("userinfo email = %v, want %q", info["email"], email)
 	}
 
 	// 5) A refresh_token was issued and can be exchanged ONCE; the old token
 	// becomes invalid with the returned one (family rotation).
 	refresh, _ := token["refresh_token"].(string)
 	if refresh == "" {
-		t.Fatal("offline_access istendi ama refresh_token yok")
+		t.Fatal("offline_access was requested but there is no refresh_token")
 	}
 	status, fresh := env.refresh(t, refresh)
 	if status != http.StatusOK {
-		t.Fatalf("refresh durumu = %d, govde: %v", status, fresh)
+		t.Fatalf("refresh status = %d, body: %v", status, fresh)
 	}
 	rotatedRefresh, _ := fresh["refresh_token"].(string)
 	if rotatedRefresh == "" || rotatedRefresh == refresh {
-		t.Errorf("refresh dondurulmedi: eski ile ayni veya bos (%q)", rotatedRefresh)
+		t.Errorf("refresh was not rotated: same as the old one or empty (%q)", rotatedRefresh)
 	}
 	if repeatStatus, repeatBody := env.refresh(t, refresh); repeatStatus == http.StatusOK {
-		t.Errorf("tuketilmis refresh_token yeniden kabul edildi: %v", repeatBody)
+		t.Errorf("a consumed refresh_token was accepted again: %v", repeatBody)
 	}
 }
 
@@ -241,46 +241,46 @@ func TestE2E_AppleLoginFormPost(t *testing.T) {
 	requestID := session.StartAuthorize(t)
 	start := session.StartFederation(t, providerApple, requestID)
 	if start.Status != http.StatusFound {
-		t.Fatalf("baslat durumu = %d, beklenen 302", start.Status)
+		t.Fatalf("start status = %d, want 302", start.Status)
 	}
 	upstreamURL, err := url.Parse(start.Location())
 	if err != nil {
-		t.Fatalf("yukari akis adresi cozulemedi: %v", err)
+		t.Fatalf("could not parse upstream address: %v", err)
 	}
 	if upstreamURL.Query().Get("response_mode") != "form_post" {
-		t.Fatalf("Apple akisi form_post istemiyor (response_mode=%q); test K2'yi OLCMUYOR",
+		t.Fatalf("Apple flow does not request form_post (response_mode=%q); the test does NOT MEASURE K2",
 			upstreamURL.Query().Get("response_mode"))
 	}
 	// To be carried on a cross-site POST the federation cookie must be
 	// SameSite=None and its surface must be limited to /federasyon.
 	cookie := start.fedCookie()
 	if cookie == nil {
-		t.Fatal("baslat federasyon cerezi yazmadi")
+		t.Fatal("start did not write the federation cookie")
 	}
 	if cookie.SameSite != http.SameSiteNoneMode {
-		t.Errorf("federasyon cerezi SameSite = %v, beklenen None", cookie.SameSite)
+		t.Errorf("federation cookie SameSite = %v, want None", cookie.SameSite)
 	}
 	if cookie.Path != "/federasyon" {
-		t.Errorf("federasyon cerezi Path = %q, beklenen /federasyon", cookie.Path)
+		t.Errorf("federation cookie Path = %q, want /federasyon", cookie.Path)
 	}
 
 	// The rest of the flow: the fake Apple POSTs to US with form_post.
 	last := session.follow(t, start)
 	code := last.LocationCode()
 	if code == "" {
-		t.Fatalf("form_post akisi kod uretmedi; son durum %d, konum %q, govde: %s",
+		t.Fatalf("form_post flow did not produce a code; last status %d, location %q, body: %s",
 			last.Status, last.Location(), last.Body())
 	}
 	status, token := env.exchangeToken(t, code, session.verifier)
 	if status != http.StatusOK {
-		t.Fatalf("token durumu = %d, govde: %v", status, token)
+		t.Fatalf("token status = %d, body: %v", status, token)
 	}
 	access, _ := token["access_token"].(string)
 	if access == "" {
-		t.Fatal("access_token yok")
+		t.Fatal("no access_token")
 	}
 	if info := env.userinfo(t, access); info["email"] != email {
-		t.Errorf("userinfo email = %v, beklenen %q", info["email"], email)
+		t.Errorf("userinfo email = %v, want %q", info["email"], email)
 	}
 }
 
@@ -298,15 +298,15 @@ func TestE2E_SecondLoginSameAccount(t *testing.T) {
 	// PRECONDITION: the first login must REALLY have written a link; otherwise
 	// the second login being the "same account" proves nothing.
 	if count := env.FederatedLinkCount(t); count != 1 {
-		t.Fatalf("ilk giristen sonra eslesme sayisi = %d, beklenen 1", count)
+		t.Fatalf("match count after the first sign-in = %d, want 1", count)
 	}
 
 	second, _ := env.federationTokens(t, providerGoogle)
 	if secondSub := accessTokenSub(t, second); secondSub != firstSub {
-		t.Errorf("ikinci giris BASKA hesaba dustu: %q != %q", secondSub, firstSub)
+		t.Errorf("second sign-in landed on ANOTHER account: %q != %q", secondSub, firstSub)
 	}
 	if count := env.FederatedLinkCount(t); count != 1 {
-		t.Errorf("ikinci giris yeni bir eslesme yazdi: sayi = %d", count)
+		t.Errorf("second sign-in wrote a new match: count = %d", count)
 	}
 }
 
@@ -323,7 +323,7 @@ func TestE2E_AppleSecondLoginWithoutEmail(t *testing.T) {
 	first, _ := env.federationTokens(t, providerApple)
 	firstSub := accessTokenSub(t, first)
 	if count := env.FederatedLinkCount(t); count != 1 {
-		t.Fatalf("ilk giristen sonra eslesme sayisi = %d, beklenen 1", count)
+		t.Fatalf("match count after the first sign-in = %d, want 1", count)
 	}
 
 	// PRECONDITION: Apple sends NO email AT ALL in the second round. This is the
@@ -334,16 +334,16 @@ func TestE2E_AppleSecondLoginWithoutEmail(t *testing.T) {
 
 	second, _ := env.federationTokens(t, providerApple)
 	if secondSub := accessTokenSub(t, second); secondSub != firstSub {
-		t.Errorf("e-postasiz ikinci giris BASKA hesaba dustu: %q != %q", secondSub, firstSub)
+		t.Errorf("second sign-in without email landed on ANOTHER account: %q != %q", secondSub, firstSub)
 	}
 	if count := env.FederatedLinkCount(t); count != 1 {
-		t.Errorf("e-postasiz ikinci giris yeni hesap acti: eslesme sayisi = %d", count)
+		t.Errorf("second sign-in without email opened a new account: match count = %d", count)
 	}
 	// The email must not be lost: the address learned in the first round stays
 	// on the account.
 	access, _ := second["access_token"].(string)
 	if info := env.userinfo(t, access); info["email"] != "apple-ilk@ornek.com" {
-		t.Errorf("userinfo email = %v, beklenen ilk turdaki adres", info["email"])
+		t.Errorf("userinfo email = %v, want the first round's address", info["email"])
 	}
 	// OUR id_token CARRIES the email too. This is not a contradiction: the
 	// source of the claim is NOT the upstream's response in this round but the
@@ -352,14 +352,14 @@ func TestE2E_AppleSecondLoginWithoutEmail(t *testing.T) {
 	// our own tokens.
 	idToken, _ := second["id_token"].(string)
 	if idToken == "" {
-		t.Fatal("id_token yok")
+		t.Fatal("no id_token")
 	}
 	_, idClaim := jwtClaims(t, idToken)
 	if idClaim["email"] != "apple-ilk@ornek.com" {
-		t.Errorf("id_token email = %v, beklenen ilk turdaki adres", idClaim["email"])
+		t.Errorf("id_token email = %v, want the first round's address", idClaim["email"])
 	}
 	if idSub, _ := idClaim["sub"].(string); idSub != firstSub {
-		t.Errorf("id_token sub = %v, beklenen %q", idClaim["sub"], firstSub)
+		t.Errorf("id_token sub = %v, want %q", idClaim["sub"], firstSub)
 	}
 }
 
@@ -398,10 +398,10 @@ func TestAttack_FlowFromOtherBrowserCannotComplete(t *testing.T) {
 	// a kimlik_fed cookie in the victim's browser too.
 	victimStart := victim.StartFederation(t, providerGoogle, victimRequest)
 	if victimStart.Status != http.StatusFound {
-		t.Fatalf("kurbanin baslat durumu = %d, beklenen 302", victimStart.Status)
+		t.Fatalf("victim's start status = %d, want 302", victimStart.Status)
 	}
 	if victimStart.fedCookie() == nil {
-		t.Fatal("kurbanin baslat'i federasyon cerezi yazmadi; senaryo kurulamadi")
+		t.Fatal("victim's start did not write the federation cookie; scenario could not be set up")
 	}
 
 	// PRECONDITION 3: the VALUES of the two cookies are different. If they were
@@ -410,10 +410,10 @@ func TestAttack_FlowFromOtherBrowserCannotComplete(t *testing.T) {
 	victimCookie := victim.jar.cookieValue(cookieNameFederation)
 	attackerCookie := attacker.jar.cookieValue(cookieNameFederation)
 	if victimCookie == "" || attackerCookie == "" {
-		t.Fatalf("cerez degerleri okunamadi (kurban %q, saldirgan %q)", victimCookie, attackerCookie)
+		t.Fatalf("could not read cookie values (victim %q, attacker %q)", victimCookie, attackerCookie)
 	}
 	if victimCookie == attackerCookie {
-		t.Fatal("iki tarayicinin federasyon cerezi AYNI; baglama testi bos olurdu")
+		t.Fatal("the federation cookies of the two browsers are the SAME; the binding test would be empty")
 	}
 
 	// The attacker has that address opened in the victim's browser: the victim
@@ -421,20 +421,20 @@ func TestAttack_FlowFromOtherBrowserCannotComplete(t *testing.T) {
 	// record, so it must be rejected.
 	red := victim.do(t, http.MethodGet, callbackURL, nil, ctxCrossSiteGet)
 	if red.Status != http.StatusForbidden {
-		t.Errorf("baska tarayicida callback durumu = %d, beklenen 403. govde: %s",
+		t.Errorf("callback status in another browser = %d, want 403. body: %s",
 			red.Status, red.Body())
 	}
 	if env.RequestDone(t, attackerRequest) {
-		t.Fatal("HESAP DEVRALMA: saldirganin istegi kurbanin tarayicisinda tamamlandi")
+		t.Fatal("ACCOUNT TAKEOVER: the attacker's request was completed in the victim's browser")
 	}
 	if env.RequestDone(t, victimRequest) {
-		t.Fatal("kurbanin istegi saldirganin akisiyla tamamlandi")
+		t.Fatal("the victim's request was completed through the attacker's flow")
 	}
 	if _, err := victim.ExchangeCode(t, attackerRequest); err == nil {
-		t.Fatal("kurbanin tarayicisinda kod degisimi basarili oldu")
+		t.Fatal("code exchange succeeded in the victim's browser")
 	}
 	if count := env.FederatedLinkCount(t); count != 0 {
-		t.Errorf("reddedilen akis eslesme yazdi: sayi = %d", count)
+		t.Errorf("rejected flow wrote a match: count = %d", count)
 	}
 
 	// POSITIVE CONTROL: a second pair obtained the SAME way works in the
@@ -445,7 +445,7 @@ func TestAttack_FlowFromOtherBrowserCannotComplete(t *testing.T) {
 	own := attacker.follow(t,
 		attacker.do(t, http.MethodGet, ownCallback, nil, ctxCrossSiteGet))
 	if own.LocationCode() == "" {
-		t.Fatalf("saldirganin kendi tarayicisinda akis tamamlanmadi (durum %d); senaryo gecersiz",
+		t.Fatalf("flow did not complete in the attacker's own browser (status %d); scenario is invalid",
 			own.Status)
 	}
 }
@@ -469,13 +469,13 @@ func TestAttack_CallbackWithoutCookieRejected(t *testing.T) {
 	session.jar.deleteCookie(cookieNameFederation)
 	red := session.do(t, http.MethodGet, callbackURL, nil, ctxCrossSiteGet)
 	if red.Status != http.StatusForbidden {
-		t.Errorf("cerezsiz callback durumu = %d, beklenen 403. govde: %s", red.Status, red.Body())
+		t.Errorf("callback status without cookie = %d, want 403. body: %s", red.Status, red.Body())
 	}
 	if env.RequestDone(t, requestID) {
-		t.Fatal("cerezsiz callback istegi tamamladi")
+		t.Fatal("callback without cookie completed the request")
 	}
 	if count := env.FederatedLinkCount(t); count != 0 {
-		t.Errorf("cerezsiz callback eslesme yazdi: sayi = %d", count)
+		t.Errorf("callback without cookie wrote a match: count = %d", count)
 	}
 
 	// POSITIVE CONTROL: a new round with the cookie IN PLACE completes.
@@ -483,7 +483,7 @@ func TestAttack_CallbackWithoutCookieRejected(t *testing.T) {
 	newCallback := upstreamCallbackURL(t, session, providerGoogle, newRequest)
 	last := session.follow(t, session.do(t, http.MethodGet, newCallback, nil, ctxCrossSiteGet))
 	if last.LocationCode() == "" {
-		t.Fatalf("cerezli akis tamamlanmadi (durum %d); test cerezi DEGIL baska bir seyi olcuyor",
+		t.Fatalf("flow with cookie did not complete (status %d); the test is measuring something OTHER than the cookie",
 			last.Status)
 	}
 }
@@ -503,29 +503,29 @@ func TestAttack_CallbackReplayRejected(t *testing.T) {
 	// PRECONDITION: the callback REALLY works ONCE.
 	first := session.follow(t, session.do(t, http.MethodGet, callbackURL, nil, ctxCrossSiteGet))
 	if first.LocationCode() == "" {
-		t.Fatalf("ilk callback kod uretmedi (durum %d); tekrar testi bos olurdu", first.Status)
+		t.Fatalf("first callback did not produce a code (status %d); the replay test would be empty", first.Status)
 	}
 	if !env.RequestDone(t, requestID) {
-		t.Fatal("ilk callback istegi tamamlamadi; tekrar testi bos olurdu")
+		t.Fatal("first callback did not complete the request; the replay test would be empty")
 	}
 	google := env.Upstream(t, providerGoogle)
 	if count := google.tokenCalls(); count != 1 {
-		t.Fatalf("ilk turda yukari akis token cagrisi = %d, beklenen 1", count)
+		t.Fatalf("upstream token calls in the first round = %d, want 1", count)
 	}
 
 	// The SAME address a second time: the state record was consumed by GETDEL.
 	again := session.do(t, http.MethodGet, callbackURL, nil, ctxCrossSiteGet)
 	if again.Status != http.StatusForbidden {
-		t.Errorf("tekrar oynatilan callback durumu = %d, beklenen 403. govde: %s",
+		t.Errorf("replayed callback status = %d, want 403. body: %s",
 			again.Status, again.Body())
 	}
 	// The rejection must happen BEFORE going to the upstream: the state check
 	// runs BEFORE the code exchange.
 	if count := google.tokenCalls(); count != 1 {
-		t.Errorf("tekrar oynatma yukari akisa yeni bir token cagrisi yapti: sayi = %d", count)
+		t.Errorf("replay made a new token call upstream: count = %d", count)
 	}
 	if count := env.FederatedLinkCount(t); count != 1 {
-		t.Errorf("tekrar oynatma eslesme sayisini degistirdi: %d, beklenen 1", count)
+		t.Errorf("replay changed the match count: %d, want 1", count)
 	}
 }
 
@@ -543,7 +543,7 @@ func TestAttack_OtherAppTokenRejected(t *testing.T) {
 	// rejection below would come from something other than aud.
 	env.federationTokens(t, providerGoogle)
 	if count := env.FederatedLinkCount(t); count != 1 {
-		t.Fatalf("dogru aud ile eslesme sayisi = %d, beklenen 1", count)
+		t.Fatalf("match count with correct aud = %d, want 1", count)
 	}
 
 	// THE ONLY CHANGE: aud now belongs to ANOTHER application.
@@ -552,16 +552,16 @@ func TestAttack_OtherAppTokenRejected(t *testing.T) {
 	requestID := session.StartAuthorize(t)
 	red := session.RunFederationFlow(t, providerGoogle, requestID)
 	if red.Status != http.StatusForbidden {
-		t.Errorf("yanlis aud ile durum = %d, beklenen 403. govde: %s", red.Status, red.Body())
+		t.Errorf("status with wrong aud = %d, want 403. body: %s", red.Status, red.Body())
 	}
 	if red.LocationCode() != "" {
-		t.Fatal("yanlis aud'lu id_token ile kod uretildi")
+		t.Fatal("a code was issued with an id_token with the wrong aud")
 	}
 	if env.RequestDone(t, requestID) {
-		t.Fatal("yanlis aud'lu id_token ile istek tamamlandi")
+		t.Fatal("the request was completed with an id_token with the wrong aud")
 	}
 	if count := env.FederatedLinkCount(t); count != 1 {
-		t.Errorf("yanlis aud'lu akis yeni eslesme yazdi: sayi = %d", count)
+		t.Errorf("flow with the wrong aud wrote a new match: count = %d", count)
 	}
 }
 
@@ -577,7 +577,7 @@ func TestAttack_NonceInjectionRejected(t *testing.T) {
 	// PRECONDITION: the flow completes with the right nonce.
 	env.federationTokens(t, providerGoogle)
 	if count := env.FederatedLinkCount(t); count != 1 {
-		t.Fatalf("dogru nonce ile eslesme sayisi = %d, beklenen 1", count)
+		t.Fatalf("match count with correct nonce = %d, want 1", count)
 	}
 
 	// THE ONLY CHANGE: the id_token's nonce does not belong to THIS flow. The
@@ -588,13 +588,13 @@ func TestAttack_NonceInjectionRejected(t *testing.T) {
 	requestID := session.StartAuthorize(t)
 	red := session.RunFederationFlow(t, providerGoogle, requestID)
 	if red.Status != http.StatusForbidden {
-		t.Errorf("yanlis nonce ile durum = %d, beklenen 403. govde: %s", red.Status, red.Body())
+		t.Errorf("status with wrong nonce = %d, want 403. body: %s", red.Status, red.Body())
 	}
 	if env.RequestDone(t, requestID) {
-		t.Fatal("yanlis nonce'lu id_token ile istek tamamlandi")
+		t.Fatal("the request was completed with an id_token with the wrong nonce")
 	}
 	if _, err := session.ExchangeCode(t, requestID); err == nil {
-		t.Fatal("yanlis nonce'lu akisin kodu jetona cevrildi")
+		t.Fatal("the code from the flow with the wrong nonce was exchanged for a token")
 	}
 }
 
@@ -620,7 +620,7 @@ func TestAttack_EmailBasedTakeoverBlocked(t *testing.T) {
 	// POSITIVE CONTROL: was the account REALLY opened? If not, the rejection in
 	// step 4 would measure nothing and the test would be EMPTY.
 	if token := env.LoginWithPassword(t, "kurban@ornek.com", attackerPassword); token == "" {
-		t.Fatal("onkosul kurulamadi: saldirganin hesabi acilmamis")
+		t.Fatal("precondition could not be set up: the attacker's account was not created")
 	}
 
 	// 2) The victim goes from the login page to Google.
@@ -631,29 +631,29 @@ func TestAttack_EmailBasedTakeoverBlocked(t *testing.T) {
 	// 3) The link page must appear: a password MUST BE ASKED.
 	body := resp.Body()
 	if !strings.Contains(body, `name="beklemeID"`) {
-		t.Fatalf("baglama formu cikmadi; durum %d, govde: %s", resp.Status, body)
+		t.Fatalf("link form did not appear; status %d, body: %s", resp.Status, body)
 	}
 	if !strings.Contains(body, `type="password"`) {
-		t.Error("baglama sayfasi sifre sormuyor")
+		t.Error("link page does not ask for a password")
 	}
 
 	// 4) THERE MUST BE NO LOGIN: since the request was not completed no code is
 	// produced and no access_token can be obtained.
 	if session.RequestDone(t, requestID) {
-		t.Fatal("federasyon, sifre sorulmadan istegi tamamladi (hesap devralma)")
+		t.Fatal("federation completed the request without asking for a password (account takeover)")
 	}
 	if _, err := session.ExchangeCode(t, requestID); err == nil {
-		t.Fatal("kod degisimi basarili oldu; giris yapilmis demektir")
+		t.Fatal("code exchange succeeded; that means a sign-in happened")
 	}
 
 	// 5) Since the victim does not know the attacker's password the flow stops
 	// HERE: linking with a wrong password must be REJECTED and NO link written.
 	red := session.SubmitLink(t, body, "kurbanin-kendi-sifresi-123")
 	if red.Status != http.StatusUnauthorized {
-		t.Errorf("yanlis sifreyle baglama durumu = %d, beklenen 401", red.Status)
+		t.Errorf("link status with wrong password = %d, want 401", red.Status)
 	}
 	if env.FederatedLinkCount(t) != 0 {
-		t.Error("yanlis sifreye ragmen federe eslesme yazilmis")
+		t.Error("federated match was written despite the wrong password")
 	}
 }
 
@@ -679,7 +679,7 @@ func TestAttack_FederationDoesNotBypassPKCE(t *testing.T) {
 	code, session := env.federationCode(t, providerGoogle)
 	status, token := env.exchangeToken(t, code, session.verifier)
 	if status != http.StatusOK {
-		t.Fatalf("dogru verifier ile token durumu = %d, govde: %v", status, token)
+		t.Fatalf("token status with correct verifier = %d, body: %v", status, token)
 	}
 
 	// 3) The code produced by the federation path stays BOUND to S256 too: it
@@ -689,6 +689,6 @@ func TestAttack_FederationDoesNotBypassPKCE(t *testing.T) {
 	wrongCode, _ := env.federationCode(t, providerGoogle)
 	wrongVerifier, _ := pkceS256(t)
 	if status, body := env.exchangeToken(t, wrongCode, wrongVerifier); status == http.StatusOK {
-		t.Fatalf("federasyon kodu YANLIS verifier ile jetona cevrildi: %v", body)
+		t.Fatalf("federation code was exchanged for a token with the WRONG verifier: %v", body)
 	}
 }

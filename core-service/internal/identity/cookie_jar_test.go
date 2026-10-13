@@ -39,39 +39,38 @@ func TestCookieJar_EnforcesSameSite(t *testing.T) {
 		{
 			// This is exactly Apple's form_post return: a Lax cookie is NOT SENT,
 			// so the federation cookie has to be None (K2).
-			// zorundadir (K2).
-			name:     "Lax capraz-site POST'ta tasinmaz",
+			name:     "Lax is not carried on a cross-site POST",
 			sameSite: http.SameSiteLaxMode, ctx: ctxCrossSitePost, want: false,
 		},
 		{
-			name:     "Lax ayni-site'ta tasinir",
+			name:     "Lax is carried on same-site",
 			sameSite: http.SameSiteLaxMode, ctx: ctxSameSite, want: true,
 		},
 		{
-			name:     "None capraz-site POST'ta tasinir",
+			name:     "None is carried on a cross-site POST",
 			sameSite: http.SameSiteNoneMode, ctx: ctxCrossSitePost, want: true,
 		},
 		{
 			// Google's 302 return is a top-level cross-site GET:
 			// Lax is sent, Strict is not.
-			name:     "Strict capraz-site GET'te tasinmaz",
+			name:     "Strict is not carried on a cross-site GET",
 			sameSite: http.SameSiteStrictMode, ctx: ctxCrossSiteGet, want: false,
 		},
 		{
-			name:     "Lax capraz-site GET'te tasinir",
+			name:     "Lax is carried on a cross-site GET",
 			sameSite: http.SameSiteLaxMode, ctx: ctxCrossSiteGet, want: true,
 		},
 		{
 			// Navigation the user started themselves (a native app opens the
 			// system browser): everything is sent.
-			name:     "Strict baslatma navigasyonunda tasinir",
+			name:     "Strict is carried on a start navigation",
 			sameSite: http.SameSiteStrictMode, ctx: ctxUserInitiated, want: true,
 		},
 	}
 
 	to, err := url.Parse(jarTarget)
 	if err != nil {
-		t.Fatalf("hedef cozulemedi: %v", err)
+		t.Fatalf("could not parse target: %v", err)
 	}
 
 	for _, d := range statuses {
@@ -83,7 +82,7 @@ func TestCookieJar_EnforcesSameSite(t *testing.T) {
 			jar.setContext(d.ctx)
 			carried := len(jar.Cookies(to)) == 1
 			if carried != d.want {
-				t.Errorf("tasindi = %v, beklenen %v", carried, d.want)
+				t.Errorf("carried = %v, want %v", carried, d.want)
 			}
 		})
 	}
@@ -111,7 +110,7 @@ func TestCookieJar_PathScope(t *testing.T) {
 
 	for _, d := range statuses {
 		if res := cookiePathMatches(d.cookiePath, d.requestPath); res != d.want {
-			t.Errorf("cerezYoluEsler(%q, %q) = %v, beklenen %v",
+			t.Errorf("cookiePathMatches(%q, %q) = %v, want %v",
 				d.cookiePath, d.requestPath, res, d.want)
 		}
 	}
@@ -120,7 +119,7 @@ func TestCookieJar_PathScope(t *testing.T) {
 	// does not prove that Cookies() calls it.
 	writer, err := url.Parse("http://kimlik.ornek/federasyon/google/baslat")
 	if err != nil {
-		t.Fatalf("adres cozulemedi: %v", err)
+		t.Fatalf("could not parse address: %v", err)
 	}
 	jar := newCookieJar()
 	jar.SetCookies(writer, []*http.Cookie{{
@@ -129,13 +128,13 @@ func TestCookieJar_PathScope(t *testing.T) {
 	jar.setContext(ctxSameSite)
 	outsidePath, err := url.Parse("http://kimlik.ornek/giris")
 	if err != nil {
-		t.Fatalf("adres cozulemedi: %v", err)
+		t.Fatalf("could not parse address: %v", err)
 	}
 	if n := len(jar.Cookies(outsidePath)); n != 0 {
-		t.Errorf("/giris'e %d cerez tasindi, beklenen 0 (Path=/federasyon)", n)
+		t.Errorf("%d cookies carried to /giris, want 0 (Path=/federasyon)", n)
 	}
 	if n := len(jar.Cookies(writer)); n != 1 {
-		t.Errorf("/federasyon/... yoluna %d cerez tasindi, beklenen 1", n)
+		t.Errorf("%d cookies carried to the /federasyon/... path, want 1", n)
 	}
 }
 
@@ -145,11 +144,11 @@ func TestCookieJar_PathScope(t *testing.T) {
 func TestCookieJar_HostIsolation(t *testing.T) {
 	ours, err := url.Parse("http://kimlik.ornek/federasyon")
 	if err != nil {
-		t.Fatalf("adres cozulemedi: %v", err)
+		t.Fatalf("could not parse address: %v", err)
 	}
 	upstream, err := url.Parse("http://yukari.ornek/federasyon")
 	if err != nil {
-		t.Fatalf("adres cozulemedi: %v", err)
+		t.Fatalf("could not parse address: %v", err)
 	}
 	jar := newCookieJar()
 	jar.SetCookies(ours, []*http.Cookie{{
@@ -157,10 +156,10 @@ func TestCookieJar_HostIsolation(t *testing.T) {
 	}})
 	jar.setContext(ctxSameSite)
 	if n := len(jar.Cookies(upstream)); n != 0 {
-		t.Errorf("baska host'a %d cerez tasindi, beklenen 0", n)
+		t.Errorf("%d cookies carried to another host, want 0", n)
 	}
 	if n := len(jar.Cookies(ours)); n != 1 {
-		t.Errorf("kendi host'una %d cerez tasindi, beklenen 1", n)
+		t.Errorf("%d cookies carried to its own host, want 1", n)
 	}
 }
 
@@ -170,7 +169,7 @@ func TestCookieJar_HostIsolation(t *testing.T) {
 func TestCookieJar_Delete(t *testing.T) {
 	to, err := url.Parse(jarTarget)
 	if err != nil {
-		t.Fatalf("hedef cozulemedi: %v", err)
+		t.Fatalf("could not parse target: %v", err)
 	}
 	jar := newCookieJar()
 	jar.SetCookies(to, []*http.Cookie{
@@ -179,15 +178,15 @@ func TestCookieJar_Delete(t *testing.T) {
 	})
 	jar.setContext(ctxSameSite)
 	if n := len(jar.Cookies(to)); n != 2 {
-		t.Fatalf("silme oncesi %d cerez, beklenen 2", n)
+		t.Fatalf("%d cookies before deletion, want 2", n)
 	}
 	jar.deleteCookie(cookieNameFederation)
 	remaining := jar.Cookies(to)
 	if len(remaining) != 1 || remaining[0].Name != "baska" {
-		t.Errorf("silmeden sonra kalan = %v, beklenen yalnizca \"baska\"", remaining)
+		t.Errorf("remaining after deletion = %v, want only \"baska\"", remaining)
 	}
 	if jar.cookieValue(cookieNameFederation) != "" {
-		t.Error("cerezDegeri silinmis cerezi hala donduruyor")
+		t.Error("cookieValue still returns the deleted cookie")
 	}
 }
 
@@ -200,7 +199,7 @@ func TestStepContext(t *testing.T) {
 		t.Helper()
 		u, err := url.Parse(raw)
 		if err != nil {
-			t.Fatalf("adres cozulemedi (%q): %v", raw, err)
+			t.Fatalf("could not parse address (%q): %v", raw, err)
 		}
 		return u
 	}
@@ -215,19 +214,19 @@ func TestStepContext(t *testing.T) {
 		method string
 		want   cookieContext
 	}{
-		{"ayni host GET ayni-site", ours, otherSite, http.MethodGet, ctxSameSite},
-		{"ayni host POST ayni-site", ours, otherSite, http.MethodPost, ctxSameSite},
-		{"baska host GET capraz-GET", upstream, otherSite, http.MethodGet, ctxCrossSiteGet},
+		{"same host GET same-site", ours, otherSite, http.MethodGet, ctxSameSite},
+		{"same host POST same-site", ours, otherSite, http.MethodPost, ctxSameSite},
+		{"other host GET cross-site GET", upstream, otherSite, http.MethodGet, ctxCrossSiteGet},
 		// Apple's form_post return: a cross-site POST for us.
-		{"baska host POST capraz-POST", upstream, otherSite, http.MethodPost, ctxCrossSitePost},
+		{"other host POST cross-site POST", upstream, otherSite, http.MethodPost, ctxCrossSitePost},
 		// The first step of the chain has NO source; being counted as cross-site
 		// is the SAFE direction (fewer cookies are sent).
-		{"kaynaksiz GET capraz-GET", nil, ours, http.MethodGet, ctxCrossSiteGet},
+		{"no source GET cross-site GET", nil, ours, http.MethodGet, ctxCrossSiteGet},
 	}
 
 	for _, d := range statuses {
 		if res := stepContext(d.from, d.to, d.method); res != d.want {
-			t.Errorf("%s: adimBaglami = %v, beklenen %v", d.name, res, d.want)
+			t.Errorf("%s: stepContext = %v, want %v", d.name, res, d.want)
 		}
 	}
 }

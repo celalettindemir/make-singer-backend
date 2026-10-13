@@ -36,10 +36,10 @@ func TestMobileClient_SatisfiesInterface(t *testing.T) {
 func TestMobileClient_PublicAndNative(t *testing.T) {
 	c := NewMobileClient(testAuthCfg())
 	if c.AuthMethod() != oidc.AuthMethodNone {
-		t.Errorf("AuthMethod = %v, beklenen none", c.AuthMethod())
+		t.Errorf("AuthMethod = %v, want none", c.AuthMethod())
 	}
 	if c.ApplicationType() != op.ApplicationTypeNative {
-		t.Errorf("ApplicationType = %v, beklenen native", c.ApplicationType())
+		t.Errorf("ApplicationType = %v, want native", c.ApplicationType())
 	}
 	if c.GetID() != "makesinger-mobil" {
 		t.Errorf("GetID = %q", c.GetID())
@@ -52,19 +52,19 @@ func TestMobileClient_CodeFlowOnly(t *testing.T) {
 	c := NewMobileClient(testAuthCfg())
 	types := c.ResponseTypes()
 	if len(types) != 1 || types[0] != oidc.ResponseTypeCode {
-		t.Errorf("ResponseTypes = %v, beklenen [code]", types)
+		t.Errorf("ResponseTypes = %v, want [code]", types)
 	}
 	var hasRefresh bool
 	for _, g := range c.GrantTypes() {
 		if g == oidc.GrantTypeImplicit {
-			t.Error("implicit grant acik")
+			t.Error("implicit grant is enabled")
 		}
 		if g == oidc.GrantTypeRefreshToken {
 			hasRefresh = true
 		}
 	}
 	if !hasRefresh {
-		t.Error("refresh_token grant kapali; oturum yenilenemez")
+		t.Error("refresh_token grant is disabled; the session cannot be renewed")
 	}
 }
 
@@ -79,7 +79,7 @@ func TestMobileClient_RedirectURIs(t *testing.T) {
 // production that would mean sending tokens to an attacker's address.
 func TestMobileClient_DevModeOff(t *testing.T) {
 	if NewMobileClient(testAuthCfg()).DevMode() {
-		t.Error("DevMode acik")
+		t.Error("DevMode is enabled")
 	}
 }
 
@@ -87,10 +87,10 @@ func TestMobileClient_AllowedScopes(t *testing.T) {
 	c := NewMobileClient(testAuthCfg())
 	for _, s := range []string{oidc.ScopeOpenID, oidc.ScopeProfile, oidc.ScopeEmail, oidc.ScopeOfflineAccess} {
 		if !c.IsScopeAllowed(s) {
-			t.Errorf("%q scope'u reddedildi", s)
+			t.Errorf("scope %q was rejected", s)
 		}
 	}
 	if c.IsScopeAllowed("admin") {
-		t.Error("tanimsiz scope kabul edildi")
+		t.Error("undefined scope was accepted")
 	}
 }

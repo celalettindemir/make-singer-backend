@@ -337,7 +337,7 @@ func (f *FederationPages) Start(w http.ResponseWriter, r *http.Request) {
 	}
 	if isCrossSite(r) {
 		// authRequestID and the cookie value are NOT LOGGED.
-		log.Print("federasyon: capraz-site baslatma reddedildi")
+		log.Print("federation: cross-site start rejected")
 		f.errorPage(w, http.StatusForbidden, msgSessionInvalid)
 		return
 	}
@@ -355,7 +355,7 @@ func (f *FederationPages) Start(w http.ResponseWriter, r *http.Request) {
 		// authRequestID is NOT LOGGED (Phase 1's rule): combined with MarkDone it
 		// acts like a short-lived authorization token that binds a pending request
 		// to a specific user.
-		log.Printf("federasyon: baslatma istegi gecersiz: %v", err)
+		log.Printf("federation: start request is invalid: %v", err)
 		f.errorPage(w, http.StatusBadRequest, msgRequestInvalid)
 		return
 	}
@@ -367,7 +367,7 @@ func (f *FederationPages) Start(w http.ResponseWriter, r *http.Request) {
 	// ERRORS ARE NOT SWALLOWED: a weak/empty state, nonce or cookie value
 	// effectively removes the protection.
 	if err != nil || err2 != nil || err3 != nil || err4 != nil {
-		log.Print("federasyon: rasgele deger uretilemedi")
+		log.Print("federation: could not generate a random value")
 		f.errorPage(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
@@ -380,7 +380,7 @@ func (f *FederationPages) Start(w http.ResponseWriter, r *http.Request) {
 		CodeVerifier:  verifier,
 	}); err != nil {
 		// state, nonce, cookie and verifier are NOT LOGGED.
-		log.Printf("federasyon: durum kaydi yazilamadi: %v", err)
+		log.Printf("federation: could not write the state record: %v", err)
 		f.errorPage(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
@@ -416,7 +416,7 @@ func (f *FederationPages) Callback(w http.ResponseWriter, r *http.Request) {
 	d, err := f.flows.TakeState(r.Context(), state)
 	if err != nil {
 		// state is NOT LOGGED; only the error class is.
-		log.Printf("federasyon: durum dogrulanamadi: %v", err)
+		log.Printf("federation: could not verify the state: %v", err)
 		f.errorPage(w, http.StatusForbidden, msgSessionInvalid)
 		return
 	}
@@ -427,7 +427,7 @@ func (f *FederationPages) Callback(w http.ResponseWriter, r *http.Request) {
 		// completed in this browser (account takeover): even if an attacker opens
 		// a valid state+code pair obtained from their own authorization in the
 		// victim's browser, the cookie is NOT in the victim's browser.
-		log.Print("federasyon: cerez baglamasi tutmadi")
+		log.Print("federation: the cookie binding did not hold")
 		f.errorPage(w, http.StatusForbidden, msgSessionInvalid)
 		return
 	}
@@ -441,14 +441,14 @@ func (f *FederationPages) Callback(w http.ResponseWriter, r *http.Request) {
 		// The provider may have been removed from the configuration after the record
 		// was written (redeploy). Since provider names are a FIXED set, it is safe
 		// to log.
-		log.Printf("federasyon: kayitli saglayici artik yapilandirilmamis (%s)", d.Provider)
+		log.Printf("federation: the registered provider is no longer configured (%s)", d.Provider)
 		f.errorPage(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if code == "" {
 		// The user may have declined at the provider, or the provider may have
 		// returned an error; there is no code to exchange.
-		log.Print("federasyon: donuste yetkilendirme kodu yok")
+		log.Print("federation: no authorization code on return")
 		f.errorPage(w, http.StatusBadRequest, msgRequestInvalid)
 		return
 	}
@@ -457,7 +457,7 @@ func (f *FederationPages) Callback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// The code, client_secret or response body does NOT appear in the error
 		// text (see ExchangeCode).
-		log.Printf("federasyon: kod degisimi basarisiz: %v", err)
+		log.Printf("federation: code exchange failed: %v", err)
 		f.errorPage(w, http.StatusForbidden, msgSessionInvalid)
 		return
 	}
@@ -466,7 +466,7 @@ func (f *FederationPages) Callback(w http.ResponseWriter, r *http.Request) {
 	claims, err := verifier.VerifyWithNonce(idToken, d.Nonce)
 	if err != nil {
 		// The id_token does NOT appear in err (see auth.VerifyWithNonce).
-		log.Printf("federasyon: id_token dogrulanamadi: %v", err)
+		log.Printf("federation: could not verify the id_token: %v", err)
 		f.errorPage(w, http.StatusForbidden, msgSessionInvalid)
 		return
 	}
@@ -476,7 +476,7 @@ func (f *FederationPages) Callback(w http.ResponseWriter, r *http.Request) {
 	user, conflict, err := f.resolveUser(r.Context(), flow.Name, claims)
 	if err != nil {
 		// Email and sub are NOT LOGGED.
-		log.Printf("federasyon: kullanici cozulemedi: %v", err)
+		log.Printf("federation: could not resolve the user: %v", err)
 		// Upstream not sending an email is NOT a SERVER error and does not go to the
 		// 409 conflict page showing an empty email either: the user must read what
 		// happened and what to do (see ErrUpstreamNoEmail).
@@ -494,7 +494,7 @@ func (f *FederationPages) Callback(w http.ResponseWriter, r *http.Request) {
 
 	if err := f.requests.MarkDone(r.Context(), d.AuthRequestID, user.ID, []string{amrFederation}); err != nil {
 		// authRequestID is NOT LOGGED.
-		log.Printf("federasyon: istek tamamlanamadi: %v", err)
+		log.Printf("federation: could not complete the request: %v", err)
 		// The classification is in writeCompletionError: 409 (bound to another
 		// identity, Subject NOT OVERWRITTEN), 400 (dropped by TTL) and 500 (real
 		// server error) are SEPARATE.

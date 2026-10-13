@@ -41,7 +41,7 @@ func fedRSAKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		t.Fatalf("rsa anahtari uretilemedi: %v", err)
+		t.Fatalf("could not generate rsa key: %v", err)
 	}
 	return key
 }
@@ -150,7 +150,7 @@ func (s *fakeProvider) idToken(t *testing.T) string {
 	token.Header["kid"] = fedKID(s.signingKey)
 	signed, err := token.SignedString(s.signingKey)
 	if err != nil {
-		t.Fatalf("id_token imzalanamadi: %v", err)
+		t.Fatalf("could not sign id_token: %v", err)
 	}
 	s.issuedTokens = append(s.issuedTokens, signed)
 	return signed
@@ -311,7 +311,7 @@ func newTestFederationPages(t *testing.T) *fedEnv {
 	for name, s := range map[string]*fakeProvider{providerGoogle: google, providerApple: apple} {
 		d, err := auth.NewUpstreamVerifier(context.Background(), s.server.URL+"/jwks", s.server.URL, s.clientID)
 		if err != nil {
-			t.Fatalf("%s dogrulayicisi kurulamadi: %v", name, err)
+			t.Fatalf("could not set up the %s verifier: %v", name, err)
 		}
 		verifiers[name] = d
 	}
@@ -346,11 +346,11 @@ func (o *fedEnv) peekState(t *testing.T, state string) FederationState {
 	t.Helper()
 	data, err := o.store.rdb.Get(context.Background(), stateKey(state)).Bytes()
 	if err != nil {
-		t.Fatalf("durum kaydi okunamadi: %v", err)
+		t.Fatalf("could not read state record: %v", err)
 	}
 	var d FederationState
 	if err := json.Unmarshal(data, &d); err != nil {
-		t.Fatalf("durum kaydi cozumlenemedi: %v", err)
+		t.Fatalf("could not decode state record: %v", err)
 	}
 	return d
 }
@@ -377,7 +377,7 @@ func (o *fedEnv) stateCount(t *testing.T) int {
 	t.Helper()
 	keyList, err := o.store.rdb.Keys(context.Background(), stateKey("*")).Result()
 	if err != nil {
-		t.Fatalf("durum anahtarlari okunamadi: %v", err)
+		t.Fatalf("could not read state keys: %v", err)
 	}
 	return len(keyList)
 }
@@ -403,7 +403,7 @@ func (o *fedEnv) start(t *testing.T, provider, authReqID string) (string, *http.
 	}
 	location, err := url.Parse(w.Header().Get("Location"))
 	if err != nil {
-		t.Fatalf("Location cozumlenemedi: %v", err)
+		t.Fatalf("could not parse Location: %v", err)
 	}
 	state := location.Query().Get("state")
 	var cookie *http.Cookie
@@ -443,7 +443,7 @@ func (o *fedEnv) runFlow(t *testing.T, provider string, post bool) *httptest.Res
 	t.Helper()
 	state, cookie, w := o.start(t, provider, o.authReqID)
 	if state == "" {
-		t.Fatalf("baslat basarisiz: durum = %d", w.Code)
+		t.Fatalf("start failed: status = %d", w.Code)
 	}
 	d := o.peekState(t, state)
 	o.provider(provider).configure(func(s *fakeProvider) { s.nonce = d.Nonce })
@@ -467,39 +467,39 @@ func TestFederationStart_SetsCookieAndWritesState(t *testing.T) {
 	o := newTestFederationPages(t)
 	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
 	if w.Code != http.StatusFound {
-		t.Fatalf("durum = %d, beklenen 302", w.Code)
+		t.Fatalf("status = %d, want 302", w.Code)
 	}
 	if state == "" {
-		t.Fatal("Location'da state yok")
+		t.Fatal("no state in Location")
 	}
 	if cookie == nil || cookie.Value == "" {
-		t.Fatal("federasyon cerezi konmadi")
+		t.Fatal("federation cookie was not set")
 	}
 	location, err := url.Parse(w.Header().Get("Location"))
 	if err != nil {
-		t.Fatalf("Location cozumlenemedi: %v", err)
+		t.Fatalf("could not parse Location: %v", err)
 	}
 	if !strings.HasPrefix(w.Header().Get("Location"), o.google.server.URL+"/authorize") {
-		t.Errorf("Location yukari akis authorize adresi degil")
+		t.Errorf("Location is not the upstream authorize address")
 	}
 	q := location.Query()
 	if q.Get("client_id") != o.google.clientID {
 		t.Errorf("client_id = %q", q.Get("client_id"))
 	}
 	if q.Get("nonce") == "" {
-		t.Error("nonce gonderilmedi")
+		t.Error("nonce was not sent")
 	}
 	if q.Get("code_challenge_method") != "S256" {
-		t.Errorf("code_challenge_method = %q, beklenen S256", q.Get("code_challenge_method"))
+		t.Errorf("code_challenge_method = %q, want S256", q.Get("code_challenge_method"))
 	}
 	wantCallback := fedTestIssuer + "/federasyon/" + providerGoogle + "/geri"
 	if q.Get("redirect_uri") != wantCallback {
-		t.Errorf("redirect_uri = %q, beklenen %q", q.Get("redirect_uri"), wantCallback)
+		t.Errorf("redirect_uri = %q, want %q", q.Get("redirect_uri"), wantCallback)
 	}
 
 	d := o.peekState(t, state)
 	if d.Cookie != cookie.Value {
-		t.Error("durum kaydindaki cerez degeri, yanittaki cerezle ayni degil")
+		t.Error("the cookie value in the state record differs from the cookie in the response")
 	}
 	if d.AuthRequestID != o.authReqID {
 		t.Errorf("AuthRequestID = %q", d.AuthRequestID)
@@ -508,14 +508,14 @@ func TestFederationStart_SetsCookieAndWritesState(t *testing.T) {
 		t.Errorf("Saglayici = %q", d.Provider)
 	}
 	if d.Nonce != q.Get("nonce") {
-		t.Error("kayitteki nonce, authorize URL'indeki nonce ile ayni degil")
+		t.Error("the nonce in the record differs from the nonce in the authorize URL")
 	}
 	if d.CodeVerifier == "" {
-		t.Error("kayitta kod dogrulayicisi yok")
+		t.Error("no code verifier in the record")
 	}
 	// The verifier must not appear in the URL in PLAIN TEXT; only its digest goes.
 	if strings.Contains(w.Header().Get("Location"), d.CodeVerifier) {
-		t.Error("kod dogrulayicisi authorize URL'ine duz metin kondu")
+		t.Error("the code verifier was put into the authorize URL in plain text")
 	}
 }
 
@@ -526,19 +526,19 @@ func TestFederationCookie_SameSiteNone(t *testing.T) {
 	o := newTestFederationPages(t)
 	_, cookie, _ := o.start(t, providerApple, o.authReqID)
 	if cookie == nil {
-		t.Fatal("federasyon cerezi konmadi")
+		t.Fatal("federation cookie was not set")
 	}
 	if cookie.SameSite != http.SameSiteNoneMode {
-		t.Errorf("SameSite = %v, beklenen None (K2: Apple form_post capraz-site POST'tur)", cookie.SameSite)
+		t.Errorf("SameSite = %v, want None (K2: Apple form_post is a cross-site POST)", cookie.SameSite)
 	}
 	if !cookie.HttpOnly {
-		t.Error("HttpOnly kapali")
+		t.Error("HttpOnly is off")
 	}
 	if !cookie.Secure {
-		t.Error("Secure kapali (issuer https)")
+		t.Error("Secure is off (issuer is https)")
 	}
 	if cookie.Path != "/federasyon" {
-		t.Errorf("Path = %q, beklenen /federasyon (oturum cerezini EZMEMELI)", cookie.Path)
+		t.Errorf("Path = %q, want /federasyon (must NOT overwrite the session cookie)", cookie.Path)
 	}
 }
 
@@ -549,7 +549,7 @@ func TestFederationStart_LeavesSessionCookie(t *testing.T) {
 	_, _, w := o.start(t, providerGoogle, o.authReqID)
 	for _, c := range w.Result().Cookies() {
 		if c.Name == cookieNameSession {
-			t.Fatalf("baslat oturum cerezine dokundu: %+v", c)
+			t.Fatalf("start touched the session cookie: %+v", c)
 		}
 	}
 }
@@ -558,7 +558,7 @@ func TestFederationStart_UnknownProvider404(t *testing.T) {
 	o := newTestFederationPages(t)
 	_, _, w := o.start(t, "facebook", o.authReqID)
 	if w.Code != http.StatusNotFound {
-		t.Errorf("durum = %d, beklenen 404", w.Code)
+		t.Errorf("status = %d, want 404", w.Code)
 	}
 }
 
@@ -572,19 +572,19 @@ func TestFederationStart_InvalidAuthRequestIDRejected(t *testing.T) {
 		id     string
 		cookie *http.Cookie
 	}{
-		{"bos id", "", o.sessionCookie},
-		{"var olmayan id", "yok-boyle-bir-istek", missingCookie},
+		{"empty id", "", o.sessionCookie},
+		{"nonexistent id", "yok-boyle-bir-istek", missingCookie},
 	} {
 		t.Run(d.name, func(t *testing.T) {
 			w := o.startRaw(providerGoogle, d.id, d.cookie, false)
 			if w.Code != http.StatusBadRequest {
-				t.Errorf("durum = %d, beklenen 400", w.Code)
+				t.Errorf("status = %d, want 400", w.Code)
 			}
 			if hasFedCookie(w) {
-				t.Error("gecersiz istekte federasyon cerezi konmamali")
+				t.Error("an invalid request must not set the federation cookie")
 			}
 			if !strings.Contains(w.Body.String(), msgRequestInvalid) {
-				t.Errorf("govde = %q", w.Body.String())
+				t.Errorf("body = %q", w.Body.String())
 			}
 		})
 	}
@@ -600,11 +600,11 @@ func TestFederationStart_SessionBindingRequired(t *testing.T) {
 		name   string
 		cookie func(o *fedEnv, t *testing.T) *http.Cookie
 	}{
-		{"oturum cerezi yok", func(*fedEnv, *testing.T) *http.Cookie { return nil }},
-		{"uydurma oturum cerezi", func(*fedEnv, *testing.T) *http.Cookie {
+		{"no session cookie", func(*fedEnv, *testing.T) *http.Cookie { return nil }},
+		{"made-up session cookie", func(*fedEnv, *testing.T) *http.Cookie {
 			return &http.Cookie{Name: cookieNameSession, Value: "saldirganin-uydurdugu-deger"}
 		}},
-		{"BASKA bir istege bagli oturum", func(o *fedEnv, t *testing.T) *http.Cookie {
+		{"session bound to ANOTHER request", func(o *fedEnv, t *testing.T) *http.Cookie {
 			return o.bindSession(t, "saldirganin-kendi-istegi")
 		}},
 	} {
@@ -614,17 +614,17 @@ func TestFederationStart_SessionBindingRequired(t *testing.T) {
 
 			w := o.startRaw(providerGoogle, o.authReqID, d.cookie(o, t), false)
 			if w.Code != http.StatusForbidden {
-				t.Errorf("durum = %d, beklenen 403", w.Code)
+				t.Errorf("status = %d, want 403", w.Code)
 			}
 			if hasFedCookie(w) {
-				t.Error("baglamasiz istege federasyon cerezi KONMAMALI")
+				t.Error("a request without a binding must NOT get the federation cookie")
 			}
 			if after := o.stateCount(t); after != previousRecord {
-				t.Errorf("state kaydi yazildi (%d -> %d); baglamasiz istek HICBIR kayit uretmemeli",
+				t.Errorf("state record was written (%d -> %d); a request without a binding must produce NO record",
 					previousRecord, after)
 			}
 			if w.Header().Get("Location") != "" {
-				t.Errorf("yukari akisa yonlendirildi: %q", w.Header().Get("Location"))
+				t.Errorf("redirected upstream: %q", w.Header().Get("Location"))
 			}
 		})
 	}
@@ -642,13 +642,13 @@ func TestFederationStart_CrossSiteRejected(t *testing.T) {
 	// cross-site.
 	w := o.startRaw(providerGoogle, o.authReqID, o.sessionCookie, true)
 	if w.Code != http.StatusForbidden {
-		t.Errorf("durum = %d, beklenen 403", w.Code)
+		t.Errorf("status = %d, want 403", w.Code)
 	}
 	if hasFedCookie(w) {
-		t.Error("capraz-site istege federasyon cerezi KONMAMALI")
+		t.Error("a cross-site request must NOT get the federation cookie")
 	}
 	if after := o.stateCount(t); after != previousRecord {
-		t.Errorf("state kaydi yazildi (%d -> %d)", previousRecord, after)
+		t.Errorf("state record was written (%d -> %d)", previousRecord, after)
 	}
 }
 
@@ -666,18 +666,18 @@ func TestFederationStart_UnboundRequestCannotComplete(t *testing.T) {
 
 	w := o.startRaw(providerGoogle, unbound, nil, false)
 	if w.Code != http.StatusForbidden {
-		t.Fatalf("durum = %d, beklenen 403", w.Code)
+		t.Fatalf("status = %d, want 403", w.Code)
 	}
 	// Nothing that could be completed was produced: no state, no cookie.
 	if hasFedCookie(w) {
-		t.Error("federasyon cerezi konmus")
+		t.Error("federation cookie was set")
 	}
 	if n := o.stateCount(t); n != 0 {
-		t.Errorf("state kaydi sayisi = %d, beklenen 0", n)
+		t.Errorf("state record count = %d, want 0", n)
 	}
 	// And the request was NOT BOUND to any user.
 	if s := o.requests.subject(unbound); s != "" {
-		t.Errorf("Subject = %q, beklenen bos (TamamlandiIsaretle'ye ULASILMAMALI)", s)
+		t.Errorf("Subject = %q, want empty (MarkDone must NOT be reached)", s)
 	}
 }
 
@@ -689,7 +689,7 @@ func TestFederationStart_UnconfiguredProvider404(t *testing.T) {
 	delete(o.pages.upstreams, providerApple)
 	_, _, w := o.start(t, providerApple, o.authReqID)
 	if w.Code != http.StatusNotFound {
-		t.Errorf("durum = %d, beklenen 404", w.Code)
+		t.Errorf("status = %d, want 404", w.Code)
 	}
 }
 
@@ -707,27 +707,27 @@ func TestFederationCallback_KnownIdentityLogsIn(t *testing.T) {
 	o := newTestFederationPages(t)
 	existing, err := o.users.Create(context.Background(), "bagli@ornek.com", "Bagli", "cokgizlisifre")
 	if err != nil {
-		t.Fatalf("kullanici olusturulamadi: %v", err)
+		t.Fatalf("could not create user: %v", err)
 	}
 	if err := o.federated.Link(context.Background(), providerGoogle, o.google.sub, existing.ID); err != nil {
-		t.Fatalf("kimlik baglanamadi: %v", err)
+		t.Fatalf("could not link identity: %v", err)
 	}
 
 	w := o.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusFound {
-		t.Fatalf("durum = %d, beklenen 302, govde = %q", w.Code, w.Body.String())
+		t.Fatalf("status = %d, want 302, body = %q", w.Code, w.Body.String())
 	}
 	if location := w.Header().Get("Location"); location != o.expectedCallback() {
-		t.Errorf("Location = %q, beklenen %q", location, o.expectedCallback())
+		t.Errorf("Location = %q, want %q", location, o.expectedCallback())
 	}
 	if s := o.requests.subject(o.authReqID); s != existing.ID {
-		t.Errorf("Subject = %q, beklenen %q", s, existing.ID)
+		t.Errorf("Subject = %q, want %q", s, existing.ID)
 	}
 	if got := o.requests.amrFor(o.authReqID); !slices.Equal(got, []string{"fed"}) {
-		t.Errorf("amr = %v, beklenen [fed]", got)
+		t.Errorf("amr = %v, want [fed]", got)
 	}
 	if o.google.counts() != 1 {
-		t.Errorf("token ucu %d kez cagrildi, beklenen 1", o.google.counts())
+		t.Errorf("token endpoint called %d times, want 1", o.google.counts())
 	}
 }
 
@@ -738,27 +738,27 @@ func TestFederationCallback_NewIdentityCreatesAccount(t *testing.T) {
 
 	w := o.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusFound {
-		t.Fatalf("durum = %d, beklenen 302, govde = %q", w.Code, w.Body.String())
+		t.Fatalf("status = %d, want 302, body = %q", w.Code, w.Body.String())
 	}
 	fresh, err := o.users.ByEmail(context.Background(), "yeni@ornek.com")
 	if err != nil {
-		t.Fatalf("yeni kullanici bulunamadi: %v", err)
+		t.Fatalf("could not find the new user: %v", err)
 	}
 	if fresh.PasswordHash != "" {
-		t.Error("federe hesabin sifresi olmamali")
+		t.Error("a federated account must not have a password")
 	}
 	linked, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub)
 	if err != nil {
-		t.Fatalf("federe kimlik yazilmamis: %v", err)
+		t.Fatalf("federated identity was not written: %v", err)
 	}
 	if linked.ID != fresh.ID {
-		t.Errorf("kimlik %q kullanicisina bagli, beklenen %q", linked.ID, fresh.ID)
+		t.Errorf("identity is linked to user %q, want %q", linked.ID, fresh.ID)
 	}
 	if s := o.requests.subject(o.authReqID); s != fresh.ID {
-		t.Errorf("Subject = %q, beklenen %q", s, fresh.ID)
+		t.Errorf("Subject = %q, want %q", s, fresh.ID)
 	}
 	if got := o.requests.amrFor(o.authReqID); !slices.Equal(got, []string{"fed"}) {
-		t.Errorf("amr = %v, beklenen [fed]", got)
+		t.Errorf("amr = %v, want [fed]", got)
 	}
 }
 
@@ -768,10 +768,10 @@ func TestFederationCallback_CrossSitePostAccepted(t *testing.T) {
 	o := newTestFederationPages(t)
 	w := o.runFlow(t, providerApple, true)
 	if w.Code != http.StatusFound {
-		t.Fatalf("durum = %d, beklenen 302, govde = %q", w.Code, w.Body.String())
+		t.Fatalf("status = %d, want 302, body = %q", w.Code, w.Body.String())
 	}
 	if o.requests.subject(o.authReqID) == "" {
-		t.Error("istek tamamlanmadi")
+		t.Error("request was not completed")
 	}
 }
 
@@ -785,19 +785,19 @@ func TestFederationCallback_UnknownStateRejected(t *testing.T) {
 		name  string
 		state string
 	}{
-		{"bos state", ""},
-		{"uydurma state", "uydurma-state-degeri"},
+		{"empty state", ""},
+		{"made-up state", "uydurma-state-degeri"},
 	} {
 		t.Run(d.name, func(t *testing.T) {
 			w := o.callback(providerGoogle, d.state, "kod-1", &http.Cookie{Name: cookieNameFederation, Value: "herhangi"}, false)
 			if w.Code != http.StatusForbidden {
-				t.Errorf("durum = %d, beklenen 403", w.Code)
+				t.Errorf("status = %d, want 403", w.Code)
 			}
 			if o.requests.subject(o.authReqID) != "" {
-				t.Error("istek TAMAMLANMAMALI")
+				t.Error("request must NOT be completed")
 			}
 			if o.google.counts() != 0 {
-				t.Error("token degisimi HIC yapilmamali")
+				t.Error("token exchange must NOT happen at all")
 			}
 		})
 	}
@@ -810,21 +810,21 @@ func TestFederationCallback_StateReplayRejected(t *testing.T) {
 
 	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
 	if state == "" {
-		t.Fatalf("baslat basarisiz: durum = %d", w.Code)
+		t.Fatalf("start failed: status = %d", w.Code)
 	}
 	d := o.peekState(t, state)
 	o.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
 
 	first := o.callback(providerGoogle, state, "kod-1", cookie, false)
 	if first.Code != http.StatusFound {
-		t.Fatalf("ilk donus durum = %d, beklenen 302, govde = %q", first.Code, first.Body.String())
+		t.Fatalf("first return status = %d, want 302, body = %q", first.Code, first.Body.String())
 	}
 	second := o.callback(providerGoogle, state, "kod-1", cookie, false)
 	if second.Code != http.StatusForbidden {
-		t.Errorf("ikinci donus durum = %d, beklenen 403 (state tek kullanimlik)", second.Code)
+		t.Errorf("second return status = %d, want 403 (state is single-use)", second.Code)
 	}
 	if o.google.counts() != 1 {
-		t.Errorf("token ucu %d kez cagrildi, beklenen 1 (tekrar oynatma token degisimine ULASMAMALI)", o.google.counts())
+		t.Errorf("token endpoint called %d times, want 1 (a replay must NOT reach the token exchange)", o.google.counts())
 	}
 }
 
@@ -837,11 +837,11 @@ func TestFederationCallback_CookieMismatchRejected(t *testing.T) {
 		name       string
 		makeCookie func(correct *http.Cookie) *http.Cookie
 	}{
-		{"cerez yok", func(*http.Cookie) *http.Cookie { return nil }},
-		{"yanlis cerez", func(*http.Cookie) *http.Cookie {
+		{"no cookie", func(*http.Cookie) *http.Cookie { return nil }},
+		{"wrong cookie", func(*http.Cookie) *http.Cookie {
 			return &http.Cookie{Name: cookieNameFederation, Value: "saldirganin-cerezi"}
 		}},
-		{"bos cerez", func(*http.Cookie) *http.Cookie {
+		{"empty cookie", func(*http.Cookie) *http.Cookie {
 			return &http.Cookie{Name: cookieNameFederation, Value: ""}
 		}},
 	} {
@@ -850,7 +850,7 @@ func TestFederationCallback_CookieMismatchRejected(t *testing.T) {
 			// 1) The attacker gets a valid state in their own browser.
 			state, validCookie, w := o.start(t, providerGoogle, o.authReqID)
 			if state == "" {
-				t.Fatalf("baslat basarisiz: durum = %d", w.Code)
+				t.Fatalf("start failed: status = %d", w.Code)
 			}
 			status := o.peekState(t, state)
 			o.google.configure(func(s *fakeProvider) { s.nonce = status.Nonce })
@@ -858,13 +858,13 @@ func TestFederationCallback_CookieMismatchRejected(t *testing.T) {
 			// 2) It arrives with the same state from the victim's browser (cookie missing/wrong).
 			resp := o.callback(providerGoogle, state, "kod-1", d.makeCookie(validCookie), false)
 			if resp.Code != http.StatusForbidden {
-				t.Errorf("durum = %d, beklenen 403", resp.Code)
+				t.Errorf("status = %d, want 403", resp.Code)
 			}
 			if o.requests.subject(o.authReqID) != "" {
-				t.Error("istek TAMAMLANMAMALI (Subject bos kalmali)")
+				t.Error("request must NOT be completed (Subject must stay empty)")
 			}
 			if o.google.counts() != 0 {
-				t.Error("token degisimi HIC yapilmamali")
+				t.Error("token exchange must NOT happen at all")
 			}
 		})
 	}
@@ -876,7 +876,7 @@ func TestFederationCallback_NonceMismatchRejected(t *testing.T) {
 	o := newTestFederationPages(t)
 	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
 	if state == "" {
-		t.Fatalf("baslat basarisiz: durum = %d", w.Code)
+		t.Fatalf("start failed: status = %d", w.Code)
 	}
 	// The provider signs with ANOTHER nonce: the scenario where an attacker
 	// injects a valid (signature/iss/aud correct) id_token obtained from their
@@ -885,13 +885,13 @@ func TestFederationCallback_NonceMismatchRejected(t *testing.T) {
 
 	resp := o.callback(providerGoogle, state, "kod-1", cookie, false)
 	if resp.Code != http.StatusForbidden {
-		t.Errorf("durum = %d, beklenen 403", resp.Code)
+		t.Errorf("status = %d, want 403", resp.Code)
 	}
 	if o.requests.subject(o.authReqID) != "" {
-		t.Error("istek TAMAMLANMAMALI")
+		t.Error("request must NOT be completed")
 	}
 	if _, err := o.users.ByEmail(context.Background(), o.google.email); err == nil {
-		t.Error("nonce eslesmezken hesap OLUSTURULMAMALI")
+		t.Error("no account must be CREATED when the nonce does not match")
 	}
 }
 
@@ -903,10 +903,10 @@ func TestFederationCallback_InvalidSignatureRejected(t *testing.T) {
 
 	w := o.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusForbidden {
-		t.Errorf("durum = %d, beklenen 403", w.Code)
+		t.Errorf("status = %d, want 403", w.Code)
 	}
 	if o.requests.subject(o.authReqID) != "" {
-		t.Error("istek TAMAMLANMAMALI")
+		t.Error("request must NOT be completed")
 	}
 }
 
@@ -918,10 +918,10 @@ func TestFederationCallback_WrongAudienceRejected(t *testing.T) {
 
 	w := o.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusForbidden {
-		t.Errorf("durum = %d, beklenen 403", w.Code)
+		t.Errorf("status = %d, want 403", w.Code)
 	}
 	if o.requests.subject(o.authReqID) != "" {
-		t.Error("istek TAMAMLANMAMALI")
+		t.Error("request must NOT be completed")
 	}
 }
 
@@ -931,17 +931,17 @@ func TestFederationCallback_WrongAudienceRejected(t *testing.T) {
 func TestFederationCallback_CompletedRequestOtherUserRejected(t *testing.T) {
 	o := newTestFederationPages(t)
 	if err := o.requests.MarkDone(context.Background(), o.authReqID, "baska-kullanici", []string{amrFederation}); err != nil {
-		t.Fatalf("on tamamlama: %v", err)
+		t.Fatalf("pre-completion: %v", err)
 	}
 	w := o.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusConflict {
-		t.Errorf("durum = %d, beklenen 409", w.Code)
+		t.Errorf("status = %d, want 409", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), msgRequestAlreadyUsed) {
-		t.Errorf("govde = %q", w.Body.String())
+		t.Errorf("body = %q", w.Body.String())
 	}
 	if s := o.requests.subject(o.authReqID); s != "baska-kullanici" {
-		t.Errorf("Subject ezildi: %q", s)
+		t.Errorf("Subject was overwritten: %q", s)
 	}
 }
 
@@ -954,7 +954,7 @@ func TestFederationCallback_ProviderReadFromState(t *testing.T) {
 
 	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
 	if state == "" {
-		t.Fatalf("baslat basarisiz: durum = %d", w.Code)
+		t.Fatalf("start failed: status = %d", w.Code)
 	}
 	d := o.peekState(t, state)
 	o.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
@@ -962,21 +962,21 @@ func TestFederationCallback_ProviderReadFromState(t *testing.T) {
 	// A flow started at Google comes back through the APPLE path.
 	resp := o.callback(providerApple, state, "kod-1", cookie, false)
 	if resp.Code != http.StatusFound {
-		t.Fatalf("durum = %d, beklenen 302 (akis kayittaki GOOGLE ile surmeli), govde = %q",
+		t.Fatalf("status = %d, want 302 (the flow must run with the GOOGLE in the record), body = %q",
 			resp.Code, resp.Body.String())
 	}
 	if o.google.counts() != 1 {
-		t.Errorf("google token ucu %d kez cagrildi, beklenen 1", o.google.counts())
+		t.Errorf("google token endpoint called %d times, want 1", o.google.counts())
 	}
 	if o.apple.counts() != 0 {
-		t.Errorf("apple token ucu %d kez cagrildi, beklenen 0 (yol degeri kullanilmamali)", o.apple.counts())
+		t.Errorf("apple token endpoint called %d times, want 0 (the path value must not be used)", o.apple.counts())
 	}
 	linked, err := o.federated.UserByIdentity(context.Background(), providerGoogle, o.google.sub)
 	if err != nil {
-		t.Fatalf("kimlik GOOGLE olarak yazilmamis: %v", err)
+		t.Fatalf("identity was not written as GOOGLE: %v", err)
 	}
 	if linked.Email != "kayittan@ornek.com" {
-		t.Errorf("e-posta = %q", linked.Email)
+		t.Errorf("email = %q", linked.Email)
 	}
 }
 
@@ -989,7 +989,7 @@ func TestFederationCallback_RateLimitApplied(t *testing.T) {
 		LoginIPPerMin: 1, LoginEmailPerHour: 100, SignupIPPerHour: 100,
 	}, []byte("test-anahtari"))
 	if err != nil {
-		t.Fatalf("hiz limiti kurulamadi: %v", err)
+		t.Fatalf("could not set up the rate limiter: %v", err)
 	}
 	mux := http.NewServeMux()
 	interceptor := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
@@ -998,15 +998,15 @@ func TestFederationCallback_RateLimitApplied(t *testing.T) {
 
 	first := o.callback(providerGoogle, "uydurma-state", "kod-1", nil, false)
 	if first.Code == http.StatusTooManyRequests {
-		t.Fatal("ilk deneme 429 aldi; sinir yanlis kurulmus")
+		t.Fatal("first attempt got 429; the limit is set up wrong")
 	}
 	second := o.callback(providerGoogle, "uydurma-state", "kod-1", nil, false)
 	if second.Code != http.StatusTooManyRequests {
-		t.Errorf("ikinci deneme durum = %d, beklenen 429", second.Code)
+		t.Errorf("second attempt status = %d, want 429", second.Code)
 	}
 	keyList, err := o.store.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
 	if err != nil {
-		t.Fatalf("anahtarlar okunamadi: %v", err)
+		t.Fatalf("could not read keys: %v", err)
 	}
 	var hasCallback bool
 	for _, a := range keyList {
@@ -1014,11 +1014,11 @@ func TestFederationCallback_RateLimitApplied(t *testing.T) {
 			hasCallback = true
 		}
 		if strings.Contains(a, ":giris:") || strings.Contains(a, ":baglama:") {
-			t.Errorf("federasyon donusu baska bir ucun sayacini tuketti: %q", a)
+			t.Errorf("federation return consumed another endpoint's counter: %q", a)
 		}
 	}
 	if !hasCallback {
-		t.Errorf("federasyon-geri sayaci olusmadi; anahtarlar: %v", keyList)
+		t.Errorf("federasyon-geri counter was not created; keys: %v", keyList)
 	}
 }
 
@@ -1032,7 +1032,7 @@ func TestFederationStart_RateLimitCountedSeparately(t *testing.T) {
 		LoginIPPerMin: 1, LoginEmailPerHour: 100, SignupIPPerHour: 100,
 	}, []byte("test-anahtari"))
 	if err != nil {
-		t.Fatalf("hiz limiti kurulamadi: %v", err)
+		t.Fatalf("could not set up the rate limiter: %v", err)
 	}
 	mux := http.NewServeMux()
 	interceptor := op.NewIssuerInterceptor(func(*http.Request) string { return fedTestIssuer })
@@ -1041,16 +1041,16 @@ func TestFederationStart_RateLimitCountedSeparately(t *testing.T) {
 
 	first := o.startRaw(providerGoogle, o.authReqID, o.sessionCookie, false)
 	if first.Code == http.StatusTooManyRequests {
-		t.Fatal("ilk baslatma 429 aldi; sinir yanlis kurulmus")
+		t.Fatal("first start got 429; the limit is set up wrong")
 	}
 	second := o.startRaw(providerGoogle, o.authReqID, o.sessionCookie, false)
 	if second.Code != http.StatusTooManyRequests {
-		t.Errorf("ikinci baslatma durumu = %d, beklenen 429", second.Code)
+		t.Errorf("second start status = %d, want 429", second.Code)
 	}
 
 	keyList, err := o.store.rdb.Keys(context.Background(), rateLimitPrefix+":*").Result()
 	if err != nil {
-		t.Fatalf("anahtarlar okunamadi: %v", err)
+		t.Fatalf("could not read keys: %v", err)
 	}
 	var hasStart bool
 	for _, a := range keyList {
@@ -1061,12 +1061,12 @@ func TestFederationStart_RateLimitCountedSeparately(t *testing.T) {
 		// ":federasyon-geri:": start and callback are separate budgets.
 		for _, foreign := range []string{":giris:", ":kayit:", ":baglama:", ":federasyon-geri:"} {
 			if strings.Contains(a, foreign) {
-				t.Errorf("federasyon baslatma baska bir ucun sayacini tuketti: %q", a)
+				t.Errorf("federation start consumed another endpoint's counter: %q", a)
 			}
 		}
 	}
 	if !hasStart {
-		t.Errorf("federasyon-baslat sayaci olusmadi; anahtarlar: %v", keyList)
+		t.Errorf("federasyon-baslat counter was not created; keys: %v", keyList)
 	}
 }
 
@@ -1089,7 +1089,7 @@ func TestFederationCallback_LogsDoNotLeak(t *testing.T) {
 	// 1) Happy path.
 	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
 	if state == "" {
-		t.Fatalf("baslat basarisiz: durum = %d", w.Code)
+		t.Fatalf("start failed: status = %d", w.Code)
 	}
 	d := o.peekState(t, state)
 	o.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
@@ -1104,38 +1104,38 @@ func TestFederationCallback_LogsDoNotLeak(t *testing.T) {
 
 	outputs := buf.String()
 	forbiddenMap := map[string]string{
-		"state":       state,
-		"state-2":     state2,
-		"kod":         "gizli-kod-degeri",
-		"cerez":       cookie.Value,
-		"cerez-2":     cookie2.Value,
-		"nonce":       d.Nonce,
-		"eposta":      "sizmasin@ornek.com",
-		"istek id":    o.authReqID,
-		"dogrulayici": d.CodeVerifier,
+		"state":      state,
+		"state-2":    state2,
+		"code":       "gizli-kod-degeri",
+		"cookie":     cookie.Value,
+		"cookie-2":   cookie2.Value,
+		"nonce":      d.Nonce,
+		"email":      "sizmasin@ornek.com",
+		"request id": o.authReqID,
+		"verifier":   d.CodeVerifier,
 	}
 	for name, value := range forbiddenMap {
 		if value == "" {
 			continue
 		}
 		if strings.Contains(outputs, value) {
-			t.Errorf("log %s degerini sizdirdi; loglar: %q", name, outputs)
+			t.Errorf("log leaked the %s value; logs: %q", name, outputs)
 		}
 	}
 	// id_token: it was produced both on the happy path and on the path where the
 	// verification FAILED; none of it (neither all nor a part) may enter a log.
 	tokenList := o.google.tokens()
 	if len(tokenList) == 0 {
-		t.Fatal("hic id_token uretilmedi; test id_token sizmasini OLCMUYOR")
+		t.Fatal("no id_token was produced; the test does NOT MEASURE id_token leakage")
 	}
 	for i, token := range tokenList {
 		if strings.Contains(outputs, token) {
-			t.Errorf("log %d. id_token'i sizdirdi; loglar: %q", i, outputs)
+			t.Errorf("log leaked the id_token %d; logs: %q", i, outputs)
 		}
 		// The signature part is searched for too: a trimmed token is a leak as well.
 		for _, part := range strings.Split(token, ".") {
 			if len(part) > 16 && strings.Contains(outputs, part) {
-				t.Errorf("log %d. id_token'in bir parcasini sizdirdi; loglar: %q", i, outputs)
+				t.Errorf("log leaked part of the id_token %d; logs: %q", i, outputs)
 			}
 		}
 	}
@@ -1157,7 +1157,7 @@ func TestFederationCallback_ExpiredRequestReturns400(t *testing.T) {
 	o := newTestFederationPages(t)
 	state, cookie, w := o.start(t, providerGoogle, o.authReqID)
 	if state == "" {
-		t.Fatalf("baslat basarisiz: durum = %d", w.Code)
+		t.Fatalf("start failed: status = %d", w.Code)
 	}
 	d := o.peekState(t, state)
 	o.google.configure(func(s *fakeProvider) { s.nonce = d.Nonce })
@@ -1168,13 +1168,13 @@ func TestFederationCallback_ExpiredRequestReturns400(t *testing.T) {
 
 	resp := o.callback(providerGoogle, state, "kod-1", cookie, false)
 	if resp.Code == http.StatusInternalServerError {
-		t.Fatalf("siradan bir suresi-dolma 500 uretti: govde = %q", resp.Body.String())
+		t.Fatalf("an ordinary expiry produced a 500: body = %q", resp.Body.String())
 	}
 	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("durum = %d, beklenen 400, govde = %q", resp.Code, resp.Body.String())
+		t.Fatalf("status = %d, want 400, body = %q", resp.Code, resp.Body.String())
 	}
 	if !strings.Contains(resp.Body.String(), msgRequestExpired) {
-		t.Errorf("kullaniciya ne oldugu soylenmemis: govde = %q", resp.Body.String())
+		t.Errorf("the user was not told what happened: body = %q", resp.Body.String())
 	}
 }
 
@@ -1189,19 +1189,19 @@ func TestWriteCompletionError_Classification(t *testing.T) {
 		code int
 		text string
 	}{
-		{"zaten tamamlandi", ErrRequestAlreadyCompleted, http.StatusConflict, msgRequestAlreadyUsed},
-		{"TTL ile dustu", ErrRequestNotFound, http.StatusBadRequest, msgRequestExpired},
-		{"gercek sunucu hatasi", errors.New("redis baglantisi dustu"), http.StatusInternalServerError, msgServerError},
+		{"already completed", ErrRequestAlreadyCompleted, http.StatusConflict, msgRequestAlreadyUsed},
+		{"dropped by TTL", ErrRequestNotFound, http.StatusBadRequest, msgRequestExpired},
+		{"real server error", errors.New("redis connection dropped"), http.StatusInternalServerError, msgServerError},
 	}
 	for _, d := range statuses {
 		t.Run(d.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			f.writeCompletionError(w, d.err)
 			if w.Code != d.code {
-				t.Errorf("durum = %d, beklenen %d", w.Code, d.code)
+				t.Errorf("status = %d, want %d", w.Code, d.code)
 			}
 			if !strings.Contains(w.Body.String(), d.text) {
-				t.Errorf("govde = %q, beklenen %q", w.Body.String(), d.text)
+				t.Errorf("body = %q, want %q", w.Body.String(), d.text)
 			}
 		})
 	}
@@ -1231,17 +1231,17 @@ func TestFederationCallback_NoUpstreamEmailNoAccount(t *testing.T) {
 
 			w := o.runFlow(t, providerGoogle, false)
 			if w.Code != http.StatusBadRequest {
-				t.Fatalf("durum = %d, beklenen 400, govde = %q", w.Code, w.Body.String())
+				t.Fatalf("status = %d, want 400, body = %q", w.Code, w.Body.String())
 			}
 			if !strings.Contains(w.Body.String(), msgUpstreamNoEmail) {
-				t.Errorf("kullaniciya ne yapacagi soylenmemis: govde = %q", w.Body.String())
+				t.Errorf("the user was not told what to do: body = %q", w.Body.String())
 			}
 			// No account must have been CREATED and no login must have HAPPENED.
 			if _, err := o.federated.UserByIdentity(context.Background(), providerGoogle, sub); !errors.Is(err, ErrIdentityNotFound) {
-				t.Errorf("bos e-postayla hesap ACILDI (hata = %v)", err)
+				t.Errorf("an account was OPENED with an empty email (error = %v)", err)
 			}
 			if o.requests.subject(o.authReqID) != "" {
-				t.Error("bos e-postayla giris YAPILDI")
+				t.Error("sign-in with an empty email SUCCEEDED")
 			}
 		})
 	}
@@ -1259,7 +1259,7 @@ func TestFederationCallback_SuccessClearsFederationCookie(t *testing.T) {
 	o := newTestFederationPages(t)
 	w := o.runFlow(t, providerGoogle, false)
 	if w.Code != http.StatusFound {
-		t.Fatalf("akis basarisiz: durum = %d, govde = %q", w.Code, w.Body.String())
+		t.Fatalf("flow failed: status = %d, body = %q", w.Code, w.Body.String())
 	}
 
 	var deletion *http.Cookie
@@ -1269,27 +1269,27 @@ func TestFederationCallback_SuccessClearsFederationCookie(t *testing.T) {
 		}
 	}
 	if deletion == nil {
-		t.Fatal("basarili donuste kimlik_fed silme cerezi YOK")
+		t.Fatal("no kimlik_fed deletion cookie on a successful return")
 	}
 	if deletion.MaxAge >= 0 {
-		t.Errorf("MaxAge = %d, beklenen negatif (MaxAge=0 cerezi OTURUM cerezi olarak yasatir)", deletion.MaxAge)
+		t.Errorf("MaxAge = %d, want negative (MaxAge=0 makes the cookie a SESSION cookie)", deletion.MaxAge)
 	}
 	if deletion.Value != "" {
-		t.Errorf("silme cerezi hala deger tasiyor: %q", deletion.Value)
+		t.Errorf("the deletion cookie still carries a value: %q", deletion.Value)
 	}
 	// The attributes MUST BE THE SAME as at write time, otherwise the browser
 	// writes a SECOND cookie next to the old one instead of deleting it.
 	writing := o.pages.federationCookie("deger")
 	if deletion.Path != writing.Path {
-		t.Errorf("Path = %q, beklenen %q", deletion.Path, writing.Path)
+		t.Errorf("Path = %q, want %q", deletion.Path, writing.Path)
 	}
 	if deletion.Secure != writing.Secure {
-		t.Errorf("Secure = %v, beklenen %v", deletion.Secure, writing.Secure)
+		t.Errorf("Secure = %v, want %v", deletion.Secure, writing.Secure)
 	}
 	if deletion.HttpOnly != writing.HttpOnly {
-		t.Errorf("HttpOnly = %v, beklenen %v", deletion.HttpOnly, writing.HttpOnly)
+		t.Errorf("HttpOnly = %v, want %v", deletion.HttpOnly, writing.HttpOnly)
 	}
 	if deletion.SameSite != writing.SameSite {
-		t.Errorf("SameSite = %v, beklenen %v", deletion.SameSite, writing.SameSite)
+		t.Errorf("SameSite = %v, want %v", deletion.SameSite, writing.SameSite)
 	}
 }
