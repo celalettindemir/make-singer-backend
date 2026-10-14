@@ -300,7 +300,8 @@ func (f *FederationPages) writeCompletionError(w http.ResponseWriter, err error)
 // THIS LEG IS NOT EXEMPT FROM K3. The exemption belongs ONLY to the return
 // endpoint (see Callback): there the return is cross-site BY DEFINITION.
 // Start, on the other hand, is a SAME-SITE top-level GET coming from the
-// button on the /giris page, so both of Phase 1's protections apply here as
+// button on the /giris page or, with the provider hint, straight from the
+// /authorize redirect (see Pages.WrapAuthorize), so both of Phase 1's protections apply here as
 // they do there, and both are REQUIRED:
 //
 //  1. SESSION BINDING (verifySessionBinding): authRequestID alone is NOT an

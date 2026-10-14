@@ -22,6 +22,12 @@ const (
 // fieldCSRF is the field name of the CSRF token in the form.
 const fieldCSRF = "csrf"
 
+// paramProviderHint is the /authorize query parameter with which the native
+// app names the upstream provider the user already chose on its own login
+// screen (R-AUTH-03: "saglayici=apple" / "saglayici=google"). See
+// Pages.providerHint for when it is honored.
+const paramProviderHint = "saglayici"
+
 // RequestCompleter binds the pending auth request to the user once login or
 // signup succeeds. It is an interface so tests can measure the happy path
 // OFFLINE; in production *RequestStore implements it.
@@ -162,8 +168,8 @@ func (s *Pages) SetFederationProviders(names []string) { s.federationProviders =
 
 // federationButtons builds the button list for the given auth request.
 //
-// The path is built HERE, with the url package; NO manual string
-// concatenation is done in the template. If authRequestID entered unescaped,
+// The path is built in Go (federationStartLocation), with the url package;
+// NO manual string concatenation is done in the template. If authRequestID entered unescaped,
 // at best the link would break, at worst the "&" in it would inject a
 // foreign parameter into the query string.
 //
@@ -176,14 +182,10 @@ func (s *Pages) federationButtons(id string) []ProviderButton {
 	}
 	buttons := make([]ProviderButton, 0, len(s.federationProviders))
 	for _, name := range s.federationProviders {
-		redirect := url.URL{
-			Path:     federationStartPath(name),
-			RawQuery: url.Values{"authRequestID": {id}}.Encode(),
-		}
 		buttons = append(buttons, ProviderButton{
 			Name:  name,
 			Label: providerLabel(name) + " ile giris yap",
-			Path:  redirect.String(),
+			Path:  federationStartLocation(name, id),
 		})
 	}
 	return buttons
@@ -306,6 +308,18 @@ func (s *Pages) BindSession(w http.ResponseWriter, r *http.Request, id string) e
 // claiming the same custom scheme, RFC 8252 section 8.1), the ONLY scenario
 // PKCE protects against collapses. So NO binding is SET on a request coming
 // from cross-site; see isCrossSite.
+//
+// PROVIDER HINT (R-AUTH-03): when the native app already asked the user
+// "Apple or Google?", showing our login page with the same two buttons again
+// is a wasted step. If paramProviderHint names a CONFIGURED provider, the
+// Location is rewritten to that provider's start leg AFTER the binding is
+// set, i.e. the redirect target changes, not the security model: the start
+// leg still requires the binding and still rejects cross-site, and a
+// cross-site /authorize is NEVER rewritten (no binding, so the shortcut
+// would only lead to a 403 anyway). The session cookie written on this 302
+// is SameSite=Lax and the next hop is a same-origin redirect of the user's
+// own navigation, so the browser sends it to the start leg exactly as it
+// does to /giris today.
 func (s *Pages) WrapAuthorize(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		interceptor := &bindingInterceptor{ResponseWriter: w}
@@ -329,7 +343,17 @@ func (s *Pages) WrapAuthorize(next http.Handler) http.Handler {
 				log.Print("authorize: cross-site navigation, session binding was not set up")
 				return nil
 			}
-			return s.BindSession(w, r, id)
+			if err := s.BindSession(w, r, id); err != nil {
+				return err
+			}
+			// The provider hint is honored ONLY HERE, i.e. AFTER the binding is set
+			// and NEVER on the cross-site branch above: the federation start leg
+			// requires exactly this binding (see FederationPages.Start), so the
+			// hint is a shortcut past the login PAGE, not past any check.
+			if provider := s.providerHint(r); provider != "" {
+				w.Header().Set("Location", federationStartLocation(provider, id))
+			}
+			return nil
 		}
 		next.ServeHTTP(interceptor, r)
 	})
@@ -390,6 +414,45 @@ const (
 // exploit and it drops the victim's legitimate flows.
 func isCrossSite(r *http.Request) bool {
 	return r.Header.Get(headerFetchSite) == fetchSiteCrossSite
+}
+
+// providerHint returns the provider named by the /authorize request's
+// paramProviderHint if, and only if, it EXACTLY matches a configured
+// federation provider; otherwise an empty string, i.e. the hint is ignored
+// and the hosted login page opens as before.
+//
+// WHY ONLY CONFIGURED PROVIDERS: the start endpoint is mounted only for
+// them; rewriting to any other name would send the user to a 404 instead of
+// the login page, where they could still pick another method.
+//
+// WHY AN EXACT, CASE-SENSITIVE MATCH: the contract fixes the wire values as
+// lowercase and the start paths are mounted with the same lowercase names.
+// Normalizing would only widen the accepted input; the value never reaches
+// the path unless it is one of our own constant names.
+func (s *Pages) providerHint(r *http.Request) string {
+	hint := r.URL.Query().Get(paramProviderHint)
+	if hint == "" {
+		return ""
+	}
+	for _, name := range s.federationProviders {
+		if name == hint {
+			return name
+		}
+	}
+	return ""
+}
+
+// federationStartLocation builds the address of a provider's start leg for
+// the given auth request: the SAME address the login page's button points to
+// (see federationButtons), so skipping the page changes nothing downstream.
+// It is built with the url package: the authRequestID is never concatenated
+// unescaped into the query string.
+func federationStartLocation(provider, id string) string {
+	u := url.URL{
+		Path:     federationStartPath(provider),
+		RawQuery: url.Values{"authRequestID": {id}}.Encode(),
+	}
+	return u.String()
 }
 
 // loginRedirectID returns the authRequestID if the redirect address produced
