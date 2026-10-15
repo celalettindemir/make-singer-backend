@@ -19,6 +19,7 @@ from services.archiver import ArchiverService
 from services.encoder import EncoderService
 from services.master import MasterService
 from services.storage import StorageService
+from services.tempo import TempoService
 
 # Logging configuration
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info").upper()
@@ -120,19 +121,31 @@ class AnalizResponse(BaseModel):
     preview_url: str
 
 
+class TempoRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    input_key: str
+
+
+class TempoResponse(BaseModel):
+    # Ritim bulunamazsa None; cagiran brief'teki BPM'de kalir.
+    bpm: float | None
+
+
 # Services
 storage_service: StorageService | None = None
 master_service: MasterService | None = None
 encoder_service: EncoderService | None = None
 archiver_service: ArchiverService | None = None
 analiz_service: AnalizService | None = None
+tempo_service: TempoService | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     global storage_service, master_service, encoder_service, archiver_service
-    global analiz_service
+    global analiz_service, tempo_service
 
     # Initialize storage service
     if R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY:
@@ -150,6 +163,7 @@ async def lifespan(app: FastAPI):
     encoder_service = EncoderService(storage_service)
     archiver_service = ArchiverService(storage_service)
     analiz_service = AnalizService(storage_service)
+    tempo_service = TempoService(storage_service)
 
     yield
 
@@ -259,6 +273,21 @@ async def analiz_audio(request: AnalizRequest):
             preview_seconds=request.preview_seconds,
         )
         return AnalizResponse(**result)
+    # Genis yakalama BILINCLI: FastAPI ucunda son siginak, her hata 500
+    # olarak donsun. BLE001 bu yuzden susturuldu.
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tempo", response_model=TempoResponse)
+async def tempo_audio(request: TempoRequest):
+    """Render edilen sarkinin gercek BPM'i; ritim bulunamazsa bpm None."""
+    if tempo_service is None:
+        raise HTTPException(status_code=503, detail="Tempo service not initialized")
+
+    try:
+        result = await tempo_service.olc(input_key=request.input_key)
+        return TempoResponse(**result)
     # Genis yakalama BILINCLI: FastAPI ucunda son siginak, her hata 500
     # olarak donsun. BLE001 bu yuzden susturuldu.
     except Exception as e:  # noqa: BLE001
