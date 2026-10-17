@@ -241,6 +241,17 @@ func (p *Purchases) applyPack(ctx context.Context, pk pack, submitter string) (s
 	if _, err := p.store.RecordPurchase(ctx, record); err != nil {
 		return "", err
 	}
+	// A refund that landed between the claim and the credit saw no
+	// credited row and clawed nothing back; do it here (same ref, once).
+	if rec, err = p.store.PurchaseByOrder(ctx, pk.store, pk.orderID); err != nil {
+		return "", err
+	}
+	if rec != nil && rec.Status == purchaseRefunded {
+		if _, _, err := p.store.ClawBack(ctx, owner, pk.store+":"+pk.orderID, credits); err != nil {
+			return "", err
+		}
+		return PurchaseRecorded, nil
+	}
 	return PurchaseCredited, nil
 }
 
@@ -280,9 +291,7 @@ type subFacts struct {
 	token string
 	// linkedID is a previous subscription this one replaces (Google).
 	linkedID string
-	// force applies the state even when it is older than the stored one.
-	force bool
-	raw   json.RawMessage
+	raw      json.RawMessage
 }
 
 // applySubscription runs the §4.3 state machine for one verified state.
@@ -318,9 +327,12 @@ func (p *Purchases) applySubscription(ctx context.Context, f subFacts, submitter
 		Store: f.store, OriginalID: f.originalID, UserID: strPtr(owner), Product: f.product,
 		Status: f.status, PeriodEnd: f.periodEnd, AutoRenew: f.autoRenew, Env: f.env,
 	}
-	stale := cur != nil && !f.force && f.periodEnd.Before(cur.PeriodEnd)
-	if stale {
-		// An older state than the stored one: keep the state, only claim.
+	// claimOnly keeps the stored state and only claims an ownerless row:
+	// for a state older than the stored one (an old order, even a refund
+	// of it), and for any non-active state a client sends, since only
+	// webhooks and Resync are authoritative for ending a subscription.
+	claimOnly := cur != nil && (f.periodEnd.Before(cur.PeriodEnd) || (submitter != "" && f.status != subActive))
+	if claimOnly {
 		next = *cur
 		if next.UserID == nil {
 			next.UserID = strPtr(owner)
@@ -355,7 +367,7 @@ func (p *Purchases) applySubscription(ctx context.Context, f subFacts, submitter
 	if stored != nil && stored.UserID == nil {
 		owner = ""
 	}
-	if replaced != nil && replaced.OriginalID != f.originalID && live(replaced.Status) && !stale {
+	if replaced != nil && replaced.OriginalID != f.originalID && live(replaced.Status) && !claimOnly {
 		old := *replaced
 		old.Status, old.NextRefill = subExpired, nil
 		if err := p.store.UpsertSubscription(ctx, old); err != nil {
@@ -363,14 +375,18 @@ func (p *Purchases) applySubscription(ctx context.Context, f subFacts, submitter
 		}
 	}
 	if f.orderID != "" {
+		status := subPurchaseStatus(owner, f.status)
+		if claimOnly && status == purchaseCredited {
+			status = purchaseRecorded
+		}
 		if _, err := p.store.RecordPurchase(ctx, PurchaseRecord{
 			Store: f.store, OrderID: f.orderID, UserID: strPtr(owner), Product: f.product,
-			Status: subPurchaseStatus(owner, f.status), Env: f.env, Raw: f.raw,
+			Status: status, Env: f.env, Raw: f.raw,
 		}); err != nil {
 			return "", "", err
 		}
 	}
-	if stale || owner == "" {
+	if claimOnly || owner == "" {
 		return PurchaseRecorded, owner, nil
 	}
 	switch {
@@ -531,7 +547,7 @@ func (p *Purchases) ApplyAppleNotification(ctx context.Context, n *appstore.Noti
 		if isPack {
 			return p.refundPack(ctx, storeApple, tx.TransactionID, product, appleEnv(tx.Environment))
 		}
-		return p.setAppleStatus(ctx, tx, renewal, product, subRefunded, true)
+		return p.setAppleStatus(ctx, tx, renewal, product, subRefunded)
 	case n.Type == "SUBSCRIBED" || n.Type == "DID_RENEW" || n.Type == "ONE_TIME_CHARGE" || n.Type == "DID_CHANGE_RENEWAL_PREF":
 		_, _, err = p.applyAppleTx(ctx, tx, renewal, "")
 		return err
@@ -560,20 +576,19 @@ func (p *Purchases) ApplyAppleNotification(ctx context.Context, n *appstore.Noti
 		if n.Subtype == "GRACE_PERIOD" {
 			status = subGrace
 		}
-		return p.setAppleStatus(ctx, tx, renewal, product, status, false)
+		return p.setAppleStatus(ctx, tx, renewal, product, status)
 	default: // GRACE_PERIOD_EXPIRED, EXPIRED
-		return p.setAppleStatus(ctx, tx, renewal, product, subExpired, false)
+		return p.setAppleStatus(ctx, tx, renewal, product, subExpired)
 	}
 }
 
 // setAppleStatus applies a non-purchase state change to a subscription.
-func (p *Purchases) setAppleStatus(ctx context.Context, tx *appstore.Transaction, renewal *appstore.RenewalInfo, product, status string, force bool) error {
+func (p *Purchases) setAppleStatus(ctx context.Context, tx *appstore.Transaction, renewal *appstore.RenewalInfo, product, status string) error {
 	autoRenew := status != subExpired && status != subRefunded
 	if renewal != nil {
 		autoRenew = renewal.AutoRenewStatus == 1
 	}
 	f := p.appleSubFacts(tx, product, status, autoRenew)
-	f.force = force
 	_, _, err := p.applySubscription(ctx, f, "")
 	return err
 }
@@ -782,23 +797,38 @@ func (p *Purchases) ApplyGoogleNotification(ctx context.Context, n *googleplay.D
 
 // applyGoogleVoided applies a refund or chargeback. Google offers no
 // lookup for voided purchases on the Publisher surface used here, so the
-// authenticated push is acted on, but only for purchases we recorded.
+// authenticated push is acted on (accepted ruling).
 func (p *Purchases) applyGoogleVoided(ctx context.Context, v *googleplay.VoidedNotification) error {
 	if v.ProductType == 1 { // subscription
 		cur, err := p.store.SubscriptionByOriginal(ctx, storeGoogle, v.PurchaseToken)
 		if err != nil || cur == nil {
 			return err
 		}
+		periodEnd := cur.PeriodEnd
+		// A voided order older than the latest one refunds a past period:
+		// only that order is marked, the current period stays.
+		sp, err := p.google.Subscription(ctx, v.PurchaseToken)
+		if err != nil && !errors.Is(err, googleplay.ErrNotFound) {
+			return err
+		}
+		if sp != nil && sp.LatestOrderID != "" && sp.LatestOrderID != v.OrderID {
+			periodEnd = time.Time{}
+		}
 		f := subFacts{
 			store: storeGoogle, originalID: cur.OriginalID, product: cur.Product, status: subRefunded,
-			env: cur.Env, periodEnd: cur.PeriodEnd, orderID: v.OrderID, force: true,
+			env: cur.Env, periodEnd: periodEnd, orderID: v.OrderID,
 		}
 		_, _, err = p.applySubscription(ctx, f, "")
 		return err
 	}
 	rec, err := p.store.PurchaseByOrder(ctx, storeGoogle, v.OrderID)
-	if err != nil || rec == nil {
+	if err != nil {
 		return err
+	}
+	if rec == nil {
+		// Unknown order: leave a refunded tombstone so a later POST of
+		// this purchase can never credit it.
+		return p.refundPack(ctx, storeGoogle, v.OrderID, "", envProduction)
 	}
 	return p.refundPack(ctx, storeGoogle, v.OrderID, rec.Product, rec.Env)
 }
@@ -842,7 +872,6 @@ func (p *Purchases) Resync(ctx context.Context, s Subscription) error {
 			autoRenew = renewal.AutoRenewStatus == 1
 		}
 		f := p.appleSubFacts(tx, product, status, autoRenew)
-		f.force = status == subRefunded
 		_, _, err = p.applySubscription(ctx, f, "")
 		return err
 	case storeGoogle:

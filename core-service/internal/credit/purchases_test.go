@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -795,5 +796,182 @@ func TestResync_AppleStatusExpiredZeroesPlan(t *testing.T) {
 	}
 	if a := e.account(t, u); a.Plan != 0 {
 		t.Fatalf("plan = %d, want 0", a.Plan)
+	}
+}
+
+func TestVerifyApple_RestoreDuringGraceKeepsPlan(t *testing.T) {
+	e := newPurchaseEnv(t)
+	ctx := context.Background()
+	u, tok := e.user(t)
+	// Active when first sent; its period has ended by the restore.
+	jws := e.apple.sign(subTx("tx-1", "orig-1", productMonthly, tok, testNow.AddDate(0, -1, 0).Add(time.Hour), 1))
+	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.p.ApplyAppleNotification(ctx, notify("DID_FAIL_TO_RENEW", "GRACE_PERIOD", jws)); err != nil {
+		t.Fatal(err)
+	}
+	e.p.now = func() time.Time { return testNow.Add(2 * time.Hour) }
+	res, err := e.p.VerifyApple(ctx, u, jws)
+	if err != nil || res.Status != PurchaseRecorded || res.Summary.PlanCredits != 300 {
+		t.Fatalf("restore: %+v %v", res, err)
+	}
+	if sub := e.sub(t, storeApple, "orig-1"); sub.Status != subGrace {
+		t.Fatalf("status = %q, want ek_sure", sub.Status)
+	}
+	if n := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'plan_bitis'`); n != 0 {
+		t.Fatalf("plan_bitis = %d, want 0", n)
+	}
+}
+
+func TestVerifyApple_StaleActiveRecordedNotCredited(t *testing.T) {
+	e := newPurchaseEnv(t)
+	ctx := context.Background()
+	u, tok := e.user(t)
+	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(subTx("tx-new", "orig-1", productMonthly, tok, testNow.Add(-time.Hour), 2))); err != nil {
+		t.Fatal(err)
+	}
+	res, err := e.p.VerifyApple(ctx, u, e.apple.sign(subTx("tx-old", "orig-1", productMonthly, tok, testNow.Add(-2*time.Hour), 1)))
+	if err != nil || res.Status != PurchaseRecorded {
+		t.Fatalf("stale: %+v %v", res, err)
+	}
+	if n := count(t, e.s, `SELECT count(*) FROM kredi.satin_alma WHERE islem_id = 'tx-old' AND durum = 'kaydedildi'`); n != 1 {
+		t.Fatalf("stale record not kaydedildi")
+	}
+	if n := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE ref = 'apple:tx-old'`); n != 0 {
+		t.Fatalf("stale tx refilled")
+	}
+	if sub := e.sub(t, storeApple, "orig-1"); !sub.PeriodEnd.Equal(testNow.Add(-time.Hour).AddDate(0, 2, 0)) {
+		t.Fatalf("period end regressed: %v", sub.PeriodEnd)
+	}
+}
+
+func TestApplyApple_ClientThenWebhookSameTxOneRefill(t *testing.T) {
+	e := newPurchaseEnv(t)
+	ctx := context.Background()
+	u, tok := e.user(t)
+	jws := e.apple.sign(subTx("tx-1", "orig-1", productMonthly, tok, testNow.Add(-time.Hour), 1))
+	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.s.Debit(ctx, u, "render", "job-1", "render_mix", 12, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, typ := range []string{"SUBSCRIBED", "DID_RENEW"} {
+		if err := e.p.ApplyAppleNotification(ctx, notify(typ, "", jws)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'plan_dolum'`); n != 1 {
+		t.Fatalf("refills = %d, want 1", n)
+	}
+	if a := e.account(t, u); a.Plan != 288 {
+		t.Fatalf("plan = %d, want 288 (no second refill)", a.Plan)
+	}
+}
+
+func TestApplyApple_RefundOfOldPeriodKeepsCurrentPlan(t *testing.T) {
+	e := newPurchaseEnv(t)
+	ctx := context.Background()
+	u, tok := e.user(t)
+	start := testNow.AddDate(0, -1, 0).Add(time.Hour)
+	old := subTx("tx-1", "orig-1", productMonthly, tok, start, 1)
+	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(old)); err != nil {
+		t.Fatal(err)
+	}
+	current := subTx("tx-2", "orig-1", productMonthly, tok, start.AddDate(0, 1, 0), 1)
+	if err := e.p.ApplyAppleNotification(ctx, notify("DID_RENEW", "", e.apple.sign(current))); err != nil {
+		t.Fatal(err)
+	}
+	old.RevocationDate = tp(testNow)
+	if err := e.p.ApplyAppleNotification(ctx, notify("REFUND", "", e.apple.sign(old))); err != nil {
+		t.Fatal(err)
+	}
+	sub := e.sub(t, storeApple, "orig-1")
+	if sub.Status != subActive || !sub.PeriodEnd.Equal(*current.ExpiresDate) {
+		t.Fatalf("subscription = %+v", sub)
+	}
+	if a := e.account(t, u); a.Plan != 300 {
+		t.Fatalf("plan = %d, want 300", a.Plan)
+	}
+	if n := count(t, e.s, `SELECT count(*) FROM kredi.satin_alma WHERE islem_id = 'tx-1' AND durum = 'iade'`); n != 1 {
+		t.Fatal("old order not marked iade")
+	}
+}
+
+func TestApplyGoogle_VoidedOldOrderKeepsCurrentPlan(t *testing.T) {
+	e := newPurchaseEnv(t)
+	ctx := context.Background()
+	u, tok := e.user(t)
+	e.google.subs["stok"] = googleSub("SUBSCRIPTION_STATE_ACTIVE", "GPA.60", "monthly", tok, testNow.AddDate(0, 0, 1))
+	if _, err := e.p.VerifyGoogle(ctx, u, "pro", "stok"); err != nil {
+		t.Fatal(err)
+	}
+	e.google.subs["stok"] = googleSub("SUBSCRIPTION_STATE_ACTIVE", "GPA.60..0", "monthly", tok, testNow.AddDate(0, 1, 1))
+	if _, err := e.p.VerifyGoogle(ctx, u, "pro", "stok"); err != nil {
+		t.Fatal(err)
+	}
+	n := &googleplay.DeveloperNotification{PackageName: "com.test.app",
+		Voided: &googleplay.VoidedNotification{PurchaseToken: "stok", OrderID: "GPA.60", ProductType: 1}}
+	if err := e.p.ApplyGoogleNotification(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	if sub := e.sub(t, storeGoogle, "stok"); sub.Status != subActive {
+		t.Fatalf("status = %q, want aktif", sub.Status)
+	}
+	if a := e.account(t, u); a.Plan != 300 {
+		t.Fatalf("plan = %d, want 300", a.Plan)
+	}
+	if c := count(t, e.s, `SELECT count(*) FROM kredi.satin_alma WHERE islem_id = 'GPA.60' AND durum = 'iade'`); c != 1 {
+		t.Fatal("old order not marked iade")
+	}
+}
+
+func TestApplyGoogle_VoidedUnknownPackTombstone(t *testing.T) {
+	e := newPurchaseEnv(t)
+	ctx := context.Background()
+	u, tok := e.user(t)
+	n := &googleplay.DeveloperNotification{PackageName: "com.test.app",
+		Voided: &googleplay.VoidedNotification{PurchaseToken: "ptok", OrderID: "GPA.70", ProductType: 2}}
+	if err := e.p.ApplyGoogleNotification(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	e.google.products["ptok"] = googlePack("GPA.70", 0, tok)
+	res, err := e.p.VerifyGoogle(ctx, u, "credits.100", "ptok")
+	if err != nil || res.Status != PurchaseRecorded || res.Summary.Balance != 0 {
+		t.Fatalf("post after void: %+v %v", res, err)
+	}
+	if e.google.consumed != 0 {
+		t.Fatal("refunded pack consumed")
+	}
+}
+
+// refundingStore marks the purchase refunded just before the credit, as a
+// REFUND webhook racing the client POST would.
+type refundingStore struct {
+	*PostgresStore
+}
+
+func (r refundingStore) Credit(ctx context.Context, userID, tur, ref, reason string, amount int) (Account, bool, error) {
+	if tur == turPaket {
+		store, order, _ := strings.Cut(ref, ":")
+		if _, err := r.RecordPurchase(ctx, PurchaseRecord{Store: store, OrderID: order, Product: reason, Status: purchaseRefunded, Env: envProduction}); err != nil {
+			return Account{}, false, err
+		}
+	}
+	return r.PostgresStore.Credit(ctx, userID, tur, ref, reason, amount)
+}
+
+func TestApplyPack_RefundDuringCreditClawsBack(t *testing.T) {
+	e := newPurchaseEnv(t)
+	ctx := context.Background()
+	u, tok := e.user(t)
+	e.p.store = refundingStore{e.s}
+	res, err := e.p.VerifyApple(ctx, u, e.apple.sign(packTx("tx-race", "credits.100", tok)))
+	if err != nil || res.Status != PurchaseRecorded || res.Summary.Balance != 0 {
+		t.Fatalf("got %+v %v", res, err)
+	}
+	if n := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'magaza_iade' AND ref = 'apple:tx-race'`); n != 1 {
+		t.Fatalf("claw-backs = %d, want 1", n)
 	}
 }
