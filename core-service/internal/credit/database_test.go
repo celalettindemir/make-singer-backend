@@ -80,6 +80,17 @@ func TestMigrate_RunsTwiceAndCreatesTables(t *testing.T) {
 	if count != 6 {
 		t.Fatalf("expected 6 credit tables, got %d", count)
 	}
+	var idx int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM pg_indexes
+		WHERE schemaname = 'kredi'
+		  AND indexname IN ('abonelik_kullanici_idx','satin_alma_kullanici_idx','eylem_olusturuldu_idx')`,
+	).Scan(&idx); err != nil {
+		t.Fatalf("could not count the indexes: %v", err)
+	}
+	if idx != 3 {
+		t.Fatalf("expected 3 indexes from migration 002, got %d", idx)
+	}
 }
 
 func TestCosts_Of(t *testing.T) {

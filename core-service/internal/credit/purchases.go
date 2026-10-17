@@ -23,6 +23,9 @@ var (
 	ErrOwnedByOther = errors.New("credit: purchase owned by another account")
 	// ErrStoreUnavailable: the store integration is not configured.
 	ErrStoreUnavailable = errors.New("credit: store not configured")
+	// ErrStoreTransient: the store API failed in a way that may pass (5xx,
+	// network, quota); the client may retry.
+	ErrStoreTransient = errors.New("credit: store temporarily unavailable")
 )
 
 // PurchaseResult statuses.
@@ -618,6 +621,25 @@ func googleEnv(test bool) string {
 	return envProduction
 }
 
+// lineOrderID is the latest successful order of a line item; it falls back to
+// the deprecated top-level latestOrderId when the line item carries none.
+func lineOrderID(sp *googleplay.SubscriptionPurchase, li googleplay.LineItem) string {
+	if li.LatestSuccessfulOrderID != "" {
+		return li.LatestSuccessfulOrderID
+	}
+	return sp.LatestOrderID
+}
+
+// latestOrderID is the latest successful order of our subscription line item.
+func latestOrderID(sp *googleplay.SubscriptionPurchase) string {
+	for _, li := range sp.LineItems {
+		if li.ProductID == googleSubscription {
+			return lineOrderID(sp, li)
+		}
+	}
+	return sp.LatestOrderID
+}
+
 // googleSubFacts maps a subscriptionsv2 purchase. ok is false for a state
 // that is not recorded (pending) or a product that is not ours.
 func googleSubFacts(token string, sp *googleplay.SubscriptionPurchase) (subFacts, bool) {
@@ -629,6 +651,7 @@ func googleSubFacts(token string, sp *googleplay.SubscriptionPurchase) (subFacts
 		if li.ProductID != googleSubscription {
 			continue
 		}
+		orderID := lineOrderID(sp, li)
 		var product string
 		switch li.BasePlanID {
 		case "monthly":
@@ -641,14 +664,14 @@ func googleSubFacts(token string, sp *googleplay.SubscriptionPurchase) (subFacts
 		f := subFacts{
 			store: storeGoogle, originalID: token, product: product, status: status,
 			env: googleEnv(sp.Test), periodEnd: li.Expiry, autoRenew: li.AutoRenew,
-			orderID: sp.LatestOrderID, token: sp.AccountID, linkedID: sp.LinkedPurchaseToken,
+			orderID: orderID, token: sp.AccountID, linkedID: sp.LinkedPurchaseToken,
 			raw: rawJSON(sp),
 		}
 		if sp.State == "SUBSCRIPTION_STATE_CANCELED" {
 			f.autoRenew = false
 		}
-		if status == subActive && sp.LatestOrderID != "" {
-			f.refillRef = storeGoogle + ":" + sp.LatestOrderID
+		if status == subActive && orderID != "" {
+			f.refillRef = storeGoogle + ":" + orderID
 		}
 		if product == productYearly && !li.Expiry.IsZero() {
 			f.periodStart = li.Expiry.AddDate(-1, 0, 0)
@@ -730,7 +753,7 @@ func (p *Purchases) VerifyGoogle(ctx context.Context, userID, productID, purchas
 			return PurchaseResult{}, fmt.Errorf("%w: %v", ErrPurchaseInvalid, err)
 		}
 		if err != nil {
-			return PurchaseResult{}, err
+			return PurchaseResult{}, fmt.Errorf("%w: %v", ErrStoreTransient, err)
 		}
 		if status, err = p.applyGoogleProduct(ctx, productID, purchaseToken, pp, userID); err != nil {
 			return PurchaseResult{}, err
@@ -741,7 +764,7 @@ func (p *Purchases) VerifyGoogle(ctx context.Context, userID, productID, purchas
 			return PurchaseResult{}, fmt.Errorf("%w: %v", ErrPurchaseInvalid, err)
 		}
 		if err != nil {
-			return PurchaseResult{}, err
+			return PurchaseResult{}, fmt.Errorf("%w: %v", ErrStoreTransient, err)
 		}
 		if status, err = p.applyGoogleSubscription(ctx, purchaseToken, sp, userID); err != nil {
 			return PurchaseResult{}, err
@@ -816,8 +839,10 @@ func (p *Purchases) applyGoogleVoided(ctx context.Context, v *googleplay.VoidedN
 		if err != nil && !errors.Is(err, googleplay.ErrNotFound) {
 			return err
 		}
-		if sp != nil && sp.LatestOrderID != "" && sp.LatestOrderID != v.OrderID {
-			periodEnd = time.Time{}
+		if sp != nil {
+			if latest := latestOrderID(sp); latest != "" && latest != v.OrderID {
+				periodEnd = time.Time{}
+			}
 		}
 		f := subFacts{
 			store: storeGoogle, originalID: cur.OriginalID, product: cur.Product, status: subRefunded,

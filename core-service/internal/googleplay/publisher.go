@@ -106,9 +106,10 @@ type subscriptionV2 struct {
 	} `json:"externalAccountIdentifiers"`
 	TestPurchase *json.RawMessage `json:"testPurchase"`
 	LineItems    []struct {
-		ProductID    string `json:"productId"`
-		ExpiryTime   string `json:"expiryTime"`
-		OfferDetails struct {
+		ProductID               string `json:"productId"`
+		ExpiryTime              string `json:"expiryTime"`
+		LatestSuccessfulOrderID string `json:"latestSuccessfulOrderId"`
+		OfferDetails            struct {
 			BasePlanID string `json:"basePlanId"`
 		} `json:"offerDetails"`
 		AutoRenewingPlan *struct {
@@ -132,7 +133,7 @@ func (p *Publisher) Subscription(ctx context.Context, token string) (*Subscripti
 		Acknowledged:        raw.AcknowledgementState == "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
 	}
 	for _, li := range raw.LineItems {
-		item := LineItem{ProductID: li.ProductID, BasePlanID: li.OfferDetails.BasePlanID}
+		item := LineItem{ProductID: li.ProductID, BasePlanID: li.OfferDetails.BasePlanID, LatestSuccessfulOrderID: li.LatestSuccessfulOrderID}
 		if li.ExpiryTime != "" {
 			t, err := time.Parse(time.RFC3339Nano, li.ExpiryTime)
 			if err != nil {

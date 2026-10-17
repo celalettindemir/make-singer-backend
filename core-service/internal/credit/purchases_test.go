@@ -72,6 +72,7 @@ type fakeGoogle struct {
 	subs       map[string]*googleplay.SubscriptionPurchase
 	products   map[string]*googleplay.ProductPurchase
 	consumeErr error
+	apiErr     error // returned by Subscription and Product when set
 	consumed   int
 	acked      []string
 }
@@ -79,6 +80,9 @@ type fakeGoogle struct {
 func (f *fakeGoogle) Subscription(_ context.Context, token string) (*googleplay.SubscriptionPurchase, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.apiErr != nil {
+		return nil, f.apiErr
+	}
 	sp, ok := f.subs[token]
 	if !ok {
 		return nil, googleplay.ErrNotFound
@@ -90,6 +94,9 @@ func (f *fakeGoogle) Subscription(_ context.Context, token string) (*googleplay.
 func (f *fakeGoogle) Product(_ context.Context, _, token string) (*googleplay.ProductPurchase, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.apiErr != nil {
+		return nil, f.apiErr
+	}
 	pp, ok := f.products[token]
 	if !ok {
 		return nil, googleplay.ErrNotFound
@@ -1074,5 +1081,75 @@ func TestVerifyApple_ResubscribeAfterRefundReactivates(t *testing.T) {
 	}
 	if sub := e.sub(t, storeApple, "orig-1"); sub.Status != subActive || !sub.PeriodEnd.Equal(*later.ExpiresDate) {
 		t.Fatalf("subscription = %+v", sub)
+	}
+}
+
+// withLineOrder gives the sub a line-item order and a different deprecated
+// top-level one, so the test shows which one is used.
+func withLineOrder(sp *googleplay.SubscriptionPurchase, lineOrder string) *googleplay.SubscriptionPurchase {
+	sp.LineItems[0].LatestSuccessfulOrderID = lineOrder
+	return sp
+}
+
+func TestApplyGoogle_RefillRefUsesLineItemLatestSuccessfulOrder(t *testing.T) {
+	e := newPurchaseEnv(t)
+	ctx := context.Background()
+	u, tok := e.user(t)
+	e.google.subs["stok"] = withLineOrder(googleSub("SUBSCRIPTION_STATE_ACTIVE", "GPA.DEPRECATED", "monthly", tok, testNow.AddDate(0, 0, 10)), "GPA.LINE")
+	if _, err := e.p.VerifyGoogle(ctx, u, "pro", "stok"); err != nil {
+		t.Fatal(err)
+	}
+	if c := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'plan_dolum' AND ref = 'google:GPA.LINE'`); c != 1 {
+		t.Fatalf("line-item refill = %d, want 1", c)
+	}
+	if c := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE ref = 'google:GPA.DEPRECATED'`); c != 0 {
+		t.Fatalf("deprecated-order movements = %d, want 0", c)
+	}
+}
+
+func TestApplyGoogle_RefillRefFallsBackToTopLevelLatestOrderID(t *testing.T) {
+	e := newPurchaseEnv(t)
+	ctx := context.Background()
+	u, tok := e.user(t)
+	e.google.subs["stok"] = googleSub("SUBSCRIPTION_STATE_ACTIVE", "GPA.TOP", "monthly", tok, testNow.AddDate(0, 0, 10))
+	if _, err := e.p.VerifyGoogle(ctx, u, "pro", "stok"); err != nil {
+		t.Fatal(err)
+	}
+	if c := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'plan_dolum' AND ref = 'google:GPA.TOP'`); c != 1 {
+		t.Fatalf("fallback refill = %d, want 1", c)
+	}
+}
+
+func TestApplyGoogle_VoidedOldOrderDetectedFromLineItem(t *testing.T) {
+	e := newPurchaseEnv(t)
+	ctx := context.Background()
+	u, tok := e.user(t)
+	e.google.subs["stok"] = withLineOrder(googleSub("SUBSCRIPTION_STATE_ACTIVE", "", "monthly", tok, testNow.AddDate(0, 0, 1)), "GPA.61")
+	if _, err := e.p.VerifyGoogle(ctx, u, "pro", "stok"); err != nil {
+		t.Fatal(err)
+	}
+	e.google.subs["stok"] = withLineOrder(googleSub("SUBSCRIPTION_STATE_ACTIVE", "", "monthly", tok, testNow.AddDate(0, 1, 1)), "GPA.61..0")
+	if _, err := e.p.VerifyGoogle(ctx, u, "pro", "stok"); err != nil {
+		t.Fatal(err)
+	}
+	n := &googleplay.DeveloperNotification{PackageName: "com.test.app",
+		Voided: &googleplay.VoidedNotification{PurchaseToken: "stok", OrderID: "GPA.61", ProductType: 1}}
+	if err := e.p.ApplyGoogleNotification(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	if sub := e.sub(t, storeGoogle, "stok"); sub.Status != subActive {
+		t.Fatalf("status = %q, want aktif (old order voided only)", sub.Status)
+	}
+}
+
+func TestVerifyGoogle_APIFailureIsTransient(t *testing.T) {
+	e := newPurchaseEnv(t)
+	u, _ := e.user(t)
+	e.google.apiErr = errors.New("googleplay: unexpected status 503")
+	for _, product := range []string{"pro", "credits.1000"} {
+		_, err := e.p.VerifyGoogle(context.Background(), u, product, "gtok")
+		if !errors.Is(err, ErrStoreTransient) || errors.Is(err, ErrPurchaseInvalid) {
+			t.Fatalf("%s: err = %v, want ErrStoreTransient", product, err)
+		}
 	}
 }

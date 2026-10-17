@@ -186,3 +186,30 @@ func TestWebhookGooglePlay_UndecodableBodyAcked(t *testing.T) {
 		t.Fatalf("status = %d", status)
 	}
 }
+
+func TestWebhookAppStore_StoreUnavailable503NotEnqueued(t *testing.T) {
+	q := &fakeQueue{}
+	p := &fakeProcessor{appleErr: credit.ErrStoreUnavailable}
+	app := webhooksApp(p, fakeAppleVerifier{}, nil, q)
+	status, out := postJSON(t, app, "/api/webhooks/appstore", `{"signedPayload":"x"}`, nil)
+	if status != 503 || errorCode(out) != "SERVICE_ERROR" {
+		t.Fatalf("status %d, %v", status, out)
+	}
+	if len(q.tasks) != 0 {
+		t.Fatal("an unconfigured store must not enqueue")
+	}
+}
+
+func TestWebhookGooglePlay_StoreUnavailable503NotEnqueued(t *testing.T) {
+	q := &fakeQueue{}
+	p := &fakeProcessor{googleErr: credit.ErrStoreUnavailable}
+	app := webhooksApp(p, nil, fakePushAuth{}, q)
+	body := googlePush(`{"packageName":"p","voidedPurchaseNotification":{"purchaseToken":"t","orderId":"o","productType":1}}`)
+	status, out := postJSON(t, app, "/api/webhooks/googleplay", body, nil)
+	if status != 503 || errorCode(out) != "SERVICE_ERROR" {
+		t.Fatalf("status %d, %v", status, out)
+	}
+	if len(q.tasks) != 0 {
+		t.Fatal("an unconfigured store must not enqueue")
+	}
+}

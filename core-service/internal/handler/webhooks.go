@@ -79,6 +79,9 @@ func (h *WebhooksHandler) AppStore(c *fiber.Ctx) error {
 		log.Printf("webhooks: appstore notification %s dropped: %v", n.UUID, err)
 		return c.SendStatus(fiber.StatusOK)
 	}
+	if errors.Is(err, credit.ErrStoreUnavailable) {
+		return response.Error(c, fiber.StatusServiceUnavailable, response.CodeServiceError, i18n.KeyStoreUnavailable, nil)
+	}
 	return h.finish(c, webhookStoreApple, err)
 }
 
@@ -108,6 +111,9 @@ func (h *WebhooksHandler) GooglePlay(c *fiber.Ctx) error {
 		// An invalid purchase does not get better on retry.
 		log.Printf("webhooks: googleplay notification dropped: %v", err)
 		return c.SendStatus(fiber.StatusOK)
+	}
+	if errors.Is(err, credit.ErrStoreUnavailable) {
+		return response.Error(c, fiber.StatusServiceUnavailable, response.CodeServiceError, i18n.KeyStoreUnavailable, nil)
 	}
 	return h.finish(c, webhookStoreGoogle, err)
 }

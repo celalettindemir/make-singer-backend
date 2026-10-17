@@ -153,19 +153,15 @@ func (s *Service) SpendAction(ctx context.Context, userID string, op Operation, 
 	return ch.Account.Balance(), ch.Charged, nil
 }
 
-// Refund reverses the render debit made with ref.
+// Refund reverses the render debit made with ref. It runs in every mode: the
+// ledger writes a refund only for an existing debit, so a debit made while
+// enforcing is still refunded after a rollback or on a shadow pod.
 func (s *Service) Refund(ctx context.Context, _ Operation, ref string) error {
-	if !s.set.Enforce {
-		return nil
-	}
 	return s.ledger.Refund(ctx, "render", "render_iade", ref)
 }
 
-// RefundAction reverses the charge of an action.
+// RefundAction reverses the charge of an action, in every mode (see Refund).
 func (s *Service) RefundAction(ctx context.Context, userID string, _ Operation, actionID string) error {
-	if !s.set.Enforce {
-		return nil
-	}
 	return s.ledger.Refund(ctx, "soz", "soz_iade", userID+":"+actionID)
 }
 

@@ -201,7 +201,7 @@ func main() {
 	} else {
 		log.Println("Info: Google Play not configured, Google purchases answer 503")
 	}
-	if cfg.GooglePlay.PubSubAudience != "" {
+	if googlePub != nil && cfg.GooglePlay.PubSubAudience != "" {
 		pv, err := googleplay.NewPushVerifier(ctx, googlePushJWKSURL, cfg.GooglePlay.PubSubAudience, cfg.GooglePlay.PubSubEmail)
 		if err != nil {
 			log.Printf("Warning: Google Play push verifier not initialized: %v", err)

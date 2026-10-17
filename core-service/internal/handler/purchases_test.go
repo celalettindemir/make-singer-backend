@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -155,5 +156,13 @@ func TestPurchasesGoogle_MissingToken400(t *testing.T) {
 	status, _ := postJSON(t, purchasesApp("u1", &fakeProcessor{}), "/api/purchases/google", `{"productId":"pro"}`, nil)
 	if status != 400 {
 		t.Fatalf("status = %d", status)
+	}
+}
+
+func TestPurchases_TransientStoreFailure503(t *testing.T) {
+	p := &fakeProcessor{err: fmt.Errorf("%w: googleplay: unexpected status 500", credit.ErrStoreTransient)}
+	status, out := postJSON(t, purchasesApp("u1", p), "/api/purchases/google", `{"productId":"pro","purchaseToken":"t"}`, nil)
+	if status != 503 || errorCode(out) != "SERVICE_ERROR" {
+		t.Fatalf("status %d, %v", status, out)
 	}
 }

@@ -120,3 +120,18 @@ func TestPublisher_AcknowledgeAndConsumePaths(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+func TestPublisher_SubscriptionParsesLineItemLatestSuccessfulOrderID(t *testing.T) {
+	p := newTestPublisher(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"subscriptionState":"SUBSCRIPTION_STATE_ACTIVE",
+"lineItems":[{"productId":"pro","latestSuccessfulOrderId":"GPA.9","offerDetails":{"basePlanId":"monthly"}},
+{"productId":"other","offerDetails":{"basePlanId":"monthly"}}]}`))
+	})
+	got, err := p.Subscription(context.Background(), "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.LineItems) != 2 || got.LineItems[0].LatestSuccessfulOrderID != "GPA.9" || got.LineItems[1].LatestSuccessfulOrderID != "" {
+		t.Fatalf("bad parse: %+v", got.LineItems)
+	}
+}

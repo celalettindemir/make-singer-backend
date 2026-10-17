@@ -27,14 +27,14 @@ func migrationNames() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var usernames []string
+	var names []string
 	for _, entry := range entries {
 		if !entry.IsDir() {
-			usernames = append(usernames, entry.Name())
+			names = append(names, entry.Name())
 		}
 	}
-	sort.Strings(usernames)
-	return usernames, nil
+	sort.Strings(names)
+	return names, nil
 }
 
 // Migrate creates the credit schema and applies pending migrations. All the
@@ -75,11 +75,11 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("could not create kredi.schema_migrations: %w", err)
 	}
 
-	usernames, err := migrationNames()
+	names, err := migrationNames()
 	if err != nil {
 		return err
 	}
-	for _, name := range usernames {
+	for _, name := range names {
 		var exists bool
 		if err := conn.QueryRow(ctx,
 			`SELECT EXISTS(SELECT 1 FROM kredi.schema_migrations WHERE version = $1)`, name,

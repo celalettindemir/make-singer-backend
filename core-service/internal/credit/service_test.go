@@ -132,16 +132,56 @@ func TestService_ShadowSpendWritesNothing(t *testing.T) {
 	if _, charged, err := s.SpendAction(context.Background(), "u1", OpLyricsGenerate, "a1"); err != nil || charged {
 		t.Fatalf("SpendAction charged=%v err=%v", charged, err)
 	}
-	if err := s.Refund(context.Background(), OpRenderStems, "job1"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.RefundAction(context.Background(), "u1", OpLyricsGenerate, "a1"); err != nil {
-		t.Fatal(err)
-	}
 	for _, c := range l.calls {
 		if c != "ReadAccount" {
 			t.Fatalf("shadow mode made a write call: %v", l.calls)
 		}
+	}
+}
+
+func TestService_ShadowRefundStillReachesLedger(t *testing.T) {
+	l := &fakeLedger{}
+	s := NewService(l, testSettings(false))
+	if err := s.Refund(context.Background(), OpRenderStems, "job1"); err != nil {
+		t.Fatal(err)
+	}
+	if l.refund.debitTur != "render" || l.refund.refundTur != "render_iade" || l.refund.ref != "job1" {
+		t.Fatalf("render refund = %+v", l.refund)
+	}
+	if err := s.RefundAction(context.Background(), "u1", OpLyricsGenerate, "a1"); err != nil {
+		t.Fatal(err)
+	}
+	if l.refund.debitTur != "soz" || l.refund.refundTur != "soz_iade" || l.refund.ref != "u1:a1" {
+		t.Fatalf("lyrics refund = %+v", l.refund)
+	}
+}
+
+// A debit made on an enforcing pod is refunded by a shadow pod (or after a
+// CREDITS_ENFORCE rollback): the refund row is written.
+func TestService_DebitEnforcedRefundThroughShadowWritesRefund(t *testing.T) {
+	store, u := newStore(t)
+	seed(t, store, u, 0, 20)
+	ctx := context.Background()
+	enforcing := NewService(store, testSettings(true))
+	if _, err := enforcing.Spend(ctx, u, OpRenderMix, "job9"); err != nil {
+		t.Fatal(err)
+	}
+	shadow := NewService(store, testSettings(false))
+	if err := shadow.Refund(ctx, OpRenderMix, "job9"); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, store, `SELECT count(*) FROM kredi.hareket WHERE kullanici_id = $1::uuid AND tur = 'render_iade'`, u); n != 1 {
+		t.Fatalf("refund rows = %d, want 1", n)
+	}
+	if a, _ := store.EnsureAccount(ctx, u); a.Balance() != 20 {
+		t.Fatalf("balance = %d, want 20", a.Balance())
+	}
+	// No debit, no refund row.
+	if err := shadow.Refund(ctx, OpRenderMix, "never-debited"); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, store, `SELECT count(*) FROM kredi.hareket WHERE kullanici_id = $1::uuid AND tur = 'render_iade'`, u); n != 1 {
+		t.Fatalf("refund rows = %d after a refund without debit, want 1", n)
 	}
 }
 

@@ -22,6 +22,9 @@ type LineItem struct {
 	BasePlanID string
 	Expiry     time.Time
 	AutoRenew  bool
+	// LatestSuccessfulOrderID is the order of the line item's latest
+	// successful charge (lineItems[].latestSuccessfulOrderId).
+	LatestSuccessfulOrderID string
 }
 
 // SubscriptionPurchase is the subset of subscriptionsv2 the backend uses.

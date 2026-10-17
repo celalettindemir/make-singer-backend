@@ -85,7 +85,7 @@ func purchaseAnswer(c *fiber.Ctx, res credit.PurchaseResult, err error) error {
 		return response.Error(c, fiber.StatusUnprocessableEntity, response.CodePurchaseInvalid, i18n.KeyPurchaseInvalid, nil)
 	case errors.Is(err, credit.ErrOwnedByOther):
 		return response.Error(c, fiber.StatusConflict, response.CodePurchaseOwnedByOther, i18n.KeyPurchaseOwnedByOther, nil)
-	case errors.Is(err, credit.ErrStoreUnavailable):
+	case errors.Is(err, credit.ErrStoreUnavailable), errors.Is(err, credit.ErrStoreTransient):
 		return response.Error(c, fiber.StatusServiceUnavailable, response.CodeServiceError, i18n.KeyStoreUnavailable, nil)
 	default:
 		return internalError(c, err)

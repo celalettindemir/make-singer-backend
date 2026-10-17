@@ -8,6 +8,7 @@ FILE	kimlik-template-cakisma	961da13a2f0437ff24e0c132daeb1018030c5ab355343b87e14
 FILE	kimlik-template-giris	e33d4301873e55984131125f547c70e0c4d8475ddec6137caba26252853d6007
 FILE	kimlik-template-kayit	489c424030faaf73e5abbb2eaa5941bd8df6da40e8411ebf0c8715a3a5323cb6
 FILE	kredi-migration-001	0e861d4adf9d53dd66d89fc965ffb94c3a3aceca5e1ec428448958940f2ad79b
+FILE	kredi-migration-002	874b4c4509854089bd36446281b8cb888bfadf8650f9c363fbeac3825aa034cb
 FILE	sosyal-migration-001	0cffcd1498596f72b1165c70a297b30bdab4b3d2262551d3c5b05b5e8c6d3a34
 FILE	sosyal-migration-002	2516985e441c61869256d4cd778935c947b3b4c2ec7275498506130aa917f0fc
 ROUTE	DELETE /account
@@ -93,6 +94,7 @@ STR	" OR %s.gorunurluk = 'link'"
 STR	" groove"
 STR	" ile giris yap"
 STR	" veya "
+STR	""
 STR	""
 STR	""
 STR	""
@@ -1522,6 +1524,7 @@ STR	"credit: insufficient balance (required %d, balance %d)"
 STR	"credit: purchase invalid"
 STR	"credit: purchase owned by another account"
 STR	"credit: store not configured"
+STR	"credit: store temporarily unavailable"
 STR	"credit: unknown operation"
 STR	"credited"
 STR	"credits.100"
@@ -2609,6 +2612,7 @@ TAG	json:"language" validate:"omitempty,oneof=en tr fr"
 TAG	json:"language" validate:"omitempty,oneof=en tr fr"
 TAG	json:"lastTransactions"
 TAG	json:"latestOrderId"
+TAG	json:"latestSuccessfulOrderId"
 TAG	json:"lineItems"
 TAG	json:"lines"
 TAG	json:"lines"
