@@ -24,8 +24,9 @@ type testChain struct {
 }
 
 type chainOpts struct {
-	leafMarker   bool
-	leafNotAfter time.Time
+	leafMarker    bool
+	noInterMarker bool
+	leafNotAfter  time.Time
 }
 
 func newTestChain(t *testing.T, now time.Time, o chainOpts) *testChain {
@@ -67,8 +68,11 @@ func newTestChain(t *testing.T, now time.Time, o chainOpts) *testChain {
 	far := now.Add(10 * 365 * 24 * time.Hour)
 	rootKey, interKey, leafKey := gen(), gen(), gen()
 	root, rootDER := mk(1, "Test Root", &rootKey.PublicKey, nil, rootKey, true, far, nil)
-	inter, interDER := mk(2, "Test Intermediate", &interKey.PublicKey, root, rootKey, true, far,
-		[]pkix.Extension{marker(oidIntermediateMarker)})
+	var interExt []pkix.Extension
+	if !o.noInterMarker {
+		interExt = []pkix.Extension{marker(oidIntermediateMarker)}
+	}
+	inter, interDER := mk(2, "Test Intermediate", &interKey.PublicKey, root, rootKey, true, far, interExt)
 	var leafExt []pkix.Extension
 	if o.leafMarker {
 		leafExt = []pkix.Extension{marker(oidLeafMarker)}

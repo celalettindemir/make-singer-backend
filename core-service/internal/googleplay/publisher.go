@@ -31,16 +31,19 @@ type Publisher struct {
 }
 
 // NewPublisher builds a client authenticated with the service account key.
+// ctx must live as long as the publisher: the token source keeps using it to
+// fetch tokens.
 func NewPublisher(ctx context.Context, cfg config.GooglePlayConfig, baseURL string) (*Publisher, error) {
 	if cfg.PackageName == "" || cfg.ServiceAccountJSON == "" {
 		return nil, errors.New("googleplay: package name and service account are required")
 	}
-	// The key comes from our own operator-controlled config, not untrusted input.
-	creds, err := google.CredentialsFromJSON(ctx, []byte(cfg.ServiceAccountJSON), publisherScope) //nolint:staticcheck // SA1019: required by the task; trusted source
+	// Token fetches use a client with a timeout.
+	tokenCtx := context.WithValue(ctx, oauth2.HTTPClient, &http.Client{Timeout: 30 * time.Second})
+	creds, err := google.CredentialsFromJSONWithType(tokenCtx, []byte(cfg.ServiceAccountJSON), google.ServiceAccount, publisherScope)
 	if err != nil {
 		return nil, fmt.Errorf("googleplay: service account: %w", err)
 	}
-	client := oauth2.NewClient(ctx, creds.TokenSource)
+	client := oauth2.NewClient(tokenCtx, creds.TokenSource)
 	client.Timeout = 30 * time.Second
 	return NewPublisherWithClient(client, cfg.PackageName, baseURL), nil
 }

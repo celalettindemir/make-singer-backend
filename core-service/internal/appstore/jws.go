@@ -158,13 +158,25 @@ func (v *Verifier) keyFunc(tok *jwt.Token) (any, error) {
 	}
 	intermediates := x509.NewCertPool()
 	intermediates.AddCert(inter)
-	if _, err := leaf.Verify(x509.VerifyOptions{
+	chains, err := leaf.Verify(x509.VerifyOptions{
 		Roots:         v.roots,
 		Intermediates: intermediates,
 		CurrentTime:   v.now(),
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("certificate chain: %w", err)
+	}
+	// The marker-checked intermediate must be the one the chain actually uses.
+	pinned := false
+	for _, ch := range chains {
+		if len(ch) == 3 && ch[1].Equal(inter) {
+			pinned = true
+			break
+		}
+	}
+	if !pinned {
+		return nil, errors.New("certificate chain does not run through the supplied intermediate")
 	}
 	pub, ok := leaf.PublicKey.(*ecdsa.PublicKey)
 	if !ok {

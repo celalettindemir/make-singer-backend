@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -93,8 +94,13 @@ func TestPublisher_ServerErrorIsNotErrNotFound(t *testing.T) {
 }
 
 func TestPublisher_AcknowledgeAndConsumePaths(t *testing.T) {
-	var got []string
+	var (
+		mu  sync.Mutex
+		got []string
+	)
 	p := newTestPublisher(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
 		got = append(got, r.Method+" "+r.URL.EscapedPath())
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -108,6 +114,8 @@ func TestPublisher_AcknowledgeAndConsumePaths(t *testing.T) {
 		"POST /androidpublisher/v3/applications/com.example.app/purchases/subscriptions/sub1/tokens/tok:acknowledge",
 		"POST /androidpublisher/v3/applications/com.example.app/purchases/products/pack/tokens/tok:consume",
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("got %v", got)
 	}

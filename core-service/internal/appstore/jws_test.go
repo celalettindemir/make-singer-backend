@@ -1,6 +1,10 @@
 package appstore
 
 import (
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -168,8 +172,54 @@ func TestVerifier_Renewal(t *testing.T) {
 }
 
 func TestAppleRoots_ParsesEmbeddedG3(t *testing.T) {
-	subjects := AppleRoots().Subjects() //nolint:staticcheck // only way to inspect the pool
-	if len(subjects) != 1 || !strings.Contains(string(subjects[0]), "Apple Root CA - G3") {
-		t.Fatalf("unexpected subjects: %q", subjects)
+	cert, err := x509.ParseCertificate(appleRootG3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cert.Subject.CommonName != "Apple Root CA - G3" {
+		t.Fatalf("CN = %q", cert.Subject.CommonName)
+	}
+	sum := sha256.Sum256(cert.Raw)
+	const want = "63343abfb89a6a03ebb57e9b3f5fa7be7c4f5c756f3017b3a8c488c3653e9179"
+	if got := hex.EncodeToString(sum[:]); got != want {
+		t.Fatalf("fingerprint = %s, want %s", got, want)
+	}
+	if AppleRoots() == nil {
+		t.Fatal("nil pool")
+	}
+}
+
+func TestVerifier_MissingIntermediateOID(t *testing.T) {
+	c := newTestChain(t, testNow, chainOpts{leafMarker: true, noInterMarker: true})
+	v := NewVerifier(c.pool(), testBundle, fixedNow)
+	if _, err := v.Transaction(c.sign(t, txClaims(testBundle, "Production"))); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+}
+
+func TestVerifier_BadX5CShapes(t *testing.T) {
+	c := newTestChain(t, testNow, chainOpts{leafMarker: true})
+	v := NewVerifier(c.pool(), testBundle, fixedNow)
+	b64 := base64.StdEncoding.EncodeToString
+	leaf, inter, root := b64(c.leafDER), b64(c.interDER), b64(c.rootDER)
+	cases := map[string][]any{
+		"two entries":  {leaf, inter},
+		"four entries": {leaf, inter, root, root},
+		"non-string":   {leaf, inter, 42},
+		"not base64":   {leaf, inter, "!!!"},
+		"not a cert":   {leaf, inter, b64([]byte("junk"))},
+	}
+	for name, x5c := range cases {
+		t.Run(name, func(t *testing.T) {
+			tok := jwt.NewWithClaims(jwt.SigningMethodES256, txClaims(testBundle, "Production"))
+			tok.Header["x5c"] = x5c
+			s, err := tok.SignedString(c.leafKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := v.Transaction(s); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("err = %v, want ErrInvalid", err)
+			}
+		})
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -36,14 +37,14 @@ const statusBody = `{"data":[{"lastTransactions":[
 
 func TestAPI_FallsBackToSandboxOn404(t *testing.T) {
 	p8, _ := testP8(t)
-	var prodHits, sandboxHits int
+	var prodHits, sandboxHits atomic.Int32
 	prod := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		prodHits++
+		prodHits.Add(1)
 		http.NotFound(w, r)
 	}))
 	defer prod.Close()
 	sandbox := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		sandboxHits++
+		sandboxHits.Add(1)
 		if r.URL.Path != "/inApps/v1/subscriptions/1000" {
 			t.Errorf("path = %s", r.URL.Path)
 		}
@@ -60,16 +61,16 @@ func TestAPI_FallsBackToSandboxOn404(t *testing.T) {
 	if status != 1 || stx != "stx" || srn != "srn" {
 		t.Fatalf("got %d %q %q", status, stx, srn)
 	}
-	if prodHits != 1 || sandboxHits != 1 {
-		t.Fatalf("hits prod=%d sandbox=%d", prodHits, sandboxHits)
+	if prodHits.Load() != 1 || sandboxHits.Load() != 1 {
+		t.Fatalf("hits prod=%d sandbox=%d", prodHits.Load(), sandboxHits.Load())
 	}
 }
 
 func TestAPI_JWTClaims(t *testing.T) {
 	p8, pub := testP8(t)
-	var auth string
+	var auth atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth = r.Header.Get("Authorization")
+		auth.Store(r.Header.Get("Authorization"))
 		_, _ = w.Write([]byte(statusBody))
 	}))
 	defer srv.Close()
@@ -79,7 +80,7 @@ func TestAPI_JWTClaims(t *testing.T) {
 	if _, _, _, err := a.SubscriptionStatus(context.Background(), "1000"); err != nil {
 		t.Fatal(err)
 	}
-	raw := strings.TrimPrefix(auth, "Bearer ")
+	raw := strings.TrimPrefix(auth.Load().(string), "Bearer ")
 	claims := jwt.MapClaims{}
 	tok, err := jwt.ParseWithClaims(raw, &claims, func(*jwt.Token) (any, error) { return pub, nil },
 		jwt.WithValidMethods([]string{"ES256"}))
