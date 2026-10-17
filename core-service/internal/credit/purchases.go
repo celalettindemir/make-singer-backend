@@ -892,3 +892,86 @@ func (p *Purchases) Resync(ctx context.Context, s Subscription) error {
 	}
 	return fmt.Errorf("credit: unknown store %q", s.Store)
 }
+
+// ---- Refill ----
+
+const (
+	// maxRefillSteps bounds the catch-up of one subscription per run.
+	maxRefillSteps = 12
+	// resyncGrace is how long past the period end a subscription waits
+	// for its renewal notification before it is re-read from the store.
+	resyncGrace = time.Hour
+	// actionTTL is how long spend-action rows are kept.
+	actionTTL = 24 * time.Hour
+)
+
+// RunRefill refills the monthly plan of yearly subscriptions, re-reads
+// overdue subscriptions from their stores and prunes old action rows.
+// Per-subscription failures are logged and retried by the next run; only
+// store-level failures are returned.
+func (p *Purchases) RunRefill(ctx context.Context) (refilled, resynced int, err error) {
+	now := p.now()
+	due, err := p.store.DueRefills(ctx, now)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, s := range due {
+		n, err := p.refillSubscription(ctx, s, now)
+		refilled += n
+		if err != nil {
+			log.Printf("credits: refill failed store=%s original=%s: %v", s.Store, s.OriginalID, err)
+		}
+	}
+	overdue, err := p.store.OverdueSubscriptions(ctx, now.Add(-resyncGrace))
+	if err != nil {
+		return refilled, 0, err
+	}
+	for _, s := range overdue {
+		if err := p.Resync(ctx, s); err != nil {
+			log.Printf("credits: resync failed store=%s original=%s: %v", s.Store, s.OriginalID, err)
+			continue
+		}
+		resynced++
+	}
+	if _, err := p.store.PruneActions(ctx, now.Add(-actionTTL)); err != nil {
+		return refilled, resynced, err
+	}
+	return refilled, resynced, nil
+}
+
+// refillSubscription takes the due refill steps of one yearly
+// subscription. Each step sets the plan bucket under its month ref
+// (idempotent), then advances the schedule with a guarded update, so a
+// concurrent write that changed the schedule is never overwritten.
+func (p *Purchases) refillSubscription(ctx context.Context, s Subscription, now time.Time) (int, error) {
+	if s.UserID == nil || s.RefillAnchor == nil || s.NextRefill == nil {
+		return 0, nil
+	}
+	steps := 0
+	for ; steps < maxRefillSteps; steps++ {
+		if s.NextRefill.After(now) || (!s.PeriodEnd.IsZero() && !s.NextRefill.Before(s.PeriodEnd)) {
+			break
+		}
+		end := s.PeriodEnd
+		var periodEnd *time.Time
+		if !end.IsZero() {
+			periodEnd = &end
+		}
+		ref := s.Store + ":" + s.OriginalID + ":" + s.NextRefill.UTC().Format("2006-01")
+		if _, _, err := p.store.SetPlan(ctx, *s.UserID, turPlanDolum, ref, p.cfg.PlanMonthly, periodEnd); err != nil {
+			return steps, err
+		}
+		next := refillAt(*s.RefillAnchor, s.RefillCount+2)
+		moved, err := p.store.AdvanceRefill(ctx, s, next)
+		if err != nil {
+			return steps, err
+		}
+		if !moved {
+			// Someone else changed the schedule; the next run re-reads it.
+			return steps, nil
+		}
+		s.RefillCount++
+		s.NextRefill = &next
+	}
+	return steps, nil
+}

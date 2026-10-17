@@ -25,6 +25,11 @@ type notificationApplier interface {
 	ApplyGoogleNotification(ctx context.Context, n *googleplay.DeveloperNotification) error
 }
 
+// refiller is the part of *credit.Purchases the refill task uses.
+type refiller interface {
+	RunRefill(ctx context.Context) (refilled, resynced int, err error)
+}
+
 // notificationVerifier is appstore.Verifier's notification check.
 type notificationVerifier interface {
 	Notification(signedPayload string) (*appstore.Notification, error)
@@ -33,12 +38,13 @@ type notificationVerifier interface {
 // CreditWorker replays store webhooks that failed to process inline.
 type CreditWorker struct {
 	p     notificationApplier
+	r     refiller
 	apple notificationVerifier // nil: Apple replays are dropped
 }
 
 // NewCreditWorker builds the worker. A nil apple verifier drops Apple replays.
 func NewCreditWorker(p *credit.Purchases, apple *appstore.Verifier) *CreditWorker {
-	w := &CreditWorker{p: p}
+	w := &CreditWorker{p: p, r: p}
 	if apple != nil {
 		w.apple = apple
 	}
@@ -94,4 +100,18 @@ func (w *CreditWorker) replayApple(ctx context.Context, body []byte) error {
 		return nil
 	}
 	return err
+}
+
+// ProcessRefill handles a kredi:dolum task: the yearly plan refill, the
+// resync of overdue subscriptions and the pruning of old actions. Errors
+// are returned so that asynq retries; every step is idempotent.
+func (w *CreditWorker) ProcessRefill(ctx context.Context, _ *asynq.Task) error {
+	refilled, resynced, err := w.r.RunRefill(ctx)
+	if err != nil {
+		return fmt.Errorf("credit refill failed: %w", err)
+	}
+	if refilled > 0 || resynced > 0 {
+		log.Printf("credit worker: refill done refilled=%d resynced=%d", refilled, resynced)
+	}
+	return nil
 }
