@@ -10,7 +10,8 @@ type LyricsGenerateRequest struct {
 
 // LyricsGenerateResponse represents the response for lyrics generation
 type LyricsGenerateResponse struct {
-	Drafts [][]string `json:"drafts"`
+	Drafts  [][]string `json:"drafts"`
+	Balance int        `json:"balance"`
 }
 
 // LyricsRewriteRequest represents the request body for lyrics rewriting
@@ -25,5 +26,6 @@ type LyricsRewriteRequest struct {
 
 // LyricsRewriteResponse represents the response for lyrics rewriting
 type LyricsRewriteResponse struct {
-	Lines []string `json:"lines"`
+	Lines   []string `json:"lines"`
+	Balance int      `json:"balance"`
 }

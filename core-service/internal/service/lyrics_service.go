@@ -14,6 +14,9 @@ import (
 type LyricsGenerator interface {
 	Generate(ctx context.Context, req *model.LyricsGenerateRequest) (*model.LyricsGenerateResponse, error)
 	Rewrite(ctx context.Context, req *model.LyricsRewriteRequest) (*model.LyricsRewriteResponse, error)
+	// IsMock reports whether the generator answers with canned text instead
+	// of calling the AI provider.
+	IsMock() bool
 }
 
 // LyricsService handles lyrics generation and rewriting using Groq AI
@@ -28,6 +31,12 @@ func NewLyricsService(groqClient *client.GroqClient) *LyricsService {
 	}
 }
 
+// IsMock reports whether no AI provider is configured, so Generate and
+// Rewrite answer with canned text.
+func (s *LyricsService) IsMock() bool {
+	return s.groqClient == nil || !s.groqClient.IsConfigured()
+}
+
 // Generate creates new lyrics based on the given parameters
 func (s *LyricsService) Generate(ctx context.Context, req *model.LyricsGenerateRequest) (*model.LyricsGenerateResponse, error) {
 	language := req.Language
@@ -36,7 +45,7 @@ func (s *LyricsService) Generate(ctx context.Context, req *model.LyricsGenerateR
 	}
 
 	// Use mock response if client is not configured
-	if s.groqClient == nil || !s.groqClient.IsConfigured() {
+	if s.IsMock() {
 		return s.generateMock(req)
 	}
 
@@ -62,7 +71,7 @@ func (s *LyricsService) Generate(ctx context.Context, req *model.LyricsGenerateR
 // Rewrite rewrites existing lyrics based on the given parameters
 func (s *LyricsService) Rewrite(ctx context.Context, req *model.LyricsRewriteRequest) (*model.LyricsRewriteResponse, error) {
 	// Use mock response if client is not configured
-	if s.groqClient == nil || !s.groqClient.IsConfigured() {
+	if s.IsMock() {
 		return s.rewriteMock(req)
 	}
 
