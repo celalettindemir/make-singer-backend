@@ -406,3 +406,56 @@ func (s *PostgresStore) DeleteUserData(ctx context.Context, userID string) error
 		return nil
 	})
 }
+
+// ReadAccount returns the user's account without creating it. The bool is
+// false when the user has no account row.
+func (s *PostgresStore) ReadAccount(ctx context.Context, userID string) (Account, bool, error) {
+	a, err := scanAccount(s.pool.QueryRow(ctx,
+		`SELECT `+accountColumns+` FROM kredi.hesap WHERE kullanici_id = $1::text::uuid`, userID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Account{}, false, nil
+	}
+	if err != nil {
+		return Account{}, false, fmt.Errorf("could not read the credit account: %w", err)
+	}
+	return a, true, nil
+}
+
+// Subscription is one store subscription row (kredi.abonelik).
+type Subscription struct {
+	Store        string
+	OriginalID   string
+	UserID       *string
+	Product      string
+	Status       string
+	PeriodEnd    time.Time
+	AutoRenew    bool
+	NextRefill   *time.Time
+	RefillAnchor *time.Time
+	RefillCount  int
+	Env          string
+}
+
+// LatestSubscription returns the user's subscription with the latest period
+// end, or nil when the user has none.
+func (s *PostgresStore) LatestSubscription(ctx context.Context, userID string) (*Subscription, error) {
+	var sub Subscription
+	var periodEnd *time.Time
+	err := s.pool.QueryRow(ctx, `
+		SELECT magaza, orijinal_islem_id, kullanici_id::text, urun, durum, donem_sonu,
+		       otomatik_yenile, sonraki_dolum, dolum_capasi, dolum_sayisi, ortam
+		FROM kredi.abonelik WHERE kullanici_id = $1::text::uuid
+		ORDER BY donem_sonu DESC NULLS LAST, orijinal_islem_id LIMIT 1`, userID).
+		Scan(&sub.Store, &sub.OriginalID, &sub.UserID, &sub.Product, &sub.Status, &periodEnd,
+			&sub.AutoRenew, &sub.NextRefill, &sub.RefillAnchor, &sub.RefillCount, &sub.Env)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("could not read the subscription: %w", err)
+	}
+	if periodEnd != nil {
+		sub.PeriodEnd = *periodEnd
+	}
+	return &sub, nil
+}

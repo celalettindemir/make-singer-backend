@@ -15,6 +15,10 @@ const (
 	CodeJobFailed       = "JOB_FAILED"
 	CodeServiceError    = "SERVICE_ERROR"
 	CodeAIError         = "AI_ERROR"
+
+	CodeInsufficientCredits  = "INSUFFICIENT_CREDITS"
+	CodePurchaseInvalid      = "PURCHASE_INVALID"
+	CodePurchaseOwnedByOther = "PURCHASE_OWNED_BY_OTHER"
 )
 
 type ErrorResponse struct {
@@ -100,4 +104,10 @@ func Accepted(c *fiber.Ctx, data interface{}) error {
 
 func NoContent(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// InsufficientCredits writes the 402 answer with the price and the balance.
+func InsufficientCredits(c *fiber.Ctx, required, balance int) error {
+	return Error(c, fiber.StatusPaymentRequired, CodeInsufficientCredits, i18n.KeyInsufficientCredits,
+		map[string]int{"required": required, "balance": balance})
 }

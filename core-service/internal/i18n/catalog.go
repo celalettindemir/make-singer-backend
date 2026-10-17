@@ -66,6 +66,14 @@ var (
 	KeySocialCommentsDisabled = Key{"social_comments_disabled"}
 	KeySocialForbidden        = Key{"social_forbidden"}
 
+	// Credits.
+	KeyInsufficientCredits  = Key{"insufficient_credits"}
+	KeyPurchaseInvalid      = Key{"purchase_invalid"}
+	KeyPurchaseOwnedByOther = Key{"purchase_owned_by_other"}
+	KeyActionIDRequired     = Key{"action_id_required"}
+	KeyActionExpired        = Key{"action_expired"}
+	KeyStoreUnavailable     = Key{"store_unavailable"}
+
 	// Social field validation (422 dogrulama).
 	KeyCursorInvalid             = Key{"cursor_invalid"}
 	KeyFeedTabInvalid            = Key{"feed_tab_invalid"}
@@ -167,6 +175,13 @@ var catalog = map[Key]texts{
 	KeySocialSelfFollow:       {"Kendini takip edemezsin.", "You cannot follow yourself."},
 	KeySocialCommentsDisabled: {"Bu yayının yorumları kapalı.", "Comments are turned off for this publication."},
 	KeySocialForbidden:        {"Bu işlem için yetkin yok.", "You are not allowed to do this."},
+
+	KeyInsufficientCredits:  {"Yeterli krediniz yok.", "You do not have enough credits."},
+	KeyPurchaseInvalid:      {"Satın alma doğrulanamadı.", "The purchase could not be verified."},
+	KeyPurchaseOwnedByOther: {"Bu satın alma başka bir hesaba ait.", "This purchase belongs to another account."},
+	KeyActionIDRequired:     {"X-Action-Id başlığı zorunludur.", "The X-Action-Id header is required."},
+	KeyActionExpired:        {"Bu işlemin süresi doldu; yeniden başlatın.", "This action has expired; start it again."},
+	KeyStoreUnavailable:     {"Mağaza şu anda yanıt vermiyor, lütfen tekrar deneyin.", "The store is not responding right now; please try again."},
 
 	KeyCursorInvalid:             {"İmleç geçersiz.", "Invalid cursor."},
 	KeyFeedTabInvalid:            {"sekme senin-icin, takip ya da yeni olmalı.", "sekme must be senin-icin, takip or yeni."},

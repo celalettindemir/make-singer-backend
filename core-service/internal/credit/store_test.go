@@ -334,3 +334,40 @@ func TestStore_DeleteUserDataAnonymises(t *testing.T) {
 		t.Errorf("anonymised purchases = %d, want 1", n)
 	}
 }
+
+func TestStore_ReadAccountMissingCreatesNothing(t *testing.T) {
+	s, u := newStore(t)
+	ctx := context.Background()
+	if _, ok, err := s.ReadAccount(ctx, u); err != nil || ok {
+		t.Fatalf("missing account: ok=%v err=%v", ok, err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM kredi.hesap WHERE kullanici_id = $1::uuid`, u); n != 0 {
+		t.Fatalf("ReadAccount created %d rows", n)
+	}
+	seed(t, s, u, 0, 7)
+	a, ok, err := s.ReadAccount(ctx, u)
+	if err != nil || !ok || a.Balance() != 7 {
+		t.Fatalf("existing account: %+v ok=%v err=%v", a, ok, err)
+	}
+}
+
+func TestStore_LatestSubscription(t *testing.T) {
+	s, u := newStore(t)
+	ctx := context.Background()
+	if sub, err := s.LatestSubscription(ctx, u); err != nil || sub != nil {
+		t.Fatalf("no subscription: %+v %v", sub, err)
+	}
+	old, latest := "old-"+u, "new-"+u
+	for id, end := range map[string]string{old: "2026-01-01T00:00:00Z", latest: "2026-09-01T00:00:00Z"} {
+		if _, err := s.pool.Exec(ctx, `
+			INSERT INTO kredi.abonelik (kullanici_id, magaza, orijinal_islem_id, urun, durum, donem_sonu, ortam)
+			VALUES ($1::uuid, 'apple', $2, 'pro.monthly', 'aktif', $3::timestamptz, 'production')`, u, id, end); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sub, err := s.LatestSubscription(ctx, u)
+	if err != nil || sub == nil || sub.OriginalID != latest || sub.Product != "pro.monthly" ||
+		sub.Status != "aktif" || sub.UserID == nil || *sub.UserID != u || !sub.AutoRenew {
+		t.Fatalf("latest subscription: %+v %v", sub, err)
+	}
+}
