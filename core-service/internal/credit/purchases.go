@@ -903,6 +903,9 @@ func (p *Purchases) Resync(ctx context.Context, s Subscription) error {
 const (
 	// maxRefillSteps bounds the catch-up of one subscription per run.
 	maxRefillSteps = 12
+	// refillBatch bounds the subscriptions one run handles; the rest wait
+	// for the next run.
+	refillBatch = 500
 	// resyncGrace is how long past the period end a subscription waits
 	// for its renewal notification before it is re-read from the store.
 	resyncGrace = time.Hour
@@ -916,7 +919,7 @@ const (
 // store-level failures are returned.
 func (p *Purchases) RunRefill(ctx context.Context) (refilled, resynced int, err error) {
 	now := p.now()
-	due, err := p.store.DueRefills(ctx, now)
+	due, err := p.store.DueRefills(ctx, now, productYearly, refillBatch)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -927,16 +930,24 @@ func (p *Purchases) RunRefill(ctx context.Context) (refilled, resynced int, err 
 			log.Printf("credits: refill failed store=%s original=%s: %v", s.Store, s.OriginalID, err)
 		}
 	}
-	overdue, err := p.store.OverdueSubscriptions(ctx, now.Add(-resyncGrace))
+	overdue, err := p.store.OverdueSubscriptions(ctx, now.Add(-resyncGrace), refillBatch)
 	if err != nil {
 		return refilled, 0, err
 	}
+	appleSkipped := false
 	for _, s := range overdue {
+		if s.Store == storeApple && (p.apple == nil || p.appleAPI == nil) {
+			appleSkipped = true
+			continue
+		}
 		if err := p.Resync(ctx, s); err != nil {
 			log.Printf("credits: resync failed store=%s original=%s: %v", s.Store, s.OriginalID, err)
 			continue
 		}
 		resynced++
+	}
+	if appleSkipped {
+		log.Printf("credits: apple resync disabled (not configured), overdue apple subscriptions skipped")
 	}
 	if _, err := p.store.PruneActions(ctx, now.Add(-actionTTL)); err != nil {
 		return refilled, resynced, err
@@ -945,34 +956,27 @@ func (p *Purchases) RunRefill(ctx context.Context) (refilled, resynced int, err 
 }
 
 // refillSubscription takes the due refill steps of one yearly
-// subscription. Each step sets the plan bucket under its month ref
-// (idempotent), then advances the schedule with a guarded update, so a
-// concurrent write that changed the schedule is never overwritten.
+// subscription. Each step is one store transaction that re-checks the
+// row, sets the plan bucket under its month ref (idempotent) with the
+// current period end and advances the schedule, so a concurrent renewal,
+// refill or ending is never overwritten.
 func (p *Purchases) refillSubscription(ctx context.Context, s Subscription, now time.Time) (int, error) {
 	if s.UserID == nil || s.RefillAnchor == nil || s.NextRefill == nil {
 		return 0, nil
 	}
 	steps := 0
 	for ; steps < maxRefillSteps; steps++ {
-		if s.NextRefill.After(now) || (!s.PeriodEnd.IsZero() && !s.NextRefill.Before(s.PeriodEnd)) {
+		if s.NextRefill.After(now) || (!s.PeriodEnd.IsZero() && (!now.Before(s.PeriodEnd) || !s.NextRefill.Before(s.PeriodEnd))) {
 			break
 		}
-		end := s.PeriodEnd
-		var periodEnd *time.Time
-		if !end.IsZero() {
-			periodEnd = &end
-		}
 		ref := s.Store + ":" + s.OriginalID + ":" + s.NextRefill.UTC().Format("2006-01")
-		if _, _, err := p.store.SetPlan(ctx, *s.UserID, turPlanDolum, ref, p.cfg.PlanMonthly, periodEnd); err != nil {
-			return steps, err
-		}
 		next := refillAt(*s.RefillAnchor, s.RefillCount+2)
-		moved, err := p.store.AdvanceRefill(ctx, s, next)
+		taken, err := p.store.RefillStep(ctx, s, now, ref, p.cfg.PlanMonthly, next)
 		if err != nil {
 			return steps, err
 		}
-		if !moved {
-			// Someone else changed the schedule; the next run re-reads it.
+		if !taken {
+			// The row changed under us; the next run re-reads it.
 			return steps, nil
 		}
 		s.RefillCount++

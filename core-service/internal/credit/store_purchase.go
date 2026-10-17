@@ -46,9 +46,9 @@ type PurchaseStore interface {
 	UpsertSubscription(ctx context.Context, s Subscription) error
 	RecordPurchase(ctx context.Context, r PurchaseRecord) (inserted bool, err error)
 	PurchaseByOrder(ctx context.Context, store, id string) (*PurchaseRecord, error)
-	DueRefills(ctx context.Context, now time.Time) ([]Subscription, error)
-	AdvanceRefill(ctx context.Context, sub Subscription, next time.Time) (bool, error)
-	OverdueSubscriptions(ctx context.Context, before time.Time) ([]Subscription, error)
+	DueRefills(ctx context.Context, now time.Time, yearlyProduct string, limit int) ([]Subscription, error)
+	RefillStep(ctx context.Context, sub Subscription, now time.Time, ref string, amount int, next time.Time) (bool, error)
+	OverdueSubscriptions(ctx context.Context, before time.Time, limit int) ([]Subscription, error)
 	PruneActions(ctx context.Context, before time.Time) (int64, error)
 }
 
@@ -195,38 +195,76 @@ func (s *PostgresStore) querySubscriptions(ctx context.Context, where string, ar
 }
 
 // DueRefills lists owned, active yearly subscriptions whose next refill
-// is due and falls inside the paid period.
-func (s *PostgresStore) DueRefills(ctx context.Context, now time.Time) ([]Subscription, error) {
+// is due, with the period not yet ended and the refill inside it. At most
+// limit rows are returned, oldest due first.
+func (s *PostgresStore) DueRefills(ctx context.Context, now time.Time, yearlyProduct string, limit int) ([]Subscription, error) {
 	return s.querySubscriptions(ctx, `
-		durum = 'aktif' AND urun = 'pro.yearly' AND kullanici_id IS NOT NULL
+		durum = 'aktif' AND urun = $2 AND kullanici_id IS NOT NULL
 		AND dolum_capasi IS NOT NULL AND sonraki_dolum <= $1
-		AND (donem_sonu IS NULL OR sonraki_dolum < donem_sonu)
-		ORDER BY sonraki_dolum`, now)
+		AND (donem_sonu IS NULL OR ($1 < donem_sonu AND sonraki_dolum < donem_sonu))
+		ORDER BY sonraki_dolum LIMIT $3`, now, yearlyProduct, limit)
 }
 
-// AdvanceRefill moves the refill schedule one step, only if the row still
-// holds the count and date of sub (a concurrent purchase write or refill
-// that changed them wins). It reports whether the step was taken.
-func (s *PostgresStore) AdvanceRefill(ctx context.Context, sub Subscription, next time.Time) (bool, error) {
-	if sub.NextRefill == nil {
+// RefillStep takes one refill step in a single transaction: it locks the
+// account, then the subscription row, and only if the row is still active
+// with the schedule of sub and now is inside the CURRENT period, it sets the
+// plan bucket under ref (idempotent, with the current period end) and moves
+// the schedule to next. It reports whether the step was taken; a changed
+// row (a concurrent renewal, refill or ending) is not an error.
+func (s *PostgresStore) RefillStep(ctx context.Context, sub Subscription, now time.Time, ref string, amount int, next time.Time) (bool, error) {
+	if sub.UserID == nil || sub.NextRefill == nil {
 		return false, nil
 	}
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE kredi.abonelik SET dolum_sayisi = dolum_sayisi + 1, sonraki_dolum = $1
-		WHERE magaza = $2 AND orijinal_islem_id = $3 AND durum = 'aktif'
-		  AND dolum_sayisi = $4 AND sonraki_dolum = $5`,
-		next, sub.Store, sub.OriginalID, sub.RefillCount, *sub.NextRefill)
-	if err != nil {
-		return false, fmt.Errorf("could not advance the refill: %w", err)
-	}
-	return tag.RowsAffected() == 1, nil
+	var taken bool
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		acct, err := lockAccount(ctx, tx, *sub.UserID, false)
+		if err != nil {
+			return fmt.Errorf("could not lock the credit account: %w", err)
+		}
+		var status string
+		var count int
+		var due, periodEnd *time.Time
+		err = tx.QueryRow(ctx, `
+			SELECT durum, dolum_sayisi, sonraki_dolum, donem_sonu FROM kredi.abonelik
+			WHERE magaza = $1 AND orijinal_islem_id = $2 AND kullanici_id = $3::text::uuid FOR UPDATE`,
+			sub.Store, sub.OriginalID, *sub.UserID).Scan(&status, &count, &due, &periodEnd)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("could not lock the subscription: %w", err)
+		}
+		if status != subActive || count != sub.RefillCount || due == nil || !due.Equal(*sub.NextRefill) ||
+			(periodEnd != nil && (!now.Before(*periodEnd) || !due.Before(*periodEnd))) {
+			return nil
+		}
+		acct, done, err := apply(ctx, tx, acct, turPlanDolum, ref, "", amount-acct.Plan, 0)
+		if err != nil {
+			return err
+		}
+		if done {
+			if _, err := tx.Exec(ctx,
+				`UPDATE kredi.hesap SET plan_donem_sonu = $2 WHERE kullanici_id = $1::text::uuid`, *sub.UserID, periodEnd); err != nil {
+				return fmt.Errorf("could not set the plan period end: %w", err)
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE kredi.abonelik SET dolum_sayisi = dolum_sayisi + 1, sonraki_dolum = $3
+			WHERE magaza = $1 AND orijinal_islem_id = $2`, sub.Store, sub.OriginalID, next); err != nil {
+			return fmt.Errorf("could not advance the refill: %w", err)
+		}
+		taken = true
+		return nil
+	})
+	return taken, err
 }
 
 // OverdueSubscriptions lists subscriptions that are not ended or refunded
-// and whose paid period ended before the given time.
-func (s *PostgresStore) OverdueSubscriptions(ctx context.Context, before time.Time) ([]Subscription, error) {
+// and whose paid period ended before the given time, oldest first, at most
+// limit rows.
+func (s *PostgresStore) OverdueSubscriptions(ctx context.Context, before time.Time, limit int) ([]Subscription, error) {
 	return s.querySubscriptions(ctx, `
-		durum NOT IN ('bitti', 'iade') AND donem_sonu < $1 ORDER BY donem_sonu`, before)
+		durum NOT IN ('bitti', 'iade') AND donem_sonu < $1 ORDER BY donem_sonu LIMIT $2`, before, limit)
 }
 
 // PruneActions deletes spend-action rows created before the given time.

@@ -73,7 +73,12 @@ func (w *CreditWorker) ProcessNotification(ctx context.Context, t *asynq.Task) e
 		if err != nil {
 			return fmt.Errorf("could not decode the push body: %v: %w", err, asynq.SkipRetry)
 		}
-		return w.p.ApplyGoogleNotification(ctx, n)
+		err = w.p.ApplyGoogleNotification(ctx, n)
+		if errors.Is(err, credit.ErrPurchaseInvalid) {
+			log.Printf("credit worker: google notification dropped: %v", err)
+			return nil
+		}
+		return err
 	default:
 		return fmt.Errorf("unknown notification store %q: %w", payload.Store, asynq.SkipRetry)
 	}
@@ -104,7 +109,8 @@ func (w *CreditWorker) replayApple(ctx context.Context, body []byte) error {
 
 // ProcessRefill handles a kredi:dolum task: the yearly plan refill, the
 // resync of overdue subscriptions and the pruning of old actions. Errors
-// are returned so that asynq retries; every step is idempotent.
+// are returned and fail the task; the scheduler enqueues it without
+// retries, so the next tick is the retry. Every step is idempotent.
 func (w *CreditWorker) ProcessRefill(ctx context.Context, _ *asynq.Task) error {
 	refilled, resynced, err := w.r.RunRefill(ctx)
 	if err != nil {

@@ -124,7 +124,7 @@ func (f *fakeRefiller) RunRefill(context.Context) (int, int, error) {
 	return 2, 1, f.err
 }
 
-func TestCreditWorker_ProcessRefillRunsAndRetriesOnError(t *testing.T) {
+func TestCreditWorker_ProcessRefillRunsAndFailsOnError(t *testing.T) {
 	r := &fakeRefiller{}
 	w := &CreditWorker{r: r}
 	if err := w.ProcessRefill(context.Background(), asynq.NewTask(credit.TaskTypeRefill, nil)); err != nil || r.calls != 1 {
@@ -133,6 +133,6 @@ func TestCreditWorker_ProcessRefillRunsAndRetriesOnError(t *testing.T) {
 	r.err = errors.New("db down")
 	err := w.ProcessRefill(context.Background(), asynq.NewTask(credit.TaskTypeRefill, nil))
 	if err == nil || errors.Is(err, asynq.SkipRetry) {
-		t.Fatalf("err = %v, want a retryable error", err)
+		t.Fatalf("err = %v, want a plain error", err)
 	}
 }

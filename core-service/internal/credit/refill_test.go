@@ -98,7 +98,7 @@ func TestRunRefill_StopsAtPeriodEnd(t *testing.T) {
 	// inside the paid period, so only the first one is given.
 	end := refillAt(refillBase, 2)
 	orig := e.yearlySub(t, &u, end, 0)
-	e.p.now = func() time.Time { return end.Add(30 * time.Minute) }
+	e.p.now = func() time.Time { return end.Add(-30 * time.Minute) }
 	for range 2 {
 		if _, _, err := e.p.RunRefill(context.Background()); err != nil {
 			t.Fatal(err)
@@ -112,20 +112,57 @@ func TestRunRefill_StopsAtPeriodEnd(t *testing.T) {
 	}
 }
 
-func TestAdvanceRefill_StaleReadLosesToNewerWrite(t *testing.T) {
+func TestRunRefill_PastPeriodEndGivesNothing(t *testing.T) {
 	e := newPurchaseEnv(t)
 	u, _ := e.user(t)
-	orig := e.yearlySub(t, &u, refillBase.AddDate(1, 0, 0), 0)
+	end := refillAt(refillBase, 1).Add(30 * time.Minute)
+	orig := e.yearlySub(t, &u, end, 0)
+	// The refill is due but the period has ended (the worker was down);
+	// within the resync grace the row is still aktif.
+	e.p.now = func() time.Time { return end.Add(10 * time.Minute) }
+	if _, _, err := e.p.RunRefill(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.movements(t, u); n != 0 {
+		t.Fatalf("movements = %d, want 0", n)
+	}
+	if sub := e.sub(t, storeApple, orig); sub.RefillCount != 0 {
+		t.Fatalf("count = %d", sub.RefillCount)
+	}
+}
+
+func TestRefillStep_StaleReadChangesNothing(t *testing.T) {
+	e := newPurchaseEnv(t)
+	u, _ := e.user(t)
+	end := refillBase.AddDate(1, 0, 0)
+	orig := e.yearlySub(t, &u, end, 0)
 	stale := *e.sub(t, storeApple, orig)
 	ctx := context.Background()
-	if ok, err := e.s.AdvanceRefill(ctx, stale, refillAt(refillBase, 2)); err != nil || !ok {
-		t.Fatalf("first advance = %v %v", ok, err)
+	now := refillAt(refillBase, 1).Add(time.Hour)
+	if ok, err := e.s.RefillStep(ctx, stale, now, "r1", 300, refillAt(refillBase, 2)); err != nil || !ok {
+		t.Fatalf("first step = %v %v", ok, err)
 	}
-	if ok, err := e.s.AdvanceRefill(ctx, stale, refillAt(refillBase, 2)); err != nil || ok {
-		t.Fatalf("stale advance = %v %v, want false", ok, err)
+	// A renewal moves the period end after the snapshot was read.
+	newEnd := end.AddDate(0, 1, 0)
+	cur := *e.sub(t, storeApple, orig)
+	cur.PeriodEnd = newEnd
+	if err := e.s.UpsertSubscription(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := e.s.RefillStep(ctx, stale, now, "r1b", 300, refillAt(refillBase, 2)); err != nil || ok {
+		t.Fatalf("stale step = %v %v, want false", ok, err)
 	}
 	if sub := e.sub(t, storeApple, orig); sub.RefillCount != 1 {
 		t.Fatalf("count = %d", sub.RefillCount)
+	}
+	// A fresh step applies the CURRENT period end to the plan.
+	fresh := *e.sub(t, storeApple, orig)
+	later := refillAt(refillBase, 2).Add(time.Hour)
+	if ok, err := e.s.RefillStep(ctx, fresh, later, "r2", 300, refillAt(refillBase, 3)); err != nil || !ok {
+		t.Fatalf("fresh step = %v %v", ok, err)
+	}
+	if a := e.account(t, u); a.PlanPeriodEnd == nil || !a.PlanPeriodEnd.Equal(newEnd) {
+		t.Fatalf("plan period end = %v, want %v", a.PlanPeriodEnd, newEnd)
 	}
 }
 
