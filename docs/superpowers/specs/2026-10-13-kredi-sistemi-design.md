@@ -1,6 +1,6 @@
 # Kredi sistemi: abonelik, hediye kampanyalari, harcama
 
-Tarih: 2026-10-13. Durum: tasarim onaylandi, spec kullanici onayi bekliyor.
+Tarih: 2026-10-13. Durum: Yerine geçti: make-singer-doc native/specs/2026-10-17-native-6-kredi-design.md.
 Figma: "MakeASinger — Aurora Redesign" (r15IOW8FQNn1ChAZVyJEqy), sayfa
 "06 Screens · Kredi" (K1–K7 mobil, W1–W2 web admin).
 

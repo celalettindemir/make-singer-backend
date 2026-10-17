@@ -1,16 +1,28 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
+
+	"github.com/makeasinger/api/internal/appstore"
+	"github.com/makeasinger/api/internal/config"
+	"github.com/makeasinger/api/internal/credit"
+	"github.com/makeasinger/api/internal/handler"
 	"github.com/makeasinger/api/internal/i18n"
+	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/social"
 )
 
@@ -66,5 +78,116 @@ func TestCustomErrorHandler(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+type rejectingAppleVerifier struct{}
+
+func (rejectingAppleVerifier) Notification(string) (*appstore.Notification, error) {
+	return nil, errors.New("bad signature")
+}
+
+// creditTestApp builds an app wired like main: webhooks first, then an
+// authenticated /api group (a Bearer-only stand-in for the OP middleware).
+func creditTestApp(t *testing.T) *fiber.App {
+	t.Helper()
+	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379", DB: 14})
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		t.Skipf("redis unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = rdb.Close() })
+	cfg := &config.Config{RateLimit: config.RateLimitConfig{WebhooksPerMin: 1000, PurchasesPerMin: 1000}}
+	rl := middleware.NewRateLimiter(rdb, nil)
+	h := creditRouteHandlers{
+		Credits:   handler.NewCreditsHandler(nil),
+		Purchases: handler.NewPurchasesHandler(nil, validator.New()),
+		Webhooks:  handler.NewWebhooksHandler(nil, rejectingAppleVerifier{}, nil, nil),
+	}
+	app := fiber.New()
+	registerWebhookRoutes(app, h, rl, cfg)
+	api := app.Group("/api", func(c *fiber.Ctx) error {
+		if c.Get("Authorization") == "" {
+			return c.SendStatus(fiber.StatusUnauthorized)
+		}
+		return c.Next()
+	})
+	registerCreditRoutes(api, h, rl, cfg)
+	return app
+}
+
+func TestRoutes_WebhookReachableWithoutBearer(t *testing.T) {
+	app := creditTestApp(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/appstore", strings.NewReader(`{"signedPayload":"garbage"}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 from the handler (not 401 from the auth group)", resp.StatusCode)
+	}
+}
+
+func TestRoutes_GoogleWebhookUnconfiguredIs503(t *testing.T) {
+	app := creditTestApp(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/googleplay", strings.NewReader(`{}`))
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 for an unconfigured push verifier", resp.StatusCode)
+	}
+}
+
+func TestRoutes_CreditsRequireAuth(t *testing.T) {
+	app := creditTestApp(t)
+	for _, r := range []struct{ method, path string }{
+		{http.MethodGet, "/api/credits"},
+		{http.MethodGet, "/api/credits/history"},
+		{http.MethodPost, "/api/credits/welcome"},
+		{http.MethodPost, "/api/purchases/apple"},
+		{http.MethodPost, "/api/purchases/google"},
+	} {
+		resp, err := app.Test(httptest.NewRequest(r.method, r.path, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("%s %s = %d, want 401", r.method, r.path, resp.StatusCode)
+		}
+	}
+}
+
+func TestScheduler_RegistersRefill(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Credits.RefillInterval = time.Hour
+	entries := scheduleEntries(cfg)
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1 (sweep disabled)", len(entries))
+	}
+	e := entries[0]
+	if e.spec != "@every 1h0m0s" || e.task.Type() != credit.TaskTypeRefill {
+		t.Fatalf("entry = %q %q", e.spec, e.task.Type())
+	}
+	var queue string
+	var unique time.Duration
+	for _, o := range e.opts {
+		switch o.Type() {
+		case asynq.QueueOpt:
+			queue = o.Value().(string)
+		case asynq.UniqueOpt:
+			unique = o.Value().(time.Duration)
+		}
+	}
+	if queue != credit.QueueCredit || unique != time.Hour-time.Hour/10 {
+		t.Fatalf("queue %q unique %v", queue, unique)
+	}
+}
+
+func TestScheduler_BothDisabledStartsNothing(t *testing.T) {
+	s, err := startScheduler(&config.Config{})
+	if s != nil || err != nil {
+		t.Fatalf("got %v, %v; want nil, nil", s, err)
 	}
 }

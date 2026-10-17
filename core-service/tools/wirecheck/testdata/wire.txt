@@ -18,6 +18,8 @@ ROUTE	DELETE /yayinlar/:id/begeni
 ROUTE	DELETE /yorumlar/:id
 ROUTE	GET /
 ROUTE	GET /akis
+ROUTE	GET /credits
+ROUTE	GET /credits/history
 ROUTE	GET /health
 ROUTE	GET /oneriler
 ROUTE	GET /profil/ben
@@ -37,18 +39,25 @@ ROUTE	GET /yayinlar/:id/coverlar
 ROUTE	GET /yayinlar/:id/yorumlar
 ROUTE	GROUP /api
 ROUTE	GROUP /api/public
+ROUTE	GROUP /api/webhooks
 ROUTE	GROUP /export
 ROUTE	GROUP /lyrics
 ROUTE	GROUP /master
+ROUTE	GROUP /purchases
 ROUTE	GROUP /render
 ROUTE	GROUP /social
 ROUTE	GROUP /upload
 ROUTE	HANDLE /
 ROUTE	PATCH /yayinlar/:id
+ROUTE	POST /apple
+ROUTE	POST /appstore
 ROUTE	POST /cancel/:jobId
+ROUTE	POST /credits/welcome
 ROUTE	POST /files/sign
 ROUTE	POST /final
 ROUTE	POST /generate
+ROUTE	POST /google
+ROUTE	POST /googleplay
 ROUTE	POST /mp3
 ROUTE	POST /preview
 ROUTE	POST /rewrite
@@ -84,6 +93,15 @@ STR	" OR %s.gorunurluk = 'link'"
 STR	" groove"
 STR	" ile giris yap"
 STR	" veya "
+STR	""
+STR	""
+STR	""
+STR	""
+STR	""
+STR	""
+STR	""
+STR	""
+STR	""
 STR	""
 STR	""
 STR	""
@@ -583,10 +601,16 @@ STR	"/api/v1/vocal-removal/generate"
 STR	"/api/v1/vocal-removal/generate"
 STR	"/api/v1/vocal-removal/record-info?taskId="
 STR	"/api/v1/vocal-removal/record-info?taskId="
+STR	"/api/webhooks"
+STR	"/apple"
+STR	"/appstore"
 STR	"/baglama"
 STR	"/callback"
 STR	"/cancel/:jobId"
 STR	"/chat/completions"
+STR	"/credits"
+STR	"/credits/history"
+STR	"/credits/welcome"
 STR	"/encode"
 STR	"/export"
 STR	"/federasyon"
@@ -598,6 +622,8 @@ STR	"/final"
 STR	"/generate"
 STR	"/geri"
 STR	"/giris"
+STR	"/google"
+STR	"/googleplay"
 STR	"/health"
 STR	"/health"
 STR	"/inApps/v1/subscriptions/"
@@ -615,6 +641,7 @@ STR	"/profiller/:ad"
 STR	"/profiller/:ad/takip"
 STR	"/profiller/:ad/takip"
 STR	"/profiller/:ad/yayinlar"
+STR	"/purchases"
 STR	"/purchases"
 STR	"/render"
 STR	"/result/:jobId"
@@ -1692,6 +1719,7 @@ STR	"https://makesinger-api.celalettindemir.dev/suno/callback"
 STR	"https://oauth2.googleapis.com/token"
 STR	"https://www.googleapis.com/auth/androidpublisher"
 STR	"https://www.googleapis.com/oauth2/v3/certs"
+STR	"https://www.googleapis.com/oauth2/v3/certs"
 STR	"iade"
 STR	"iade"
 STR	"iade"
@@ -1780,6 +1808,7 @@ STR	"kimlik:oturum:"
 STR	"kimlik:silindi:"
 STR	"kimlik_fed"
 STR	"kimlik_oturum"
+STR	"kredi"
 STR	"kredi"
 STR	"kredi:bildirim"
 STR	"kredi:dolum"
@@ -1926,6 +1955,7 @@ STR	"project_id_required"
 STR	"public"
 STR	"publication has no stem copy"
 STR	"publication is not in a valid state for this operation"
+STR	"purchase"
 STR	"purchase_invalid"
 STR	"purchase_owned_by_other"
 STR	"pwd"
@@ -2263,6 +2293,7 @@ STR	"warn"
 STR	"wav"
 STR	"wav"
 STR	"wav"
+STR	"webhook"
 STR	"welcome"
 STR	"welcome"
 STR	"woodwinds"

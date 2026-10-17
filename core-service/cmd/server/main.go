@@ -21,9 +21,12 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/makeasinger/api/docs"
+	"github.com/makeasinger/api/internal/appstore"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
+	"github.com/makeasinger/api/internal/credit"
 	"github.com/makeasinger/api/internal/deletionmark"
+	"github.com/makeasinger/api/internal/googleplay"
 	"github.com/makeasinger/api/internal/handler"
 	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/identity"
@@ -110,6 +113,23 @@ func main() {
 	}
 	socialStore := social.NewPostgresStore(socialPool)
 
+	// Credits (Kredi): same database, own pool, own schema (kredi) and own
+	// migration table. FATAL like social: a pod without the credit tables
+	// would fail every spend and purchase.
+	creditPool, err := identity.Connect(ctx, cfg.Auth.DBURL)
+	if err != nil {
+		log.Fatalf("Could not connect to the credit database: %v", err)
+	}
+	defer creditPool.Close()
+	if err := credit.Migrate(ctx, creditPool); err != nil {
+		log.Fatalf("Credit migration failed: %v", err)
+	}
+	creditStore := credit.NewPostgresStore(creditPool)
+	creditService := credit.NewService(creditStore, creditSettings(cfg))
+	if !cfg.Credits.Enforce {
+		log.Println("Credits: shadow mode (CREDITS_ENFORCE=false), spends are metered but never refused")
+	}
+
 	// Initialize Asynq client
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{
 		Addr:     cfg.Redis.Addr,
@@ -151,9 +171,61 @@ func main() {
 		storage = r2Client
 	}
 
+	// Store verifiers. Each is an interface variable that stays an untyped nil
+	// while its store is unconfigured: assigning a nil pointer would set the
+	// typed-nil trap (see storage) and defeat the handlers' nil checks.
+	var (
+		appleVerifier *appstore.Verifier // concrete: the replay worker takes it as is
+		appleAPI      credit.AppleStatusAPI
+		googlePub     credit.GooglePublisher
+		googlePush    handler.PushAuth
+	)
+	if cfg.AppStore.BundleID != "" {
+		appleVerifier = appstore.NewVerifier(appstore.AppleRoots(), cfg.AppStore.BundleID, time.Now)
+		if cfg.AppStore.IssuerID != "" && cfg.AppStore.KeyID != "" && cfg.AppStore.PrivateKey != "" {
+			appleAPI = appstore.NewAPI(cfg.AppStore, nil)
+		} else {
+			log.Println("Info: App Store Server API key not configured, Apple subscription resync is off")
+		}
+	} else {
+		log.Println("Info: App Store not configured, Apple purchases answer 503")
+	}
+	if cfg.GooglePlay.PackageName != "" && cfg.GooglePlay.ServiceAccountJSON != "" {
+		// ctx is the process context: the token source keeps using it.
+		pub, err := googleplay.NewPublisher(ctx, cfg.GooglePlay, "")
+		if err != nil {
+			log.Printf("Warning: Google Play publisher not initialized: %v", err)
+		} else {
+			googlePub = pub
+		}
+	} else {
+		log.Println("Info: Google Play not configured, Google purchases answer 503")
+	}
+	if cfg.GooglePlay.PubSubAudience != "" {
+		pv, err := googleplay.NewPushVerifier(ctx, googlePushJWKSURL, cfg.GooglePlay.PubSubAudience, cfg.GooglePlay.PubSubEmail)
+		if err != nil {
+			log.Printf("Warning: Google Play push verifier not initialized: %v", err)
+		} else {
+			googlePush = pv
+		}
+	}
+	var appleNotifications handler.NotificationVerifier
+	var appleReplay credit.AppleVerifier
+	if appleVerifier != nil {
+		appleNotifications = appleVerifier
+		appleReplay = appleVerifier
+	}
+	purchases := credit.NewPurchases(creditStore, creditService, appleReplay, appleAPI, googlePub,
+		credit.PurchasesConfig{
+			PlanMonthly:        cfg.Credits.PlanMonthly,
+			AppleProductPrefix: cfg.AppStore.ProductPrefix,
+			PackageName:        cfg.GooglePlay.PackageName,
+		}, time.Now)
+	creditWorker := worker.NewCreditWorker(purchases, appleVerifier)
+
 	// Initialize services
 	lyricsService := service.NewLyricsService(groqClient)
-	renderService := service.NewRenderService(redisClient, asynqClient, storage, &cfg.R2)
+	renderService := service.NewRenderService(redisClient, asynqClient, storage, &cfg.R2).WithCredits(creditService)
 	masterService := service.NewMasterService(redisClient, asynqClient, storage, &cfg.R2)
 	exportService := service.NewExportService(storage, audioClient, &cfg.R2)
 	uploadService := service.NewUploadService(storage, &cfg.R2)
@@ -168,7 +240,8 @@ func main() {
 	}
 
 	// Account deletion: the user record is kept in our own OP.
-	accountService := service.NewAccountService(identityServer, prefixDeleter, redisClient, asynqClient, socialStore)
+	accountService := service.NewAccountService(identityServer, prefixDeleter, redisClient, asynqClient, socialStore).
+		WithCreditCleaner(creditStore)
 	accountHandler := handler.NewAccountHandler(accountService)
 
 	// copier: interface variable; assigning r2Client directly while it is
@@ -183,13 +256,18 @@ func main() {
 		WithStaleSweep(socialStore, cfg.Social.StalePreparationAfter)
 
 	// Initialize handlers
-	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
+	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate).WithCredits(creditService)
 	renderHandler := handler.NewRenderHandler(renderService, validate)
 	masterHandler := handler.NewMasterHandler(masterService, validate)
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
 	fileHandler := handler.NewFileHandler(fileService, validate)
 	wsTicketHandler := handler.NewWSTicketHandler(wsTicketService, validate)
+	creditRoutes := creditRouteHandlers{
+		Credits:   handler.NewCreditsHandler(creditService),
+		Purchases: handler.NewPurchasesHandler(purchases, validate),
+		Webhooks:  handler.NewWebhooksHandler(purchases, appleNotifications, googlePush, asynqClient),
+	}
 
 	// The only path for /api/*: our own OP's RS256 access token. The public
 	// key is read in-process; the JWKS endpoint is not fetched over the network.
@@ -272,6 +350,11 @@ func main() {
 		rateLimiter.LimitIP("public", cfg.RateLimit.PublicPerMin, time.Minute,
 			cfg.Social.WebKey, cfg.RateLimit.PublicWebPerMin, cfg.RateLimit.PublicWebVisitorPerMin))
 
+	// Store webhooks (Apple, Google Pub/Sub): the stores carry no user token and
+	// authenticate with a signed payload / push JWT inside the handler. Like
+	// /api/public these are registered BEFORE the authenticated /api group.
+	registerWebhookRoutes(app, creditRoutes, rateLimiter, cfg)
+
 	// API routes
 	api := app.Group("/api", apiAuthMiddleware, middleware.DeletedUserGate(deletionmark.NewRedisChecker(redisClient)))
 
@@ -322,6 +405,8 @@ func main() {
 		Cover: rateLimiter.Limit("sosyal-cover", cfg.RateLimit.SocialCoverPerHour, time.Hour),
 	})
 
+	registerCreditRoutes(api, creditRoutes, rateLimiter, cfg)
+
 	// WebSocket routes
 	app.Use("/ws", func(c *fiber.Ctx) error {
 		if websocket.IsWebSocketUpgrade(c) {
@@ -337,7 +422,7 @@ func main() {
 	}))
 
 	// Start Asynq worker server
-	go startWorkerServer(cfg, redisClient, renderService, masterService, sunoClient, audioClient, storage, hub, accountService, socialWorker)
+	go startWorkerServer(cfg, redisClient, renderService, masterService, sunoClient, audioClient, storage, hub, accountService, socialWorker, creditWorker, creditService)
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
@@ -370,6 +455,8 @@ func startWorkerServer(
 	hub *ws.Hub,
 	accountService *service.AccountService,
 	socialWorker *worker.SocialWorker,
+	creditWorker *worker.CreditWorker,
+	creditSpender credit.Spender,
 ) {
 	asynqLogLevel := asynq.InfoLevel
 	if strings.EqualFold(cfg.Server.LogLevel, "debug") {
@@ -393,6 +480,7 @@ func startWorkerServer(
 				"master": 4,
 				"sosyal": 2,
 				"bakim":  1,
+				"kredi":  3,
 			},
 			LogLevel: asynqLogLevel,
 		},
@@ -402,7 +490,7 @@ func startWorkerServer(
 	// Workers check the job owner's deleted mark before the paid Suno call
 	// and before every R2 write.
 	deletionChecker := deletionmark.NewRedisChecker(redisClient)
-	renderWorker := worker.NewRenderWorker(renderService, sunoClient, storage, hub, deletionChecker)
+	renderWorker := worker.NewRenderWorker(renderService, sunoClient, storage, hub, deletionChecker).WithCredits(creditSpender)
 	masterWorker := worker.NewMasterWorker(redisClient, audioClient, storage, masterService, hub, &cfg.R2, deletionChecker)
 
 	mux := asynq.NewServeMux()
@@ -412,10 +500,12 @@ func startWorkerServer(
 	mux.HandleFunc(social.TaskTypePrepare, socialWorker.Prepare)
 	mux.HandleFunc(social.TaskTypeDeleteFiles, socialWorker.DeleteFiles)
 	mux.HandleFunc(social.TaskTypeSweepStale, socialWorker.SweepStale)
+	mux.HandleFunc(credit.TaskTypeNotification, creditWorker.ProcessNotification)
+	mux.HandleFunc(credit.TaskTypeRefill, creditWorker.ProcessRefill)
 
-	scheduler, err := startStaleSweepScheduler(cfg)
+	scheduler, err := startScheduler(cfg)
 	if err != nil {
-		log.Printf("Stale sweep scheduler could not start: %v", err)
+		log.Printf("Scheduler could not start: %v", err)
 	}
 	if scheduler != nil {
 		defer scheduler.Shutdown()
@@ -426,16 +516,49 @@ func startWorkerServer(
 	}
 }
 
-// startStaleSweepScheduler starts the periodic sosyal:bayat-tara schedule.
-// Every API replica runs one; Unique keeps them from piling up duplicate
-// jobs (the sweep is idempotent, so an occasional duplicate is harmless).
-// The lock is a little shorter than the interval so a replica's own next tick
-// is never swallowed by its previous one. It returns nil when the interval is
-// <= 0 (disabled).
-func startStaleSweepScheduler(cfg *config.Config) (*asynq.Scheduler, error) {
-	interval := cfg.Social.StaleSweepInterval
-	if interval <= 0 {
+// scheduleEntry is one periodic task of the scheduler.
+type scheduleEntry struct {
+	spec string
+	task *asynq.Task
+	opts []asynq.Option
+}
+
+// scheduleEntries lists the periodic tasks cfg enables. Every API replica runs
+// a scheduler; Unique keeps them from piling up duplicate jobs (both tasks are
+// idempotent, so an occasional duplicate is harmless). The lock is a little
+// shorter than the interval so a replica's own next tick is never swallowed by
+// its previous one. An interval <= 0 disables that entry.
+func scheduleEntries(cfg *config.Config) []scheduleEntry {
+	var entries []scheduleEntry
+	add := func(interval time.Duration, taskType, queue string) {
+		entries = append(entries, scheduleEntry{
+			spec: "@every " + interval.String(),
+			task: asynq.NewTask(taskType, nil),
+			opts: []asynq.Option{
+				asynq.Queue(queue),
+				asynq.MaxRetry(0),
+				asynq.Unique(interval - interval/10),
+			},
+		})
+	}
+	if iv := cfg.Social.StaleSweepInterval; iv > 0 {
+		add(iv, social.TaskTypeSweepStale, social.QueueSocial)
+	} else {
 		log.Println("Stale sweep scheduler disabled (social stale_sweep_interval <= 0)")
+	}
+	if iv := cfg.Credits.RefillInterval; iv > 0 {
+		add(iv, credit.TaskTypeRefill, credit.QueueCredit)
+	} else {
+		log.Println("Credit refill scheduler disabled (credits.refill_interval <= 0)")
+	}
+	return entries
+}
+
+// startScheduler starts the periodic sosyal:bayat-tara and kredi:dolum
+// schedules. It returns nil when both are disabled.
+func startScheduler(cfg *config.Config) (*asynq.Scheduler, error) {
+	entries := scheduleEntries(cfg)
+	if len(entries) == 0 {
 		return nil, nil
 	}
 	scheduler := asynq.NewScheduler(asynq.RedisClientOpt{
@@ -443,19 +566,66 @@ func startStaleSweepScheduler(cfg *config.Config) (*asynq.Scheduler, error) {
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
 	}, nil)
-	if _, err := scheduler.Register(
-		"@every "+interval.String(),
-		asynq.NewTask(social.TaskTypeSweepStale, nil),
-		asynq.Queue(social.QueueSocial),
-		asynq.MaxRetry(0),
-		asynq.Unique(interval-interval/10),
-	); err != nil {
-		return nil, err
+	for _, e := range entries {
+		if _, err := scheduler.Register(e.spec, e.task, e.opts...); err != nil {
+			return nil, err
+		}
 	}
 	if err := scheduler.Start(); err != nil {
 		return nil, err
 	}
 	return scheduler, nil
+}
+
+// googlePushJWKSURL is where Google publishes the keys that sign Pub/Sub push
+// tokens.
+const googlePushJWKSURL = "https://www.googleapis.com/oauth2/v3/certs"
+
+// creditSettings converts the config into the credit service settings
+// (config never imports internal/credit).
+func creditSettings(cfg *config.Config) credit.Settings {
+	c := cfg.Credits
+	return credit.Settings{
+		Enforce:     c.Enforce,
+		Welcome:     c.Welcome,
+		PlanMonthly: c.PlanMonthly,
+		Costs: credit.Costs{
+			RenderMix:      c.Costs.RenderMix,
+			RenderFocus:    c.Costs.RenderFocus,
+			RenderStems:    c.Costs.RenderStems,
+			LyricsGenerate: c.Costs.LyricsGenerate,
+			LyricsRewrite:  c.Costs.LyricsRewrite,
+		},
+	}
+}
+
+// creditRouteHandlers are the handlers of the credit routes.
+type creditRouteHandlers struct {
+	Credits   *handler.CreditsHandler
+	Purchases *handler.PurchasesHandler
+	Webhooks  *handler.WebhooksHandler
+}
+
+// registerWebhookRoutes binds the store webhooks. It must run before the
+// authenticated /api group is created: Fiber matches in registration order,
+// and a store POST carries no Bearer token.
+func registerWebhookRoutes(app *fiber.App, h creditRouteHandlers, rl *middleware.RateLimiter, cfg *config.Config) {
+	webhooks := app.Group("/api/webhooks",
+		rl.LimitIP("webhook", cfg.RateLimit.WebhooksPerMin, time.Minute, "", 0, 0))
+	webhooks.Post("/appstore", h.Webhooks.AppStore)
+	webhooks.Post("/googleplay", h.Webhooks.GooglePlay)
+}
+
+// registerCreditRoutes binds the authenticated credit and purchase routes on
+// the /api group.
+func registerCreditRoutes(api fiber.Router, h creditRouteHandlers, rl *middleware.RateLimiter, cfg *config.Config) {
+	api.Get("/credits", h.Credits.Get)
+	api.Get("/credits/history", h.Credits.History)
+	api.Post("/credits/welcome", h.Credits.ClaimWelcome)
+
+	purchases := api.Group("/purchases", rl.Limit("purchase", cfg.RateLimit.PurchasesPerMin, time.Minute))
+	purchases.Post("/apple", h.Purchases.Apple)
+	purchases.Post("/google", h.Purchases.Google)
 }
 
 // customErrorHandler answers errors that reach Fiber (unknown routes,

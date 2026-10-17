@@ -59,8 +59,25 @@ services:
       # Kesfet web onizlemesi: make-singer-frontend'in X-Web-Anahtari degeri
       # (iki stack'te ayni). Bos ise web sunucusu da IP basina 30/dk sinirda.
       SOSYAL_WEB_ANAHTARI: ${SOSYAL_WEB_ANAHTARI:-}
+      # Kredi: CREDITS_ENFORCE=false iken yalnizca olcum yapilir, kredi dusulmez.
+      # 6b magazalarda yayinlanana kadar uretimde false kalir.
+      CREDITS_ENFORCE: ${CREDITS_ENFORCE:-false}
+      CREDITS_WELCOME: ${CREDITS_WELCOME:-24}
+      CREDITS_PLAN_MONTHLY: ${CREDITS_PLAN_MONTHLY:-300}
+      CREDITS_REFILL_INTERVAL: ${CREDITS_REFILL_INTERVAL:-1h}
+      APPSTORE_BUNDLE_ID: ${APPSTORE_BUNDLE_ID:-}
+      APPSTORE_PRODUCT_PREFIX: ${APPSTORE_PRODUCT_PREFIX:-}
+      APPSTORE_ISSUER_ID: ${APPSTORE_ISSUER_ID:-}
+      APPSTORE_KEY_ID: ${APPSTORE_KEY_ID:-}
+      APPSTORE_PRIVATE_KEY_FILE: /run/secrets/appstore_private_key
+      GOOGLEPLAY_PACKAGE_NAME: ${GOOGLEPLAY_PACKAGE_NAME:-}
+      GOOGLEPLAY_PUBSUB_AUDIENCE: ${GOOGLEPLAY_PUBSUB_AUDIENCE:-}
+      GOOGLEPLAY_PUBSUB_EMAIL: ${GOOGLEPLAY_PUBSUB_EMAIL:-}
+      GOOGLEPLAY_SERVICE_ACCOUNT_FILE: /run/secrets/googleplay_service_account
     secrets:
       - groq_api_key
+      - appstore_private_key
+      - googleplay_service_account
       - r2_account_id
       - r2_access_key_id
       - r2_secret_access_key
@@ -190,9 +207,14 @@ networks:
 # =============================================================================
 # API:    groq_api_key, suno_api_key, redis_password
 # R2:     r2_account_id, r2_access_key_id, r2_secret_access_key
+# Kredi:  appstore_private_key, googleplay_service_account
 # =============================================================================
 secrets:
   groq_api_key:
+    external: true
+  appstore_private_key:
+    external: true
+  googleplay_service_account:
     external: true
   suno_api_key:
     external: true

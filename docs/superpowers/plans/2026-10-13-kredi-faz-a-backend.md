@@ -1,5 +1,7 @@
 # Kredi Faz A (Backend Ledger, Campaigns, Admin API) Implementation Plan
 
+Durum: Yerine geçti: make-singer-doc native/specs/2026-10-17-native-6-kredi-design.md.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship phase A of the credit system: a Postgres credit ledger (lots, entries, reservations), gift campaigns with a lazy welcome-gift claim, the admin campaign API, credit reservation around lyrics / render / final master, and a periodic sweep, all in shadow mode (`CREDITS_ENFORCE=false`: spending is recorded, never blocked).
