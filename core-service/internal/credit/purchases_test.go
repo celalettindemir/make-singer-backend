@@ -975,3 +975,104 @@ func TestApplyPack_RefundDuringCreditClawsBack(t *testing.T) {
 		t.Fatalf("claw-backs = %d, want 1", n)
 	}
 }
+
+// refundThenReplay subscribes with tx, has Apple refund it, then replays
+// the JWS signed before the refund (no RevocationDate).
+func refundThenReplay(t *testing.T, e *purchaseEnv, u string, tx *appstore.Transaction) PurchaseResult {
+	t.Helper()
+	ctx := context.Background()
+	jws := e.apple.sign(tx)
+	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
+		t.Fatal(err)
+	}
+	// The notification carries the same transaction id as the purchase.
+	e.apple.txs["jws-refund-"+tx.TransactionID] = &appstore.Transaction{
+		TransactionID: tx.TransactionID, OriginalTransactionID: tx.OriginalTransactionID, ProductID: tx.ProductID,
+		BundleID: tx.BundleID, Environment: tx.Environment, AppAccountToken: tx.AppAccountToken,
+		PurchaseDate: tx.PurchaseDate, ExpiresDate: tx.ExpiresDate, RevocationDate: tp(testNow),
+	}
+	if err := e.p.ApplyAppleNotification(ctx, notify("REFUND", "", "jws-refund-"+tx.TransactionID)); err != nil {
+		t.Fatal(err)
+	}
+	res, err := e.p.VerifyApple(ctx, u, jws)
+	if err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	return res
+}
+
+func TestVerifyApple_ReplayAfterRefundStaysRefunded(t *testing.T) {
+	e := newPurchaseEnv(t)
+	u, tok := e.user(t)
+	res := refundThenReplay(t, e, u, subTx("tx-1", "orig-1", productMonthly, tok, testNow.Add(-time.Hour), 1))
+	if res.Status != PurchaseRecorded || res.Summary.PlanCredits != 0 {
+		t.Fatalf("replay result = %+v", res)
+	}
+	if sub := e.sub(t, storeApple, "orig-1"); sub.Status != subRefunded || sub.NextRefill != nil {
+		t.Fatalf("subscription = %+v", sub)
+	}
+}
+
+func TestVerifyApple_YearlyReplayAfterRefundNoRefills(t *testing.T) {
+	e := newPurchaseEnv(t)
+	ctx := context.Background()
+	u, tok := e.user(t)
+	res := refundThenReplay(t, e, u, subTx("tx-y", "orig-y", productYearly, tok, testNow.Add(-time.Hour), 12))
+	if res.Summary.PlanCredits != 0 {
+		t.Fatalf("plan after replay = %d", res.Summary.PlanCredits)
+	}
+	if sub := e.sub(t, storeApple, "orig-y"); sub.Status != subRefunded {
+		t.Fatalf("status = %q, want iade", sub.Status)
+	}
+	e.p.now = func() time.Time { return testNow.AddDate(0, 3, 0) }
+	refilled, _, err := e.p.RunRefill(ctx)
+	if err != nil || refilled != 0 {
+		t.Fatalf("RunRefill = %d %v, want 0", refilled, err)
+	}
+	if a := e.account(t, u); a.Plan != 0 {
+		t.Fatalf("plan = %d, want 0", a.Plan)
+	}
+}
+
+func TestVerifyGoogle_ReplayAfterVoidStaysRefunded(t *testing.T) {
+	e := newPurchaseEnv(t)
+	ctx := context.Background()
+	u, tok := e.user(t)
+	e.google.subs["stok"] = googleSub("SUBSCRIPTION_STATE_ACTIVE", "GPA.80", "yearly", tok, testNow.AddDate(1, 0, 0))
+	if _, err := e.p.VerifyGoogle(ctx, u, "pro", "stok"); err != nil {
+		t.Fatal(err)
+	}
+	n := &googleplay.DeveloperNotification{PackageName: "com.test.app",
+		Voided: &googleplay.VoidedNotification{PurchaseToken: "stok", OrderID: "GPA.80", ProductType: 1}}
+	if err := e.p.ApplyGoogleNotification(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	// Google still reports the subscription active; the client posts it.
+	res, err := e.p.VerifyGoogle(ctx, u, "pro", "stok")
+	if err != nil || res.Status != PurchaseRecorded || res.Summary.PlanCredits != 0 {
+		t.Fatalf("replay: %+v %v", res, err)
+	}
+	if sub := e.sub(t, storeGoogle, "stok"); sub.Status != subRefunded {
+		t.Fatalf("status = %q, want iade", sub.Status)
+	}
+	e.p.now = func() time.Time { return testNow.AddDate(0, 3, 0) }
+	if refilled, _, err := e.p.RunRefill(ctx); err != nil || refilled != 0 {
+		t.Fatalf("RunRefill = %d %v, want 0", refilled, err)
+	}
+}
+
+func TestVerifyApple_ResubscribeAfterRefundReactivates(t *testing.T) {
+	e := newPurchaseEnv(t)
+	ctx := context.Background()
+	u, tok := e.user(t)
+	first := subTx("tx-1", "orig-1", productMonthly, tok, testNow.AddDate(0, 0, -5), 1)
+	refundThenReplay(t, e, u, first)
+	later := subTx("tx-2", "orig-1", productMonthly, tok, testNow.Add(-time.Minute), 1)
+	res, err := e.p.VerifyApple(ctx, u, e.apple.sign(later))
+	if err != nil || res.Status != PurchaseCredited || res.Summary.PlanCredits != 300 {
+		t.Fatalf("resubscribe: %+v %v", res, err)
+	}
+	if sub := e.sub(t, storeApple, "orig-1"); sub.Status != subActive || !sub.PeriodEnd.Equal(*later.ExpiresDate) {
+		t.Fatalf("subscription = %+v", sub)
+	}
+}

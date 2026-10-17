@@ -330,8 +330,13 @@ func (p *Purchases) applySubscription(ctx context.Context, f subFacts, submitter
 	// claimOnly keeps the stored state and only claims an ownerless row:
 	// for a state older than the stored one (an old order, even a refund
 	// of it), and for any non-active state a client sends, since only
-	// webhooks and Resync are authoritative for ending a subscription.
-	claimOnly := cur != nil && (f.periodEnd.Before(cur.PeriodEnd) || (submitter != "" && f.status != subActive))
+	// webhooks and Resync are authoritative for ending a subscription. A
+	// client cannot reopen an ended or refunded row either (a JWS signed
+	// before the refund replays as active) unless it brings a strictly
+	// later period.
+	claimOnly := cur != nil && (f.periodEnd.Before(cur.PeriodEnd) ||
+		(submitter != "" && (f.status != subActive ||
+			((cur.Status == subRefunded || cur.Status == subExpired) && !f.periodEnd.After(cur.PeriodEnd)))))
 	if claimOnly {
 		next = *cur
 		if next.UserID == nil {
