@@ -216,6 +216,7 @@ func (c cancelBeforeClaim) IsDeleted(context.Context, string) (bool, error) {
 
 func TestRenderWorker_CancelBeforeClaimSkipsSunoAndRefundsOnce(t *testing.T) {
 	s := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
+	s.svc.WithCredits(s.fake) // the cancel's own refund is observed too
 	s.w.deletionChecker = cancelBeforeClaim{cancel: func() {
 		if _, err := s.svc.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
 			t.Errorf("CancelRender: %v", err)
@@ -228,8 +229,10 @@ func TestRenderWorker_CancelBeforeClaimSkipsSunoAndRefundsOnce(t *testing.T) {
 	if s.suno.generateCalls != 0 {
 		t.Errorf("GenerateMusic called %d times after a committed cancel", s.suno.generateCalls)
 	}
-	if len(s.fake.Refunds) != 1 || s.fake.Refunds[0].ID != "is1" {
-		t.Errorf("worker refunds = %+v, want exactly one for is1", s.fake.Refunds)
+	// The cancel refunds (queued) and the worker refunds again; the ledger
+	// keys both on the jobId, so they are one refund row.
+	if len(s.fake.Refunds) != 2 || s.fake.Refunds[0].ID != "is1" || s.fake.Refunds[1].ID != "is1" {
+		t.Errorf("refunds = %+v, want two calls, both for is1", s.fake.Refunds)
 	}
 	if st := jobStatus(t, s.svc); st != model.JobStatusCanceled {
 		t.Errorf("status = %s, want canceled", st)
@@ -310,18 +313,22 @@ func TestRenderWorker_MockContextDoneOnLastAttemptRefunds(t *testing.T) {
 	}
 }
 
-func TestRenderWorker_MockCanceledAtStartRefunds(t *testing.T) {
+func TestRenderWorker_MockCanceledBeforeClaimRefunds(t *testing.T) {
 	s := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
-	s.w.music = nil
-	s.w.deletionChecker = nil
-	// Cancel between the attempt-start check and the mock claim is not
-	// hookable; a canceled job at attempt start covers the early exit, and
-	// ClaimRun is covered in the service tests.
-	putJob(t, s.rdb, model.JobStatusCanceled)
+	s.w.music = nil // mock path
+	s.w.afterStatusCheck = func() {
+		if _, err := s.svc.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
+			t.Errorf("CancelRender: %v", err)
+		}
+	}
+
 	if err := s.w.ProcessTask(context.Background(), renderTask(t, model.StemModeMix)); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
-	if len(s.fake.Refunds) != 1 {
-		t.Errorf("refunds = %+v, want one", s.fake.Refunds)
+	if len(s.fake.Refunds) != 1 || s.fake.Refunds[0].ID != "is1" {
+		t.Errorf("refunds = %+v, want one for is1", s.fake.Refunds)
+	}
+	if st := jobStatus(t, s.svc); st != model.JobStatusCanceled {
+		t.Errorf("status = %s, want canceled (the mock must not run)", st)
 	}
 }

@@ -276,3 +276,75 @@ func TestUpdateJob_ConcurrentUpdatesLoseNothing(t *testing.T) {
 		t.Errorf("RetryCount = %d, want %d (an update was lost)", job.RetryCount, n)
 	}
 }
+
+func TestClaimRun_ConflictWithCancelReturnsFalse(t *testing.T) {
+	rdb := liveRedis(t)
+	s := NewRenderService(rdb, nil, nil, testR2Cfg())
+	storeRenderJob(t, rdb, model.JobStatusQueued)
+
+	// The first transaction attempt has read "queued"; a cancel commits
+	// before its EXEC, so EXEC fails and the retry reads "canceled".
+	fired := false
+	s.beforeExec = func() {
+		if fired {
+			return
+		}
+		fired = true
+		job, err := readJob(context.Background(), rdb, "is1")
+		if err != nil {
+			t.Errorf("readJob: %v", err)
+			return
+		}
+		job.Status = model.JobStatusCanceled
+		if err := writeJob(context.Background(), rdb, job); err != nil {
+			t.Errorf("writeJob: %v", err)
+		}
+	}
+
+	ok, err := s.ClaimRun(context.Background(), "is1")
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if !fired {
+		t.Fatal("the conflict hook did not run")
+	}
+	if ok {
+		t.Error("ClaimRun returned true for a job canceled during the claim")
+	}
+	if st, _ := s.JobStatus(context.Background(), "is1"); st != model.JobStatusCanceled {
+		t.Errorf("status = %s, want canceled", st)
+	}
+}
+
+func TestClaimRun_FinishedJobsNotClaimed(t *testing.T) {
+	rdb := liveRedis(t)
+	s := NewRenderService(rdb, nil, nil, testR2Cfg())
+	for _, st := range []model.JobStatus{model.JobStatusFailed, model.JobStatusSucceeded} {
+		storeRenderJob(t, rdb, st)
+		if ok, err := s.ClaimRun(context.Background(), "is1"); err != nil || ok {
+			t.Errorf("claim %s = %v, %v; want false", st, ok, err)
+		}
+	}
+}
+
+func TestStartRender_ShadowReadFailureStillStarts(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: false, Err: errors.New("db down")}
+	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	resp, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(""))
+	if err != nil || resp.Balance != 0 {
+		t.Fatalf("resp=%+v err=%v, want a started job with balance 0", resp, err)
+	}
+}
+
+func TestStartRender_EnforcedSpendErrorFails(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: true, Err: errors.New("db down")}
+	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+	if _, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest("")); err == nil {
+		t.Fatal("want the spend error in enforced mode")
+	}
+	if n := jobKeyCount(t, rdb); n != 0 {
+		t.Errorf("job records = %d, want 0", n)
+	}
+}

@@ -66,6 +66,10 @@ type RenderWorker struct {
 	deletionChecker deletionmark.Checker // nil: no check
 	credits         credit.Spender       // nil: no credit accounting
 	isLastAttempt   func(context.Context) bool
+
+	// afterStatusCheck is a test seam called after the attempt-start status
+	// check, to commit a cancel in the gap before the claim.
+	afterStatusCheck func()
 }
 
 // NewRenderWorker creates a new render worker
@@ -127,6 +131,10 @@ func (w *RenderWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		log.Printf("Job %s was canceled before it started; skipping", jobID)
 		w.refund(ctx, op, jobID)
 		return nil
+	}
+
+	if w.afterStatusCheck != nil {
+		w.afterStatusCheck()
 	}
 
 	// Check if Suno client is configured
@@ -367,7 +375,14 @@ func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, op cre
 		}
 
 		w.updateProgress(ctx, jobID, step.progress, step.step)
-		time.Sleep(step.duration)
+		select {
+		case <-ctx.Done():
+			log.Printf("Render job %s cancelled", jobID)
+			err := ctx.Err()
+			w.failFinal(ctx, jobID, op, "Render failed", err)
+			return err
+		case <-time.After(step.duration):
+		}
 	}
 
 	result, err := w.generateMockResult(payload)
@@ -503,7 +518,9 @@ func (w *RenderWorker) failFinal(ctx context.Context, jobID string, op credit.Op
 	}
 	// Detached: the final failure must be written even when ctx is the
 	// reason for it (shutdown, deadline).
-	w.failJob(context.WithoutCancel(ctx), jobID, errMsg)
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	w.failJob(fctx, jobID, errMsg)
 	w.refund(ctx, op, jobID)
 }
 

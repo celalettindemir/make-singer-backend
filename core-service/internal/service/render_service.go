@@ -29,6 +29,10 @@ type RenderService struct {
 	r2Client    client.StorageClient
 	r2Cfg       *config.R2Config
 	credits     credit.Spender // nil: no credit accounting
+
+	// beforeExec is a test seam: called after updateJob read the record and
+	// before the transaction executes, to force a WATCH conflict.
+	beforeExec func()
 }
 
 func NewRenderService(redisClient *redis.Client, asynqClient *asynq.Client, r2Client client.StorageClient, r2Cfg *config.R2Config) *RenderService {
@@ -311,13 +315,16 @@ func (s *RenderService) UpdateJobProgress(ctx context.Context, jobID string, pro
 func (s *RenderService) ClaimRun(ctx context.Context, jobID string) (bool, error) {
 	claimed := false
 	err := s.updateJob(ctx, jobID, func(job *model.Job) error {
-		if job.Status == model.JobStatusCanceled {
+		// The callback re-runs on a WATCH conflict: decide from scratch each
+		// time, so a stale true from an earlier read cannot survive.
+		claimed = false
+		switch job.Status {
+		case model.JobStatusCanceled, model.JobStatusFailed, model.JobStatusSucceeded:
 			return errSkipWrite
-		}
-		claimed = true
-		if job.Status == model.JobStatusQueued {
+		case model.JobStatusQueued:
 			markRunning(job)
 		}
+		claimed = true
 		return nil
 	})
 	if err != nil && !errors.Is(err, errSkipWrite) {
@@ -389,6 +396,9 @@ func (s *RenderService) updateJob(ctx context.Context, jobID string, fn func(*mo
 			out, err := json.Marshal(&job)
 			if err != nil {
 				return err
+			}
+			if s.beforeExec != nil {
+				s.beforeExec()
 			}
 			_, err = tx.TxPipelined(ctx, func(p redis.Pipeliner) error {
 				return p.Set(ctx, key, out, jobTTL).Err()
