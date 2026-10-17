@@ -371,3 +371,24 @@ func TestStore_LatestSubscription(t *testing.T) {
 		t.Fatalf("latest subscription: %+v %v", sub, err)
 	}
 }
+
+func TestStore_RefundWithoutAccountRowWritesNothing(t *testing.T) {
+	s, u := newStore(t)
+	seed(t, s, u, 0, 20)
+	ctx := context.Background()
+	if _, _, err := s.Debit(ctx, u, "render", "orphan-"+u, "render_mix", 12, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM kredi.hesap WHERE kullanici_id = $1::uuid`, u); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Refund(ctx, "render", "render_iade", "orphan-"+u); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM kredi.hesap WHERE kullanici_id = $1::uuid`, u); n != 0 {
+		t.Errorf("account row recreated: %d", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'render_iade' AND ref = $1`, "orphan-"+u); n != 0 {
+		t.Errorf("refund rows = %d, want 0", n)
+	}
+}

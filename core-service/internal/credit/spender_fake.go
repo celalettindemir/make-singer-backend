@@ -117,4 +117,8 @@ func (f *FakeSpender) Balance(context.Context, string) (int, error) {
 }
 
 // Enforced returns IsEnforced.
-func (f *FakeSpender) Enforced() bool { return f.IsEnforced }
+func (f *FakeSpender) Enforced() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.IsEnforced
+}

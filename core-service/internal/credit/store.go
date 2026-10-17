@@ -392,6 +392,12 @@ func (s *PostgresStore) History(ctx context.Context, userID string, beforeID int
 // anonymises their subscriptions and purchases.
 func (s *PostgresStore) DeleteUserData(ctx context.Context, userID string) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
+		// Lock the account first, like every other write, so a concurrent
+		// spend or refund cannot deadlock with this or slip rows in.
+		if _, err := tx.Exec(ctx,
+			`SELECT 1 FROM kredi.hesap WHERE kullanici_id = $1::text::uuid FOR UPDATE`, userID); err != nil {
+			return fmt.Errorf("could not lock the credit account: %w", err)
+		}
 		for _, q := range []string{
 			`DELETE FROM kredi.eylem WHERE kullanici_id = $1::text::uuid`,
 			`DELETE FROM kredi.hareket WHERE kullanici_id = $1::text::uuid`,

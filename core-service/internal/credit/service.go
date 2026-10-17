@@ -20,6 +20,9 @@ const (
 // ErrBadCursor is returned by History for a cursor that is not a movement id.
 var ErrBadCursor = errors.New("credit: bad history cursor")
 
+// ErrUnknownOperation is returned for an operation without a price.
+var ErrUnknownOperation = errors.New("credit: unknown operation")
+
 // Spender is what the render and lyrics paths need from the credit system.
 type Spender interface {
 	// Spend debits op once per ref and returns the new balance.
@@ -104,11 +107,22 @@ func (s *Service) Spend(ctx context.Context, userID string, op Operation, ref st
 	if !s.set.Enforce {
 		return s.shadow(ctx, userID, op)
 	}
+	if !knownOperation(op) {
+		return 0, ErrUnknownOperation
+	}
 	acct, _, err := s.ledger.Debit(ctx, userID, "render", ref, string(op), s.set.Costs.Of(op), false)
 	if err != nil {
 		return 0, err
 	}
 	return acct.Balance(), nil
+}
+
+func knownOperation(op Operation) bool {
+	switch op {
+	case OpRenderMix, OpRenderFocus, OpRenderStems, OpLyricsGenerate, OpLyricsRewrite:
+		return true
+	}
+	return false
 }
 
 // actionUses is the request budget of one action.
@@ -128,6 +142,9 @@ func (s *Service) SpendAction(ctx context.Context, userID string, op Operation, 
 	if !s.set.Enforce {
 		bal, err := s.shadow(ctx, userID, op)
 		return bal, false, err
+	}
+	if !knownOperation(op) {
+		return 0, false, ErrUnknownOperation
 	}
 	ch, err := s.ledger.SpendAction(ctx, userID, op, actionID, s.set.Costs.Of(op), actionWindow, actionUses(op), false)
 	if err != nil {
@@ -226,7 +243,7 @@ func (s *Service) Summary(ctx context.Context, userID string) (Summary, error) {
 		Enforced:          s.set.Enforce,
 	}
 	if sub != nil {
-		if status, ok := planStatus[sub.Status]; ok {
+		if status, ok := planStatus[sub.Status]; ok && !sub.PeriodEnd.IsZero() {
 			out.Plan = &Plan{Product: sub.Product, Status: status, PeriodEnd: sub.PeriodEnd, AutoRenew: sub.AutoRenew}
 		}
 	}

@@ -263,3 +263,25 @@ func TestService_HistoryBadCursor(t *testing.T) {
 		}
 	}
 }
+
+func TestService_UnknownOperationErrors(t *testing.T) {
+	l := &fakeLedger{acct: &Account{Permanent: 100}}
+	s := NewService(l, testSettings(true))
+	if _, err := s.Spend(context.Background(), "u1", Operation("nope"), "j"); !errors.Is(err, ErrUnknownOperation) {
+		t.Fatalf("Spend err = %v", err)
+	}
+	if _, _, err := s.SpendAction(context.Background(), "u1", Operation("nope"), "a"); !errors.Is(err, ErrUnknownOperation) {
+		t.Fatalf("SpendAction err = %v", err)
+	}
+	if len(l.calls) != 0 {
+		t.Fatalf("ledger touched: %v", l.calls)
+	}
+}
+
+func TestService_SummaryPlanNilWithoutPeriodEnd(t *testing.T) {
+	l := &fakeLedger{sub: &Subscription{Product: "pro.monthly", Status: "aktif"}}
+	got, err := NewService(l, testSettings(true)).Summary(context.Background(), "u1")
+	if err != nil || got.Plan != nil {
+		t.Fatalf("plan = %+v, %v", got.Plan, err)
+	}
+}
