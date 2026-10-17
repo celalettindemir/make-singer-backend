@@ -353,10 +353,9 @@ func main() {
 	// Store webhooks (Apple, Google Pub/Sub): the stores carry no user token and
 	// authenticate with a signed payload / push JWT inside the handler. Like
 	// /api/public these are registered BEFORE the authenticated /api group.
-	registerWebhookRoutes(app, creditRoutes, rateLimiter, cfg)
-
 	// API routes
-	api := app.Group("/api", apiAuthMiddleware, middleware.DeletedUserGate(deletionmark.NewRedisChecker(redisClient)))
+	api := newAPIRouter(app, creditRoutes, rateLimiter, cfg,
+		apiAuthMiddleware, middleware.DeletedUserGate(deletionmark.NewRedisChecker(redisClient)))
 
 	// Lyrics routes
 	lyrics := api.Group("/lyrics", rateLimiter.LyricsLimit(cfg.RateLimit.LyricsPerMin))
@@ -604,6 +603,15 @@ type creditRouteHandlers struct {
 	Credits   *handler.CreditsHandler
 	Purchases *handler.PurchasesHandler
 	Webhooks  *handler.WebhooksHandler
+}
+
+// newAPIRouter registers the store webhooks and then creates the
+// authenticated /api group with authChain. The order is the point: Fiber
+// matches in registration order, so webhooks registered after the group would
+// be answered 401. main and the route tests both go through here.
+func newAPIRouter(app *fiber.App, h creditRouteHandlers, rl *middleware.RateLimiter, cfg *config.Config, authChain ...fiber.Handler) fiber.Router {
+	registerWebhookRoutes(app, h, rl, cfg)
+	return app.Group("/api", authChain...)
 }
 
 // registerWebhookRoutes binds the store webhooks. It must run before the

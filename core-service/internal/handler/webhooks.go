@@ -93,15 +93,23 @@ func (h *WebhooksHandler) GooglePlay(c *fiber.Ctx) error {
 	}
 	n, err := googleplay.DecodePush(c.Body())
 	if err != nil {
-		log.Printf("webhooks: googleplay push undecodable: %v", err)
-		return response.ValidationError(c, i18n.KeyInvalidBody, nil)
+		// The token was valid, so a body that cannot be decoded will never
+		// get better: ack it, or Pub/Sub redelivers the poison message.
+		log.Printf("webhooks: googleplay push undecodable, dropped: %v", err)
+		return c.SendStatus(fiber.StatusOK)
 	}
 	if n.Test {
 		return c.SendStatus(fiber.StatusOK)
 	}
 	ctx, cancel := context.WithTimeout(c.UserContext(), webhookTimeout)
 	defer cancel()
-	return h.finish(c, webhookStoreGoogle, h.p.ApplyGoogleNotification(ctx, n))
+	err = h.p.ApplyGoogleNotification(ctx, n)
+	if errors.Is(err, credit.ErrPurchaseInvalid) {
+		// An invalid purchase does not get better on retry.
+		log.Printf("webhooks: googleplay notification dropped: %v", err)
+		return c.SendStatus(fiber.StatusOK)
+	}
+	return h.finish(c, webhookStoreGoogle, err)
 }
 
 // finish answers 200 for a processed webhook. A processing error is handed to

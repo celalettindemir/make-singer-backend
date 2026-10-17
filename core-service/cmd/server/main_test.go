@@ -87,8 +87,8 @@ func (rejectingAppleVerifier) Notification(string) (*appstore.Notification, erro
 	return nil, errors.New("bad signature")
 }
 
-// creditTestApp builds an app wired like main: webhooks first, then an
-// authenticated /api group (a Bearer-only stand-in for the OP middleware).
+// creditTestApp builds an app through the same newAPIRouter main uses, with a
+// Bearer-only stand-in for the OP middleware.
 func creditTestApp(t *testing.T) *fiber.App {
 	t.Helper()
 	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379", DB: 14})
@@ -104,8 +104,7 @@ func creditTestApp(t *testing.T) *fiber.App {
 		Webhooks:  handler.NewWebhooksHandler(nil, rejectingAppleVerifier{}, nil, nil),
 	}
 	app := fiber.New()
-	registerWebhookRoutes(app, h, rl, cfg)
-	api := app.Group("/api", func(c *fiber.Ctx) error {
+	api := newAPIRouter(app, h, rl, cfg, func(c *fiber.Ctx) error {
 		if c.Get("Authorization") == "" {
 			return c.SendStatus(fiber.StatusUnauthorized)
 		}

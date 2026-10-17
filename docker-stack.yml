@@ -208,6 +208,11 @@ networks:
 # API:    groq_api_key, suno_api_key, redis_password
 # R2:     r2_account_id, r2_access_key_id, r2_secret_access_key
 # Kredi:  appstore_private_key, googleplay_service_account
+#         Create BOTH before the first deploy of this version: the stack is
+#         rejected while an external secret is missing, and Swarm rejects empty
+#         secret data, so use a non-empty placeholder (e.g. "unset") until the
+#         store is configured. The integration stays off while
+#         APPSTORE_BUNDLE_ID / GOOGLEPLAY_PACKAGE_NAME are empty.
 # =============================================================================
 secrets:
   groq_api_key:

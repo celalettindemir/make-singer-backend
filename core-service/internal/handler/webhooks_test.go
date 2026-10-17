@@ -180,9 +180,9 @@ func TestWebhookGooglePlay_ProcessErrorEnqueuesAnd200(t *testing.T) {
 	}
 }
 
-func TestWebhookGooglePlay_UndecodableBody400(t *testing.T) {
+func TestWebhookGooglePlay_UndecodableBodyAcked(t *testing.T) {
 	app := webhooksApp(&fakeProcessor{}, nil, fakePushAuth{}, &fakeQueue{})
-	if status, _ := postJSON(t, app, "/api/webhooks/googleplay", `{"message":{}}`, nil); status != 400 {
+	if status, _ := postJSON(t, app, "/api/webhooks/googleplay", `{"message":{}}`, nil); status != 200 {
 		t.Fatalf("status = %d", status)
 	}
 }
