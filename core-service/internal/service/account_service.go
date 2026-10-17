@@ -54,16 +54,30 @@ type SocialCleaner interface {
 	DeleteUserData(ctx context.Context, userID string) error
 }
 
+// CreditCleaner removes the user's credit data and anonymises their store
+// records (implemented by *credit.PostgresStore). It must be idempotent: the
+// delayed cleanup task runs it again.
+type CreditCleaner interface {
+	DeleteUserData(ctx context.Context, userID string) error
+}
+
 type AccountService struct {
 	identity      AccountDeleter
 	prefixDeleter client.PrefixDeleter // nil: R2 not configured
 	redis         *redis.Client
 	queue         Enqueuer
 	social        SocialCleaner // nil: no social module
+	credit        CreditCleaner // nil: no credit module
 }
 
 func NewAccountService(accountDeleter AccountDeleter, prefixDeleter client.PrefixDeleter, rdb *redis.Client, queue Enqueuer, social SocialCleaner) *AccountService {
 	return &AccountService{identity: accountDeleter, prefixDeleter: prefixDeleter, redis: rdb, queue: queue, social: social}
+}
+
+// WithCreditCleaner enables credit data cleanup and returns the service.
+func (s *AccountService) WithCreditCleaner(c CreditCleaner) *AccountService {
+	s.credit = c
+	return s
 }
 
 // Delete deletes the account and all its files. Once the identity record is
@@ -103,7 +117,7 @@ func (s *AccountService) Delete(ctx context.Context, userID string) error {
 	return nil
 }
 
-// Cleanup deletes all of the user's R2 prefixes and Discover data. Without R2
+// Cleanup deletes all of the user's R2 prefixes, Discover data and credit data. Without R2
 // the prefixes are skipped. If one prefix fails the others are still tried.
 func (s *AccountService) Cleanup(ctx context.Context, userID string) error {
 	prefixes, err := client.UserPrefixes(userID)
@@ -121,6 +135,11 @@ func (s *AccountService) Cleanup(ctx context.Context, userID string) error {
 	if s.social != nil {
 		if err := s.cleanupSocial(ctx, userID); err != nil {
 			errs = append(errs, err)
+		}
+	}
+	if s.credit != nil {
+		if err := s.credit.DeleteUserData(ctx, userID); err != nil {
+			errs = append(errs, fmt.Errorf("could not delete credit data: %w", err))
 		}
 	}
 	return errors.Join(errs...)

@@ -322,16 +322,34 @@ func TestStore_DeleteUserDataAnonymises(t *testing.T) {
 	s, u := newStore(t)
 	seed(t, s, u, 0, 10)
 	ctx := context.Background()
+	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, 10*time.Minute, 12, false); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO kredi.satin_alma (magaza, islem_id, kullanici_id, urun, kredi, durum, ortam)
-		VALUES ('apple', 't1', $1::uuid, 'credits.100', 100, 'ok', 'sandbox')`, u); err != nil {
+		VALUES ('apple', 't1-`+u+`', $1::uuid, 'credits.100', 100, 'ok', 'sandbox')`, u); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteUserData(ctx, u); err != nil {
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO kredi.abonelik (kullanici_id, magaza, orijinal_islem_id, urun, durum, donem_sonu, ortam)
+		VALUES ($1::uuid, 'apple', 'o1-`+u+`', 'pro.monthly', 'aktif', now(), 'sandbox')`, u); err != nil {
 		t.Fatal(err)
 	}
-	if n := count(t, s, `SELECT count(*) FROM kredi.satin_alma WHERE islem_id = 't1' AND kullanici_id IS NULL`); n != 1 {
+	for i := 0; i < 2; i++ { // the second run must be a no-op, not an error
+		if err := s.DeleteUserData(ctx, u); err != nil {
+			t.Fatalf("run %d: %v", i+1, err)
+		}
+	}
+	for _, table := range []string{"hesap", "hareket", "eylem"} {
+		if n := count(t, s, `SELECT count(*) FROM kredi.`+table+` WHERE kullanici_id = $1::uuid`, u); n != 0 {
+			t.Errorf("%s rows = %d, want 0", table, n)
+		}
+	}
+	if n := count(t, s, `SELECT count(*) FROM kredi.satin_alma WHERE islem_id = 't1-`+u+`' AND kullanici_id IS NULL`); n != 1 {
 		t.Errorf("anonymised purchases = %d, want 1", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM kredi.abonelik WHERE orijinal_islem_id = 'o1-`+u+`' AND kullanici_id IS NULL`); n != 1 {
+		t.Errorf("anonymised subscriptions = %d, want 1", n)
 	}
 }
 
