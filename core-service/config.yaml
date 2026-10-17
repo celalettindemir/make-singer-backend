@@ -22,6 +22,8 @@ ratelimit:
   public_per_min: 30 # GET /api/public/s/{slug}, per client IP
   public_web_per_min: 600 # same endpoint, shared by all web requests carrying X-Web-Anahtari
   public_web_visitor_per_min: 30 # per visitor (X-Ziyaretci-Ip) within the web requests, also checked; <=0 disables
+  purchases_per_min: 20 # RATELIMIT_PURCHASES_PER_MIN: POST /api/purchases/*, per user
+  webhooks_per_min: 120 # RATELIMIT_WEBHOOKS_PER_MIN: store webhooks, per IP
   # Cloudflare edge ranges whose CF-Connecting-IP is trusted for per-IP limits (comma-separated CIDRs).
   # Unset = the built-in Cloudflare list (clientip.DefaultCloudflareRanges); empty string disables the header.
   # cloudflare_ranges: ""
@@ -31,6 +33,34 @@ sosyal:
   web_anahtari: "" # Set via SOSYAL_WEB_ANAHTARI (or _FILE). Empty = web bypass disabled.
   stale_preparation_after: 1h # SOCIAL_STALE_PREPARATION_AFTER: preparing longer than this -> failed
   stale_sweep_interval: 15m # SOCIAL_STALE_SWEEP_INTERVAL: sweep period; <= 0 disables the scheduler
+
+# Credits
+credits:
+  enforce: false # CREDITS_ENFORCE: false = no deduction yet
+  welcome: 24 # CREDITS_WELCOME: one-time gift
+  plan_monthly: 300 # CREDITS_PLAN_MONTHLY: plan bucket size
+  costs:
+    render_mix: 12 # CREDITS_COST_RENDER_MIX
+    render_focus: 32 # CREDITS_COST_RENDER_FOCUS
+    render_stems: 62 # CREDITS_COST_RENDER_STEMS
+    lyrics_generate: 2 # CREDITS_COST_LYRICS_GENERATE
+    lyrics_rewrite: 1 # CREDITS_COST_LYRICS_REWRITE
+  refill_interval: 1h # CREDITS_REFILL_INTERVAL: annual-plan refill sweep period
+
+# Apple App Store
+appstore:
+  bundle_id: "" # APPSTORE_BUNDLE_ID
+  product_prefix: "" # APPSTORE_PRODUCT_PREFIX; empty = bundle_id + "."
+  issuer_id: "" # APPSTORE_ISSUER_ID
+  key_id: "" # APPSTORE_KEY_ID
+  private_key: "" # APPSTORE_PRIVATE_KEY (or _FILE): secret, never in this file
+
+# Google Play
+googleplay:
+  package_name: "" # GOOGLEPLAY_PACKAGE_NAME
+  service_account: "" # GOOGLEPLAY_SERVICE_ACCOUNT (or _FILE): secret JSON, never in this file
+  pubsub_audience: "" # GOOGLEPLAY_PUBSUB_AUDIENCE: expected OIDC audience of the RTDN push
+  pubsub_email: "" # GOOGLEPLAY_PUBSUB_EMAIL: expected service account of the push
 
 # Groq AI Configuration
 groq:

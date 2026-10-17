@@ -1,0 +1,96 @@
+package credit
+
+import (
+	"context"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/makeasinger/api/internal/identity"
+)
+
+// testPool connects to the local Postgres, applies the credit migrations
+// and empties the credit tables. The test is skipped when Postgres is absent
+// (same pattern and SAME default DSN as the social tests). TRUNCATE touches
+// only the kredi.* tables.
+func testPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	dsn := os.Getenv("KIMLIK_TEST_DB_URL")
+	if dsn == "" {
+		dsn = "postgres://postgres:kimlik-test-yerel@localhost:55432/postgres?sslmode=disable"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pool, err := identity.Connect(ctx, dsn)
+	if err != nil {
+		t.Skip("no local Postgres, skipping")
+	}
+	t.Cleanup(pool.Close)
+	if err := Migrate(context.Background(), pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := pool.Exec(context.Background(),
+		`TRUNCATE kredi.hesap, kredi.hareket, kredi.eylem, kredi.abonelik, kredi.satin_alma`); err != nil {
+		t.Fatalf("could not truncate the credit tables: %v", err)
+	}
+	return pool
+}
+
+func TestMigrations_EmbeddedAndSorted(t *testing.T) {
+	names, err := migrationNames()
+	if err != nil || len(names) == 0 {
+		t.Fatalf("no migrations: %v %v", names, err)
+	}
+	for i := 1; i < len(names); i++ {
+		if names[i-1] >= names[i] {
+			t.Errorf("migrations are not sorted: %q, %q", names[i-1], names[i])
+		}
+	}
+	content, err := migrationFS.ReadFile("migrations/001_kredi.sql")
+	if err != nil {
+		t.Fatalf("could not read 001_kredi.sql: %v", err)
+	}
+	for _, table := range []string{"kredi.hesap", "kredi.hareket", "kredi.eylem", "kredi.abonelik", "kredi.satin_alma"} {
+		if !strings.Contains(string(content), "CREATE TABLE IF NOT EXISTS "+table) {
+			t.Errorf("migration does not create %s", table)
+		}
+	}
+	if strings.Contains(string(content), "REFERENCES users") || strings.Contains(string(content), "public.users") {
+		t.Error("credit tables must not have an FK to public.users")
+	}
+}
+
+// Migrate must not fail when it runs twice (replicas start first).
+func TestMigrate_RunsTwiceAndCreatesTables(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("second Migrate: %v", err)
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = 'kredi'
+		  AND table_name IN ('hesap','hareket','eylem','abonelik','satin_alma','schema_migrations')`,
+	).Scan(&count); err != nil {
+		t.Fatalf("could not count the tables: %v", err)
+	}
+	if count != 6 {
+		t.Fatalf("expected 6 credit tables, got %d", count)
+	}
+}
+
+func TestCosts_Of(t *testing.T) {
+	c := Costs{RenderMix: 12, RenderFocus: 32, RenderStems: 62, LyricsGenerate: 2, LyricsRewrite: 1}
+	cases := map[Operation]int{
+		OpRenderMix: 12, OpRenderFocus: 32, OpRenderStems: 62,
+		OpLyricsGenerate: 2, OpLyricsRewrite: 1, Operation("bogus"): 0,
+	}
+	for op, want := range cases {
+		if got := c.Of(op); got != want {
+			t.Errorf("Of(%q) = %d, want %d", op, got, want)
+		}
+	}
+}

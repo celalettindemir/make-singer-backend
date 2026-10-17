@@ -496,3 +496,63 @@ func TestLoad_CloudflareRangesYAMLList(t *testing.T) {
 			len(cfg.RateLimit.Cloudflare), len(cfg.Auth.Cloudflare))
 	}
 }
+
+func TestLoad_CreditDefaults(t *testing.T) {
+	for _, k := range []string{
+		"CREDITS_ENFORCE", "CREDITS_WELCOME", "CREDITS_PLAN_MONTHLY", "CREDITS_REFILL_INTERVAL",
+		"CREDITS_COST_RENDER_MIX", "CREDITS_COST_RENDER_FOCUS", "CREDITS_COST_RENDER_STEMS",
+		"CREDITS_COST_LYRICS_GENERATE", "CREDITS_COST_LYRICS_REWRITE",
+		"APPSTORE_PRODUCT_PREFIX", "RATELIMIT_PURCHASES_PER_MIN", "RATELIMIT_WEBHOOKS_PER_MIN",
+	} {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
+	t.Setenv("APPSTORE_BUNDLE_ID", "com.example.app")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	c := cfg.Credits
+	if c.Enforce || c.Welcome != 24 || c.PlanMonthly != 300 {
+		t.Errorf("credits = %+v, want enforce=false welcome=24 plan=300", c)
+	}
+	want := CreditCosts{RenderMix: 12, RenderFocus: 32, RenderStems: 62, LyricsGenerate: 2, LyricsRewrite: 1}
+	if c.Costs != want {
+		t.Errorf("costs = %+v, want %+v", c.Costs, want)
+	}
+	if c.RefillInterval != time.Hour {
+		t.Errorf("RefillInterval = %v, want 1h", c.RefillInterval)
+	}
+	if cfg.RateLimit.PurchasesPerMin != 20 || cfg.RateLimit.WebhooksPerMin != 120 {
+		t.Errorf("purchases/webhooks = %d/%d, want 20/120", cfg.RateLimit.PurchasesPerMin, cfg.RateLimit.WebhooksPerMin)
+	}
+	if cfg.AppStore.ProductPrefix != "com.example.app." {
+		t.Errorf("ProductPrefix = %q, want com.example.app.", cfg.AppStore.ProductPrefix)
+	}
+}
+
+func TestLoad_StoreSecretsFromFiles(t *testing.T) {
+	dir := t.TempDir()
+	keyFile := dir + "/appstore_key"
+	saFile := dir + "/googleplay_sa"
+	if err := os.WriteFile(keyFile, []byte("  pem-icerik\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(saFile, []byte("{\"a\":1}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("APPSTORE_PRIVATE_KEY", "")
+	t.Setenv("APPSTORE_PRIVATE_KEY_FILE", keyFile)
+	t.Setenv("GOOGLEPLAY_SERVICE_ACCOUNT", "")
+	t.Setenv("GOOGLEPLAY_SERVICE_ACCOUNT_FILE", saFile)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.AppStore.PrivateKey != "pem-icerik" {
+		t.Errorf("PrivateKey = %q, want pem-icerik", cfg.AppStore.PrivateKey)
+	}
+	if cfg.GooglePlay.ServiceAccountJSON != `{"a":1}` {
+		t.Errorf("ServiceAccountJSON = %q", cfg.GooglePlay.ServiceAccountJSON)
+	}
+}

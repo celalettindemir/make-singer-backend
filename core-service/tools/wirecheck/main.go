@@ -41,6 +41,7 @@ var assets = map[string]string{
 	"kimlik-template-cakisma": "internal/identity/sablonlar/cakisma.html",
 	"kimlik-template-giris":   "internal/identity/sablonlar/giris.html",
 	"kimlik-template-kayit":   "internal/identity/sablonlar/kayit.html",
+	"kredi-migration-001":     "internal/credit/migrations/001_kredi.sql",
 	"sosyal-migration-001":    "internal/social/migrations/001_sosyal.sql",
 	"sosyal-migration-002":    "internal/social/migrations/002_hazirlik_baslangic.sql",
 	"config-yaml":             "config.yaml",

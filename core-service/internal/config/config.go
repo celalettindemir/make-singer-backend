@@ -40,6 +40,10 @@ type Config struct {
 	Audio     AudioConfig
 	Auth      AuthConfig
 	Social    SocialConfig
+
+	Credits    CreditConfig
+	AppStore   AppStoreConfig
+	GooglePlay GooglePlayConfig
 }
 
 type ServerConfig struct {
@@ -82,6 +86,10 @@ type RateLimitConfig struct {
 	// server requests (X-Web-Anahtari + X-Ziyaretci-Ip), applied in
 	// addition to PublicWebPerMin. <= 0 disables the per-visitor bucket.
 	PublicWebVisitorPerMin int
+	// PurchasesPerMin is the per-minute per-user limit for POST /api/purchases/*.
+	PurchasesPerMin int
+	// WebhooksPerMin is the per-minute per-IP limit for the store webhooks.
+	WebhooksPerMin int
 	// Cloudflare is the parsed ratelimit.cloudflare_ranges list: the edge
 	// networks whose CF-Connecting-IP header is trusted for per-IP limits
 	// (see internal/clientip). Empty disables the header.
@@ -101,6 +109,50 @@ type SocialConfig struct {
 	// StaleSweepInterval is how often the sweep runs; <= 0 disables the
 	// scheduler.
 	StaleSweepInterval time.Duration
+}
+
+// CreditCosts is the credit price of each billable operation. It mirrors
+// credit.Costs; main converts, so config never imports internal/credit.
+type CreditCosts struct {
+	RenderMix      int
+	RenderFocus    int
+	RenderStems    int
+	LyricsGenerate int
+	LyricsRewrite  int
+}
+
+// CreditConfig is the configuration of the credit system.
+type CreditConfig struct {
+	// Enforce turns credit deduction on; false = metering only.
+	Enforce bool
+	// Welcome is the one-time gift granted to a new account.
+	Welcome int
+	// PlanMonthly is the plan bucket size a subscription refills to.
+	PlanMonthly int
+	Costs       CreditCosts
+	// RefillInterval is how often the annual-plan refill scheduler runs.
+	RefillInterval time.Duration
+}
+
+// AppStoreConfig is the Apple App Store configuration.
+type AppStoreConfig struct {
+	BundleID string
+	// ProductPrefix is the prefix of this app's product ids; defaults to
+	// BundleID + ".".
+	ProductPrefix string
+	IssuerID      string
+	KeyID         string
+	// PrivateKey is the App Store Connect API .p8 key (secret).
+	PrivateKey string
+}
+
+// GooglePlayConfig is the Google Play configuration.
+type GooglePlayConfig struct {
+	PackageName string
+	// ServiceAccountJSON is the service account key (secret).
+	ServiceAccountJSON string
+	PubSubAudience     string
+	PubSubEmail        string
 }
 
 type GroqConfig struct {
@@ -222,6 +274,8 @@ func Load() (*Config, error) {
 	readSecret("AUTH_SIGNING_KEY")
 	readSecret("AUTH_CRYPTO_KEY")
 	readSecret("SOSYAL_WEB_ANAHTARI")
+	readSecret("APPSTORE_PRIVATE_KEY")
+	readSecret("GOOGLEPLAY_SERVICE_ACCOUNT")
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
@@ -284,6 +338,26 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("ratelimit.public_web_per_min", "RATELIMIT_PUBLIC_WEB_PER_MIN")
 	_ = viper.BindEnv("ratelimit.public_web_visitor_per_min", "RATELIMIT_PUBLIC_WEB_VISITOR_PER_MIN")
 	_ = viper.BindEnv("ratelimit.cloudflare_ranges", "RATELIMIT_CLOUDFLARE_RANGES")
+	_ = viper.BindEnv("ratelimit.purchases_per_min", "RATELIMIT_PURCHASES_PER_MIN")
+	_ = viper.BindEnv("ratelimit.webhooks_per_min", "RATELIMIT_WEBHOOKS_PER_MIN")
+	_ = viper.BindEnv("credits.enforce", "CREDITS_ENFORCE")
+	_ = viper.BindEnv("credits.welcome", "CREDITS_WELCOME")
+	_ = viper.BindEnv("credits.plan_monthly", "CREDITS_PLAN_MONTHLY")
+	_ = viper.BindEnv("credits.costs.render_mix", "CREDITS_COST_RENDER_MIX")
+	_ = viper.BindEnv("credits.costs.render_focus", "CREDITS_COST_RENDER_FOCUS")
+	_ = viper.BindEnv("credits.costs.render_stems", "CREDITS_COST_RENDER_STEMS")
+	_ = viper.BindEnv("credits.costs.lyrics_generate", "CREDITS_COST_LYRICS_GENERATE")
+	_ = viper.BindEnv("credits.costs.lyrics_rewrite", "CREDITS_COST_LYRICS_REWRITE")
+	_ = viper.BindEnv("credits.refill_interval", "CREDITS_REFILL_INTERVAL")
+	_ = viper.BindEnv("appstore.bundle_id", "APPSTORE_BUNDLE_ID")
+	_ = viper.BindEnv("appstore.product_prefix", "APPSTORE_PRODUCT_PREFIX")
+	_ = viper.BindEnv("appstore.issuer_id", "APPSTORE_ISSUER_ID")
+	_ = viper.BindEnv("appstore.key_id", "APPSTORE_KEY_ID")
+	_ = viper.BindEnv("appstore.private_key", "APPSTORE_PRIVATE_KEY")
+	_ = viper.BindEnv("googleplay.package_name", "GOOGLEPLAY_PACKAGE_NAME")
+	_ = viper.BindEnv("googleplay.service_account", "GOOGLEPLAY_SERVICE_ACCOUNT")
+	_ = viper.BindEnv("googleplay.pubsub_audience", "GOOGLEPLAY_PUBSUB_AUDIENCE")
+	_ = viper.BindEnv("googleplay.pubsub_email", "GOOGLEPLAY_PUBSUB_EMAIL")
 	_ = viper.BindEnv("sosyal.web_anahtari", "SOSYAL_WEB_ANAHTARI")
 	_ = viper.BindEnv("sosyal.stale_preparation_after", "SOCIAL_STALE_PREPARATION_AFTER")
 	_ = viper.BindEnv("sosyal.stale_sweep_interval", "SOCIAL_STALE_SWEEP_INTERVAL")
@@ -308,6 +382,17 @@ func Load() (*Config, error) {
 	viper.SetDefault("ratelimit.public_per_min", 30)
 	viper.SetDefault("ratelimit.public_web_per_min", 600)
 	viper.SetDefault("ratelimit.public_web_visitor_per_min", 30)
+	viper.SetDefault("ratelimit.purchases_per_min", 20)
+	viper.SetDefault("ratelimit.webhooks_per_min", 120)
+	viper.SetDefault("credits.enforce", false)
+	viper.SetDefault("credits.welcome", 24)
+	viper.SetDefault("credits.plan_monthly", 300)
+	viper.SetDefault("credits.costs.render_mix", 12)
+	viper.SetDefault("credits.costs.render_focus", 32)
+	viper.SetDefault("credits.costs.render_stems", 62)
+	viper.SetDefault("credits.costs.lyrics_generate", 2)
+	viper.SetDefault("credits.costs.lyrics_rewrite", 1)
+	viper.SetDefault("credits.refill_interval", "1h")
 	viper.SetDefault("sosyal.stale_preparation_after", "1h")
 	viper.SetDefault("sosyal.stale_sweep_interval", "15m")
 	viper.SetDefault("ratelimit.cloudflare_ranges", strings.Join(clientip.DefaultCloudflareRanges, ","))
@@ -408,6 +493,8 @@ func Load() (*Config, error) {
 			PublicPerMin:             viper.GetInt("ratelimit.public_per_min"),
 			PublicWebPerMin:          viper.GetInt("ratelimit.public_web_per_min"),
 			PublicWebVisitorPerMin:   viper.GetInt("ratelimit.public_web_visitor_per_min"),
+			PurchasesPerMin:          viper.GetInt("ratelimit.purchases_per_min"),
+			WebhooksPerMin:           viper.GetInt("ratelimit.webhooks_per_min"),
 		},
 		Groq: GroqConfig{
 			APIKey:  viper.GetString("groq.api_key"),
@@ -460,6 +547,38 @@ func Load() (*Config, error) {
 			StalePreparationAfter: viper.GetDuration("sosyal.stale_preparation_after"),
 			StaleSweepInterval:    viper.GetDuration("sosyal.stale_sweep_interval"),
 		},
+		Credits: CreditConfig{
+			Enforce:     viper.GetBool("credits.enforce"),
+			Welcome:     viper.GetInt("credits.welcome"),
+			PlanMonthly: viper.GetInt("credits.plan_monthly"),
+			Costs: CreditCosts{
+				RenderMix:      viper.GetInt("credits.costs.render_mix"),
+				RenderFocus:    viper.GetInt("credits.costs.render_focus"),
+				RenderStems:    viper.GetInt("credits.costs.render_stems"),
+				LyricsGenerate: viper.GetInt("credits.costs.lyrics_generate"),
+				LyricsRewrite:  viper.GetInt("credits.costs.lyrics_rewrite"),
+			},
+			RefillInterval: viper.GetDuration("credits.refill_interval"),
+		},
+		AppStore: AppStoreConfig{
+			BundleID:      viper.GetString("appstore.bundle_id"),
+			ProductPrefix: viper.GetString("appstore.product_prefix"),
+			IssuerID:      viper.GetString("appstore.issuer_id"),
+			KeyID:         viper.GetString("appstore.key_id"),
+			PrivateKey:    viper.GetString("appstore.private_key"),
+		},
+		GooglePlay: GooglePlayConfig{
+			PackageName:        viper.GetString("googleplay.package_name"),
+			ServiceAccountJSON: viper.GetString("googleplay.service_account"),
+			PubSubAudience:     viper.GetString("googleplay.pubsub_audience"),
+			PubSubEmail:        viper.GetString("googleplay.pubsub_email"),
+		},
+	}
+
+	// viper.SetDefault does not apply to a present-but-empty value, and the
+	// default depends on another key, so the product prefix is derived here.
+	if cfg.AppStore.ProductPrefix == "" && cfg.AppStore.BundleID != "" {
+		cfg.AppStore.ProductPrefix = cfg.AppStore.BundleID + "."
 	}
 
 	// An env var set to the empty string must DISABLE the Cloudflare
