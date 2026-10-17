@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
+	"github.com/makeasinger/api/internal/credit"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/redis/go-redis/v9"
 )
@@ -25,6 +27,7 @@ type RenderService struct {
 	asynqClient *asynq.Client
 	r2Client    client.StorageClient
 	r2Cfg       *config.R2Config
+	credits     credit.Spender // nil: no credit accounting
 }
 
 func NewRenderService(redisClient *redis.Client, asynqClient *asynq.Client, r2Client client.StorageClient, r2Cfg *config.R2Config) *RenderService {
@@ -33,6 +36,41 @@ func NewRenderService(redisClient *redis.Client, asynqClient *asynq.Client, r2Cl
 		asynqClient: asynqClient,
 		r2Client:    r2Client,
 		r2Cfg:       r2Cfg,
+	}
+}
+
+// WithCredits turns on credit accounting: StartRender debits, and a cancel
+// while the job is still queued refunds. A nil spender keeps the service
+// free of credits.
+func (s *RenderService) WithCredits(sp credit.Spender) *RenderService {
+	s.credits = sp
+	return s
+}
+
+// RenderOperation maps a stem mode to its credit operation. An empty or
+// unknown mode is mix (the cheap side), like stemPlan in the worker.
+func RenderOperation(mode model.StemMode) credit.Operation {
+	switch mode {
+	case model.StemModeStems:
+		return credit.OpRenderStems
+	case model.StemModeFocus:
+		return credit.OpRenderFocus
+	default:
+		return credit.OpRenderMix
+	}
+}
+
+// refundJob reverses a render debit. It uses a detached context so a
+// canceled request cannot skip the refund; a failure is logged, never
+// returned (the ledger refund is idempotent per jobId, so it can be redone).
+func (s *RenderService) refundJob(ctx context.Context, op credit.Operation, jobID string) {
+	if s.credits == nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := s.credits.Refund(rctx, op, jobID); err != nil {
+		log.Printf("Job %s: could not refund %s: %v", jobID, op, err)
 	}
 }
 
@@ -108,14 +146,27 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 
 	job.Payload = payloadBytes
 
+	// Debit at the start (reservation); every failure below refunds it.
+	// An *credit.InsufficientError is returned as is: no job, no enqueue.
+	op := RenderOperation(stemMode)
+	balance := 0
+	if s.credits != nil {
+		balance, err = s.credits.Spend(ctx, userID, op, jobID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// Save job to Redis
 	if err := s.saveJob(ctx, job); err != nil {
+		s.refundJob(ctx, op, jobID)
 		return nil, fmt.Errorf("failed to save job: %w", err)
 	}
 
 	// Create Asynq task
 	task, err := newRenderTask(jobID, payloadBytes)
 	if err != nil {
+		s.refundJob(ctx, op, jobID)
 		return nil, fmt.Errorf("failed to create task: %w", err)
 	}
 
@@ -126,6 +177,7 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 		asynq.Retention(24*time.Hour),
 	)
 	if err != nil {
+		s.refundJob(ctx, op, jobID)
 		return nil, fmt.Errorf("failed to enqueue task: %w", err)
 	}
 
@@ -134,7 +186,18 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 		Status:            model.JobStatusQueued,
 		EstimatedDuration: 45, // seconds - this would be calculated based on song length
 		CreatedAt:         now,
+		Balance:           balance,
 	}, nil
+}
+
+// JobStatus returns a job's current status without an owner check (called by
+// the worker).
+func (s *RenderService) JobStatus(ctx context.Context, jobID string) (model.JobStatus, error) {
+	job, err := s.getJob(ctx, jobID)
+	if err != nil {
+		return "", err
+	}
+	return job.Status, nil
 }
 
 // GetStatus returns the current status of a render job
@@ -187,12 +250,22 @@ func (s *RenderService) CancelRender(ctx context.Context, userID, jobID string) 
 		return nil, ErrJobAlreadyCompleted
 	}
 
+	// Only a job that never left the queue is refunded: no Suno call was
+	// made. A running job keeps its charge (6-G2).
+	wasQueued := job.Status == model.JobStatusQueued
+
 	job.Status = model.JobStatusCanceled
 	now := time.Now()
 	job.CompletedAt = &now
 
 	if err := s.saveJob(ctx, job); err != nil {
 		return nil, err
+	}
+	if wasQueued {
+		// The stored job keeps no stem mode (Job.Payload is not persisted),
+		// and the ledger refund is keyed by jobId within the render family,
+		// so any render operation names the right debit.
+		s.refundJob(ctx, credit.OpRenderMix, jobID)
 	}
 
 	return &model.RenderCancelResponse{

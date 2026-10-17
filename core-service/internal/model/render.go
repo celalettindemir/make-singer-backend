@@ -97,6 +97,7 @@ type RenderStartResponse struct {
 	Status            JobStatus `json:"status"`
 	EstimatedDuration int       `json:"estimatedDuration"`
 	CreatedAt         time.Time `json:"createdAt"`
+	Balance           int       `json:"balance"`
 }
 
 // RenderStatusResponse represents the status of a render job

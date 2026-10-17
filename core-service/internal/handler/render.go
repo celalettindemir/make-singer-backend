@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/credit"
 	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
@@ -33,6 +34,7 @@ func NewRenderHandler(svc *service.RenderService, v *validator.Validate) *Render
 // @Success      202 {object} model.RenderStartResponse
 // @Failure      400 {object} response.ErrorResponse
 // @Failure      401 {object} response.ErrorResponse
+// @Failure      402 {object} response.ErrorResponse
 // @Failure      429 {object} response.ErrorResponse
 // @Failure      500 {object} response.ErrorResponse
 // @Security     BearerAuth
@@ -56,6 +58,10 @@ func (h *RenderHandler) Start(c *fiber.Ctx) error {
 	if err != nil {
 		if errors.Is(err, model.ErrInvalidStemSettings) {
 			return response.ValidationError(c, i18n.KeyStemSettingsInvalid, nil)
+		}
+		var insufficient *credit.InsufficientError
+		if errors.As(err, &insufficient) {
+			return response.InsufficientCredits(c, insufficient.Required, insufficient.Balance)
 		}
 		return internalError(c, err)
 	}

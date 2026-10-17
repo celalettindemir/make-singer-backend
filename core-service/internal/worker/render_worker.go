@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/credit"
 	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
@@ -59,6 +60,8 @@ type RenderWorker struct {
 	downloader      *http.Client
 	pollInterval    time.Duration
 	deletionChecker deletionmark.Checker // nil: no check
+	credits         credit.Spender       // nil: no credit accounting
+	isLastAttempt   func(context.Context) bool
 }
 
 // NewRenderWorker creates a new render worker
@@ -71,7 +74,16 @@ func NewRenderWorker(renderService *service.RenderService, music client.MusicGen
 		downloader:      &http.Client{Timeout: 30 * time.Second},
 		pollInterval:    5 * time.Second,
 		deletionChecker: deletionChecker,
+		isLastAttempt:   asynqIsLastAttempt,
 	}
+}
+
+// WithCredits turns on credit accounting: the final failure of a job and a
+// job canceled before its first attempt refund the render debit. A nil
+// spender keeps the worker free of credits.
+func (w *RenderWorker) WithCredits(s credit.Spender) *RenderWorker {
+	w.credits = s
+	return w
 }
 
 // ProcessTask handles render task processing
@@ -93,39 +105,57 @@ func (w *RenderWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		w.failJob(ctx, jobID, "Invalid payload")
 		return fmt.Errorf("failed to unmarshal render payload: %w", err)
 	}
+	op := service.RenderOperation(payload.StemMode)
+
+	// A job canceled while queued must not reach Suno. Its cancel already
+	// refunded; the refund here is a no-op then (one row per jobId), and it
+	// covers a cancel whose own refund failed.
+	status, err := w.renderService.JobStatus(ctx, jobID)
+	if err != nil {
+		log.Printf("Job %s: could not read the status: %v", jobID, err)
+		w.failFinal(ctx, jobID, op, "Render failed", err)
+		return fmt.Errorf("could not read the job status: %w", err)
+	}
+	if status == model.JobStatusCanceled {
+		log.Printf("Job %s was canceled before it started; skipping", jobID)
+		w.refund(ctx, op, jobID)
+		return nil
+	}
 
 	// Check if Suno client is configured
 	if w.music == nil || !w.music.IsConfigured() {
-		return w.processWithMock(ctx, jobID, &payload)
+		return w.processWithMock(ctx, jobID, op, &payload)
 	}
 
-	return w.processWithSuno(ctx, jobID, &payload)
+	return w.processWithSuno(ctx, jobID, op, &payload)
 }
 
 // processWithSuno handles real rendering using Suno API
-func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, payload *model.RenderJobPayload) error {
+func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, op credit.Operation, payload *model.RenderJobPayload) error {
 	result, err := w.generateWithSuno(ctx, payload, func(p int, step string) {
 		w.updateProgress(ctx, jobID, p, step)
 	})
 	if err != nil {
 		log.Printf("Job %s: render failed: %v", jobID, err)
-		w.failJob(ctx, jobID, "Render failed")
+		w.failFinal(ctx, jobID, op, "Render failed", err)
 		return err
 	}
 
 	if err := w.renderService.CompleteJob(ctx, jobID, result); err != nil {
-		w.failJob(ctx, jobID, "Failed to save result")
 		// The Suno fee was paid; a retry would rerun the job and charge again.
-		return fmt.Errorf("could not save the result: %w: %w", err, asynq.SkipRetry)
+		err = fmt.Errorf("could not save the result: %w: %w", err, asynq.SkipRetry)
+		w.failFinal(ctx, jobID, op, "Failed to save result", err)
+		return err
 	}
 
 	// URLs are generated fresh for publishing; the record keeps the key.
 	resp, err := w.renderService.BuildResult(ctx, result)
 	if err != nil {
 		log.Printf("Job %s: could not generate the stem URL: %v", jobID, err)
-		w.failJob(ctx, jobID, "Could not generate the stem URL")
 		// Same reason: the paid generation finished and a retry would charge again.
-		return fmt.Errorf("could not generate the stem URL: %w: %w", err, asynq.SkipRetry)
+		err = fmt.Errorf("could not generate the stem URL: %w: %w", err, asynq.SkipRetry)
+		w.failFinal(ctx, jobID, op, "Could not generate the stem URL", err)
+		return err
 	}
 	w.hub.BroadcastComplete(jobID, resp)
 	log.Printf("Render job %s completed", jobID)
@@ -276,7 +306,7 @@ func stemPlan(payload *model.RenderJobPayload) (model.StemMode, string, error) {
 }
 
 // processWithMock handles rendering with mock data for development
-func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, payload *model.RenderJobPayload) error {
+func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, op credit.Operation, payload *model.RenderJobPayload) error {
 	steps := []struct {
 		progress int
 		step     string
@@ -306,19 +336,20 @@ func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, payloa
 
 	result, err := w.generateMockResult(payload)
 	if err != nil {
-		w.failJob(ctx, jobID, "Invalid job owner or project")
-		return fmt.Errorf("mock result: %w: %w", err, asynq.SkipRetry)
+		err = fmt.Errorf("mock result: %w: %w", err, asynq.SkipRetry)
+		w.failFinal(ctx, jobID, op, "Invalid job owner or project", err)
+		return err
 	}
 
 	if err := w.renderService.CompleteJob(ctx, jobID, result); err != nil {
-		w.failJob(ctx, jobID, "Failed to save result")
+		w.failFinal(ctx, jobID, op, "Failed to save result", err)
 		return err
 	}
 
 	resp, err := w.renderService.BuildResult(ctx, result)
 	if err != nil {
 		log.Printf("Job %s: could not generate the stem URL: %v", jobID, err)
-		w.failJob(ctx, jobID, "Could not generate the stem URL")
+		w.failFinal(ctx, jobID, op, "Could not generate the stem URL", err)
 		return err
 	}
 	w.hub.BroadcastComplete(jobID, resp)
@@ -422,6 +453,41 @@ func (w *RenderWorker) failJob(ctx context.Context, jobID, errMsg string) {
 		log.Printf("Failed to mark job as failed: %v", err)
 	}
 	w.hub.BroadcastError(jobID, "RENDER_FAILED", errMsg)
+}
+
+// failFinal ends a failed attempt. Only the job's FINAL failure (SkipRetry,
+// or asynq's last attempt) writes the failed status and refunds; an
+// intermediate failure leaves the job as it is, so a later retry that
+// succeeds is not a free render and a visible "failed" always comes with its
+// refund (6-G16).
+func (w *RenderWorker) failFinal(ctx context.Context, jobID string, op credit.Operation, errMsg string, err error) {
+	if !errors.Is(err, asynq.SkipRetry) && !w.lastAttempt(ctx) {
+		log.Printf("Job %s: attempt failed, will retry: %v", jobID, err)
+		return
+	}
+	w.failJob(ctx, jobID, errMsg)
+	w.refund(ctx, op, jobID)
+}
+
+func (w *RenderWorker) lastAttempt(ctx context.Context) bool {
+	if w.isLastAttempt == nil {
+		return asynqIsLastAttempt(ctx)
+	}
+	return w.isLastAttempt(ctx)
+}
+
+// refund reverses the render debit on a detached context, so a shutting-down
+// worker still refunds. A failure is logged, never returned: returning it
+// would retry the whole render for a bookkeeping error.
+func (w *RenderWorker) refund(ctx context.Context, op credit.Operation, jobID string) {
+	if w.credits == nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := w.credits.Refund(rctx, op, jobID); err != nil {
+		log.Printf("Job %s: could not refund %s: %v", jobID, op, err)
+	}
 }
 
 func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) (*model.RenderResultRecord, error) {
