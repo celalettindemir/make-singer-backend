@@ -332,3 +332,43 @@ func TestRenderWorker_MockCanceledBeforeClaimRefunds(t *testing.T) {
 		t.Errorf("status = %s, want canceled (the mock must not run)", st)
 	}
 }
+
+func TestRenderWorker_RedeliveredFinishedJobNoRefundNoSuno(t *testing.T) {
+	for _, st := range []model.JobStatus{model.JobStatusSucceeded, model.JobStatusFailed} {
+		for _, mock := range []bool{false, true} {
+			s := newCreditSetup(t, st, &fakeStorage{})
+			if mock {
+				s.w.music = nil
+			}
+			if err := s.w.ProcessTask(context.Background(), renderTask(t, model.StemModeMix)); err != nil {
+				t.Fatalf("%s mock=%v: ProcessTask: %v", st, mock, err)
+			}
+			if s.suno.generateCalls != 0 {
+				t.Errorf("%s mock=%v: GenerateMusic called", st, mock)
+			}
+			if len(s.fake.Refunds) != 0 {
+				t.Errorf("%s mock=%v: refunds = %+v, want none", st, mock, s.fake.Refunds)
+			}
+			if got := jobStatus(t, s.svc); got != st {
+				t.Errorf("%s mock=%v: status changed to %s", st, mock, got)
+			}
+		}
+	}
+}
+
+// TestRenderWorker_FinishedBeforeClaimNoRefund ends the job after the attempt-start check, so the
+// claim sees a finished job.
+func TestRenderWorker_FinishedBeforeClaimNoRefund(t *testing.T) {
+	s := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
+	s.w.deletionChecker = cancelBeforeClaim{cancel: func() {
+		if err := s.svc.CompleteJob(context.Background(), "is1", map[string]string{}); err != nil {
+			t.Errorf("CompleteJob: %v", err)
+		}
+	}}
+	if err := s.w.ProcessTask(context.Background(), renderTask(t, model.StemModeMix)); err != nil {
+		t.Fatalf("ProcessTask: %v", err)
+	}
+	if s.suno.generateCalls != 0 || len(s.fake.Refunds) != 0 {
+		t.Errorf("generateCalls=%d refunds=%+v, want 0 and none", s.suno.generateCalls, s.fake.Refunds)
+	}
+}

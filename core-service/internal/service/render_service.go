@@ -309,15 +309,14 @@ func (s *RenderService) UpdateJobProgress(ctx context.Context, jobID string, pro
 }
 
 // ClaimRun is the worker's last check before the paid Suno call. It returns
-// false if the job was canceled; otherwise it marks the job running, which
+// false (with the status it saw) if the job was canceled or is already finished; otherwise it marks the job running, which
 // makes a later cancel a running-cancel (no refund). Both outcomes are decided
 // in one transaction against CancelRender.
-func (s *RenderService) ClaimRun(ctx context.Context, jobID string) (bool, error) {
-	claimed := false
-	err := s.updateJob(ctx, jobID, func(job *model.Job) error {
+func (s *RenderService) ClaimRun(ctx context.Context, jobID string) (claimed bool, status model.JobStatus, err error) {
+	err = s.updateJob(ctx, jobID, func(job *model.Job) error {
 		// The callback re-runs on a WATCH conflict: decide from scratch each
 		// time, so a stale true from an earlier read cannot survive.
-		claimed = false
+		claimed, status = false, job.Status
 		switch job.Status {
 		case model.JobStatusCanceled, model.JobStatusFailed, model.JobStatusSucceeded:
 			return errSkipWrite
@@ -328,9 +327,9 @@ func (s *RenderService) ClaimRun(ctx context.Context, jobID string) (bool, error
 		return nil
 	})
 	if err != nil && !errors.Is(err, errSkipWrite) {
-		return false, err
+		return false, "", err
 	}
-	return claimed, nil
+	return claimed, status, nil
 }
 
 func markRunning(job *model.Job) {

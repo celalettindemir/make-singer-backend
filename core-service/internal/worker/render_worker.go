@@ -127,9 +127,15 @@ func (w *RenderWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		w.failFinal(ctx, jobID, op, "Render failed", err)
 		return fmt.Errorf("could not read the job status: %w", err)
 	}
-	if status == model.JobStatusCanceled {
+	switch status {
+	case model.JobStatusCanceled:
 		log.Printf("Job %s was canceled before it started; skipping", jobID)
 		w.refund(ctx, op, jobID)
+		return nil
+	case model.JobStatusSucceeded, model.JobStatusFailed:
+		// A redelivered task of a finished job (e.g. a crash after
+		// CompleteJob, before the ack): nothing to run, nothing to refund.
+		log.Printf("Job %s is already %s; skipping the redelivery", jobID, status)
 		return nil
 	}
 
@@ -147,14 +153,23 @@ func (w *RenderWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 
 // processWithSuno handles real rendering using Suno API
 func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, op credit.Operation, payload *model.RenderJobPayload) error {
+	var claimStatus model.JobStatus
 	result, err := w.generateWithSuno(ctx, payload, func(p int, step string) {
 		w.updateProgress(ctx, jobID, p, step)
 	}, func() (bool, error) {
-		return w.renderService.ClaimRun(ctx, jobID)
+		claimed, st, err := w.renderService.ClaimRun(ctx, jobID)
+		claimStatus = st
+		return claimed, err
 	})
 	if errors.Is(err, errJobCanceled) {
-		log.Printf("Job %s was canceled before the Suno call; skipping", jobID)
-		w.refund(ctx, op, jobID)
+		// Only a canceled job is refunded; a job that finished meanwhile
+		// (succeeded/failed) already has its outcome.
+		if claimStatus == model.JobStatusCanceled {
+			log.Printf("Job %s was canceled before the Suno call; skipping", jobID)
+			w.refund(ctx, op, jobID)
+		} else {
+			log.Printf("Job %s is already %s; skipping", jobID, claimStatus)
+		}
 		return nil
 	}
 	if err != nil {
@@ -353,14 +368,18 @@ func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, op cre
 		{95, "Finalizing...", 1 * time.Second},
 	}
 
-	claimed, err := w.renderService.ClaimRun(ctx, jobID)
+	claimed, claimStatus, err := w.renderService.ClaimRun(ctx, jobID)
 	if err != nil {
 		w.failFinal(ctx, jobID, op, "Render failed", err)
 		return fmt.Errorf("could not claim the job: %w", err)
 	}
 	if !claimed {
-		log.Printf("Job %s was canceled before it started; skipping (mock)", jobID)
-		w.refund(ctx, op, jobID)
+		if claimStatus == model.JobStatusCanceled {
+			log.Printf("Job %s was canceled before it started; skipping (mock)", jobID)
+			w.refund(ctx, op, jobID)
+		} else {
+			log.Printf("Job %s is already %s; skipping (mock)", jobID, claimStatus)
+		}
 		return nil
 	}
 

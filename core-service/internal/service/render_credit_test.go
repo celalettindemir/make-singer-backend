@@ -207,7 +207,7 @@ func TestClaimRun(t *testing.T) {
 	s := NewRenderService(rdb, nil, nil, testR2Cfg())
 
 	storeRenderJob(t, rdb, model.JobStatusQueued)
-	ok, err := s.ClaimRun(context.Background(), "is1")
+	ok, _, err := s.ClaimRun(context.Background(), "is1")
 	if err != nil || !ok {
 		t.Fatalf("claim queued = %v, %v; want true", ok, err)
 	}
@@ -216,8 +216,8 @@ func TestClaimRun(t *testing.T) {
 	}
 
 	storeRenderJob(t, rdb, model.JobStatusCanceled)
-	ok, err = s.ClaimRun(context.Background(), "is1")
-	if err != nil || ok {
+	ok, st, err := s.ClaimRun(context.Background(), "is1")
+	if err != nil || ok || st != model.JobStatusCanceled {
 		t.Fatalf("claim canceled = %v, %v; want false", ok, err)
 	}
 	if st, _ := s.JobStatus(context.Background(), "is1"); st != model.JobStatusCanceled {
@@ -233,13 +233,13 @@ func TestCancelThenClaim_NoRunAfterQueuedCancelRefund(t *testing.T) {
 	if _, err := s.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := s.ClaimRun(context.Background(), "is1"); ok {
+	if ok, _, _ := s.ClaimRun(context.Background(), "is1"); ok {
 		t.Error("a canceled job was claimed")
 	}
 	// Running then cancel: no refund.
 	fake.Refunds = nil
 	storeRenderJob(t, rdb, model.JobStatusQueued)
-	if ok, _ := s.ClaimRun(context.Background(), "is1"); !ok {
+	if ok, _, _ := s.ClaimRun(context.Background(), "is1"); !ok {
 		t.Fatal("claim failed")
 	}
 	if _, err := s.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
@@ -301,7 +301,7 @@ func TestClaimRun_ConflictWithCancelReturnsFalse(t *testing.T) {
 		}
 	}
 
-	ok, err := s.ClaimRun(context.Background(), "is1")
+	ok, _, err := s.ClaimRun(context.Background(), "is1")
 	if err != nil {
 		t.Fatalf("ClaimRun: %v", err)
 	}
@@ -321,8 +321,8 @@ func TestClaimRun_FinishedJobsNotClaimed(t *testing.T) {
 	s := NewRenderService(rdb, nil, nil, testR2Cfg())
 	for _, st := range []model.JobStatus{model.JobStatusFailed, model.JobStatusSucceeded} {
 		storeRenderJob(t, rdb, st)
-		if ok, err := s.ClaimRun(context.Background(), "is1"); err != nil || ok {
-			t.Errorf("claim %s = %v, %v; want false", st, ok, err)
+		if ok, seen, err := s.ClaimRun(context.Background(), "is1"); err != nil || ok || seen != st {
+			t.Errorf("claim %s = %v, %v, %v; want false with the status", st, ok, seen, err)
 		}
 	}
 }
