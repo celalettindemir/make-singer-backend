@@ -110,6 +110,8 @@ func workerWithChecker(s *fakeSuno, d client.StorageClient, h deletionmark.Check
 
 func noProgress(int, string) {}
 
+func claimOK() (bool, error) { return true, nil }
+
 func TestRenderWorker_SunoHappyPath(t *testing.T) {
 	srv := audioServer(t)
 	s := &fakeSuno{
@@ -121,7 +123,7 @@ func TestRenderWorker_SunoHappyPath(t *testing.T) {
 	}
 	d := &fakeStorage{}
 
-	res, err := testWorker(s, d).generateWithSuno(context.Background(), testPayload(), noProgress)
+	res, err := testWorker(s, d).generateWithSuno(context.Background(), testPayload(), noProgress, claimOK)
 	if err != nil {
 		t.Fatalf("generateWithSuno: %v", err)
 	}
@@ -156,7 +158,7 @@ func TestRenderWorker_SunoHappyPath(t *testing.T) {
 
 func TestRenderWorker_SunoGenerateRejectionIsRetryable(t *testing.T) {
 	s := &fakeSuno{generateErr: errors.New("no credits")}
-	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), testPayload(), noProgress)
+	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), testPayload(), noProgress, claimOK)
 	if err == nil || errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("an error before the charge must be retryable, got: %v", err)
 	}
@@ -176,7 +178,7 @@ func TestRenderWorker_SunoNoRetryAfterPaidStep(t *testing.T) {
 	for name, s := range cases {
 		t.Run(name, func(t *testing.T) {
 			d := &fakeStorage{}
-			_, err := testWorker(s, d).generateWithSuno(context.Background(), testPayload(), noProgress)
+			_, err := testWorker(s, d).generateWithSuno(context.Background(), testPayload(), noProgress, claimOK)
 			if !errors.Is(err, asynq.SkipRetry) {
 				t.Fatalf("want SkipRetry, got: %v", err)
 			}
@@ -189,7 +191,7 @@ func TestRenderWorker_SunoNoRetryAfterPaidStep(t *testing.T) {
 
 func TestRenderWorker_SunoNotCalledWithoutStorage(t *testing.T) {
 	s := &fakeSuno{}
-	_, err := testWorker(s, nil).generateWithSuno(context.Background(), testPayload(), noProgress)
+	_, err := testWorker(s, nil).generateWithSuno(context.Background(), testPayload(), noProgress, claimOK)
 	if !errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("want SkipRetry, got: %v", err)
 	}
@@ -209,7 +211,7 @@ func TestRenderWorker_SunoEstimatesMissingDuration(t *testing.T) {
 	p.Brief.BPM.Value = &bpm
 	p.Brief.Structure = []model.SongSection{{ID: "s1", Type: "verse", Bars: 8}}
 
-	res, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
+	res, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress, claimOK)
 	if err != nil {
 		t.Fatalf("generateWithSuno: %v", err)
 	}
@@ -222,7 +224,7 @@ func TestRenderWorker_SunoNotCalledForOwnerlessJob(t *testing.T) {
 	s := &fakeSuno{}
 	p := testPayload()
 	p.OwnerID = ""
-	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
+	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress, claimOK)
 	if !errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("want SkipRetry, got: %v", err)
 	}
@@ -247,7 +249,7 @@ func TestRenderWorker_SunoPanicAfterChargeNotRetried(t *testing.T) {
 		track: &client.Track{ID: "a1", Duration: 30},
 		stems: []client.Stem{{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"}},
 	}
-	_, err := testWorker(s, &panickingStorage{}).generateWithSuno(context.Background(), testPayload(), noProgress)
+	_, err := testWorker(s, &panickingStorage{}).generateWithSuno(context.Background(), testPayload(), noProgress, claimOK)
 	if !errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("want SkipRetry, got: %v", err)
 	}
@@ -260,7 +262,7 @@ func TestRenderWorker_SunoMixModeDoesNotSplit(t *testing.T) {
 	p := testPayload()
 	p.StemMode = model.StemModeMix
 
-	res, err := testWorker(s, d).generateWithSuno(context.Background(), p, noProgress)
+	res, err := testWorker(s, d).generateWithSuno(context.Background(), p, noProgress, claimOK)
 	if err != nil {
 		t.Fatalf("generateWithSuno: %v", err)
 	}
@@ -283,7 +285,7 @@ func TestRenderWorker_SunoEmptyModeActsAsMix(t *testing.T) {
 	s := &fakeSuno{track: &client.Track{ID: "a1", AudioURL: srv.URL + "/tam.mp3", Duration: 120}}
 	p := testPayload()
 	p.StemMode = ""
-	res, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
+	res, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress, claimOK)
 	if err != nil {
 		t.Fatalf("generateWithSuno: %v", err)
 	}
@@ -296,7 +298,7 @@ func TestRenderWorker_SunoMixModeMissingTrackURLNoRetry(t *testing.T) {
 	s := &fakeSuno{track: &client.Track{ID: "a1", Duration: 120}}
 	p := testPayload()
 	p.StemMode = model.StemModeMix
-	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
+	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress, claimOK)
 	if !errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("want SkipRetry, got: %v", err)
 	}
@@ -314,7 +316,7 @@ func TestRenderWorker_SunoFocusModeTwoStems(t *testing.T) {
 	drums := model.InstrumentDrums
 	p.FocusInstrument = &drums
 
-	res, err := testWorker(s, d).generateWithSuno(context.Background(), p, noProgress)
+	res, err := testWorker(s, d).generateWithSuno(context.Background(), p, noProgress, claimOK)
 	if err != nil {
 		t.Fatalf("generateWithSuno: %v", err)
 	}
@@ -342,7 +344,7 @@ func TestRenderWorker_SunoFocusIsolateErrorSkipsRetry(t *testing.T) {
 	p.StemMode = model.StemModeFocus
 	drums := model.InstrumentDrums
 	p.FocusInstrument = &drums
-	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
+	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress, claimOK)
 	if !errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("want SkipRetry, got: %v", err)
 	}
@@ -353,7 +355,7 @@ func TestRenderWorker_SunoFocusUnmappedInstrumentNotCalled(t *testing.T) {
 	p := testPayload()
 	p.StemMode = model.StemModeFocus
 	p.FocusInstrument = nil
-	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
+	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress, claimOK)
 	if !errors.Is(err, asynq.SkipRetry) || s.generateCalls != 0 {
 		t.Fatalf("want SkipRetry and zero generations before the charge: err=%v generations=%d", err, s.generateCalls)
 	}
@@ -365,7 +367,7 @@ func TestRenderWorker_SunoFocusIsolateWaitErrorNoRetry(t *testing.T) {
 	p.StemMode = model.StemModeFocus
 	drums := model.InstrumentDrums
 	p.FocusInstrument = &drums
-	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress)
+	_, err := testWorker(s, &fakeStorage{}).generateWithSuno(context.Background(), p, noProgress, claimOK)
 	if !errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("want SkipRetry, got: %v", err)
 	}
@@ -390,7 +392,7 @@ func TestRenderWorker_SunoNotCalledForDeletedOwner(t *testing.T) {
 	s := &fakeSuno{}
 	h := &fakeChecker{answer: alwaysDeleted}
 	d := &fakeStorage{}
-	_, err := workerWithChecker(s, d, h).generateWithSuno(context.Background(), testPayload(), noProgress)
+	_, err := workerWithChecker(s, d, h).generateWithSuno(context.Background(), testPayload(), noProgress, claimOK)
 	if !errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("want SkipRetry, got: %v", err)
 	}
@@ -405,7 +407,7 @@ func TestRenderWorker_SunoNotCalledForDeletedOwner(t *testing.T) {
 func TestRenderWorker_SunoCheckErrorBeforeChargeIsRetryable(t *testing.T) {
 	s := &fakeSuno{}
 	h := &fakeChecker{answer: func(int) (bool, error) { return false, errors.New("redis is down") }}
-	_, err := workerWithChecker(s, &fakeStorage{}, h).generateWithSuno(context.Background(), testPayload(), noProgress)
+	_, err := workerWithChecker(s, &fakeStorage{}, h).generateWithSuno(context.Background(), testPayload(), noProgress, claimOK)
 	if err == nil || errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("a check error before the charge must be retryable, got: %v", err)
 	}
@@ -437,7 +439,7 @@ func TestRenderWorker_SunoNoUploadForOwnerDeletedAfterCharge(t *testing.T) {
 				},
 			}
 			d := &fakeStorage{}
-			_, err := workerWithChecker(s, d, &fakeChecker{answer: answer}).generateWithSuno(context.Background(), testPayload(), noProgress)
+			_, err := workerWithChecker(s, d, &fakeChecker{answer: answer}).generateWithSuno(context.Background(), testPayload(), noProgress, claimOK)
 			if !errors.Is(err, asynq.SkipRetry) {
 				t.Fatalf("want SkipRetry, got: %v", err)
 			}
@@ -462,7 +464,7 @@ func TestRenderWorker_SunoChecksBeforeEveryUpload(t *testing.T) {
 	d := &fakeStorage{}
 	// 0: before the charge, 1: before the first upload, 2: before the second upload
 	h := &fakeChecker{answer: func(n int) (bool, error) { return n >= 2, nil }}
-	_, err := workerWithChecker(s, d, h).generateWithSuno(context.Background(), testPayload(), noProgress)
+	_, err := workerWithChecker(s, d, h).generateWithSuno(context.Background(), testPayload(), noProgress, claimOK)
 	if !errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("want SkipRetry, got: %v", err)
 	}
@@ -482,7 +484,7 @@ func TestRenderWorker_SunoChecksEveryStepForLiveOwner(t *testing.T) {
 	}
 	d := &fakeStorage{}
 	h := &fakeChecker{answer: func(int) (bool, error) { return false, nil }}
-	if _, err := workerWithChecker(s, d, h).generateWithSuno(context.Background(), testPayload(), noProgress); err != nil {
+	if _, err := workerWithChecker(s, d, h).generateWithSuno(context.Background(), testPayload(), noProgress, claimOK); err != nil {
 		t.Fatalf("generateWithSuno: %v", err)
 	}
 	if len(d.uploads) != 2 || len(h.asked) != 3 {

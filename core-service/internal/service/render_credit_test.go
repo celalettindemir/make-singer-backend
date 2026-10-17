@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -184,5 +185,94 @@ func TestRenderOperation(t *testing.T) {
 		if got := RenderOperation(mode); got != want {
 			t.Errorf("RenderOperation(%q) = %s, want %s", mode, got, want)
 		}
+	}
+}
+
+func TestUpdateJobProgress_CanceledStaysCanceled(t *testing.T) {
+	rdb := liveRedis(t)
+	s := NewRenderService(rdb, nil, nil, testR2Cfg())
+	storeRenderJob(t, rdb, model.JobStatusCanceled)
+
+	if err := s.UpdateJobProgress(context.Background(), "is1", 40, "x"); err != nil {
+		t.Fatalf("UpdateJobProgress: %v", err)
+	}
+	job, _ := readJob(context.Background(), rdb, "is1")
+	if job.Status != model.JobStatusCanceled || job.Progress != 0 {
+		t.Errorf("job = %s/%d, want canceled/0", job.Status, job.Progress)
+	}
+}
+
+func TestClaimRun(t *testing.T) {
+	rdb := liveRedis(t)
+	s := NewRenderService(rdb, nil, nil, testR2Cfg())
+
+	storeRenderJob(t, rdb, model.JobStatusQueued)
+	ok, err := s.ClaimRun(context.Background(), "is1")
+	if err != nil || !ok {
+		t.Fatalf("claim queued = %v, %v; want true", ok, err)
+	}
+	if st, _ := s.JobStatus(context.Background(), "is1"); st != model.JobStatusRunning {
+		t.Errorf("status = %s, want running", st)
+	}
+
+	storeRenderJob(t, rdb, model.JobStatusCanceled)
+	ok, err = s.ClaimRun(context.Background(), "is1")
+	if err != nil || ok {
+		t.Fatalf("claim canceled = %v, %v; want false", ok, err)
+	}
+	if st, _ := s.JobStatus(context.Background(), "is1"); st != model.JobStatusCanceled {
+		t.Errorf("status = %s, want canceled", st)
+	}
+}
+
+func TestCancelThenClaim_NoRunAfterQueuedCancelRefund(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{}
+	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+	storeRenderJob(t, rdb, model.JobStatusQueued)
+	if _, err := s.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := s.ClaimRun(context.Background(), "is1"); ok {
+		t.Error("a canceled job was claimed")
+	}
+	// Running then cancel: no refund.
+	fake.Refunds = nil
+	storeRenderJob(t, rdb, model.JobStatusQueued)
+	if ok, _ := s.ClaimRun(context.Background(), "is1"); !ok {
+		t.Fatal("claim failed")
+	}
+	if _, err := s.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.Refunds) != 0 {
+		t.Errorf("refunds after a post-claim cancel = %+v, want none", fake.Refunds)
+	}
+}
+
+func TestUpdateJob_ConcurrentUpdatesLoseNothing(t *testing.T) {
+	rdb := liveRedis(t)
+	s := NewRenderService(rdb, nil, nil, testR2Cfg())
+	storeRenderJob(t, rdb, model.JobStatusRunning)
+
+	const n = 10
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := s.updateJob(context.Background(), "is1", func(j *model.Job) error {
+				j.RetryCount++
+				return nil
+			})
+			if err != nil {
+				t.Errorf("updateJob: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	job, _ := readJob(context.Background(), rdb, "is1")
+	if job.RetryCount != n {
+		t.Errorf("RetryCount = %d, want %d (an update was lost)", job.RetryCount, n)
 	}
 }

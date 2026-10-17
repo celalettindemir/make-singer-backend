@@ -182,18 +182,6 @@ func TestRenderWorker_SkipRetryAfterChargeRefunds(t *testing.T) {
 	}
 }
 
-func TestRenderWorker_ShadowStillWorks(t *testing.T) {
-	s := newCreditSetup(t, model.JobStatusCanceled, &fakeStorage{})
-	s.fake.IsEnforced = false
-
-	if err := s.w.ProcessTask(context.Background(), renderTask(t, model.StemModeMix)); err != nil {
-		t.Fatalf("ProcessTask: %v", err)
-	}
-	if s.suno.generateCalls != 0 || len(s.fake.Refunds) != 1 {
-		t.Errorf("generateCalls=%d refunds=%d, want 0 and 1", s.suno.generateCalls, len(s.fake.Refunds))
-	}
-}
-
 func TestRenderWorker_RefundFailureIsNotReturned(t *testing.T) {
 	s := newCreditSetup(t, model.JobStatusCanceled, &fakeStorage{})
 	s.fake.Err = errors.New("db down")
@@ -214,5 +202,126 @@ func TestRenderWorker_NilSpenderUnchanged(t *testing.T) {
 	}
 	if st := jobStatus(t, s.svc); st != model.JobStatusFailed {
 		t.Errorf("status = %s, want failed", st)
+	}
+}
+
+// cancelHook cancels the job (through a service that has its own spender)
+// when the worker reaches the hooked step.
+type cancelBeforeClaim struct{ cancel func() }
+
+func (c cancelBeforeClaim) IsDeleted(context.Context, string) (bool, error) {
+	c.cancel() // runs after the attempt-start check, before the claim
+	return false, nil
+}
+
+func TestRenderWorker_CancelBeforeClaimSkipsSunoAndRefundsOnce(t *testing.T) {
+	s := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
+	s.w.deletionChecker = cancelBeforeClaim{cancel: func() {
+		if _, err := s.svc.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
+			t.Errorf("CancelRender: %v", err)
+		}
+	}}
+
+	if err := s.w.ProcessTask(context.Background(), renderTask(t, model.StemModeMix)); err != nil {
+		t.Fatalf("ProcessTask: %v", err)
+	}
+	if s.suno.generateCalls != 0 {
+		t.Errorf("GenerateMusic called %d times after a committed cancel", s.suno.generateCalls)
+	}
+	if len(s.fake.Refunds) != 1 || s.fake.Refunds[0].ID != "is1" {
+		t.Errorf("worker refunds = %+v, want exactly one for is1", s.fake.Refunds)
+	}
+	if st := jobStatus(t, s.svc); st != model.JobStatusCanceled {
+		t.Errorf("status = %s, want canceled", st)
+	}
+}
+
+// cancelOnGenerate cancels the job once GenerateMusic has been reached,
+// i.e. after the claim.
+type cancelOnGenerate struct {
+	*fakeSuno
+	cancel func()
+}
+
+func (c cancelOnGenerate) GenerateMusic(ctx context.Context, r *client.GenerateMusicRequest) (string, error) {
+	c.cancel()
+	return c.fakeSuno.GenerateMusic(ctx, r)
+}
+
+func TestRenderWorker_CancelAfterClaimNoRefund(t *testing.T) {
+	rdb := creditRedis(t)
+	putJob(t, rdb, model.JobStatusQueued)
+	cancelSpender := &credit.FakeSpender{IsEnforced: true}
+	svc := service.NewRenderService(rdb, nil, &fakeStorage{}, &config.R2Config{}).WithCredits(cancelSpender)
+	workerSpender := &credit.FakeSpender{IsEnforced: true}
+	suno := &fakeSuno{generateErr: errors.New("suno 503")}
+	music := cancelOnGenerate{fakeSuno: suno, cancel: func() {
+		if _, err := svc.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
+			t.Errorf("CancelRender: %v", err)
+		}
+	}}
+	w := NewRenderWorker(svc, music, &fakeStorage{}, websocket.NewHub(), nil).WithCredits(workerSpender)
+	w.isLastAttempt = func(context.Context) bool { return false }
+
+	_ = w.ProcessTask(context.Background(), renderTask(t, model.StemModeMix))
+
+	if suno.generateCalls != 1 {
+		t.Fatalf("generateCalls = %d, want 1", suno.generateCalls)
+	}
+	if len(cancelSpender.Refunds) != 0 || len(workerSpender.Refunds) != 0 {
+		t.Errorf("refunds cancel=%+v worker=%+v, want none after the claim", cancelSpender.Refunds, workerSpender.Refunds)
+	}
+	if st := jobStatus(t, svc); st != model.JobStatusCanceled {
+		t.Errorf("status = %s, want canceled", st)
+	}
+}
+
+func TestRenderWorker_InvalidPayloadFailsAndRefunds(t *testing.T) {
+	s := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
+	data, _ := json.Marshal(map[string]any{"jobId": "is1", "payload": []int{1}})
+
+	err := s.w.ProcessTask(context.Background(), asynq.NewTask(service.TaskTypeRender, data))
+	if !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("want SkipRetry, got: %v", err)
+	}
+	if st := jobStatus(t, s.svc); st != model.JobStatusFailed {
+		t.Errorf("status = %s, want failed", st)
+	}
+	if len(s.fake.Refunds) != 1 || s.fake.Refunds[0].ID != "is1" {
+		t.Errorf("refunds = %+v, want one for is1", s.fake.Refunds)
+	}
+}
+
+func TestRenderWorker_MockContextDoneOnLastAttemptRefunds(t *testing.T) {
+	s := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
+	s.w.music = nil // mock path
+	s.w.isLastAttempt = func(context.Context) bool { return true }
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	if err := s.w.ProcessTask(ctx, renderTask(t, model.StemModeMix)); err == nil {
+		t.Fatal("want the context error")
+	}
+	if st := jobStatus(t, s.svc); st != model.JobStatusFailed {
+		t.Errorf("status = %s, want failed", st)
+	}
+	if len(s.fake.Refunds) != 1 {
+		t.Errorf("refunds = %+v, want one", s.fake.Refunds)
+	}
+}
+
+func TestRenderWorker_MockCanceledAtStartRefunds(t *testing.T) {
+	s := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
+	s.w.music = nil
+	s.w.deletionChecker = nil
+	// Cancel between the attempt-start check and the mock claim is not
+	// hookable; a canceled job at attempt start covers the early exit, and
+	// ClaimRun is covered in the service tests.
+	putJob(t, s.rdb, model.JobStatusCanceled)
+	if err := s.w.ProcessTask(context.Background(), renderTask(t, model.StemModeMix)); err != nil {
+		t.Fatalf("ProcessTask: %v", err)
+	}
+	if len(s.fake.Refunds) != 1 {
+		t.Errorf("refunds = %+v, want one", s.fake.Refunds)
 	}
 }

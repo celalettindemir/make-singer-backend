@@ -21,6 +21,10 @@ import (
 	"github.com/makeasinger/api/internal/websocket"
 )
 
+// errJobCanceled: the job was canceled before the paid call; the worker
+// refunds and ends the task without an error.
+var errJobCanceled = errors.New("the job was canceled")
+
 // maxStemSize: download limit for a single stem file.
 const maxStemSize = 50 << 20
 
@@ -102,8 +106,11 @@ func (w *RenderWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 
 	var payload model.RenderJobPayload
 	if err := json.Unmarshal(taskPayload.Payload, &payload); err != nil {
-		w.failJob(ctx, jobID, "Invalid payload")
-		return fmt.Errorf("failed to unmarshal render payload: %w", err)
+		// A payload that cannot be decoded never will; the op is unknown
+		// but the ledger refund ignores it.
+		err = fmt.Errorf("failed to unmarshal render payload: %w: %w", err, asynq.SkipRetry)
+		w.failFinal(ctx, jobID, credit.OpRenderMix, "Invalid payload", err)
+		return err
 	}
 	op := service.RenderOperation(payload.StemMode)
 
@@ -134,7 +141,14 @@ func (w *RenderWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, op credit.Operation, payload *model.RenderJobPayload) error {
 	result, err := w.generateWithSuno(ctx, payload, func(p int, step string) {
 		w.updateProgress(ctx, jobID, p, step)
+	}, func() (bool, error) {
+		return w.renderService.ClaimRun(ctx, jobID)
 	})
+	if errors.Is(err, errJobCanceled) {
+		log.Printf("Job %s was canceled before the Suno call; skipping", jobID)
+		w.refund(ctx, op, jobID)
+		return nil
+	}
 	if err != nil {
 		log.Printf("Job %s: render failed: %v", jobID, err)
 		w.failFinal(ctx, jobID, op, "Render failed", err)
@@ -168,7 +182,7 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, op cre
 // Retry: once GenerateMusic succeeds, credits are spent. Every later error is
 // wrapped with asynq.SkipRetry; otherwise asynq would rerun the job and
 // charge Suno again (4 x 62 credits with MaxRetry(3)).
-func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.RenderJobPayload, progress func(int, string)) (result *model.RenderResultRecord, retErr error) {
+func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.RenderJobPayload, progress func(int, string), claim func() (bool, error)) (result *model.RenderResultRecord, retErr error) {
 	if w.r2Client == nil {
 		return nil, fmt.Errorf("storage is not configured, Suno was not called: %w", asynq.SkipRetry)
 	}
@@ -204,6 +218,15 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 	}
 
 	progress(10, "Generating music...")
+	// The last check before the paid call. It is atomic against a cancel:
+	// after it returns true, a cancel counts as a running-cancel.
+	claimed, err := claim()
+	if err != nil {
+		return nil, fmt.Errorf("could not claim the job, suno was not called: %w", err)
+	}
+	if !claimed {
+		return nil, errJobCanceled
+	}
 	taskID, err := w.music.GenerateMusic(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("music generation failed: %w", err)
@@ -322,11 +345,24 @@ func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, op cre
 		{95, "Finalizing...", 1 * time.Second},
 	}
 
+	claimed, err := w.renderService.ClaimRun(ctx, jobID)
+	if err != nil {
+		w.failFinal(ctx, jobID, op, "Render failed", err)
+		return fmt.Errorf("could not claim the job: %w", err)
+	}
+	if !claimed {
+		log.Printf("Job %s was canceled before it started; skipping (mock)", jobID)
+		w.refund(ctx, op, jobID)
+		return nil
+	}
+
 	for _, step := range steps {
 		select {
 		case <-ctx.Done():
 			log.Printf("Render job %s cancelled", jobID)
-			return ctx.Err()
+			err := ctx.Err()
+			w.failFinal(ctx, jobID, op, "Render failed", err)
+			return err
 		default:
 		}
 
@@ -465,7 +501,9 @@ func (w *RenderWorker) failFinal(ctx context.Context, jobID string, op credit.Op
 		log.Printf("Job %s: attempt failed, will retry: %v", jobID, err)
 		return
 	}
-	w.failJob(ctx, jobID, errMsg)
+	// Detached: the final failure must be written even when ctx is the
+	// reason for it (shutdown, deadline).
+	w.failJob(context.WithoutCancel(ctx), jobID, errMsg)
 	w.refund(ctx, op, jobID)
 }
 

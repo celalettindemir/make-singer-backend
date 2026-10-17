@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -153,7 +154,14 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 	if s.credits != nil {
 		balance, err = s.credits.Spend(ctx, userID, op, jobID)
 		if err != nil {
-			return nil, err
+			var insufficient *credit.InsufficientError
+			if errors.As(err, &insufficient) || s.credits.Enforced() {
+				return nil, err
+			}
+			// Shadow mode: nothing is debited, so a failed balance read
+			// must not fail the render.
+			log.Printf("Job %s: shadow credit read failed: %v", jobID, err)
+			balance = 0
 		}
 	}
 
@@ -239,26 +247,27 @@ func (s *RenderService) GetResult(ctx context.Context, userID, jobID string) (*m
 	return s.BuildResult(ctx, &record)
 }
 
-// CancelRender cancels a render job
+// CancelRender cancels a render job. The status check and the write are one
+// transaction, so a worker claiming the job at the same time either sees
+// canceled (and never calls Suno) or wins (and the cancel sees running).
 func (s *RenderService) CancelRender(ctx context.Context, userID, jobID string) (*model.RenderCancelResponse, error) {
-	job, err := readOwnedJob(ctx, s.redis, userID, jobID)
-	if err != nil {
-		return nil, err
-	}
-
-	if job.Status == model.JobStatusSucceeded || job.Status == model.JobStatusFailed {
-		return nil, ErrJobAlreadyCompleted
-	}
-
 	// Only a job that never left the queue is refunded: no Suno call was
 	// made. A running job keeps its charge (6-G2).
-	wasQueued := job.Status == model.JobStatusQueued
-
-	job.Status = model.JobStatusCanceled
-	now := time.Now()
-	job.CompletedAt = &now
-
-	if err := s.saveJob(ctx, job); err != nil {
+	wasQueued := false
+	err := s.updateJob(ctx, jobID, func(job *model.Job) error {
+		if !job.IsOwnedBy(userID) {
+			return ErrJobNotFound
+		}
+		if job.Status == model.JobStatusSucceeded || job.Status == model.JobStatusFailed {
+			return ErrJobAlreadyCompleted
+		}
+		wasQueued = job.Status == model.JobStatusQueued
+		job.Status = model.JobStatusCanceled
+		now := time.Now()
+		job.CompletedAt = &now
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	if wasQueued {
@@ -275,59 +284,123 @@ func (s *RenderService) CancelRender(ctx context.Context, userID, jobID string) 
 	}, nil
 }
 
-// UpdateJobProgress updates job progress (called by worker)
+// UpdateJobProgress updates job progress (called by worker). A canceled job
+// stays canceled.
 func (s *RenderService) UpdateJobProgress(ctx context.Context, jobID string, progress int, step string) error {
-	job, err := s.getJob(ctx, jobID)
-	if err != nil {
-		return err
+	err := s.updateJob(ctx, jobID, func(job *model.Job) error {
+		if job.Status == model.JobStatusCanceled {
+			return errSkipWrite
+		}
+		job.Progress = progress
+		job.CurrentStep = step
+		if job.Status == model.JobStatusQueued {
+			markRunning(job)
+		}
+		return nil
+	})
+	if errors.Is(err, errSkipWrite) {
+		return nil
 	}
+	return err
+}
 
-	job.Progress = progress
-	job.CurrentStep = step
-
-	if job.Status == model.JobStatusQueued {
-		job.Status = model.JobStatusRunning
-		now := time.Now()
-		job.StartedAt = &now
+// ClaimRun is the worker's last check before the paid Suno call. It returns
+// false if the job was canceled; otherwise it marks the job running, which
+// makes a later cancel a running-cancel (no refund). Both outcomes are decided
+// in one transaction against CancelRender.
+func (s *RenderService) ClaimRun(ctx context.Context, jobID string) (bool, error) {
+	claimed := false
+	err := s.updateJob(ctx, jobID, func(job *model.Job) error {
+		if job.Status == model.JobStatusCanceled {
+			return errSkipWrite
+		}
+		claimed = true
+		if job.Status == model.JobStatusQueued {
+			markRunning(job)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errSkipWrite) {
+		return false, err
 	}
+	return claimed, nil
+}
 
-	return s.saveJob(ctx, job)
+func markRunning(job *model.Job) {
+	job.Status = model.JobStatusRunning
+	now := time.Now()
+	job.StartedAt = &now
 }
 
 // CompleteJob marks job as completed (called by worker)
 func (s *RenderService) CompleteJob(ctx context.Context, jobID string, result interface{}) error {
-	job, err := s.getJob(ctx, jobID)
-	if err != nil {
-		return err
-	}
-
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
 		return err
 	}
-
-	job.Status = model.JobStatusSucceeded
-	job.Progress = 100
-	job.Result = resultBytes
-	now := time.Now()
-	job.CompletedAt = &now
-
-	return s.saveJob(ctx, job)
+	return s.updateJob(ctx, jobID, func(job *model.Job) error {
+		job.Status = model.JobStatusSucceeded
+		job.Progress = 100
+		job.Result = resultBytes
+		now := time.Now()
+		job.CompletedAt = &now
+		return nil
+	})
 }
 
 // FailJob marks job as failed (called by worker)
 func (s *RenderService) FailJob(ctx context.Context, jobID string, errMsg string) error {
-	job, err := s.getJob(ctx, jobID)
-	if err != nil {
+	return s.updateJob(ctx, jobID, func(job *model.Job) error {
+		job.Status = model.JobStatusFailed
+		job.Error = &errMsg
+		now := time.Now()
+		job.CompletedAt = &now
+		return nil
+	})
+}
+
+// errSkipWrite: updateJob callbacks return it to leave the record untouched;
+// updateJob returns it to the caller, which treats it as success.
+var errSkipWrite = errors.New("skip job write")
+
+const updateJobAttempts = 20
+
+// updateJob read-modify-writes a job under WATCH, so concurrent updates (the
+// worker and a cancel) cannot overwrite each other. fn runs again on every
+// conflict and must be free of side effects.
+func (s *RenderService) updateJob(ctx context.Context, jobID string, fn func(*model.Job) error) error {
+	key := jobKey(jobID)
+	for i := 0; i < updateJobAttempts; i++ {
+		err := s.redis.Watch(ctx, func(tx *redis.Tx) error {
+			data, err := tx.Get(ctx, key).Bytes()
+			if err != nil {
+				if errors.Is(err, redis.Nil) {
+					return ErrJobNotFound
+				}
+				return err
+			}
+			var job model.Job
+			if err := json.Unmarshal(data, &job); err != nil {
+				return err
+			}
+			if err := fn(&job); err != nil {
+				return err
+			}
+			out, err := json.Marshal(&job)
+			if err != nil {
+				return err
+			}
+			_, err = tx.TxPipelined(ctx, func(p redis.Pipeliner) error {
+				return p.Set(ctx, key, out, jobTTL).Err()
+			})
+			return err
+		}, key)
+		if errors.Is(err, redis.TxFailedErr) {
+			continue
+		}
 		return err
 	}
-
-	job.Status = model.JobStatusFailed
-	job.Error = &errMsg
-	now := time.Now()
-	job.CompletedAt = &now
-
-	return s.saveJob(ctx, job)
+	return redis.TxFailedErr
 }
 
 // Helper methods

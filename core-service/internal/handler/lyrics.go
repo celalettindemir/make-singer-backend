@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -74,7 +76,7 @@ func (h *LyricsHandler) Generate(c *fiber.Ctx) error {
 		act.refund(c)
 		return aiError(c, err)
 	}
-	if !hasLyricLines(result.Drafts...) {
+	if act.charged && !hasLyricLines(result.Drafts...) {
 		act.refund(c)
 		return aiError(c, errEmptyLyrics)
 	}
@@ -118,7 +120,7 @@ func (h *LyricsHandler) Rewrite(c *fiber.Ctx) error {
 		act.refund(c)
 		return aiError(c, err)
 	}
-	if !hasLyricLines(result.Lines) {
+	if act.charged && !hasLyricLines(result.Lines) {
 		act.refund(c)
 		return aiError(c, errEmptyLyrics)
 	}
@@ -168,7 +170,13 @@ func (h *LyricsHandler) begin(c *fiber.Ctx, op credit.Operation) (*lyricsAction,
 	if h.service.IsMock() || !h.credits.Enforced() {
 		bal, err := h.credits.Balance(c.Context(), userID)
 		if err != nil {
-			return nil, internalError(c, err)
+			if h.credits.Enforced() {
+				return nil, internalError(c, err)
+			}
+			// Shadow mode: nothing is charged, so a failed balance read
+			// must not fail the request.
+			log.Printf("%s %s: shadow balance read failed: %v", c.Method(), c.Route().Path, err)
+			bal = 0
 		}
 		act.balance = bal
 		return act, nil
@@ -203,7 +211,9 @@ func (a *lyricsAction) refund(c *fiber.Ctx) {
 	if !a.charged {
 		return
 	}
-	if err := a.h.credits.RefundAction(c.Context(), a.userID, a.op, a.id); err != nil {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Context()), 10*time.Second)
+	defer cancel()
+	if err := a.h.credits.RefundAction(ctx, a.userID, a.op, a.id); err != nil {
 		log.Printf("%s %s: refund action %s: %v", c.Method(), c.Route().Path, a.id, err)
 	}
 }

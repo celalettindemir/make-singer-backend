@@ -109,7 +109,7 @@ func TestLyrics_ShadowMissingActionIDOK(t *testing.T) {
 		t.Fatalf("status = %d, want 200", status)
 	}
 	if body["balance"] != float64(40) {
-		t.Errorf("balance = %v, want 40", body["data"])
+		t.Errorf("balance = %v, want 40", body["balance"])
 	}
 	if len(sp.Actions) != 0 {
 		t.Errorf("shadow mode made %d spend calls, want 0", len(sp.Actions))
@@ -140,7 +140,7 @@ func TestLyrics_GenerateChargesFirstRequestOnly(t *testing.T) {
 			t.Fatalf("call %d status = %d, want 200", i, status)
 		}
 		if body["balance"] != float64(7) {
-			t.Errorf("call %d balance = %v, want 7", i, body["data"])
+			t.Errorf("call %d balance = %v, want 7", i, body["balance"])
 		}
 	}
 	if len(sp.Actions) != 2 {
@@ -260,7 +260,7 @@ func TestLyrics_MockModeNoDebit(t *testing.T) {
 		t.Fatalf("status = %d, want 200", status)
 	}
 	if body["balance"] != float64(25) {
-		t.Errorf("balance = %v, want 25", body["data"])
+		t.Errorf("balance = %v, want 25", body["balance"])
 	}
 	if len(sp.Actions) != 0 {
 		t.Errorf("mock mode made %d spend calls, want 0", len(sp.Actions))
@@ -273,6 +273,48 @@ func TestLyrics_NilSpenderBalanceZero(t *testing.T) {
 		t.Fatalf("status = %d, want 200", status)
 	}
 	if body["balance"] != float64(0) {
-		t.Errorf("balance = %v, want 0", body["data"])
+		t.Errorf("balance = %v, want 0", body["balance"])
+	}
+}
+
+func TestLyrics_NoUserWithSpender401(t *testing.T) {
+	h := NewLyricsHandler(newFakeLyrics(), validator.New()).WithCredits(&credit.FakeSpender{IsEnforced: true})
+	app := fiber.New()
+	app.Post("/generate", asUser(""), h.Generate)
+	status, _ := lyricsCall(t, app, "/generate", lyricsGenBody, actionA)
+	if status != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", status)
+	}
+}
+
+func TestLyrics_ShadowBalanceFailureStillOK(t *testing.T) {
+	sp := &credit.FakeSpender{IsEnforced: false, Err: errors.New("db down")}
+	status, body := lyricsCall(t, lyricsApp(newFakeLyrics(), sp), "/generate", lyricsGenBody, "")
+	if status != http.StatusOK || body["balance"] != float64(0) {
+		t.Errorf("status = %d balance = %v, want 200 and 0", status, body["balance"])
+	}
+}
+
+func TestLyrics_EnforcedMockBalanceFailure500(t *testing.T) {
+	gen := newFakeLyrics()
+	gen.mock = true
+	sp := &credit.FakeSpender{IsEnforced: true, Err: errors.New("db down")}
+	status, _ := lyricsCall(t, lyricsApp(gen, sp), "/generate", lyricsGenBody, "")
+	if status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", status)
+	}
+}
+
+func TestLyrics_UnchargedEmptyResultKeepsOldBehavior(t *testing.T) {
+	gen := newFakeLyrics()
+	gen.drafts = [][]string{{"  "}}
+	// Shadow mode charges nothing, so the empty-result 502 does not apply.
+	sp := &credit.FakeSpender{IsEnforced: false}
+	if status, _ := lyricsCall(t, lyricsApp(gen, sp), "/generate", lyricsGenBody, ""); status != http.StatusOK {
+		t.Errorf("shadow: status = %d, want 200", status)
+	}
+	// Nil spender: same.
+	if status, _ := lyricsCall(t, lyricsApp(gen, nil), "/generate", lyricsGenBody, ""); status != http.StatusOK {
+		t.Errorf("nil spender: status = %d, want 200", status)
 	}
 }
