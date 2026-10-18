@@ -182,9 +182,9 @@ func debitTx(ctx context.Context, tx pgx.Tx, acct Account, tur, ref, reason stri
 	return apply(ctx, tx, acct, tur, ref, reason, -fromPlan, -fromPerm)
 }
 
-// Debit takes amount from the plan bucket first, then the permanent bucket.
+// DebitBucket takes amount from the plan bucket first, then the permanent bucket.
 // The bool is false when (tur, ref) already exists.
-func (s *PostgresStore) Debit(ctx context.Context, userID string, tur, ref, reason string, amount int, allowNegative bool) (Account, bool, error) {
+func (s *PostgresStore) DebitBucket(ctx context.Context, userID string, tur, ref, reason string, amount int, allowNegative bool) (Account, bool, error) {
 	var acct Account
 	var done bool
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
@@ -198,11 +198,11 @@ func (s *PostgresStore) Debit(ctx context.Context, userID string, tur, ref, reas
 	return acct, done, err
 }
 
-// Refund reverses the debit (debitTur, ref) with a refundTur movement of the
+// RefundBucket reverses the debit (debitTur, ref) with a refundTur movement of the
 // negated deltas. It is a no-op when the debit is missing (for example after
 // the account was deleted) or the refund already exists, and it never
 // creates an account.
-func (s *PostgresStore) Refund(ctx context.Context, debitTur, refundTur, ref string) error {
+func (s *PostgresStore) RefundBucket(ctx context.Context, debitTur, refundTur, ref string) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		var userID, reason string
 		var planDelta, permDelta int

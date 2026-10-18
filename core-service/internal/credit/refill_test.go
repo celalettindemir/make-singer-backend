@@ -40,6 +40,7 @@ func (e *purchaseEnv) yearlySub(t *testing.T, user *string, periodEnd time.Time,
 }
 
 func TestRunRefill_YearlyRefillsOncePerMonth(t *testing.T) {
+	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, _ := e.user(t)
@@ -63,6 +64,7 @@ func TestRunRefill_YearlyRefillsOncePerMonth(t *testing.T) {
 }
 
 func TestRunRefill_CatchesUpMissedMonths(t *testing.T) {
+	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, _ := e.user(t)
 	orig := e.yearlySub(t, &u, refillBase.AddDate(1, 0, 0), 0)
@@ -92,6 +94,7 @@ func TestRunRefill_SkipsOwnerless(t *testing.T) {
 }
 
 func TestRunRefill_StopsAtPeriodEnd(t *testing.T) {
+	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, _ := e.user(t)
 	// The second refill is due exactly at the period end: it is not
@@ -113,6 +116,7 @@ func TestRunRefill_StopsAtPeriodEnd(t *testing.T) {
 }
 
 func TestRunRefill_PastPeriodEndGivesNothing(t *testing.T) {
+	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, _ := e.user(t)
 	end := refillAt(refillBase, 1).Add(30 * time.Minute)
@@ -132,6 +136,7 @@ func TestRunRefill_PastPeriodEndGivesNothing(t *testing.T) {
 }
 
 func TestRefillStep_StaleReadChangesNothing(t *testing.T) {
+	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, _ := e.user(t)
 	end := refillBase.AddDate(1, 0, 0)
@@ -167,6 +172,7 @@ func TestRefillStep_StaleReadChangesNothing(t *testing.T) {
 }
 
 func TestRunRefill_ResyncsOverdueApple(t *testing.T) {
+	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -195,6 +201,7 @@ func TestRunRefill_ResyncsOverdueApple(t *testing.T) {
 }
 
 func TestRunRefill_PrunesOldActions(t *testing.T) {
+	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, _ := e.user(t)

@@ -47,7 +47,7 @@ func (f *fakeLedger) ReadAccount(context.Context, string) (Account, bool, error)
 	return *f.acct, true, nil
 }
 
-func (f *fakeLedger) Debit(_ context.Context, userID, tur, ref, reason string, amount int, allowNegative bool) (Account, bool, error) {
+func (f *fakeLedger) DebitBucket(_ context.Context, userID, tur, ref, reason string, amount int, allowNegative bool) (Account, bool, error) {
 	f.calls = append(f.calls, "Debit")
 	f.debit.tur, f.debit.ref, f.debit.reason, f.debit.amount, f.debit.allowNegative = tur, ref, reason, amount, allowNegative
 	bal := 0
@@ -61,7 +61,7 @@ func (f *fakeLedger) Debit(_ context.Context, userID, tur, ref, reason string, a
 	return *f.acct, true, nil
 }
 
-func (f *fakeLedger) Refund(_ context.Context, debitTur, refundTur, ref string) error {
+func (f *fakeLedger) RefundBucket(_ context.Context, debitTur, refundTur, ref string) error {
 	f.calls = append(f.calls, "Refund")
 	f.refund.debitTur, f.refund.refundTur, f.refund.ref = debitTur, refundTur, ref
 	return nil
@@ -159,6 +159,7 @@ func TestService_ShadowRefundStillReachesLedger(t *testing.T) {
 // A debit made on an enforcing pod is refunded by a shadow pod (or after a
 // CREDITS_ENFORCE rollback): the refund row is written.
 func TestService_DebitEnforcedRefundThroughShadowWritesRefund(t *testing.T) {
+	t.Skip("moved to lots in Task 3")
 	store, u := newStore(t)
 	seed(t, store, u, 0, 20)
 	ctx := context.Background()

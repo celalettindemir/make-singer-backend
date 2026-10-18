@@ -44,8 +44,8 @@ type Spender interface {
 type Ledger interface {
 	EnsureAccount(ctx context.Context, userID string) (Account, error)
 	ReadAccount(ctx context.Context, userID string) (Account, bool, error)
-	Debit(ctx context.Context, userID string, tur, ref, reason string, amount int, allowNegative bool) (Account, bool, error)
-	Refund(ctx context.Context, debitTur, refundTur, ref string) error
+	DebitBucket(ctx context.Context, userID string, tur, ref, reason string, amount int, allowNegative bool) (Account, bool, error)
+	RefundBucket(ctx context.Context, debitTur, refundTur, ref string) error
 	Credit(ctx context.Context, userID, tur, ref, reason string, amount int) (Account, bool, error)
 	SetPlan(ctx context.Context, userID, tur, ref string, amount int, periodEnd *time.Time) (Account, bool, error)
 	ClawBack(ctx context.Context, userID, ref string, amount int) (Account, bool, error)
@@ -110,7 +110,7 @@ func (s *Service) Spend(ctx context.Context, userID string, op Operation, ref st
 	if !knownOperation(op) {
 		return 0, ErrUnknownOperation
 	}
-	acct, _, err := s.ledger.Debit(ctx, userID, "render", ref, string(op), s.set.Costs.Of(op), false)
+	acct, _, err := s.ledger.DebitBucket(ctx, userID, "render", ref, string(op), s.set.Costs.Of(op), false)
 	if err != nil {
 		return 0, err
 	}
@@ -157,12 +157,12 @@ func (s *Service) SpendAction(ctx context.Context, userID string, op Operation, 
 // ledger writes a refund only for an existing debit, so a debit made while
 // enforcing is still refunded after a rollback or on a shadow pod.
 func (s *Service) Refund(ctx context.Context, _ Operation, ref string) error {
-	return s.ledger.Refund(ctx, "render", "render_iade", ref)
+	return s.ledger.RefundBucket(ctx, "render", "render_iade", ref)
 }
 
 // RefundAction reverses the charge of an action, in every mode (see Refund).
 func (s *Service) RefundAction(ctx context.Context, userID string, _ Operation, actionID string) error {
-	return s.ledger.Refund(ctx, "soz", "soz_iade", userID+":"+actionID)
+	return s.ledger.RefundBucket(ctx, "soz", "soz_iade", userID+":"+actionID)
 }
 
 // Plan is the caller's Pro subscription as the API shows it.
