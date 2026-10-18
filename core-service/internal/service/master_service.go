@@ -125,7 +125,7 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 
 	// Debit before the job record (P8); every failure below refunds it. An
 	// *credit.InsufficientError is returned as is: no job, no enqueue.
-	var balance *int
+	var balance int
 	if s.credits != nil {
 		b, err := s.credits.Spend(ctx, userID, credit.OpMaster, jobID, req.ProjectID)
 		if err != nil {
@@ -138,7 +138,7 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 			log.Printf("Job %s: shadow credit read failed: %v", jobID, err)
 			b = 0
 		}
-		balance = &b
+		balance = b
 	}
 
 	// Save job to Redis

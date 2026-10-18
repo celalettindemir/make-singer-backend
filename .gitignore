@@ -47,3 +47,4 @@ __pycache__/
 .pytest_cache/
 .claude/worktrees/
 .superpowers/
+dump.rdb

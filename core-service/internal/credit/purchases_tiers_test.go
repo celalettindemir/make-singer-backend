@@ -346,6 +346,9 @@ func TestPurchases_GraceExtendsPlanLot(t *testing.T) {
 	if a := e.view(t, u); a.Plan != 0 {
 		t.Fatalf("plan after grace = %d, want 0", a.Plan)
 	}
+	if err := e.p.ApplyAppleNotification(ctx, notify("GRACE_PERIOD_EXPIRED", "", jws)); err != nil {
+		t.Fatal(err)
+	}
 	if pro, err := e.p.svc.HasPro(ctx, u); err != nil || pro {
 		t.Fatalf("HasPro after grace = %v %v, want false", pro, err)
 	}
@@ -547,5 +550,127 @@ func TestPurchases_AppleProductPrefixForFourSubscriptions(t *testing.T) {
 	tx = subTx("tx-bad2", "orig-bad2", "gold.monthly", tok, testNow, 1)
 	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(tx)); err == nil {
 		t.Fatal("unknown product accepted")
+	}
+}
+
+func TestPurchases_YearlyRenewalThenSweepGrantsMonth12Once(t *testing.T) {
+	e := newPurchaseEnv(t)
+	e.realCredits()
+	ctx := context.Background()
+	u, tok := e.user(t)
+	start := time.Date(2027, 1, 20, 10, 0, 0, 0, time.UTC)
+	e.at(start)
+	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(subTx("tx-y1", "orig-y", productProYearly, tok, start, 12))); err != nil {
+		t.Fatal(err)
+	}
+	for m := 1; m <= 12; m++ {
+		e.at(refillAt(start, m).Add(time.Hour))
+		if _, _, err := e.p.RunRefill(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The sweep at month 12 is past the period end: no 13th month inside year 1.
+	// The renewal arrives at the year end.
+	renewAt := refillAt(start, 12)
+	e.at(renewAt.Add(time.Minute))
+	renew := e.apple.sign(subTx("tx-y2", "orig-y", productProYearly, tok, renewAt, 12))
+	if err := e.p.ApplyAppleNotification(ctx, notify("DID_RENEW", "", renew)); err != nil {
+		t.Fatal(err)
+	}
+	e.at(renewAt.Add(2 * time.Hour))
+	if _, _, err := e.p.RunRefill(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.movements(t, u); n != 13 {
+		t.Fatalf("plan_dolum rows = %d, want 13 (start + 11 months + renewal)", n)
+	}
+	left, end := liveLotOf(t, e, u)
+	if left != 1000 || end == nil || !end.Equal(refillAt(renewAt, 1)) {
+		t.Fatalf("lot = %d until %v, want 1000 until %v (never a year-long lot)", left, end, refillAt(renewAt, 1))
+	}
+	// The next month of the new year is granted once.
+	e.at(refillAt(renewAt, 1).Add(time.Hour))
+	if _, _, err := e.p.RunRefill(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.movements(t, u); n != 14 {
+		t.Fatalf("plan_dolum rows after month 1 of year 2 = %d, want 14", n)
+	}
+}
+
+func TestPurchases_GraceKeepsProRightWithSpentPlanLot(t *testing.T) {
+	e := newPurchaseEnv(t)
+	e.realCredits()
+	ctx := context.Background()
+	u, tok := e.user(t)
+	jws := e.apple.sign(subTx("tx-1", "orig-1", productProMonthly, tok, testNow.AddDate(0, -1, 0).Add(time.Hour), 1))
+	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.s.Debit(ctx, u, "render", "job-1", 1000, Meta{Reason: "render_stems"}, e.p.now()); err != nil {
+		t.Fatal(err)
+	}
+	e.apple.renewals["rn-s"] = &appstore.RenewalInfo{AutoRenewStatus: 1, GracePeriodExpiresDate: tp(testNow.Add(72 * time.Hour))}
+	n := notify("DID_FAIL_TO_RENEW", "GRACE_PERIOD", jws)
+	n.SignedRenewalInfo = "rn-s"
+	if err := e.p.ApplyAppleNotification(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	e.at(testNow.Add(24 * time.Hour))
+	if pro, err := e.p.svc.HasPro(ctx, u); err != nil || !pro {
+		t.Fatalf("HasPro in grace with a spent lot = %v %v, want true", pro, err)
+	}
+	// The grace ends (webhook): the right ends with it.
+	if err := e.p.ApplyAppleNotification(ctx, notify("GRACE_PERIOD_EXPIRED", "", jws)); err != nil {
+		t.Fatal(err)
+	}
+	if pro, err := e.p.svc.HasPro(ctx, u); err != nil || pro {
+		t.Fatalf("HasPro after grace expired = %v %v, want false", pro, err)
+	}
+}
+
+func TestPurchases_GraceAfterSweepReopensPlanLot(t *testing.T) {
+	e := newPurchaseEnv(t)
+	e.realCredits()
+	ctx := context.Background()
+	u, tok := e.user(t)
+	jws := e.apple.sign(subTx("tx-1", "orig-1", productProMonthly, tok, testNow.AddDate(0, -1, 0).Add(time.Hour), 1))
+	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.s.Debit(ctx, u, "render", "job-1", 400, Meta{Reason: "render_stems"}, e.p.now()); err != nil {
+		t.Fatal(err)
+	}
+	// The hourly sweep runs before the grace notice arrives.
+	e.at(testNow.Add(2 * time.Hour))
+	if n, err := e.s.ExpireLots(ctx, e.p.now(), 100); err != nil || n != 1 {
+		t.Fatalf("sweep = %d %v, want 1", n, err)
+	}
+	if a := e.view(t, u); a.Plan != 0 {
+		t.Fatalf("plan after sweep = %d", a.Plan)
+	}
+	graceEnd := testNow.Add(72 * time.Hour)
+	e.apple.renewals["rn-r"] = &appstore.RenewalInfo{AutoRenewStatus: 1, GracePeriodExpiresDate: tp(graceEnd)}
+	n := notify("DID_FAIL_TO_RENEW", "GRACE_PERIOD", jws)
+	n.SignedRenewalInfo = "rn-r"
+	for range 2 { // a replayed notice changes nothing more
+		if err := e.p.ApplyAppleNotification(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	left, end := liveLotOf(t, e, u)
+	if left != 600 || end == nil || !end.Equal(graceEnd) {
+		t.Fatalf("re-opened lot = %d until %v, want the swept 600 until %v", left, end, graceEnd)
+	}
+	if pro, err := e.p.svc.HasPro(ctx, u); err != nil || !pro {
+		t.Fatalf("HasPro = %v %v, want true", pro, err)
+	}
+	// After the grace the sweep takes it again.
+	e.at(graceEnd.Add(time.Hour))
+	if _, err := e.s.ExpireLots(ctx, e.p.now(), 100); err != nil {
+		t.Fatal(err)
+	}
+	if a := e.view(t, u); a.Plan != 0 {
+		t.Fatalf("plan after grace = %d, want 0", a.Plan)
 	}
 }

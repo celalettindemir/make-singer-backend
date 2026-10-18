@@ -68,7 +68,7 @@ func TestMasterService_FinalDebitsBeforeSave(t *testing.T) {
 	if got.Op != credit.OpMaster || got.ID != resp.JobID || got.User != "kullanici-a" || got.Project != "p1" {
 		t.Errorf("spend = %+v, want master ref %s project p1", got, resp.JobID)
 	}
-	if resp.Balance == nil || *resp.Balance != 81 {
+	if resp.Balance != 81 {
 		t.Errorf("balance = %v, want 81", resp.Balance)
 	}
 	if len(fake.Refunds) != 0 {
@@ -89,12 +89,12 @@ func TestMasterService_FinalDebitsBeforeSave(t *testing.T) {
 	}
 }
 
-func TestMasterService_NoCreditsOmitsBalance(t *testing.T) {
+func TestMasterService_NoCreditsBalanceIsZero(t *testing.T) {
 	rdb := liveRedis(t)
 	s := NewMasterService(rdb, creditAsynqClient(t), nil, testR2Cfg())
 	resp, err := s.StartFinal(context.Background(), "kullanici-a", masterFinalRequest(t, "kullanici-a"))
-	if err != nil || resp.Balance != nil {
-		t.Fatalf("resp=%+v err=%v, want nil balance", resp, err)
+	if err != nil || resp.Balance != 0 {
+		t.Fatalf("resp=%+v err=%v, want zero balance", resp, err)
 	}
 }
 

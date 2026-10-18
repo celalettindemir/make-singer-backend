@@ -54,9 +54,9 @@ type MasterFinalResponse struct {
 	JobID             string    `json:"jobId"`
 	Status            JobStatus `json:"status"`
 	EstimatedDuration int       `json:"estimatedDuration"`
-	// Balance is the credit balance after the debit; absent when the service
-	// runs without credit accounting.
-	Balance *int `json:"balance,omitempty"`
+	// Balance is the credit balance after the debit; always on the wire
+	// (0 when the service runs without credit accounting).
+	Balance int `json:"balance"`
 }
 
 // MasterStatusResponse represents the status of a master job

@@ -192,7 +192,7 @@ func (s *Service) RefundAction(ctx context.Context, userID string, op Operation,
 
 // HasPro reports whether the user has an active Pro plan (P4): the latest
 // subscription is a pro product in status active, billing issue or grace,
-// and its period (or, in grace, the extended plan lot) has not ended.
+// and, except in grace, its period has not ended.
 func (s *Service) HasPro(ctx context.Context, userID string) (bool, error) {
 	sub, err := s.ledger.LatestSubscription(ctx, userID)
 	if err != nil || sub == nil {
@@ -206,19 +206,9 @@ func (s *Service) HasPro(ctx context.Context, userID string) (bool, error) {
 	case subActive, subBillingIssue:
 		return sub.PeriodEnd.After(now), nil
 	case subGrace:
-		if sub.PeriodEnd.After(now) {
-			return true, nil
-		}
-		lots, err := s.ledger.Lots(ctx, userID, now)
-		if err != nil {
-			return false, err
-		}
-		for _, l := range lots {
-			if l.Source == LotPlan && !l.Refund {
-				return true, nil
-			}
-		}
-		return false, nil
+		// The store's grace keeps the right while the status says so (the
+		// webhook or the resync ends it), whatever the plan lot holds.
+		return true, nil
 	}
 	return false, nil
 }

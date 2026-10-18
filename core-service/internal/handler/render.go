@@ -60,7 +60,7 @@ func (h *RenderHandler) Start(c *fiber.Ctx) error {
 			return response.ValidationError(c, i18n.KeyStemSettingsInvalid, nil)
 		}
 		if errors.Is(err, service.ErrPlanRequired) {
-			return response.PlanRequired(c, "pro")
+			return response.PlanRequired(c, string(credit.TierPro))
 		}
 		var insufficient *credit.InsufficientError
 		if errors.As(err, &insufficient) {

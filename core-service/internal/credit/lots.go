@@ -581,9 +581,12 @@ func endPlanLotsTx(ctx context.Context, tx pgx.Tx, userID, tur, ref string, now 
 	return bal - total, nil
 }
 
-// ExtendPlanLot moves the end of the user's current plan lot (the newest
-// one not yet swept or ended) to until (grace, P3). It is the only update
-// of bitis. No plan lot is not an error.
+// ExtendPlanLot moves the end of the user's newest plan lot to until (grace,
+// P3). It is the only update of bitis. When the expiry sweep already took
+// that lot (the grace notice came late), the lot is re-opened: the swept
+// remainder comes back under a plan_dolum movement (ref grace:<lot id>) and
+// the lot lasts until until. A lot ended on purpose (plan_bitis) is never
+// re-opened. No plan lot is not an error.
 func (s *PostgresStore) ExtendPlanLot(ctx context.Context, userID string, until time.Time) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		if _, err := lockAccount(ctx, tx, userID, false); err != nil {
@@ -592,13 +595,58 @@ func (s *PostgresStore) ExtendPlanLot(ctx context.Context, userID string, until 
 			}
 			return fmt.Errorf("could not lock the credit account: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE kredi.dilim SET bitis = $2
-			WHERE id = (SELECT id FROM kredi.dilim
-			            WHERE kullanici_id = $1::text::uuid AND kaynak = 'plan' AND NOT iade AND NOT sure_islendi
-			            ORDER BY bitis DESC NULLS FIRST, id DESC LIMIT 1)
-			  AND bitis IS NOT NULL AND bitis < $2`, userID, until); err != nil {
-			return fmt.Errorf("could not extend the plan lot: %w", err)
+		var id int64
+		var end *time.Time
+		var swept bool
+		err := tx.QueryRow(ctx, `
+			SELECT id, bitis, sure_islendi FROM kredi.dilim
+			WHERE kullanici_id = $1::text::uuid AND kaynak = 'plan' AND NOT iade
+			ORDER BY id DESC LIMIT 1 FOR UPDATE`, userID).Scan(&id, &end, &swept)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("could not read the plan lot: %w", err)
+		}
+		if end == nil || !end.Before(until) {
+			return nil
+		}
+		if !swept {
+			if _, err := tx.Exec(ctx, `UPDATE kredi.dilim SET bitis = $2 WHERE id = $1`, id, until); err != nil {
+				return fmt.Errorf("could not extend the plan lot: %w", err)
+			}
+			return nil
+		}
+		var amount int
+		err = tx.QueryRow(ctx, `
+			SELECT -dh.delta FROM kredi.dilim_hareket dh JOIN kredi.hareket h ON h.id = dh.hareket_id
+			WHERE dh.dilim_id = $1 AND h.tur = 'plan_sure'`, id).Scan(&amount)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // ended on purpose, or never swept by expiry
+		}
+		if err != nil {
+			return fmt.Errorf("could not read the swept remainder: %w", err)
+		}
+		tier, err := lotTier(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		ref := "grace:" + strconv.FormatInt(id, 10)
+		if done, err := movementDone(ctx, tx, userID, turPlanDolum, ref); err != nil || done {
+			return err
+		}
+		mid, err := insertMovement(ctx, tx, movement{userID: userID, tur: turPlanDolum, ref: ref, amount: amount, tier: tier})
+		if err != nil {
+			return err
+		}
+		if amount > 0 {
+			if err := lotDelta(ctx, tx, mid, id, amount); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE kredi.dilim SET bitis = $2, sure_islendi = false WHERE id = $1`, id, until); err != nil {
+			return fmt.Errorf("could not re-open the plan lot: %w", err)
 		}
 		return nil
 	})

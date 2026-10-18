@@ -393,7 +393,10 @@ func (p *Purchases) applySubscription(ctx context.Context, f subFacts, submitter
 			next.UserID = strPtr(owner)
 		}
 	} else if isYearly(f.product) {
-		restart := cur == nil || cur.Product != f.product || cur.RefillAnchor == nil || !live(cur.Status)
+		// A new paid period (the year-end renewal) restarts the monthly
+		// schedule, so the sweep never grants the renewal's first month twice.
+		renewed := cur != nil && f.refillRef != "" && f.periodEnd.After(cur.PeriodEnd)
+		restart := cur == nil || cur.Product != f.product || cur.RefillAnchor == nil || !live(cur.Status) || renewed
 		if restart && f.status == subActive {
 			anchor := f.periodStart
 			if anchor.IsZero() {
