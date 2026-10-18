@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/makeasinger/api/internal/identity"
 )
 
@@ -112,33 +111,6 @@ type CampaignDetail struct {
 	Used        int
 	UsedPercent int
 	Recent      []Participant
-}
-
-// campaignUUIDPrefix is the fixed part of the UUID a campaign id is shown
-// as: the table key is a bigint, the contract names a UUID.
-const campaignUUIDPrefix = "00000000-0000-4000-8000-"
-
-// CampaignUUID is the wire id of a campaign (a UUID that carries the table
-// key in its last 12 hex digits).
-func CampaignUUID(id int64) string {
-	return fmt.Sprintf("%s%012x", campaignUUIDPrefix, id)
-}
-
-// ParseCampaignUUID reverses CampaignUUID. It is false for any other string.
-func ParseCampaignUUID(s string) (int64, bool) {
-	u, err := uuid.Parse(s)
-	if err != nil {
-		return 0, false
-	}
-	canon := u.String()
-	if !strings.HasPrefix(canon, campaignUUIDPrefix) {
-		return 0, false
-	}
-	var id int64
-	if _, err := fmt.Sscanf(canon[len(campaignUUIDPrefix):], "%012x", &id); err != nil || id <= 0 {
-		return 0, false
-	}
-	return id, true
 }
 
 // SignupJoin is one person asking for the gift.

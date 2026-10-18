@@ -4,7 +4,7 @@ import "time"
 
 // CampaignView is a campaign as the admin API shows it.
 type CampaignView struct {
-	ID        string     `json:"id"`
+	ID        int64      `json:"id"`
 	Name      string     `json:"name"`
 	Quota     int        `json:"quota"`
 	PerUser   int        `json:"perUser"`
@@ -20,7 +20,7 @@ type CampaignView struct {
 // View is the API form of the campaign.
 func (c Campaign) View() CampaignView {
 	v := CampaignView{
-		ID: CampaignUUID(c.ID), Name: c.Name, Quota: c.Quota, PerUser: c.PerUser, ValidDays: c.ValidDays,
+		ID: c.ID, Name: c.Name, Quota: c.Quota, PerUser: c.PerUser, ValidDays: c.ValidDays,
 		Status: c.Status.JSON(), StartedAt: c.StartedAt.UTC(), CreatedBy: c.CreatedBy, Joined: c.Joined,
 	}
 	if c.EndsAt != nil {

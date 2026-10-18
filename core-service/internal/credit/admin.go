@@ -156,7 +156,7 @@ type AdminMovement struct {
 	Note       *string   `json:"note"`
 	ProjectID  *string   `json:"projectId"`
 	Tier       *string   `json:"tier"`
-	CampaignID *string   `json:"campaignId"`
+	CampaignID *int64    `json:"campaignId"`
 }
 
 // AdminMovementPage is one page of movements, newest first.
@@ -477,7 +477,7 @@ func (a *Admin) movementViews(ctx context.Context, rows []AdminMovementRow) ([]A
 			m.By, m.Note = r.By, r.Note
 		}
 		if r.CampaignID != nil {
-			id := CampaignUUID(*r.CampaignID)
+			id := *r.CampaignID
 			m.CampaignID = &id
 		}
 		out = append(out, m)

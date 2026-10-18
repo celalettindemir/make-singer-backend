@@ -183,7 +183,7 @@ func TestAdmin_ListShowsSummaryAndActive(t *testing.T) {
 	}
 	o, _ = e.camp.List(ctx)
 	v = o.View()
-	if v.Summary.Active == nil || v.Summary.Active.ID != CampaignUUID(second.ID) || v.Summary.Active.Joined != 2 ||
+	if v.Summary.Active == nil || v.Summary.Active.ID != second.ID || v.Summary.Active.Joined != 2 ||
 		v.Summary.Active.Status != "active" || *v.Summary.Active.EndsAt != "2026-12-31" {
 		t.Fatalf("active = %+v", v.Summary.Active)
 	}
@@ -193,7 +193,7 @@ func TestAdmin_ListShowsSummaryAndActive(t *testing.T) {
 	if v.Summary.DistributedThisMonth.Users != 2 || v.Summary.DistributedThisMonth.Credits != 100 {
 		t.Fatalf("distributedThisMonth = %+v", v.Summary.DistributedThisMonth)
 	}
-	if len(v.Items) != 2 || v.Items[0].ID != CampaignUUID(second.ID) || v.Items[1].Status != "stopped" || v.Items[1].StoppedAt == nil {
+	if len(v.Items) != 2 || v.Items[0].ID != second.ID || v.Items[1].Status != "stopped" || v.Items[1].StoppedAt == nil {
 		t.Fatalf("items = %+v", v.Items)
 	}
 	if v.Items[1].EndsAt != nil {
@@ -252,23 +252,6 @@ func TestAdmin_StopTwiceIs409(t *testing.T) {
 	}
 	if _, err := e.camp.Stop(ctx, c.ID+1000); !errors.Is(err, ErrCampaignNotFound) {
 		t.Fatalf("unknown Stop err = %v", err)
-	}
-}
-
-func TestCampaignUUID_RoundTrip(t *testing.T) {
-	for _, id := range []int64{1, 42, 1 << 40} {
-		got, ok := ParseCampaignUUID(CampaignUUID(id))
-		if !ok || got != id {
-			t.Errorf("round trip %d = %d, %v", id, got, ok)
-		}
-	}
-	for _, bad := range []string{"", "x", uuid.NewString(), CampaignUUID(0), "00000000-0000-4000-8000-00000000000g"} {
-		if _, ok := ParseCampaignUUID(bad); ok {
-			t.Errorf("ParseCampaignUUID(%q) accepted", bad)
-		}
-	}
-	if _, err := uuid.Parse(CampaignUUID(7)); err != nil {
-		t.Errorf("not a UUID: %v", err)
 	}
 }
 
@@ -569,7 +552,7 @@ func TestAdmin_MovementsFilterKindCampaignDates(t *testing.T) {
 		t.Fatalf("campaign filter = %+v, want gift + spend", byCampaign)
 	}
 	for _, m := range byCampaign {
-		if m.UserID != idA || m.CampaignID == nil || *m.CampaignID != CampaignUUID(c.ID) {
+		if m.UserID != idA || m.CampaignID == nil || *m.CampaignID != c.ID {
 			t.Errorf("campaign row = %+v", m)
 		}
 	}
@@ -662,5 +645,27 @@ func TestAdmin_MovementsFilterKindCampaignDates(t *testing.T) {
 func TestShortID(t *testing.T) {
 	if got := ShortID("8f3a21c0-6b7d-4e19-a2f5-0d9c1b3e4a67"); got != "8F3A21" {
 		t.Fatalf("ShortID = %q", got)
+	}
+}
+
+// The month of the summary starts at 00:00 on the 1st in Europe/Istanbul.
+func TestAdmin_DistributedThisMonthStartsInIstanbul(t *testing.T) {
+	e := newAdminEnv(t)
+	ctx := context.Background()
+	e.setNow(time.Date(2031, 9, 30, 19, 0, 0, 0, time.UTC))
+	e.campaign(10, 7, 30, nil)
+	e.setNow(time.Date(2031, 9, 30, 20, 59, 0, 0, time.UTC)) // 23:59 on 30 Sep in Istanbul
+	idA, mailA := e.user("eylul", e.clock())
+	e.join(idA, mailA)
+	e.setNow(time.Date(2031, 9, 30, 21, 0, 0, 0, time.UTC)) // 00:00 on 1 Oct in Istanbul
+	idB, mailB := e.user("ekim", e.clock())
+	e.join(idB, mailB)
+	e.setNow(time.Date(2031, 10, 18, 12, 0, 0, 0, time.UTC))
+	o, err := e.camp.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.MonthPeople != 1 || o.MonthCredits != 7 {
+		t.Fatalf("month = %d people, %d credits; want 1, 7", o.MonthPeople, o.MonthCredits)
 	}
 }

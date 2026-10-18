@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"strconv"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -171,9 +172,9 @@ func (h *AdminHandler) CreateCampaign(c *fiber.Ctx) error {
 
 // GetCampaign handles GET /api/admin/campaigns/:id.
 func (h *AdminHandler) GetCampaign(c *fiber.Ctx) error {
-	id, ok := credit.ParseCampaignUUID(c.Params("id"))
-	if !ok {
-		return response.NotFound(c, i18n.KeyAdminNotFound)
+	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
+	if err != nil || id <= 0 {
+		return invalidField(c, "id")
 	}
 	d, err := h.campaigns.Get(c.UserContext(), id)
 	if errors.Is(err, credit.ErrCampaignNotFound) {
@@ -187,9 +188,9 @@ func (h *AdminHandler) GetCampaign(c *fiber.Ctx) error {
 
 // StopCampaign handles POST /api/admin/campaigns/:id/stop.
 func (h *AdminHandler) StopCampaign(c *fiber.Ctx) error {
-	id, ok := credit.ParseCampaignUUID(c.Params("id"))
-	if !ok {
-		return response.NotFound(c, i18n.KeyAdminNotFound)
+	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
+	if err != nil || id <= 0 {
+		return invalidField(c, "id")
 	}
 	stopped, err := h.campaigns.Stop(c.UserContext(), id)
 	switch {
@@ -282,8 +283,8 @@ func (h *AdminHandler) ListMovements(c *fiber.Ctx) error {
 		}
 	}
 	if s := c.Query("campaignId"); s != "" {
-		id, ok := credit.ParseCampaignUUID(s)
-		if !ok {
+		id, err := strconv.ParseInt(s, 10, 64)
+		if err != nil || id <= 0 {
 			return invalidField(c, "campaignId")
 		}
 		q.CampaignID = &id

@@ -115,7 +115,8 @@ func (s *PostgresStore) CampaignOverview(ctx context.Context, now time.Time) (Ca
 			break
 		}
 	}
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	y, m, _ := now.In(istanbul).Date()
+	monthStart := time.Date(y, m, 1, 0, 0, 0, 0, istanbul)
 	if err := s.pool.QueryRow(ctx,
 		`SELECT count(*), coalesce(sum(k.kisi_basi), 0)
 		 FROM kredi.kampanya_katilim p JOIN kredi.kampanya k ON k.id = p.kampanya_id
