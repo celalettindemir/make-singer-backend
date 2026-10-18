@@ -70,6 +70,9 @@ var (
 	KeyInsufficientCredits  = Key{"insufficient_credits"}
 	KeyPlanRequired         = Key{"plan_required"}
 	KeyAdminRequired        = Key{"admin_required"}
+	KeyAdminNotFound        = Key{"admin_not_found"}
+	KeyCampaignNotActive    = Key{"campaign_not_active"}
+	KeyBalanceTooLow        = Key{"balance_too_low"}
 	KeyPurchaseInvalid      = Key{"purchase_invalid"}
 	KeyPurchaseOwnedByOther = Key{"purchase_owned_by_other"}
 	KeyActionIDRequired     = Key{"action_id_required"}
@@ -181,6 +184,9 @@ var catalog = map[Key]texts{
 	KeyInsufficientCredits:  {"Yeterli krediniz yok.", "You do not have enough credits."},
 	KeyPlanRequired:         {"Kanallar render'ı Pro planı gerektirir.", "The channels render needs the Pro plan."},
 	KeyAdminRequired:        {"Bu alan yalnızca yöneticilere açıktır.", "This area is for administrators only."},
+	KeyAdminNotFound:        {"Kampanya ya da kullanıcı bulunamadı.", "No such campaign or user."},
+	KeyCampaignNotActive:    {"Kampanya etkin değil.", "The campaign is not active."},
+	KeyBalanceTooLow:        {"Bakiye, düşülecek tutardan az.", "The balance is lower than the amount to take away."},
 	KeyPurchaseInvalid:      {"Satın alma doğrulanamadı.", "The purchase could not be verified."},
 	KeyPurchaseOwnedByOther: {"Bu satın alma başka bir hesaba ait.", "This purchase belongs to another account."},
 	KeyActionIDRequired:     {"X-Action-Id başlığı zorunludur.", "The X-Action-Id header is required."},

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/makeasinger/api/internal/identity"
 )
 
@@ -60,8 +61,9 @@ type Campaign struct {
 	PerUser   int
 	ValidDays int
 	Joined    int
-	// EndsAt is the last day of the campaign (a date, UTC); nil: it ends when
-	// the quota is full.
+	// EndsAt is the last day of the campaign (a calendar date kept at 00:00
+	// UTC, read in Europe/Istanbul: the campaign gives gifts until the end of
+	// that day there); nil: it ends when the quota is full.
 	EndsAt    *time.Time
 	Status    CampaignStatus
 	StartedAt time.Time
@@ -93,8 +95,8 @@ type CampaignOverview struct {
 	QuotaLeft int
 }
 
-// Participant is one recent campaign member. UserID is empty once the
-// account was deleted.
+// Participant is one recent campaign member. Deleted accounts are not
+// listed.
 type Participant struct {
 	UserID   string
 	JoinedAt time.Time
@@ -110,6 +112,33 @@ type CampaignDetail struct {
 	Used        int
 	UsedPercent int
 	Recent      []Participant
+}
+
+// campaignUUIDPrefix is the fixed part of the UUID a campaign id is shown
+// as: the table key is a bigint, the contract names a UUID.
+const campaignUUIDPrefix = "00000000-0000-4000-8000-"
+
+// CampaignUUID is the wire id of a campaign (a UUID that carries the table
+// key in its last 12 hex digits).
+func CampaignUUID(id int64) string {
+	return fmt.Sprintf("%s%012x", campaignUUIDPrefix, id)
+}
+
+// ParseCampaignUUID reverses CampaignUUID. It is false for any other string.
+func ParseCampaignUUID(s string) (int64, bool) {
+	u, err := uuid.Parse(s)
+	if err != nil {
+		return 0, false
+	}
+	canon := u.String()
+	if !strings.HasPrefix(canon, campaignUUIDPrefix) {
+		return 0, false
+	}
+	var id int64
+	if _, err := fmt.Sscanf(canon[len(campaignUUIDPrefix):], "%012x", &id); err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
 }
 
 // SignupJoin is one person asking for the gift.
@@ -150,24 +179,39 @@ func NewCampaigns(store CampaignStore, now func() time.Time) *Campaigns {
 	return &Campaigns{store: store, now: func() time.Time { return now().UTC() }}
 }
 
-// maxCampaignName and maxCampaignCredits bound the admin input.
+// Bounds of the admin input (contract CreateCampaignRequest).
 const (
-	maxCampaignName    = 120
-	maxCampaignCredits = 100000
+	maxCampaignName    = 80
+	maxCampaignQuota   = 1000000
+	maxCampaignPerUser = 10000
 	maxCampaignDays    = 3650
 )
+
+// FieldError is a validation failure naming the request field. It matches
+// the sentinel it wraps (ErrCampaignInvalid or ErrAdjustInvalid).
+type FieldError struct {
+	Field string
+	base  error
+}
+
+func (e *FieldError) Error() string { return e.base.Error() + ": " + e.Field }
+
+// Unwrap lets errors.Is find the sentinel.
+func (e *FieldError) Unwrap() error { return e.base }
+
+func campaignField(field string) error { return &FieldError{Field: field, base: ErrCampaignInvalid} }
 
 func (in NewCampaign) validate() error {
 	name := strings.TrimSpace(in.Name)
 	switch {
 	case name == "" || len([]rune(name)) > maxCampaignName:
-		return fmt.Errorf("%w: name", ErrCampaignInvalid)
-	case in.Quota <= 0 || in.Quota > maxCampaignCredits:
-		return fmt.Errorf("%w: quota", ErrCampaignInvalid)
-	case in.PerUser <= 0 || in.PerUser > maxCampaignCredits:
-		return fmt.Errorf("%w: per user", ErrCampaignInvalid)
+		return campaignField("name")
+	case in.Quota <= 0 || in.Quota > maxCampaignQuota:
+		return campaignField("quota")
+	case in.PerUser <= 0 || in.PerUser > maxCampaignPerUser:
+		return campaignField("perUser")
 	case in.ValidDays <= 0 || in.ValidDays > maxCampaignDays:
-		return fmt.Errorf("%w: valid days", ErrCampaignInvalid)
+		return campaignField("validDays")
 	}
 	return nil
 }
@@ -182,8 +226,8 @@ func (c *Campaigns) Create(ctx context.Context, in NewCampaign, by string) (crea
 	now := c.now()
 	if in.EndsAt != nil {
 		day := dateOf(*in.EndsAt)
-		if day.Before(dateOf(now)) {
-			return Campaign{}, nil, fmt.Errorf("%w: end date is in the past", ErrCampaignInvalid)
+		if day.Before(istanbulDay(now)) {
+			return Campaign{}, nil, campaignField("endsAt")
 		}
 		in.EndsAt = &day
 	}

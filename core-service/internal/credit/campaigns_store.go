@@ -125,7 +125,7 @@ func (s *PostgresStore) CampaignOverview(ctx context.Context, now time.Time) (Ca
 	return o, nil
 }
 
-const recentParticipants = 10
+const recentParticipants = 20
 
 // CampaignDetail returns one campaign with distributed/used credits and the
 // latest participants.
@@ -150,11 +150,11 @@ func (s *PostgresStore) CampaignDetail(ctx context.Context, id int64) (CampaignD
 		return CampaignDetail{}, fmt.Errorf("could not sum the used credits: %w", err)
 	}
 	if d.Distributed > 0 {
-		d.UsedPercent = d.Used * 100 / d.Distributed
+		d.UsedPercent = min((d.Used*100+d.Distributed/2)/d.Distributed, 100)
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT coalesce(kullanici_id::text, ''), olusturuldu FROM kredi.kampanya_katilim
-		 WHERE kampanya_id = $1 ORDER BY olusturuldu DESC LIMIT $2`, id, recentParticipants)
+		`SELECT kullanici_id::text, olusturuldu FROM kredi.kampanya_katilim
+		 WHERE kampanya_id = $1 AND kullanici_id IS NOT NULL ORDER BY olusturuldu DESC LIMIT $2`, id, recentParticipants)
 	if err != nil {
 		return CampaignDetail{}, fmt.Errorf("could not list the participants: %w", err)
 	}
@@ -197,8 +197,8 @@ func (s *PostgresStore) JoinCampaign(ctx context.Context, j SignupJoin, now time
 		if j.CreatedAt.Before(startedAt) || joinedCount >= quota {
 			return nil
 		}
-		if endsOn != nil && dateOf(now).After(dateOf(*endsOn)) {
-			return nil // past its end date, the sweep has not run yet
+		if endsOn != nil && istanbulDay(now).After(dateOf(*endsOn)) {
+			return nil // past its end day (Istanbul), the sweep has not run yet
 		}
 		tag, err := tx.Exec(ctx,
 			`INSERT INTO kredi.kampanya_katilim (kampanya_id, kullanici_id, eposta_karma, olusturuldu)
@@ -238,7 +238,7 @@ func (s *PostgresStore) JoinCampaign(ctx context.Context, j SignupJoin, now time
 func (s *PostgresStore) EndCampaigns(ctx context.Context, now time.Time) (int, error) {
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE kredi.kampanya SET durum = 'bitti'
-		 WHERE durum = 'aktif' AND bitis_tarihi IS NOT NULL AND bitis_tarihi < $1::date`, now)
+		 WHERE durum = 'aktif' AND bitis_tarihi IS NOT NULL AND bitis_tarihi < $1::date`, istanbulDay(now))
 	if err != nil {
 		return 0, err
 	}
@@ -255,7 +255,7 @@ func (s *PostgresStore) MissingGifts(ctx context.Context, since, now time.Time, 
 		WHERE k.durum = 'aktif' AND k.katilan < k.kota
 		  AND (k.bitis_tarihi IS NULL OR k.bitis_tarihi >= $2::date)
 		  AND NOT EXISTS (SELECT 1 FROM kredi.kampanya_katilim p WHERE p.kullanici_id = u.id)
-		ORDER BY u.created_at LIMIT $3`, since, now, limit)
+		ORDER BY u.created_at LIMIT $3`, since, istanbulDay(now), limit)
 	if err != nil {
 		return nil, err
 	}

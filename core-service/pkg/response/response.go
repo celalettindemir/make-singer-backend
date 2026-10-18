@@ -21,6 +21,8 @@ const (
 	CodePurchaseOwnedByOther = "PURCHASE_OWNED_BY_OTHER"
 	CodePlanRequired         = "PLAN_REQUIRED"
 	CodeAdminRequired        = "ADMIN_REQUIRED"
+	CodeCampaignNotActive    = "CAMPAIGN_NOT_ACTIVE"
+	CodeBalanceTooLow        = "BALANCE_TOO_LOW"
 )
 
 type ErrorResponse struct {
@@ -123,4 +125,17 @@ func AdminRequired(c *fiber.Ctx) error {
 func PlanRequired(c *fiber.Ctx, tier string) error {
 	return Error(c, fiber.StatusForbidden, CodePlanRequired, i18n.KeyPlanRequired,
 		map[string]string{"requiredTier": tier})
+}
+
+// CampaignNotActive writes the 409 answer for stopping a campaign that is
+// not active.
+func CampaignNotActive(c *fiber.Ctx) error {
+	return Error(c, fiber.StatusConflict, CodeCampaignNotActive, i18n.KeyCampaignNotActive, nil)
+}
+
+// BalanceTooLow writes the 409 answer for an admin deduction larger than the
+// user's balance.
+func BalanceTooLow(c *fiber.Ctx, balance int) error {
+	return Error(c, fiber.StatusConflict, CodeBalanceTooLow, i18n.KeyBalanceTooLow,
+		map[string]int{"balance": balance})
 }

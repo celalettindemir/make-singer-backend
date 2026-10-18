@@ -251,3 +251,22 @@ type adminStub struct {
 func (a adminStub) AdminView(context.Context, string) (string, bool, error) {
 	return a.email, a.verified, nil
 }
+
+func TestRoutes_AdminHandlerBindsTheContractPaths(t *testing.T) {
+	app := fiber.New()
+	handler.NewAdminHandler(nil, nil).Routes(app.Group("/api/admin"))
+	have := map[string]bool{}
+	for _, r := range app.GetRoutes() {
+		have[r.Method+" "+r.Path] = true
+	}
+	for _, want := range []string{
+		"GET /api/admin/campaigns", "POST /api/admin/campaigns",
+		"GET /api/admin/campaigns/:id", "POST /api/admin/campaigns/:id/stop",
+		"GET /api/admin/users", "GET /api/admin/users/:id", "POST /api/admin/users/:id/adjust",
+		"GET /api/admin/movements",
+	} {
+		if !have[want] {
+			t.Errorf("route %q is not bound", want)
+		}
+	}
+}

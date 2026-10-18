@@ -302,6 +302,26 @@ var planStatus = map[string]string{
 	"iade":         "refunded",
 }
 
+// planOf shows a subscription as the API plan; nil when there is none or it
+// has no usable tier, status or period.
+func planOf(sub *Subscription) *Plan {
+	if sub == nil {
+		return nil
+	}
+	status, ok := planStatus[sub.Status]
+	tier := tierOf(sub.Product)
+	if !ok || tier == "" || sub.PeriodEnd.IsZero() {
+		return nil
+	}
+	plan := &Plan{Tier: tier, Period: periodOf(sub.Product), Status: status, PeriodEnd: sub.PeriodEnd, AutoRenew: sub.AutoRenew}
+	if sub.NextProduct != nil {
+		if next := tierOf(*sub.NextProduct); next != "" && next != tier {
+			plan.PendingTier = &next
+		}
+	}
+	return plan
+}
+
 // Summary reads (creating when missing) the user's account, lots and plan.
 // The balance is the sum of the unexpired lots minus the debt, computed now.
 func (s *Service) Summary(ctx context.Context, userID string) (Summary, error) {
@@ -344,19 +364,7 @@ func (s *Service) Summary(ctx context.Context, userID string) (Summary, error) {
 	if gift != nil && gift.ExpiresAt != nil {
 		out.Gift = &Gift{Amount: gift.Amount, ExpiresAt: *gift.ExpiresAt}
 	}
-	if sub != nil {
-		status, ok := planStatus[sub.Status]
-		tier := tierOf(sub.Product)
-		if ok && tier != "" && !sub.PeriodEnd.IsZero() {
-			plan := &Plan{Tier: tier, Period: periodOf(sub.Product), Status: status, PeriodEnd: sub.PeriodEnd, AutoRenew: sub.AutoRenew}
-			if sub.NextProduct != nil {
-				if next := tierOf(*sub.NextProduct); next != "" && next != tier {
-					plan.PendingTier = &next
-				}
-			}
-			out.Plan = plan
-		}
-	}
+	out.Plan = planOf(sub)
 	return out, nil
 }
 
@@ -409,24 +417,33 @@ func (s *Service) History(ctx context.Context, userID, cursor, kind string) (His
 		page.NextCursor = &next
 	}
 	for _, m := range p.Items {
-		kind := MovementKind(m.Tur)
-		item := HistoryItem{ID: "mv_" + strconv.FormatInt(m.ID, 10), Kind: kind, Amount: m.Amount, CreatedAt: m.CreatedAt}
-		if operationKinds[kind] {
-			op := m.Reason
-			if op == "" && strings.HasPrefix(kind, "master") {
-				op = string(OpMaster)
-			}
-			if op != "" {
-				item.Operation = &op
-			}
-		}
-		if projectKinds[kind] {
-			item.ProjectID = m.ProjectID
-		}
-		if tierKinds[kind] {
-			item.Tier = m.Tier
-		}
-		page.Items = append(page.Items, item)
+		kind, op, project, tier := movementFields(m)
+		page.Items = append(page.Items, HistoryItem{
+			ID: "mv_" + strconv.FormatInt(m.ID, 10), Kind: kind, Operation: op, Amount: m.Amount,
+			ProjectID: project, Tier: tier, CreatedAt: m.CreatedAt,
+		})
 	}
 	return page, nil
+}
+
+// movementFields derives the API fields of a ledger movement: its kind, and
+// the operation, project and tier that only some kinds carry.
+func movementFields(m Movement) (kind string, operation, project, tier *string) {
+	kind = MovementKind(m.Tur)
+	if operationKinds[kind] {
+		op := m.Reason
+		if op == "" && strings.HasPrefix(kind, "master") {
+			op = string(OpMaster)
+		}
+		if op != "" {
+			operation = &op
+		}
+	}
+	if projectKinds[kind] {
+		project = m.ProjectID
+	}
+	if tierKinds[kind] {
+		tier = m.Tier
+	}
+	return kind, operation, project, tier
 }

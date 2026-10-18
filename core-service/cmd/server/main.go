@@ -358,9 +358,13 @@ func main() {
 	// Admin panel: its own auth chain (admin audience, then the e-mail gate).
 	// Registered BEFORE the mobile /api group, whose middleware would
 	// otherwise answer these paths first.
-	registerAdminRoutes(app, rateLimiter, cfg.Auth.AdminClientSecret != "",
+	adminRoutes := registerAdminRoutes(app, rateLimiter, cfg.Auth.AdminClientSecret != "",
 		middleware.NewAdminAuth(cfg.Auth.Issuer, cfg.Auth.AdminClientID, identityServer.APIPublicKey()),
 		middleware.AdminGate(identityServer, cfg.Admin.Emails))
+	if adminRoutes != nil {
+		admin := credit.NewAdmin(creditStore, creditStore, identity.NewDirectory(creditPool), time.Now)
+		handler.NewAdminHandler(campaigns, admin).Routes(adminRoutes)
+	}
 
 	// API routes
 	api := newAPIRouter(app, creditRoutes, rateLimiter, cfg,
