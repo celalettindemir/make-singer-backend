@@ -581,6 +581,25 @@ func endPlanLotsTx(ctx context.Context, tx pgx.Tx, userID, tur, ref string, now 
 	return bal - total, nil
 }
 
+// freshRef returns the first unused ref of tur among base, base:2, base:3 ...
+// (one per expiry or re-opening of the same lot). done is true only when a
+// movement under that ref already exists for another reason (never here).
+func freshRef(ctx context.Context, tx pgx.Tx, userID, tur, base string) (string, bool, error) {
+	ref := base
+	for n := 2; n < 1000; n++ {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM kredi.hareket WHERE tur = $1 AND ref = $2)`,
+			tur, ref).Scan(&exists); err != nil {
+			return "", false, fmt.Errorf("could not check the ledger: %w", err)
+		}
+		if !exists {
+			return ref, false, nil
+		}
+		ref = base + ":" + strconv.Itoa(n)
+	}
+	return "", false, fmt.Errorf("credit: too many %s movements for %s", tur, base)
+}
+
 // ExtendPlanLot moves the end of the user's newest plan lot to until (grace,
 // P3). It is the only update of bitis. When the expiry sweep already took
 // that lot (the grace notice came late), the lot is re-opened: the swept
@@ -620,7 +639,7 @@ func (s *PostgresStore) ExtendPlanLot(ctx context.Context, userID string, until 
 		var amount int
 		err = tx.QueryRow(ctx, `
 			SELECT -dh.delta FROM kredi.dilim_hareket dh JOIN kredi.hareket h ON h.id = dh.hareket_id
-			WHERE dh.dilim_id = $1 AND h.tur = 'plan_sure'`, id).Scan(&amount)
+			WHERE dh.dilim_id = $1 AND h.tur = 'plan_sure' ORDER BY h.id DESC LIMIT 1`, id).Scan(&amount)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil // ended on purpose, or never swept by expiry
 		}
@@ -631,7 +650,15 @@ func (s *PostgresStore) ExtendPlanLot(ctx context.Context, userID string, until 
 		if err != nil {
 			return err
 		}
-		ref := "grace:" + strconv.FormatInt(id, 10)
+		// Idempotent per expiry: the re-opening is keyed by the number of
+		// expiry movements the lot has had.
+		var expiries int
+		if err := tx.QueryRow(ctx, `
+			SELECT count(*) FROM kredi.dilim_hareket dh JOIN kredi.hareket h ON h.id = dh.hareket_id
+			WHERE dh.dilim_id = $1 AND h.tur = 'plan_sure'`, id).Scan(&expiries); err != nil {
+			return fmt.Errorf("could not count the expiries: %w", err)
+		}
+		ref := "grace:" + strconv.FormatInt(id, 10) + ":" + strconv.Itoa(expiries)
 		if done, err := movementDone(ctx, tx, userID, turPlanDolum, ref); err != nil || done {
 			return err
 		}
@@ -767,8 +794,8 @@ func (s *PostgresStore) ExpireLots(ctx context.Context, now time.Time, limit int
 			}
 			if remain > 0 {
 				tur := expiryTur[LotSource(source)]
-				ref := strconv.FormatInt(d.id, 10)
-				done, err := movementDone(ctx, tx, d.userID, tur, ref)
+				// A re-opened lot (grace) expires again under a new ref.
+				ref, done, err := freshRef(ctx, tx, d.userID, tur, strconv.FormatInt(d.id, 10))
 				if err != nil {
 					return err
 				}

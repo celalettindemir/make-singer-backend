@@ -674,3 +674,152 @@ func TestPurchases_GraceAfterSweepReopensPlanLot(t *testing.T) {
 		t.Fatalf("plan after grace = %d, want 0", a.Plan)
 	}
 }
+
+// ledgerDrift is (sum of all movements) - (sum of lot remainders): zero when
+// every change of a lot is on the ledger.
+func ledgerDrift(t *testing.T, e *purchaseEnv, user string) int {
+	t.Helper()
+	var moved, lots int
+	if err := e.s.pool.QueryRow(context.Background(), `
+		SELECT COALESCE((SELECT SUM(tutar) FROM kredi.hareket WHERE kullanici_id = $1::uuid), 0),
+		       COALESCE((SELECT SUM(kalan) FROM kredi.dilim WHERE kullanici_id = $1::uuid), 0)`, user).Scan(&moved, &lots); err != nil {
+		t.Fatal(err)
+	}
+	return moved - lots
+}
+
+func TestPurchases_ReopenedLotExpiresAgainWithoutDrift(t *testing.T) {
+	e := newPurchaseEnv(t)
+	e.realCredits()
+	ctx := context.Background()
+	u, tok := e.user(t)
+	jws := e.apple.sign(subTx("tx-1", "orig-1", productProMonthly, tok, testNow.AddDate(0, -1, 0).Add(time.Hour), 1))
+	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.s.Debit(ctx, u, "render", "job-1", 400, Meta{Reason: "render_stems"}, e.p.now()); err != nil {
+		t.Fatal(err)
+	}
+	e.at(testNow.Add(2 * time.Hour))
+	if _, err := e.s.ExpireLots(ctx, e.p.now(), 100); err != nil {
+		t.Fatal(err)
+	}
+	graceEnd := testNow.Add(72 * time.Hour)
+	e.apple.renewals["rn-d"] = &appstore.RenewalInfo{AutoRenewStatus: 1, GracePeriodExpiresDate: tp(graceEnd)}
+	n := notify("DID_FAIL_TO_RENEW", "GRACE_PERIOD", jws)
+	n.SignedRenewalInfo = "rn-d"
+	if err := e.p.ApplyAppleNotification(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := liveLotOf(t, e, u); left != 600 {
+		t.Fatalf("re-opened = %d, want 600", left)
+	}
+	e.at(graceEnd.Add(time.Hour))
+	if swept, err := e.s.ExpireLots(ctx, e.p.now(), 100); err != nil || swept != 1 {
+		t.Fatalf("second sweep = %d %v, want 1", swept, err)
+	}
+	if n := count(t, e.s, `SELECT count(*) FROM kredi.dilim WHERE kullanici_id = $1::uuid AND kalan <> 0`, u); n != 0 {
+		t.Fatalf("lots with credit left = %d, want 0", n)
+	}
+	if n := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE kullanici_id = $1::uuid AND tur = 'plan_sure'`, u); n != 2 {
+		t.Fatalf("plan_sure rows = %d, want 2", n)
+	}
+	if d := ledgerDrift(t, e, u); d != 0 {
+		t.Fatalf("ledger drift = %d, want 0", d)
+	}
+	// A second grace after the second expiry re-opens it once more, still balanced.
+	later := graceEnd.Add(48 * time.Hour)
+	e.apple.renewals["rn-d2"] = &appstore.RenewalInfo{AutoRenewStatus: 1, GracePeriodExpiresDate: tp(later)}
+	n2 := notify("DID_FAIL_TO_RENEW", "GRACE_PERIOD", jws)
+	n2.SignedRenewalInfo = "rn-d2"
+	if err := e.p.ApplyAppleNotification(ctx, n2); err != nil {
+		t.Fatal(err)
+	}
+	if d := ledgerDrift(t, e, u); d != 0 {
+		t.Fatalf("ledger drift after a third life = %d", d)
+	}
+}
+
+func TestPurchases_GraceEndIsStoredAndBoundsHasPro(t *testing.T) {
+	e := newPurchaseEnv(t)
+	e.realCredits()
+	ctx := context.Background()
+	u, tok := e.user(t)
+	jws := e.apple.sign(subTx("tx-1", "orig-1", productProMonthly, tok, testNow.AddDate(0, -1, 0).Add(time.Hour), 1))
+	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
+		t.Fatal(err)
+	}
+	graceEnd := testNow.Add(72 * time.Hour)
+	e.apple.renewals["rn-e"] = &appstore.RenewalInfo{AutoRenewStatus: 1, GracePeriodExpiresDate: tp(graceEnd)}
+	n := notify("DID_FAIL_TO_RENEW", "GRACE_PERIOD", jws)
+	n.SignedRenewalInfo = "rn-e"
+	if err := e.p.ApplyAppleNotification(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	sub := e.sub(t, storeApple, "orig-1")
+	if sub.GraceEnd == nil || !sub.GraceEnd.Equal(graceEnd) {
+		t.Fatalf("grace end = %v, want %v", sub.GraceEnd, graceEnd)
+	}
+	e.at(graceEnd.Add(-time.Hour))
+	if pro, _ := e.p.svc.HasPro(ctx, u); !pro {
+		t.Fatal("HasPro before the grace end = false")
+	}
+	e.at(graceEnd.Add(time.Hour)) // no webhook arrived
+	if pro, _ := e.p.svc.HasPro(ctx, u); pro {
+		t.Fatal("HasPro after the stored grace end = true")
+	}
+	// Billing retry afterwards clears the grace end.
+	if err := e.p.ApplyAppleNotification(ctx, notify("DID_FAIL_TO_RENEW", "", jws)); err != nil {
+		t.Fatal(err)
+	}
+	if sub := e.sub(t, storeApple, "orig-1"); sub.GraceEnd != nil {
+		t.Fatalf("grace end after billing issue = %v, want nil", sub.GraceEnd)
+	}
+}
+
+func TestPurchases_GraceWithoutEndCapsAtSixteenDays(t *testing.T) {
+	e := newPurchaseEnv(t)
+	e.realCredits()
+	ctx := context.Background()
+	u, tok := e.user(t)
+	end := testNow.Add(time.Hour)
+	jws := e.apple.sign(subTx("tx-1", "orig-1", productProMonthly, tok, end.AddDate(0, -1, 0), 1))
+	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.p.ApplyAppleNotification(ctx, notify("DID_FAIL_TO_RENEW", "GRACE_PERIOD", jws)); err != nil {
+		t.Fatal(err)
+	}
+	e.at(end.Add(15 * 24 * time.Hour))
+	if pro, _ := e.p.svc.HasPro(ctx, u); !pro {
+		t.Fatal("HasPro inside 16 days = false")
+	}
+	e.at(end.Add(17 * 24 * time.Hour))
+	if pro, _ := e.p.svc.HasPro(ctx, u); pro {
+		t.Fatal("HasPro after 16 days = true")
+	}
+}
+
+func TestResync_GoogleNotFoundEndsOverdueSubscription(t *testing.T) {
+	e := newPurchaseEnv(t)
+	e.realCredits()
+	ctx := context.Background()
+	u, tok := e.user(t)
+	expiry := testNow.Add(24 * time.Hour)
+	e.google.subs["tok"] = googleSubOf("pro", "SUBSCRIPTION_STATE_ACTIVE", "GPA.1", "monthly", tok, expiry)
+	if _, err := e.p.VerifyGoogle(ctx, u, "pro", "tok"); err != nil {
+		t.Fatal(err)
+	}
+	delete(e.google.subs, "tok") // Google no longer knows the token
+	e.at(expiry.Add(3 * time.Hour))
+	sub := *e.sub(t, storeGoogle, "tok")
+	if err := e.p.Resync(ctx, sub); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.sub(t, storeGoogle, "tok"); got.Status != subExpired {
+		t.Fatalf("status = %q, want bitti", got.Status)
+	}
+	if n := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE kullanici_id = $1::uuid AND tur = 'plan_bitis'`, u); n != 1 {
+		t.Fatalf("plan_bitis = %d, want 1", n)
+	}
+}

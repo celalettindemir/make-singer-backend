@@ -76,7 +76,7 @@ func (s *PostgresStore) SubscriptionByOriginal(ctx context.Context, store, origi
 		SELECT `+subscriptionColumns+`
 		FROM kredi.abonelik WHERE magaza = $1 AND orijinal_islem_id = $2`, store, originalID).
 		Scan(&sub.Store, &sub.OriginalID, &sub.UserID, &sub.Product, &sub.Status, &periodEnd,
-			&sub.AutoRenew, &sub.NextRefill, &sub.RefillAnchor, &sub.RefillCount, &sub.Env, &sub.NextProduct)
+			&sub.AutoRenew, &sub.NextRefill, &sub.RefillAnchor, &sub.RefillCount, &sub.Env, &sub.NextProduct, &sub.GraceEnd)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -99,8 +99,8 @@ func (s *PostgresStore) UpsertSubscription(ctx context.Context, sub Subscription
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO kredi.abonelik (kullanici_id, magaza, orijinal_islem_id, urun, durum, donem_sonu,
-		                            otomatik_yenile, sonraki_dolum, dolum_capasi, dolum_sayisi, ortam, sonraki_urun)
-		VALUES ($1::text::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		                            otomatik_yenile, sonraki_dolum, dolum_capasi, dolum_sayisi, ortam, sonraki_urun, ek_sure_bitis)
+		VALUES ($1::text::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (magaza, orijinal_islem_id) DO UPDATE SET
 			kullanici_id    = COALESCE(kredi.abonelik.kullanici_id, EXCLUDED.kullanici_id),
 			urun            = EXCLUDED.urun,
@@ -111,9 +111,10 @@ func (s *PostgresStore) UpsertSubscription(ctx context.Context, sub Subscription
 			dolum_capasi    = EXCLUDED.dolum_capasi,
 			dolum_sayisi    = EXCLUDED.dolum_sayisi,
 			ortam           = EXCLUDED.ortam,
-			sonraki_urun    = EXCLUDED.sonraki_urun`,
+			sonraki_urun    = EXCLUDED.sonraki_urun,
+			ek_sure_bitis   = EXCLUDED.ek_sure_bitis`,
 		sub.UserID, sub.Store, sub.OriginalID, sub.Product, sub.Status, periodEnd,
-		sub.AutoRenew, sub.NextRefill, sub.RefillAnchor, sub.RefillCount, sub.Env, sub.NextProduct)
+		sub.AutoRenew, sub.NextRefill, sub.RefillAnchor, sub.RefillCount, sub.Env, sub.NextProduct, sub.GraceEnd)
 	if err != nil {
 		return fmt.Errorf("could not write the subscription: %w", err)
 	}
@@ -168,7 +169,7 @@ func (s *PostgresStore) PurchaseByOrder(ctx context.Context, store, id string) (
 }
 
 const subscriptionColumns = `magaza, orijinal_islem_id, kullanici_id::text, urun, durum, donem_sonu,
-	otomatik_yenile, sonraki_dolum, dolum_capasi, dolum_sayisi, ortam, sonraki_urun`
+	otomatik_yenile, sonraki_dolum, dolum_capasi, dolum_sayisi, ortam, sonraki_urun, ek_sure_bitis`
 
 func (s *PostgresStore) querySubscriptions(ctx context.Context, where string, args ...any) ([]Subscription, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+subscriptionColumns+` FROM kredi.abonelik WHERE `+where, args...)
@@ -181,7 +182,7 @@ func (s *PostgresStore) querySubscriptions(ctx context.Context, where string, ar
 		var sub Subscription
 		var periodEnd *time.Time
 		if err := rows.Scan(&sub.Store, &sub.OriginalID, &sub.UserID, &sub.Product, &sub.Status, &periodEnd,
-			&sub.AutoRenew, &sub.NextRefill, &sub.RefillAnchor, &sub.RefillCount, &sub.Env, &sub.NextProduct); err != nil {
+			&sub.AutoRenew, &sub.NextRefill, &sub.RefillAnchor, &sub.RefillCount, &sub.Env, &sub.NextProduct, &sub.GraceEnd); err != nil {
 			return nil, fmt.Errorf("could not read a subscription: %w", err)
 		}
 		if periodEnd != nil {

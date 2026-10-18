@@ -349,6 +349,9 @@ type Subscription struct {
 	// NextProduct is the internal product that starts at the next renewal
 	// after a downgrade (sonraki_urun), or nil.
 	NextProduct *string
+	// GraceEnd is the end of the store's grace period (ek_sure_bitis) while
+	// the status is ek_sure and the store told it, else nil.
+	GraceEnd *time.Time
 }
 
 // LatestSubscription returns the user's subscription with the latest period
@@ -361,7 +364,7 @@ func (s *PostgresStore) LatestSubscription(ctx context.Context, userID string) (
 		FROM kredi.abonelik WHERE kullanici_id = $1::text::uuid
 		ORDER BY donem_sonu DESC NULLS LAST, orijinal_islem_id LIMIT 1`, userID).
 		Scan(&sub.Store, &sub.OriginalID, &sub.UserID, &sub.Product, &sub.Status, &periodEnd,
-			&sub.AutoRenew, &sub.NextRefill, &sub.RefillAnchor, &sub.RefillCount, &sub.Env, &sub.NextProduct)
+			&sub.AutoRenew, &sub.NextRefill, &sub.RefillAnchor, &sub.RefillCount, &sub.Env, &sub.NextProduct, &sub.GraceEnd)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

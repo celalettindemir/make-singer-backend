@@ -418,6 +418,17 @@ func (p *Purchases) applySubscription(ctx context.Context, f subFacts, submitter
 			next.NextProduct = cur.NextProduct
 		}
 	}
+	if !claimOnly {
+		switch {
+		case f.status != subGrace:
+			next.GraceEnd = nil
+		case !f.graceEnd.IsZero():
+			g := f.graceEnd
+			next.GraceEnd = &g
+		case cur != nil:
+			next.GraceEnd = cur.GraceEnd
+		}
+	}
 	if err := p.store.UpsertSubscription(ctx, next); err != nil {
 		return "", "", err
 	}
@@ -1019,8 +1030,13 @@ func (p *Purchases) Resync(ctx context.Context, s Subscription) error {
 		}
 		sp, err := p.google.Subscription(ctx, s.OriginalID)
 		if errors.Is(err, googleplay.ErrNotFound) {
-			log.Printf("credits: google subscription not found on resync token=%s", s.OriginalID)
-			return nil
+			// Google forgets old purchases: an overdue row it no longer knows
+			// is over.
+			log.Printf("credits: google subscription not found on resync token=%s, ending it", s.OriginalID)
+			f := subFacts{store: storeGoogle, originalID: s.OriginalID, product: s.Product, status: subExpired,
+				periodEnd: s.PeriodEnd, env: s.Env}
+			_, _, err := p.applySubscription(ctx, f, "")
+			return err
 		}
 		if err != nil {
 			return err

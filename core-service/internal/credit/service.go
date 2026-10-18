@@ -190,6 +190,9 @@ func (s *Service) RefundAction(ctx context.Context, userID string, op Operation,
 	return err
 }
 
+// maxGrace caps a grace period whose end is unknown (Apple's longest is 16 days).
+const maxGrace = 16 * 24 * time.Hour
+
 // HasPro reports whether the user has an active Pro plan (P4): the latest
 // subscription is a pro product in status active, billing issue or grace,
 // and, except in grace, its period has not ended.
@@ -206,9 +209,13 @@ func (s *Service) HasPro(ctx context.Context, userID string) (bool, error) {
 	case subActive, subBillingIssue:
 		return sub.PeriodEnd.After(now), nil
 	case subGrace:
-		// The store's grace keeps the right while the status says so (the
-		// webhook or the resync ends it), whatever the plan lot holds.
-		return true, nil
+		// The store's grace keeps the right whatever the plan lot holds, until
+		// its end; when the store never told it, the period end plus the
+		// longest grace Apple allows.
+		if sub.GraceEnd != nil {
+			return now.Before(*sub.GraceEnd), nil
+		}
+		return now.Before(sub.PeriodEnd.Add(maxGrace)), nil
 	}
 	return false, nil
 }

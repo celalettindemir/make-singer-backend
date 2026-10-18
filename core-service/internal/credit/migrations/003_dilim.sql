@@ -81,7 +81,8 @@ ALTER TABLE kredi.abonelik ADD CONSTRAINT abonelik_urun_check
     CHECK (urun IN ('plus.monthly', 'plus.yearly', 'pro.monthly', 'pro.yearly'));
 
 ALTER TABLE kredi.abonelik
-    ADD COLUMN IF NOT EXISTS sonraki_urun text NULL;
+    ADD COLUMN IF NOT EXISTS sonraki_urun text NULL,
+    ADD COLUMN IF NOT EXISTS ek_sure_bitis timestamptz NULL;
 
 -- Kampanyalar: ayni anda en fazla bir aktif kampanya.
 CREATE TABLE IF NOT EXISTS kredi.kampanya (

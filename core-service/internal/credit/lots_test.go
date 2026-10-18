@@ -732,9 +732,13 @@ func TestStore_ExpireLotsSkipsBadLotAndContinues(t *testing.T) {
 		INSERT INTO kredi.hareket (kullanici_id, tur, ref, tutar) VALUES ($1::uuid, 'kampanya_sure', $2, -1)`, other, badID); err != nil {
 		t.Fatal(err)
 	}
+	// A taken ref no longer fails the lot: it expires under the next free ref.
 	n, err := s.ExpireLots(ctx, lotNow, 500)
-	if err != nil || n != 1 {
-		t.Fatalf("sweep = %d, %v; want 1 lot swept and no error", n, err)
+	if err != nil || n != 2 {
+		t.Fatalf("sweep = %d, %v; want both lots swept and no error", n, err)
+	}
+	if count(t, s, `SELECT count(*) FROM kredi.hareket WHERE kullanici_id = $1::uuid AND tur = 'kampanya_sure' AND ref = $2`, u, badID+":2") != 1 {
+		t.Fatal("the bad lot did not expire under the next free ref")
 	}
 	if count(t, s, `SELECT count(*) FROM kredi.dilim WHERE ref = 'ok' AND sure_islendi`) != 1 {
 		t.Fatal("the good lot behind the bad one was not swept")
