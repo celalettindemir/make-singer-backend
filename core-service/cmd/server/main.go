@@ -221,7 +221,9 @@ func main() {
 			AppleProductPrefix: cfg.AppStore.ProductPrefix,
 			PackageName:        cfg.GooglePlay.PackageName,
 		}, time.Now)
-	creditWorker := worker.NewCreditWorker(purchases, appleVerifier)
+	campaigns := credit.NewCampaigns(creditStore, time.Now)
+	identityServer.OnSignup(campaigns.GrantSignupGift)
+	creditWorker := worker.NewCreditWorker(purchases, appleVerifier).WithExpiry(creditStore, campaigns)
 
 	// Initialize services
 	lyricsService := service.NewLyricsService(groqClient)
@@ -501,6 +503,7 @@ func startWorkerServer(
 	mux.HandleFunc(social.TaskTypeSweepStale, socialWorker.SweepStale)
 	mux.HandleFunc(credit.TaskTypeNotification, creditWorker.ProcessNotification)
 	mux.HandleFunc(credit.TaskTypeRefill, creditWorker.ProcessRefill)
+	mux.HandleFunc(credit.TaskTypeExpire, creditWorker.ProcessExpire)
 
 	scheduler, err := startScheduler(cfg)
 	if err != nil {
@@ -549,6 +552,11 @@ func scheduleEntries(cfg *config.Config) []scheduleEntry {
 		add(iv, credit.TaskTypeRefill, credit.QueueCredit)
 	} else {
 		log.Println("Credit refill scheduler disabled (credits.refill_interval <= 0)")
+	}
+	if iv := cfg.Credits.ExpireInterval; iv > 0 {
+		add(iv, credit.TaskTypeExpire, credit.QueueCredit)
+	} else {
+		log.Println("Credit expiry scheduler disabled (credits.expire_interval <= 0)")
 	}
 	return entries
 }

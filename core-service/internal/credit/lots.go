@@ -14,6 +14,7 @@ import (
 // Lot movement kinds written by the lot primitives (kredi.hareket.tur).
 const (
 	turSoz          = "soz"
+	turKampanya     = "kampanya"
 	turPlanDolum    = "plan_dolum"
 	turPlanBitis    = "plan_bitis"
 	turMagazaIade   = "magaza_iade"

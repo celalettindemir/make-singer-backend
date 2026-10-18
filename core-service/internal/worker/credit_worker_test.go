@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/appstore"
@@ -134,5 +135,57 @@ func TestCreditWorker_ProcessRefillRunsAndFailsOnError(t *testing.T) {
 	err := w.ProcessRefill(context.Background(), asynq.NewTask(credit.TaskTypeRefill, nil))
 	if err == nil || errors.Is(err, asynq.SkipRetry) {
 		t.Fatalf("err = %v, want a plain error", err)
+	}
+}
+
+type fakeExpirer struct {
+	batches []int // lots swept per call
+	calls   int
+	err     error
+}
+
+func (f *fakeExpirer) ExpireLots(_ context.Context, _ time.Time, limit int) (int, error) {
+	f.calls++
+	if f.err != nil {
+		return 0, f.err
+	}
+	if f.calls > len(f.batches) {
+		return 0, nil
+	}
+	if limit != 500 {
+		panic("batch must be 500")
+	}
+	return f.batches[f.calls-1], nil
+}
+
+type fakeSweeper struct {
+	calls int
+	err   error
+}
+
+func (f *fakeSweeper) Sweep(context.Context, time.Time) (int, int, error) {
+	f.calls++
+	return 1, 2, f.err
+}
+
+func TestCreditWorker_ExpireRunsBatchesThenSweep(t *testing.T) {
+	e := &fakeExpirer{batches: []int{500, 500, 30}}
+	s := &fakeSweeper{}
+	w := (&CreditWorker{}).WithExpiry(e, s)
+	if err := w.ProcessExpire(context.Background(), asynq.NewTask(credit.TaskTypeExpire, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if e.calls != 3 || s.calls != 1 {
+		t.Fatalf("expire calls %d, sweep calls %d; want 3 and 1", e.calls, s.calls)
+	}
+}
+
+func TestCreditWorker_ExpireErrorStillSweepsAndFails(t *testing.T) {
+	e := &fakeExpirer{err: errors.New("db down")}
+	s := &fakeSweeper{err: errors.New("sweep down")}
+	w := (&CreditWorker{}).WithExpiry(e, s)
+	err := w.ProcessExpire(context.Background(), asynq.NewTask(credit.TaskTypeExpire, nil))
+	if err == nil || s.calls != 1 {
+		t.Fatalf("err %v, sweep calls %d; want an error and the sweep to run", err, s.calls)
 	}
 }

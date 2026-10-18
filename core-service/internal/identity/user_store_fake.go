@@ -30,6 +30,7 @@ type FakeUserStore struct {
 	mu      sync.Mutex
 	byEmail map[string]*User
 	byID    map[string]*User
+	hooks   signupHooks
 }
 
 func NewFakeUserStore() *FakeUserStore {
@@ -51,6 +52,16 @@ func (s *FakeUserStore) Create(ctx context.Context, email, name, password string
 	if err != nil {
 		return nil, err
 	}
+	created, err := s.createLocked(email, name, hash)
+	if err != nil {
+		return nil, err
+	}
+	// Hooks run after the "commit", outside the lock (a hook may call back).
+	s.hooks.run(ctx, created)
+	return created, nil
+}
+
+func (s *FakeUserStore) createLocked(email, name, hash string) (*User, error) {
 	key := fakeEmailKey(email)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -69,6 +80,9 @@ func (s *FakeUserStore) Create(ctx context.Context, email, name, password string
 	s.byID[u.ID] = u
 	return copyUser(u), nil
 }
+
+// OnSignup registers a hook that runs after a user is created.
+func (s *FakeUserStore) OnSignup(h SignupHook) { s.hooks.add(h) }
 
 func (s *FakeUserStore) ByEmail(ctx context.Context, email string) (*User, error) {
 	s.mu.Lock()

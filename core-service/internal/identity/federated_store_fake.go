@@ -27,6 +27,7 @@ type FakeFederatedStore struct {
 	mu    sync.Mutex
 	users *FakeUserStore
 	links map[string]string // identityKey(provider, sub) -> userID
+	hooks signupHooks
 }
 
 func NewFakeFederatedStore(users *FakeUserStore) *FakeFederatedStore {
@@ -76,6 +77,15 @@ func (d *FakeFederatedStore) canLinkLocked(provider, sub, userID string) error {
 func (d *FakeFederatedStore) CreateFederatedUser(
 	ctx context.Context, provider, sub, email, name string, emailVerified bool,
 ) (*User, error) {
+	k, err := d.createLocked(provider, sub, email, name, emailVerified)
+	if err != nil {
+		return nil, err
+	}
+	d.hooks.run(ctx, k) // after the "commit", outside the lock
+	return k, nil
+}
+
+func (d *FakeFederatedStore) createLocked(provider, sub, email, name string, emailVerified bool) (*User, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err := d.canLinkLocked(provider, sub, ""); err != nil {
@@ -88,6 +98,9 @@ func (d *FakeFederatedStore) CreateFederatedUser(
 	d.links[identityKey(provider, sub)] = k.ID
 	return k, nil
 }
+
+// OnSignup registers a hook that runs after a federated user is created.
+func (d *FakeFederatedStore) OnSignup(h SignupHook) { d.hooks.add(h) }
 
 func (d *FakeFederatedStore) ProvidersByUserID(ctx context.Context, userID string) ([]string, error) {
 	d.mu.Lock()

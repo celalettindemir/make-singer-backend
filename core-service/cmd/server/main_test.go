@@ -189,3 +189,19 @@ func TestScheduler_BothDisabledStartsNothing(t *testing.T) {
 		t.Fatalf("got %v, %v; want nil, nil", s, err)
 	}
 }
+
+func TestScheduler_RegistersExpiry(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Credits.ExpireInterval = 30 * time.Minute
+	entries := scheduleEntries(cfg)
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1 (refill and sweep disabled)", len(entries))
+	}
+	e := entries[0]
+	if e.spec != "@every 30m0s" || e.task.Type() != credit.TaskTypeExpire {
+		t.Fatalf("entry = %q %q", e.spec, e.task.Type())
+	}
+	if credit.TaskTypeExpire != "kredi:sure" {
+		t.Fatalf("task type = %q", credit.TaskTypeExpire)
+	}
+}

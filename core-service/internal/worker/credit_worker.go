@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/appstore"
@@ -30,6 +31,16 @@ type refiller interface {
 	RunRefill(ctx context.Context) (refilled, resynced int, err error)
 }
 
+// lotExpirer is the part of the ledger the expiry task uses.
+type lotExpirer interface {
+	ExpireLots(ctx context.Context, now time.Time, limit int) (int, error)
+}
+
+// campaignSweeper is the part of *credit.Campaigns the expiry task uses.
+type campaignSweeper interface {
+	Sweep(ctx context.Context, now time.Time) (ended, gifts int, err error)
+}
+
 // notificationVerifier is appstore.Verifier's notification check.
 type notificationVerifier interface {
 	Notification(signedPayload string) (*appstore.Notification, error)
@@ -40,6 +51,23 @@ type CreditWorker struct {
 	p     notificationApplier
 	r     refiller
 	apple notificationVerifier // nil: Apple replays are dropped
+
+	expirer lotExpirer      // nil: ProcessExpire is a no-op
+	sweeper campaignSweeper // nil: no campaign sweep
+	now     func() time.Time
+}
+
+// expireBatch is the lots one ExpireLots call sweeps (P7); expireMaxBatches
+// bounds one task run.
+const (
+	expireBatch      = 500
+	expireMaxBatches = 200
+)
+
+// WithExpiry wires the kredi:sure task.
+func (w *CreditWorker) WithExpiry(e lotExpirer, c campaignSweeper) *CreditWorker {
+	w.expirer, w.sweeper = e, c
+	return w
 }
 
 // NewCreditWorker builds the worker. A nil apple verifier drops Apple replays.
@@ -120,4 +148,42 @@ func (w *CreditWorker) ProcessRefill(ctx context.Context, _ *asynq.Task) error {
 		log.Printf("credit worker: refill done refilled=%d resynced=%d", refilled, resynced)
 	}
 	return nil
+}
+
+// ProcessExpire handles a kredi:sure task: it sweeps expired lots in batches
+// of 500, then ends campaigns by date and retries missing signup gifts. Both
+// steps run even when one fails; the scheduler enqueues the task without
+// retries, so the next tick is the retry. Every step is idempotent.
+func (w *CreditWorker) ProcessExpire(ctx context.Context, _ *asynq.Task) error {
+	now := time.Now
+	if w.now != nil {
+		now = w.now
+	}
+	var errs []error
+	total := 0
+	if w.expirer != nil {
+		for range expireMaxBatches {
+			n, err := w.expirer.ExpireLots(ctx, now(), expireBatch)
+			total += n
+			if err != nil {
+				errs = append(errs, fmt.Errorf("credit expiry failed: %w", err))
+				break
+			}
+			if n < expireBatch {
+				break
+			}
+		}
+	}
+	ended, gifts := 0, 0
+	if w.sweeper != nil {
+		var err error
+		ended, gifts, err = w.sweeper.Sweep(ctx, now())
+		if err != nil {
+			errs = append(errs, fmt.Errorf("campaign sweep failed: %w", err))
+		}
+	}
+	if total > 0 || ended > 0 || gifts > 0 {
+		log.Printf("credit worker: expiry done lots=%d campaignsEnded=%d giftsRetried=%d", total, ended, gifts)
+	}
+	return errors.Join(errs...)
 }

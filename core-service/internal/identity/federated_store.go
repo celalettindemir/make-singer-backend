@@ -41,7 +41,8 @@ type FederatedStore interface {
 }
 
 type PostgresFederatedStore struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	hooks signupHooks
 }
 
 func NewPostgresFederatedStore(pool *pgxpool.Pool) *PostgresFederatedStore {
@@ -128,8 +129,13 @@ func (d *PostgresFederatedStore) CreateFederatedUser(
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("could not complete the transaction: %w", err)
 	}
+	d.hooks.run(ctx, k)
 	return k, nil
 }
+
+// OnSignup registers a hook that runs after a federated user is created and
+// committed. A hook cannot fail the sign-in.
+func (d *PostgresFederatedStore) OnSignup(h SignupHook) { d.hooks.add(h) }
 
 func (d *PostgresFederatedStore) ProvidersByUserID(ctx context.Context, userID string) ([]string, error) {
 	lines, err := d.pool.Query(ctx,

@@ -44,7 +44,8 @@ type UserStore interface {
 }
 
 type PostgresUserStore struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	hooks signupHooks
 }
 
 func NewPostgresUserStore(pool *pgxpool.Pool) *PostgresUserStore {
@@ -76,8 +77,13 @@ func (s *PostgresUserStore) Create(ctx context.Context, email, name, password st
 		}
 		return nil, fmt.Errorf("could not create the user: %w", err)
 	}
+	s.hooks.run(ctx, u)
 	return u, nil
 }
+
+// OnSignup registers a hook that runs after a user is created and
+// committed. A hook cannot fail the signup.
+func (s *PostgresUserStore) OnSignup(h SignupHook) { s.hooks.add(h) }
 
 func (s *PostgresUserStore) ByEmail(ctx context.Context, email string) (*User, error) {
 	return s.queryOne(ctx,

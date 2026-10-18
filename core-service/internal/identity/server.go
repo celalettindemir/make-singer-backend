@@ -49,6 +49,11 @@ type Server struct {
 	// (see DeleteAccount).
 	users UserStore
 
+	// userStore and federated are the concrete stores whose signup hooks
+	// OnSignup registers.
+	userStore *PostgresUserStore
+	federated *PostgresFederatedStore
+
 	// ready tracks whether the listener is REALLY serving. /health used to
 	// look only at "identityServer != nil", so it never caught the listener
 	// crashing AFTER Start returned (e.g. the accept loop stopping with an
@@ -64,6 +69,14 @@ type Server struct {
 	// verifiers is kept to be Closed on shutdown. It is EMPTY if
 	// federation is not configured.
 	verifiers map[string]*auth.UpstreamVerifier
+}
+
+// OnSignup registers h on both signup paths (password signup and the first
+// Apple/Google sign-in). It runs after the user row is committed and cannot
+// fail the signup. Safe to call while the server is serving.
+func (s *Server) OnSignup(h SignupHook) {
+	s.userStore.OnSignup(h)
+	s.federated.OnSignup(h)
 }
 
 // Ready reports that the OP listener is serving right now. /health uses
@@ -228,6 +241,7 @@ func Start(ctx context.Context, cfg *config.AuthConfig, rdb *redis.Client, env s
 
 	server := &Server{
 		srv: srv, pool: pool, signingKey: signingKey, users: userStore,
+		userStore: userStore, federated: federatedStore,
 		fedCancel: cancelFed, verifiers: verifiers,
 	}
 	server.ready.Store(true)
