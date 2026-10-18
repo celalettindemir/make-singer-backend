@@ -103,7 +103,7 @@ func (h *MasterHandler) Final(c *fiber.Ctx) error {
 		}
 		var insufficient *credit.InsufficientError
 		if errors.As(err, &insufficient) {
-			return response.InsufficientCredits(c, insufficient.Required, insufficient.Balance)
+			return response.InsufficientCredits(c, insufficient.Required, insufficient.Balance, insufficient.Debt)
 		}
 		return internalError(c, err)
 	}

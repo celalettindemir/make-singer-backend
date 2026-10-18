@@ -669,3 +669,52 @@ func TestAdmin_DistributedThisMonthStartsInIstanbul(t *testing.T) {
 		t.Fatalf("month = %d people, %d credits; want 1, 7", o.MonthPeople, o.MonthCredits)
 	}
 }
+
+// raceLedger hides the pre-check: MovementOwner answers "free", as if the
+// other user's movement committed after the check ran.
+type raceLedger struct{ *PostgresStore }
+
+func (raceLedger) MovementOwner(context.Context, string, string) (string, bool, error) {
+	return "", false, nil
+}
+
+func TestAdmin_AdjustOwnerRaceInsideLockIs400(t *testing.T) {
+	e := newAdminEnv(t)
+	ctx := context.Background()
+	a, _ := e.user("a", e.clock())
+	b, _ := e.user("b", e.clock())
+	req := uuid.NewString()
+	adm := NewAdmin(raceLedger{e.store}, e.store, identity.NewDirectory(e.pool), e.clock)
+	if _, err := adm.Adjust(ctx, a, Adjustment{Amount: 5, Note: "ilk", RequestID: req}, "a@b.c"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := adm.Adjust(ctx, b, Adjustment{Amount: 5, Note: "ikinci", RequestID: req}, "a@b.c")
+	var fe *FieldError
+	if !errors.Is(err, ErrAdjustInvalid) || !errors.As(err, &fe) || fe.Field != "requestId" {
+		t.Fatalf("grant race err = %v, want requestId validation error", err)
+	}
+	_, err = adm.Adjust(ctx, b, Adjustment{Amount: -1, Note: "ikinci", RequestID: req}, "a@b.c")
+	fe = nil
+	if !errors.Is(err, ErrAdjustInvalid) || !errors.As(err, &fe) || fe.Field != "requestId" {
+		t.Fatalf("deduct race err = %v, want requestId validation error", err)
+	}
+}
+
+func TestStore_CampaignOverviewIsNotCapped(t *testing.T) {
+	e := newAdminEnv(t)
+	ctx := context.Background()
+	if _, err := e.pool.Exec(ctx, `
+		INSERT INTO kredi.kampanya (ad, kota, kisi_basi, gecerlilik_gun, durum, baslangic, olusturan)
+		SELECT 'ovw-' || g, 10, 24, 30, 'bitti', now(), 'a@b.c' FROM generate_series(1, 105) g`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = e.pool.Exec(ctx, `DELETE FROM kredi.kampanya WHERE ad LIKE 'ovw-%'`) })
+	var total int
+	if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM kredi.kampanya`).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	o, err := e.store.CampaignOverview(ctx, e.clock())
+	if err != nil || len(o.Campaigns) != total || total < 105 {
+		t.Fatalf("campaigns = %d of %d, %v", len(o.Campaigns), total, err)
+	}
+}

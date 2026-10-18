@@ -156,13 +156,13 @@ func TestLyrics_GenerateChargesFirstRequestOnly(t *testing.T) {
 
 func TestLyrics_Insufficient402(t *testing.T) {
 	gen := newFakeLyrics()
-	sp := &credit.FakeSpender{IsEnforced: true, Insufficient: true, Required: 3, Bal: 1}
+	sp := &credit.FakeSpender{IsEnforced: true, Insufficient: true, Required: 3, Bal: 1, Debt: 70}
 	status, body := lyricsCall(t, lyricsApp(gen, sp), "/generate", lyricsGenBody, actionA)
 	if status != http.StatusPaymentRequired {
 		t.Fatalf("status = %d, want 402", status)
 	}
 	d := errDetails(t, body)
-	if d["required"] != float64(3) || d["balance"] != float64(1) {
+	if d["required"] != float64(3) || d["balance"] != float64(1) || d["debt"] != float64(70) {
 		t.Errorf("details = %v, want required 3 balance 1", d)
 	}
 	if gen.genCalls != 0 {

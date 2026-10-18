@@ -24,7 +24,7 @@ const validRenderBody = `{
 
 func TestRenderHandler_Insufficient402(t *testing.T) {
 	rdb := liveRedis(t)
-	fake := &credit.FakeSpender{Insufficient: true, Required: 62, Bal: 10, Pro: true}
+	fake := &credit.FakeSpender{Insufficient: true, Required: 62, Bal: 10, Debt: 70, Pro: true}
 	svc := service.NewRenderService(rdb, nil, nil, &config.R2Config{}).WithCredits(fake)
 	h := NewRenderHandler(svc, validator.New())
 	app := fiber.New()
@@ -48,7 +48,7 @@ func TestRenderHandler_Insufficient402(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body.Error.Details["required"] != 62 || body.Error.Details["balance"] != 10 {
+	if body.Error.Details["required"] != 62 || body.Error.Details["balance"] != 10 || body.Error.Details["debt"] != 70 {
 		t.Errorf("details = %v, want required 62 balance 10", body.Error.Details)
 	}
 }

@@ -193,7 +193,7 @@ func (h *LyricsHandler) begin(c *fiber.Ctx, op credit.Operation) (*lyricsAction,
 		var insufficient *credit.InsufficientError
 		switch {
 		case errors.As(err, &insufficient):
-			return nil, response.InsufficientCredits(c, insufficient.Required, insufficient.Balance)
+			return nil, response.InsufficientCredits(c, insufficient.Required, insufficient.Balance, insufficient.Debt)
 		case errors.Is(err, credit.ErrActionExpired):
 			return nil, response.ValidationError(c, i18n.KeyActionExpired, map[string]string{actionIDHeader: "action_expired"})
 		default:

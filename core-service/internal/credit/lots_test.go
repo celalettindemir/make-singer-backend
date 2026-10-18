@@ -774,3 +774,28 @@ func TestStore_DebitFinalTieBreakIsLotID(t *testing.T) {
 		t.Fatal("the lower lot id was not spent first")
 	}
 }
+
+func TestStore_InsufficientCarriesDebt(t *testing.T) {
+	s, u := newStore(t)
+	ctx := context.Background()
+	grant(t, s, u, "plan_dolum", "p", LotPlan, 300, nil)
+	setDebt(t, s, u, 70)
+	// The balance (230) covers the price, but the debt refuses the spend.
+	_, err := s.Debit(ctx, u, "render", "r1", 12, Meta{}, lotNow)
+	var ie *InsufficientError
+	if !errors.As(err, &ie) || ie.Required != 12 || ie.Balance != 230 || ie.Debt != 70 {
+		t.Fatalf("Debit err = %v, want {12, 230, debt 70}", err)
+	}
+	_, err = s.SpendAction(ctx, u, "render_mix", "act1", 12, time.Hour, 3, lotNow)
+	ie = nil
+	if !errors.As(err, &ie) || ie.Required != 12 || ie.Balance != 230 || ie.Debt != 70 {
+		t.Fatalf("SpendAction err = %v, want {12, 230, debt 70}", err)
+	}
+	// Short without debt reports debt 0.
+	setDebt(t, s, u, 0)
+	_, err = s.Debit(ctx, u, "render", "r2", 400, Meta{}, lotNow)
+	ie = nil
+	if !errors.As(err, &ie) || ie.Balance != 300 || ie.Debt != 0 {
+		t.Fatalf("err = %v, want {400, 300, debt 0}", err)
+	}
+}

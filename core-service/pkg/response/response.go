@@ -110,10 +110,10 @@ func NoContent(c *fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-// InsufficientCredits writes the 402 answer with the price and the balance.
-func InsufficientCredits(c *fiber.Ctx, required, balance int) error {
+// InsufficientCredits writes the 402 answer with the price, the balance and the open debt.
+func InsufficientCredits(c *fiber.Ctx, required, balance, debt int) error {
 	return Error(c, fiber.StatusPaymentRequired, CodeInsufficientCredits, i18n.KeyInsufficientCredits,
-		map[string]int{"required": required, "balance": balance})
+		map[string]int{"required": required, "balance": balance, "debt": debt})
 }
 
 // AdminRequired writes the 403 answer for a signed-in user who is not an admin.

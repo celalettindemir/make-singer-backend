@@ -220,6 +220,9 @@ func (h *AdminHandler) ListUsers(c *fiber.Ctx) error {
 
 // GetUser handles GET /api/admin/users/:id.
 func (h *AdminHandler) GetUser(c *fiber.Ctx) error {
+	if _, err := uuid.Parse(c.Params("id")); err != nil {
+		return invalidField(c, "id")
+	}
 	d, err := h.credits.User(c.UserContext(), c.Params("id"))
 	if errors.Is(err, credit.ErrUserNotFound) {
 		return response.NotFound(c, i18n.KeyAdminNotFound)
@@ -239,6 +242,9 @@ type adjustRequest struct {
 
 // Adjust handles POST /api/admin/users/:id/adjust.
 func (h *AdminHandler) Adjust(c *fiber.Ctx) error {
+	if _, err := uuid.Parse(c.Params("id")); err != nil {
+		return invalidField(c, "id")
+	}
 	by := middleware.GetAdminEmail(c)
 	if by == "" {
 		return response.Unauthorized(c, i18n.KeyUnauthenticated)

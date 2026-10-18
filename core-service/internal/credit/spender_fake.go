@@ -35,6 +35,8 @@ type FakeSpender struct {
 	Expired bool
 	// Required is the price reported in the InsufficientError.
 	Required int
+	// Debt is the debt reported in the InsufficientError.
+	Debt int
 	// Bal is the balance returned by every call.
 	Bal int
 	// ChargedFirst makes SpendAction report charged=true on the first call
@@ -61,7 +63,7 @@ func (f *FakeSpender) fail() error {
 		return f.Err
 	}
 	if f.Insufficient {
-		return &InsufficientError{Required: f.Required, Balance: f.Bal}
+		return &InsufficientError{Required: f.Required, Balance: f.Bal, Debt: f.Debt}
 	}
 	return nil
 }

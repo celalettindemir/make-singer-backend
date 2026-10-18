@@ -85,13 +85,11 @@ func (s *PostgresStore) StopCampaign(ctx context.Context, id int64, now time.Tim
 	return Campaign{}, ErrCampaignNotActive
 }
 
-const overviewLimit = 100
-
 // CampaignOverview lists campaigns newest first and the month numbers.
 func (s *PostgresStore) CampaignOverview(ctx context.Context, now time.Time) (CampaignOverview, error) {
 	var o CampaignOverview
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+campaignColumns+` FROM kredi.kampanya ORDER BY id DESC LIMIT $1`, overviewLimit)
+		`SELECT `+campaignColumns+` FROM kredi.kampanya ORDER BY id DESC`)
 	if err != nil {
 		return o, fmt.Errorf("could not list the campaigns: %w", err)
 	}

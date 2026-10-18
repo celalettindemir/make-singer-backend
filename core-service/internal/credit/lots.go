@@ -89,6 +89,10 @@ func balanceOf(ctx context.Context, q queryRower, userID string, now time.Time) 
 	return bal, nil
 }
 
+// ErrMovementOwner is returned (wrapped) when a (tur, ref) is already taken
+// by another user.
+var ErrMovementOwner = errors.New("credit: movement belongs to another user")
+
 // movementDone reports whether (tur, ref) is already in the ledger. A row of
 // another user is an error: refs are never shared between users.
 func movementDone(ctx context.Context, tx pgx.Tx, userID, tur, ref string) (bool, error) {
@@ -102,7 +106,7 @@ func movementDone(ctx context.Context, tx pgx.Tx, userID, tur, ref string) (bool
 		return false, fmt.Errorf("could not check the ledger: %w", err)
 	}
 	if owner != userID {
-		return false, fmt.Errorf("credit: movement %s/%s belongs to another user", tur, ref)
+		return false, fmt.Errorf("credit: movement %s/%s belongs to another user: %w", tur, ref, ErrMovementOwner)
 	}
 	return true, nil
 }
@@ -219,54 +223,51 @@ func spendLots(ctx context.Context, tx pgx.Tx, userID string, movementID int64, 
 // spendTx is the shared body of Debit, DeductAdmin and SpendAction. The
 // caller holds the account lock. short is true (and nothing is written)
 // when the balance does not cover amount.
-func spendTx(ctx context.Context, tx pgx.Tx, m movement, now time.Time) (balance int, short bool, err error) {
+func spendTx(ctx context.Context, tx pgx.Tx, m movement, now time.Time) (balance, debt int, short bool, err error) {
 	if m.amount <= 0 {
-		return 0, false, fmt.Errorf("credit: spend amount must be positive, got %d", m.amount)
+		return 0, 0, false, fmt.Errorf("credit: spend amount must be positive, got %d", m.amount)
 	}
 	bal, err := balanceOf(ctx, tx, m.userID, now)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 	done, err := movementDone(ctx, tx, m.userID, m.tur, m.ref)
 	if err != nil || done {
-		return bal, false, err
+		return bal, 0, false, err
+	}
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE((SELECT borc FROM kredi.hesap WHERE kullanici_id = $1::text::uuid), 0)`, m.userID).Scan(&debt); err != nil {
+		return 0, 0, false, fmt.Errorf("could not read the debt: %w", err)
 	}
 	if bal < m.amount {
-		return bal, true, nil
+		return bal, debt, true, nil
 	}
-	if !m.allowDebt {
-		// P2 / R-CRD-12: nothing is spent while debt is owed.
-		var debt int
-		if err := tx.QueryRow(ctx,
-			`SELECT COALESCE((SELECT borc FROM kredi.hesap WHERE kullanici_id = $1::text::uuid), 0)`, m.userID).Scan(&debt); err != nil {
-			return 0, false, fmt.Errorf("could not read the debt: %w", err)
-		}
-		if debt > 0 {
-			return bal, true, nil
-		}
+	// P2 / R-CRD-12: nothing is spent while debt is owed.
+	if !m.allowDebt && debt > 0 {
+		return bal, debt, true, nil
 	}
 	amount := m.amount
 	m.amount = -amount
 	id, err := insertMovement(ctx, tx, m)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 	if err := spendLots(ctx, tx, m.userID, id, amount, now); err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
-	return bal - amount, false, nil
+	return bal - amount, debt, false, nil
 }
 
-func (s *PostgresStore) spend(ctx context.Context, m movement, now time.Time) (balance int, short bool, err error) {
+func (s *PostgresStore) spend(ctx context.Context, m movement, now time.Time) (balance, debt int, short bool, err error) {
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
 		if _, err := lockAccount(ctx, tx, m.userID, true); err != nil {
 			return fmt.Errorf("could not lock the credit account: %w", err)
 		}
 		var err error
-		balance, short, err = spendTx(ctx, tx, m, now)
+		balance, debt, short, err = spendTx(ctx, tx, m, now)
 		return err
 	})
-	return balance, short, err
+	return balance, debt, short, err
 }
 
 // Balance returns the spendable balance at now (live lots minus debt). It
@@ -279,13 +280,13 @@ func (s *PostgresStore) Balance(ctx context.Context, userID string, now time.Tim
 // repeated (tur, ref) returns the current balance and changes nothing. A
 // balance (debt counted) below amount gives *InsufficientError.
 func (s *PostgresStore) Debit(ctx context.Context, userID, tur, ref string, amount int, meta Meta, now time.Time) (int, error) {
-	bal, short, err := s.spend(ctx,
+	bal, debt, short, err := s.spend(ctx,
 		movement{userID: userID, tur: tur, ref: ref, amount: amount, reason: meta.Reason, projectID: meta.ProjectID}, now)
 	if err != nil {
 		return 0, err
 	}
 	if short {
-		return 0, &InsufficientError{Required: amount, Balance: bal}
+		return 0, &InsufficientError{Required: amount, Balance: bal, Debt: debt}
 	}
 	return bal, nil
 }
@@ -293,7 +294,7 @@ func (s *PostgresStore) Debit(ctx context.Context, userID, tur, ref string, amou
 // DeductAdmin removes amount in spend order as an admin adjustment
 // (yonetici). It gives ErrBalanceTooLow when the balance would go below 0.
 func (s *PostgresStore) DeductAdmin(ctx context.Context, userID, ref string, amount int, by, note string, now time.Time) (int, error) {
-	bal, short, err := s.spend(ctx,
+	bal, _, short, err := s.spend(ctx,
 		movement{userID: userID, tur: turYonetici, ref: ref, amount: amount, by: by, note: note, allowDebt: true}, now)
 	if err != nil {
 		return 0, err

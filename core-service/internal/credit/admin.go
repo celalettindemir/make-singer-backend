@@ -528,6 +528,11 @@ func (a *Admin) Adjust(ctx context.Context, userID string, in Adjustment, by str
 			return AdjustResult{}, &BalanceTooLowError{Balance: balance}
 		}
 	}
+	if errors.Is(err, ErrMovementOwner) {
+		// Another user won a race for the same request id: the owner check
+		// above ran outside the account lock, this one runs inside it.
+		return AdjustResult{}, adjustField("requestId")
+	}
 	if err != nil {
 		return AdjustResult{}, err
 	}

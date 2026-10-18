@@ -27,6 +27,9 @@ var ErrBadFilter = errors.New("credit: bad history filter")
 type InsufficientError struct {
 	Required int
 	Balance  int
+	// Debt is the open store-refund debt (>= 0); a debt refuses spending
+	// even when Balance covers Required.
+	Debt int
 }
 
 func (e *InsufficientError) Error() string {
@@ -182,12 +185,12 @@ func (s *PostgresStore) SpendAction(ctx context.Context, userID string, op Opera
 			// The charge exists but the action row is gone: refunded or dropped.
 			return ErrActionExpired
 		}
-		bal, short, err := spendTx(ctx, tx, movement{userID: userID, tur: turSoz, ref: ref, amount: amount, reason: string(op)}, now)
+		bal, debt, short, err := spendTx(ctx, tx, movement{userID: userID, tur: turSoz, ref: ref, amount: amount, reason: string(op)}, now)
 		if err != nil {
 			return err
 		}
 		if short {
-			return &InsufficientError{Required: amount, Balance: bal}
+			return &InsufficientError{Required: amount, Balance: bal, Debt: debt}
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO kredi.eylem (ref, kullanici_id, tur, kullanim) VALUES ($1, $2::text::uuid, $3, 1)`,

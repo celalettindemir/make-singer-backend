@@ -17,7 +17,7 @@ import (
 
 func TestMasterHandler_InsufficientIs402(t *testing.T) {
 	rdb := liveRedis(t)
-	fake := &credit.FakeSpender{IsEnforced: true, Insufficient: true, Required: 3, Bal: 1}
+	fake := &credit.FakeSpender{IsEnforced: true, Insufficient: true, Required: 3, Bal: 1, Debt: 70}
 	cfg := &config.R2Config{AccountID: "hesap123", PublicBucket: "pub", PrivateBucket: "priv", PublicURL: "https://cdn.example.com"}
 	svc := service.NewMasterService(rdb, nil, nil, cfg).WithCredits(fake)
 	h := NewMasterHandler(svc, validator.New())
@@ -48,7 +48,7 @@ func TestMasterHandler_InsufficientIs402(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if out.Error.Code != "INSUFFICIENT_CREDITS" || out.Error.Details["required"] != 3 || out.Error.Details["balance"] != 1 {
+	if out.Error.Code != "INSUFFICIENT_CREDITS" || out.Error.Details["required"] != 3 || out.Error.Details["balance"] != 1 || out.Error.Details["debt"] != 70 {
 		t.Errorf("error = %+v, want INSUFFICIENT_CREDITS required 3 balance 1", out.Error)
 	}
 }

@@ -146,14 +146,14 @@ func TestCreditsHandler_UnauthorizedWithoutUser(t *testing.T) {
 
 func TestInsufficientCredits_Envelope(t *testing.T) {
 	app := fiber.New()
-	app.Get("/x", func(c *fiber.Ctx) error { return response.InsufficientCredits(c, 62, 10) })
+	app.Get("/x", func(c *fiber.Ctx) error { return response.InsufficientCredits(c, 62, 10, 70) })
 	status, body := creditsRequest(t, app, http.MethodGet, "/x")
 	if status != http.StatusPaymentRequired || errorCode(body) != "INSUFFICIENT_CREDITS" {
 		t.Fatalf("status=%d body=%v", status, body)
 	}
 	e := body["error"].(map[string]any)
 	d := e["details"].(map[string]any)
-	if d["required"] != float64(62) || d["balance"] != float64(10) || e["message"] != "Yeterli krediniz yok." {
+	if d["required"] != float64(62) || d["balance"] != float64(10) || d["debt"] != float64(70) || e["message"] != "Yeterli krediniz yok." {
 		t.Fatalf("error = %v", e)
 	}
 }

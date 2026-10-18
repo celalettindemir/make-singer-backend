@@ -466,3 +466,19 @@ func TestAdminHandler_ServiceFailureIs500(t *testing.T) {
 		t.Errorf("movements: %d %s", code, body)
 	}
 }
+
+func TestAdminHandler_NonUUIDUserIDIs400(t *testing.T) {
+	adm := &fakeAdmin{}
+	app := newAdminApp(&fakeCampaigns{}, adm)
+	for _, id := range []string{"nope", "123", "8f3a21c0"} {
+		if code, body := adminDo(t, app, http.MethodGet, "/api/admin/users/"+id, ""); code != 400 || adminErrorCode(t, body) != "VALIDATION_ERROR" {
+			t.Errorf("get %q: %d %s", id, code, body)
+		}
+		if code, body := adminDo(t, app, http.MethodPost, "/api/admin/users/"+id+"/adjust", exAdjustReq); code != 400 || adminErrorCode(t, body) != "VALIDATION_ERROR" {
+			t.Errorf("adjust %q: %d %s", id, code, body)
+		}
+	}
+	if adm.userID != "" {
+		t.Errorf("service was called with %q", adm.userID)
+	}
+}
