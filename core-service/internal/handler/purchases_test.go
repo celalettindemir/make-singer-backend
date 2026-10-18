@@ -76,7 +76,7 @@ func postJSON(t *testing.T, app *fiber.App, path, body string, hdr map[string]st
 }
 
 func TestPurchasesApple_200Credited(t *testing.T) {
-	p := &fakeProcessor{result: credit.PurchaseResult{Status: credit.PurchaseCredited, Summary: credit.Summary{Balance: 100, PermanentCredits: 100}}}
+	p := &fakeProcessor{result: credit.PurchaseResult{Status: credit.PurchaseCredited, Summary: credit.Summary{Balance: 100}}}
 	status, out := postJSON(t, purchasesApp("u1", p), "/api/purchases/apple", `{"signedTransaction":"jws"}`, nil)
 	if status != 200 {
 		t.Fatalf("status = %d, body %v", status, out)

@@ -217,7 +217,7 @@ func main() {
 	}
 	purchases := credit.NewPurchases(creditStore, creditService, appleReplay, appleAPI, googlePub,
 		credit.PurchasesConfig{
-			PlanMonthly:        cfg.Credits.PlanMonthly,
+			PlanMonthly:        cfg.Credits.PlanPro, // Task 5 makes this per tier
 			AppleProductPrefix: cfg.AppStore.ProductPrefix,
 			PackageName:        cfg.GooglePlay.PackageName,
 		}, time.Now)
@@ -586,14 +586,15 @@ func creditSettings(cfg *config.Config) credit.Settings {
 	c := cfg.Credits
 	return credit.Settings{
 		Enforce:     c.Enforce,
-		Welcome:     c.Welcome,
-		PlanMonthly: c.PlanMonthly,
+		PlanCredits: map[credit.Tier]int{credit.TierPlus: c.PlanPlus, credit.TierPro: c.PlanPro},
+		RefundGrace: c.RefundGrace,
 		Costs: credit.Costs{
 			RenderMix:      c.Costs.RenderMix,
 			RenderFocus:    c.Costs.RenderFocus,
 			RenderStems:    c.Costs.RenderStems,
 			LyricsGenerate: c.Costs.LyricsGenerate,
 			LyricsRewrite:  c.Costs.LyricsRewrite,
+			Master:         c.Costs.Master,
 		},
 	}
 }
@@ -629,7 +630,6 @@ func registerWebhookRoutes(app *fiber.App, h creditRouteHandlers, rl *middleware
 func registerCreditRoutes(api fiber.Router, h creditRouteHandlers, rl *middleware.RateLimiter, cfg *config.Config) {
 	api.Get("/credits", h.Credits.Get)
 	api.Get("/credits/history", h.Credits.History)
-	api.Post("/credits/welcome", h.Credits.ClaimWelcome)
 
 	purchases := api.Group("/purchases", rl.Limit("purchase", cfg.RateLimit.PurchasesPerMin, time.Minute))
 	purchases.Post("/apple", h.Purchases.Apple)

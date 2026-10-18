@@ -20,31 +20,39 @@ import (
 type creditsLedger struct{ credit.Ledger }
 
 func (creditsLedger) EnsureAccount(_ context.Context, userID string) (credit.Account, error) {
-	return credit.Account{UserID: userID, Permanent: 5, StoreToken: uuid.New()}, nil
+	return credit.Account{UserID: userID, StoreToken: uuid.New()}, nil
 }
+
+func (creditsLedger) Lots(context.Context, string, time.Time) ([]credit.Lot, error) {
+	return []credit.Lot{{Source: credit.LotPack, Amount: 5}}, nil
+}
+
+func (creditsLedger) Gift(context.Context, string, time.Time) (*credit.Lot, error) { return nil, nil }
 
 func (creditsLedger) LatestSubscription(context.Context, string) (*credit.Subscription, error) {
 	return nil, nil
 }
 
-func (creditsLedger) Credit(_ context.Context, userID, _, _, _ string, _ int) (credit.Account, bool, error) {
-	return credit.Account{UserID: userID}, false, nil
-}
-
-func (creditsLedger) History(context.Context, string, int64, int) ([]credit.Movement, error) {
-	return []credit.Movement{{ID: 3, Tur: "paket", Amount: 100, CreatedAt: time.Unix(0, 0).UTC()}}, nil
+func (creditsLedger) History(_ context.Context, _, cursor string, filter credit.HistoryFilter) (credit.Page, error) {
+	if cursor == "zzz" {
+		return credit.Page{}, credit.ErrBadCursor
+	}
+	if filter == credit.FilterSpend {
+		return credit.Page{}, nil
+	}
+	return credit.Page{Items: []credit.Movement{{ID: 3, Tur: "paket", Amount: 100, CreatedAt: time.Unix(0, 0).UTC()}}}, nil
 }
 
 func newCreditsApp(userID string) *fiber.App {
 	svc := credit.NewService(creditsLedger{}, credit.Settings{
-		Welcome: 30, Costs: credit.Costs{RenderMix: 12, RenderFocus: 32, RenderStems: 62, LyricsGenerate: 2, LyricsRewrite: 1},
+		PlanCredits: map[credit.Tier]int{credit.TierPlus: 300, credit.TierPro: 1000},
+		Costs:       credit.Costs{RenderMix: 12, RenderFocus: 32, RenderStems: 62, LyricsGenerate: 2, LyricsRewrite: 1, Master: 3},
 	})
 	h := NewCreditsHandler(svc)
 	app := fiber.New()
 	g := app.Group("/api/credits", asUser(userID))
 	g.Get("/", h.Get)
 	g.Get("/history", h.History)
-	g.Post("/welcome", h.ClaimWelcome)
 	return app
 }
 
@@ -76,7 +84,7 @@ func TestCreditsHandler_GetReturnsSummaryJSON(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, body %v", status, body)
 	}
-	want := []string{"balance", "costs", "enforced", "permanentCredits", "plan", "planCredits", "storeAccountToken", "welcome"}
+	want := []string{"balance", "costs", "debt", "enforced", "gift", "lots", "plan", "planCredits", "storeAccountToken"}
 	got := sortedKeys(body)
 	if len(got) != len(want) {
 		t.Fatalf("keys = %v, want %v", got, want)
@@ -90,7 +98,7 @@ func TestCreditsHandler_GetReturnsSummaryJSON(t *testing.T) {
 		t.Fatalf("body = %v", body)
 	}
 	costs := body["costs"].(map[string]any)
-	if costs["render"].(map[string]any)["stems"] != float64(62) || costs["lyrics"].(map[string]any)["rewrite"] != float64(1) {
+	if costs["render"].(map[string]any)["stems"] != float64(62) || costs["lyrics"].(map[string]any)["rewrite"] != float64(1) || costs["master"] != float64(3) {
 		t.Fatalf("costs = %v", costs)
 	}
 }
@@ -102,7 +110,7 @@ func TestCreditsHandler_HistoryPageJSON(t *testing.T) {
 		t.Fatalf("status=%d body=%v", status, body)
 	}
 	item := items[0].(map[string]any)
-	if item["id"] != "3" || item["kind"] != "pack" || item["operation"] != nil || item["amount"] != float64(100) {
+	if item["id"] != "mv_3" || item["kind"] != "pack" || item["operation"] != nil || item["projectId"] != nil || item["tier"] != nil || item["amount"] != float64(100) {
 		t.Fatalf("item = %v", item)
 	}
 }
@@ -114,16 +122,20 @@ func TestCreditsHandler_HistoryBadCursor400(t *testing.T) {
 	}
 }
 
-func TestCreditsHandler_ClaimWelcomeReturnsSummary(t *testing.T) {
-	status, body := creditsRequest(t, newCreditsApp("u1"), http.MethodPost, "/api/credits/welcome")
-	if status != http.StatusOK || body["storeAccountToken"] == nil {
+func TestCreditsHandler_HistoryKindBadRequest(t *testing.T) {
+	status, body := creditsRequest(t, newCreditsApp("u1"), http.MethodGet, "/api/credits/history?kind=all")
+	if status != http.StatusBadRequest || errorCode(body) != response.CodeValidationError {
 		t.Fatalf("status=%d body=%v", status, body)
+	}
+	status, body = creditsRequest(t, newCreditsApp("u1"), http.MethodGet, "/api/credits/history?kind=spend")
+	if items, _ := body["items"].([]any); status != http.StatusOK || len(items) != 0 {
+		t.Fatalf("spend: status=%d body=%v", status, body)
 	}
 }
 
 func TestCreditsHandler_UnauthorizedWithoutUser(t *testing.T) {
 	for _, tc := range []struct{ method, path string }{
-		{http.MethodGet, "/api/credits/"}, {http.MethodGet, "/api/credits/history"}, {http.MethodPost, "/api/credits/welcome"},
+		{http.MethodGet, "/api/credits/"}, {http.MethodGet, "/api/credits/history"},
 	} {
 		status, body := creditsRequest(t, newCreditsApp(""), tc.method, tc.path)
 		if status != http.StatusUnauthorized || errorCode(body) != response.CodeUnauthorized {

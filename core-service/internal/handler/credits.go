@@ -39,27 +39,17 @@ func (h *CreditsHandler) History(c *fiber.Ctx) error {
 	if !ok {
 		return response.Unauthorized(c, i18n.KeyUnauthenticated)
 	}
-	page, err := h.svc.History(c.Context(), userID, c.Query("cursor"))
+	page, err := h.svc.History(c.Context(), userID, c.Query("cursor"), c.Query("kind"))
 	if errors.Is(err, credit.ErrBadCursor) {
 		return response.ValidationError(c, i18n.KeyCursorInvalid, map[string]string{"cursor": "invalid"})
+	}
+	if errors.Is(err, credit.ErrBadFilter) {
+		return response.ValidationError(c, i18n.KeyValidationFailed, map[string]string{"kind": "invalid"})
 	}
 	if err != nil {
 		return creditsFailure(c, "history", err)
 	}
 	return response.OK(c, page)
-}
-
-// ClaimWelcome handles POST /api/credits/welcome.
-func (h *CreditsHandler) ClaimWelcome(c *fiber.Ctx) error {
-	userID, ok := requestOwner(c)
-	if !ok {
-		return response.Unauthorized(c, i18n.KeyUnauthenticated)
-	}
-	summary, err := h.svc.ClaimWelcome(c.Context(), userID)
-	if err != nil {
-		return creditsFailure(c, "welcome", err)
-	}
-	return response.OK(c, summary)
 }
 
 func creditsFailure(c *fiber.Ctx, op string, err error) error {

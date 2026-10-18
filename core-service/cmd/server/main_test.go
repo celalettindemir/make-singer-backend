@@ -144,7 +144,6 @@ func TestRoutes_CreditsRequireAuth(t *testing.T) {
 	for _, r := range []struct{ method, path string }{
 		{http.MethodGet, "/api/credits"},
 		{http.MethodGet, "/api/credits/history"},
-		{http.MethodPost, "/api/credits/welcome"},
 		{http.MethodPost, "/api/purchases/apple"},
 		{http.MethodPost, "/api/purchases/google"},
 	} {

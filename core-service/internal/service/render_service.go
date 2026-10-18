@@ -156,7 +156,7 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 	op := RenderOperation(stemMode)
 	balance := 0
 	if s.credits != nil {
-		balance, err = s.credits.Spend(ctx, userID, op, jobID)
+		balance, err = s.credits.Spend(ctx, userID, op, jobID, req.ProjectID)
 		if err != nil {
 			var insufficient *credit.InsufficientError
 			if errors.As(err, &insufficient) || s.credits.Enforced() {

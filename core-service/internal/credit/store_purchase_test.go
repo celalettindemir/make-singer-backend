@@ -9,7 +9,6 @@ import (
 )
 
 func TestStore_AccountByStoreToken(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	s, u := newStore(t)
 	ctx := context.Background()
 	a, err := s.EnsureAccount(ctx, u)

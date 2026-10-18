@@ -56,8 +56,8 @@ func TestStartRender_DebitsByStemModeWithJobRef(t *testing.T) {
 			t.Fatalf("mode %q: spends = %d, want 1", mode, len(fake.Spends))
 		}
 		got := fake.Spends[0]
-		if got.Op != want || got.ID != resp.JobID || got.User != "kullanici-a" {
-			t.Errorf("mode %q: spend = %+v, want op %s ref %s", mode, got, want, resp.JobID)
+		if got.Op != want || got.ID != resp.JobID || got.User != "kullanici-a" || got.Project != "p1" {
+			t.Errorf("mode %q: spend = %+v, want op %s ref %s project p1", mode, got, want, resp.JobID)
 		}
 		if resp.Balance != 138 {
 			t.Errorf("mode %q: balance = %d, want 138", mode, resp.Balance)

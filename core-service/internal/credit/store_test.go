@@ -3,7 +3,6 @@ package credit
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -16,19 +15,16 @@ func newStore(t *testing.T) (*PostgresStore, string) {
 	return NewPostgresStore(pool), uuid.NewString()
 }
 
-// seed sets the buckets directly through the ledger.
+// seed gives the user a plan lot (plan > 0, ends in 30 days) and a pack lot
+// (perm > 0, never ends); with neither it only creates the account.
 func seed(t *testing.T, s *PostgresStore, user string, plan, perm int) {
 	t.Helper()
 	ctx := context.Background()
 	if plan > 0 {
-		if _, _, err := s.SetPlan(ctx, user, "plan_dolum", "seed-plan-"+user, plan, nil); err != nil {
-			t.Fatalf("seed plan: %v", err)
-		}
+		grant(t, s, user, "plan_dolum", "seed-plan-"+user, LotPlan, plan, at(30*day))
 	}
 	if perm > 0 {
-		if _, _, err := s.Credit(ctx, user, "paket", "seed-perm-"+user, "", perm); err != nil {
-			t.Fatalf("seed permanent: %v", err)
-		}
+		grant(t, s, user, "paket", "seed-perm-"+user, LotPack, perm, nil)
 	}
 	if plan == 0 && perm == 0 {
 		if _, err := s.EnsureAccount(ctx, user); err != nil {
@@ -46,301 +42,191 @@ func count(t *testing.T, s *PostgresStore, q string, args ...any) int {
 	return n
 }
 
-func TestStore_DebitSameRefOnce(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
-	s, u := newStore(t)
-	seed(t, s, u, 0, 20)
-	ctx := context.Background()
-	a, done, err := s.DebitBucket(ctx, u, "render", "r1", "render_mix", 5, false)
-	if err != nil || !done || a.Balance() != 15 {
-		t.Fatalf("first debit: %+v %v %v", a, done, err)
-	}
-	a, done, err = s.DebitBucket(ctx, u, "render", "r1", "render_mix", 5, false)
-	if err != nil || done || a.Balance() != 15 {
-		t.Fatalf("second debit: %+v %v %v", a, done, err)
-	}
-}
-
-func TestStore_CreditSameRefOnce(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
-	s, u := newStore(t)
-	ctx := context.Background()
-	if _, done, err := s.Credit(ctx, u, "paket", "p1", "", 100); err != nil || !done {
-		t.Fatalf("first credit: %v %v", done, err)
-	}
-	a, done, err := s.Credit(ctx, u, "paket", "p1", "", 100)
-	if err != nil || done || a.Permanent != 100 {
-		t.Fatalf("second credit: %+v %v %v", a, done, err)
-	}
-}
-
-func TestStore_DebitTakesPlanFirst(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
-	s, u := newStore(t)
-	seed(t, s, u, 5, 20)
-	a, _, err := s.DebitBucket(context.Background(), u, "render", "r1", "render_mix", 12, false)
-	if err != nil || a.Plan != 0 || a.Permanent != 13 {
-		t.Fatalf("got %+v %v", a, err)
-	}
-}
-
-func TestStore_DebitInsufficient(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
-	s, u := newStore(t)
-	seed(t, s, u, 2, 5)
-	_, _, err := s.DebitBucket(context.Background(), u, "render", "r1", "render_mix", 12, false)
-	var ie *InsufficientError
-	if !errors.As(err, &ie) || ie.Required != 12 || ie.Balance != 7 {
-		t.Fatalf("got %v", err)
-	}
-	if n := count(t, s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'render'`); n != 0 {
-		t.Errorf("render rows = %d, want 0", n)
-	}
-}
-
-func TestStore_ConcurrentDebitsOneSucceeds(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
-	s, u := newStore(t)
-	seed(t, s, u, 0, 12)
-	var wg sync.WaitGroup
-	errs := make([]error, 2)
-	for i := range errs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, _, errs[i] = s.DebitBucket(context.Background(), u, "render", "r"+string(rune('a'+i)), "render_mix", 12, false)
-		}()
-	}
-	wg.Wait()
-	insufficient := 0
-	for _, err := range errs {
-		var ie *InsufficientError
-		if errors.As(err, &ie) {
-			insufficient++
-		} else if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	}
-	if insufficient != 1 {
-		t.Fatalf("insufficient errors = %d, want 1", insufficient)
-	}
-}
-
-func TestStore_RefundRestoresBuckets(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
-	s, u := newStore(t)
-	seed(t, s, u, 5, 20)
-	ctx := context.Background()
-	if _, _, err := s.DebitBucket(ctx, u, "render", "r1", "render_mix", 12, false); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.RefundBucket(ctx, "render", "render_iade", "r1"); err != nil {
-		t.Fatal(err)
-	}
-	a, _ := s.EnsureAccount(ctx, u)
-	if a.Plan != 5 || a.Permanent != 20 {
-		t.Fatalf("got %+v", a)
-	}
-}
-
-func TestStore_RefundTwiceOnce(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
-	s, u := newStore(t)
-	seed(t, s, u, 0, 20)
-	ctx := context.Background()
-	if _, _, err := s.DebitBucket(ctx, u, "render", "r1", "render_mix", 12, false); err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		if err := s.RefundBucket(ctx, "render", "render_iade", "r1"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if a, _ := s.EnsureAccount(ctx, u); a.Balance() != 20 {
-		t.Fatalf("balance = %d, want 20", a.Balance())
-	}
-}
-
 func TestStore_RefundAfterDeleteDoesNotRecreateAccount(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	s, u := newStore(t)
 	seed(t, s, u, 0, 20)
 	ctx := context.Background()
-	if _, _, err := s.DebitBucket(ctx, u, "render", "r1", "render_mix", 12, false); err != nil {
+	if _, err := s.Debit(ctx, u, "render", "r1", 12, Meta{}, lotNow); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DeleteUserData(ctx, u); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RefundBucket(ctx, "render", "render_iade", "r1"); err != nil {
-		t.Fatal(err)
+	if _, ok, err := s.Refund(ctx, u, "render", "render_iade", "r1", lotNow, 168*time.Hour); err != nil || ok {
+		t.Fatalf("refund after delete: ok=%v err=%v", ok, err)
 	}
-	if n := count(t, s, `SELECT count(*) FROM kredi.hesap WHERE kullanici_id = $1::uuid`, u); n != 0 {
-		t.Errorf("hesap rows = %d, want 0", n)
-	}
-	if n := count(t, s, `SELECT count(*) FROM kredi.hareket WHERE kullanici_id = $1::uuid`, u); n != 0 {
-		t.Errorf("hareket rows = %d, want 0", n)
-	}
-}
-
-func TestStore_SetPlanIsIdempotentSet(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
-	s, u := newStore(t)
-	ctx := context.Background()
-	end := time.Now().Add(30 * 24 * time.Hour)
-	if _, _, err := s.SetPlan(ctx, u, "plan_dolum", "a", 300, &end); err != nil {
-		t.Fatal(err)
-	}
-	a, done, err := s.SetPlan(ctx, u, "plan_dolum", "b", 300, &end)
-	if err != nil || !done || a.Plan != 300 || a.PlanPeriodEnd == nil {
-		t.Fatalf("got %+v %v %v", a, done, err)
-	}
-	a, _, err = s.SetPlan(ctx, u, "plan_bitis", "c", 0, nil)
-	if err != nil || a.Plan != 0 {
-		t.Fatalf("expiry: %+v %v", a, err)
-	}
-}
-
-func TestStore_ClawBackGoesNegative(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
-	s, u := newStore(t)
-	seed(t, s, u, 0, 30)
-	a, done, err := s.ClawBack(context.Background(), u, "iade1", 100)
-	if err != nil || !done || a.Permanent != -70 {
-		t.Fatalf("got %+v %v %v", a, done, err)
-	}
-}
-
-func TestStore_NegativeBalanceBlocksDebit(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
-	s, u := newStore(t)
-	seed(t, s, u, 0, 30)
-	ctx := context.Background()
-	if _, _, err := s.ClawBack(ctx, u, "iade1", 100); err != nil {
-		t.Fatal(err)
-	}
-	_, _, err := s.DebitBucket(ctx, u, "render", "r1", "render_mix", 1, false)
-	var ie *InsufficientError
-	if !errors.As(err, &ie) || ie.Balance != -70 {
-		t.Fatalf("got %v", err)
+	for _, table := range []string{"hesap", "hareket", "dilim"} {
+		if n := count(t, s, `SELECT count(*) FROM kredi.`+table+` WHERE kullanici_id = $1::uuid`, u); n != 0 {
+			t.Errorf("%s rows = %d, want 0", table, n)
+		}
 	}
 }
 
 func TestStore_SpendActionFollowUpsFree(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	s, u := newStore(t)
 	seed(t, s, u, 0, 10)
 	ctx := context.Background()
-	c, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, 10*time.Minute, 12, false)
-	if err != nil || !c.Charged || c.Account.Balance() != 8 {
+	c, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, 10*time.Minute, 12, lotNow)
+	if err != nil || !c.Charged || c.Balance != 8 {
 		t.Fatalf("first: %+v %v", c, err)
 	}
 	for i := 2; i <= 12; i++ {
-		c, err = s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, 10*time.Minute, 12, false)
-		if err != nil || c.Charged || c.Account.Balance() != 8 {
+		c, err = s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, 10*time.Minute, 12, lotNow)
+		if err != nil || c.Charged || c.Balance != 8 {
 			t.Fatalf("call %d: %+v %v", i, c, err)
 		}
 	}
-	if _, err = s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, 10*time.Minute, 12, false); !errors.Is(err, ErrActionExpired) {
+	if _, err = s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, 10*time.Minute, 12, lotNow); !errors.Is(err, ErrActionExpired) {
 		t.Fatalf("call 13: %v", err)
+	}
+	var reason string
+	if err := s.pool.QueryRow(ctx, `SELECT sebep FROM kredi.hareket WHERE tur = 'soz' AND ref = $1`, u+":act").Scan(&reason); err != nil || reason != "lyrics_generate" {
+		t.Fatalf("movement reason = %q, %v", reason, err)
+	}
+}
+
+func TestStore_SpendActionInsufficientWritesNothing(t *testing.T) {
+	s, u := newStore(t)
+	seed(t, s, u, 0, 1)
+	_, err := s.SpendAction(context.Background(), u, OpLyricsGenerate, "act", 2, time.Hour, 12, lotNow)
+	var ie *InsufficientError
+	if !errors.As(err, &ie) || ie.Required != 2 || ie.Balance != 1 {
+		t.Fatalf("got %v", err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM kredi.eylem WHERE kullanici_id = $1::uuid`, u); n != 0 {
+		t.Errorf("action rows = %d, want 0", n)
 	}
 }
 
 func TestStore_SpendActionExpiresAfterWindow(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	s, u := newStore(t)
 	seed(t, s, u, 0, 10)
 	ctx := context.Background()
-	if _, err := s.SpendAction(ctx, u, OpLyricsRewrite, "act", 1, 10*time.Minute, 2, false); err != nil {
+	if _, err := s.SpendAction(ctx, u, OpLyricsRewrite, "act", 1, 10*time.Minute, 2, lotNow); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.pool.Exec(ctx, `UPDATE kredi.eylem SET olusturuldu = now() - interval '11 minutes'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SpendAction(ctx, u, OpLyricsRewrite, "act", 1, 10*time.Minute, 2, false); !errors.Is(err, ErrActionExpired) {
+	if _, err := s.SpendAction(ctx, u, OpLyricsRewrite, "act", 1, 10*time.Minute, 2, lotNow); !errors.Is(err, ErrActionExpired) {
 		t.Fatalf("got %v", err)
 	}
 }
 
 func TestStore_SpendActionOtherUserCannotReuse(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	s, u := newStore(t)
 	other := uuid.NewString()
 	seed(t, s, u, 0, 10)
 	seed(t, s, other, 0, 10)
 	ctx := context.Background()
-	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, time.Hour, 12, false); err != nil {
+	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, time.Hour, 12, lotNow); err != nil {
 		t.Fatal(err)
 	}
-	c, err := s.SpendAction(ctx, other, OpLyricsGenerate, "act", 2, time.Hour, 12, false)
-	if err != nil || !c.Charged || c.Account.Balance() != 8 {
+	c, err := s.SpendAction(ctx, other, OpLyricsGenerate, "act", 2, time.Hour, 12, lotNow)
+	if err != nil || !c.Charged || c.Balance != 8 {
 		t.Fatalf("other user: %+v %v", c, err)
 	}
 }
 
 func TestStore_DropActionThenReuseExpired(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	s, u := newStore(t)
 	seed(t, s, u, 0, 10)
 	ctx := context.Background()
-	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, time.Hour, 12, false); err != nil {
+	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, time.Hour, 12, lotNow); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DropAction(ctx, u+":act"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, time.Hour, 12, false); !errors.Is(err, ErrActionExpired) {
+	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, time.Hour, 12, lotNow); !errors.Is(err, ErrActionExpired) {
 		t.Fatalf("got %v", err)
 	}
-	if a, _ := s.EnsureAccount(ctx, u); a.Balance() != 8 {
-		t.Fatalf("balance = %d, want 8 (no second charge)", a.Balance())
+	if b := balance(t, s, u, lotNow); b != 8 {
+		t.Fatalf("balance = %d, want 8 (no second charge)", b)
 	}
 }
 
 func TestStore_RefundSozClosesAction(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	s, u := newStore(t)
 	seed(t, s, u, 0, 10)
 	ctx := context.Background()
-	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, time.Hour, 12, false); err != nil {
+	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, time.Hour, 12, lotNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RefundBucket(ctx, "soz", "soz_iade", u+":act"); err != nil {
-		t.Fatal(err)
+	if _, ok, err := s.Refund(ctx, u, "soz", "soz_iade", u+":act", lotNow, 168*time.Hour); err != nil || !ok {
+		t.Fatalf("refund: ok=%v err=%v", ok, err)
 	}
-	if a, _ := s.EnsureAccount(ctx, u); a.Balance() != 10 {
-		t.Fatalf("balance = %d, want 10", a.Balance())
+	if b := balance(t, s, u, lotNow); b != 10 {
+		t.Fatalf("balance = %d, want 10", b)
 	}
-	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, time.Hour, 12, false); !errors.Is(err, ErrActionExpired) {
+	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, time.Hour, 12, lotNow); !errors.Is(err, ErrActionExpired) {
 		t.Fatalf("got %v", err)
 	}
 }
 
-func TestStore_HistoryPagesByID(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
+func TestStore_HistoryPagesByCursor(t *testing.T) {
 	s, u := newStore(t)
 	ctx := context.Background()
 	for i := range 25 {
-		if _, _, err := s.Credit(ctx, u, "paket", "h"+string(rune('a'+i)), "", 1); err != nil {
-			t.Fatal(err)
-		}
+		grant(t, s, u, "paket", "h"+string(rune('a'+i)), LotPack, 1, nil)
 	}
-	p1, err := s.History(ctx, u, 0, 20)
-	if err != nil || len(p1) != 20 {
-		t.Fatalf("page 1: %d %v", len(p1), err)
+	p1, err := s.History(ctx, u, "", FilterAll)
+	if err != nil || len(p1.Items) != 20 || p1.Next == "" {
+		t.Fatalf("page 1: %d %q %v", len(p1.Items), p1.Next, err)
 	}
-	p2, err := s.History(ctx, u, p1[19].ID, 20)
-	if err != nil || len(p2) != 5 || p2[0].ID >= p1[19].ID {
-		t.Fatalf("page 2: %d %v", len(p2), err)
+	p2, err := s.History(ctx, u, p1.Next, FilterAll)
+	if err != nil || len(p2.Items) != 5 || p2.Next != "" || p2.Items[0].ID >= p1.Items[19].ID {
+		t.Fatalf("page 2: %d %q %v", len(p2.Items), p2.Next, err)
+	}
+	if _, err := s.History(ctx, u, "zzz", FilterAll); !errors.Is(err, ErrBadCursor) {
+		t.Fatalf("bad cursor: %v", err)
+	}
+	if _, err := s.History(ctx, u, "", HistoryFilter("all")); !errors.Is(err, ErrBadFilter) {
+		t.Fatalf("bad filter: %v", err)
+	}
+}
+
+func TestStore_HistoryFilterSplitsSpendAndEarn(t *testing.T) {
+	s, u := newStore(t)
+	ctx := context.Background()
+	grant(t, s, u, "paket", "b", LotPack, 100, nil)
+	if _, err := s.Debit(ctx, u, "render", "r1", 12, Meta{Reason: "render_mix", ProjectID: "3f2c8a10-5b7e-4c1d-9a2f-6e8b0c4d2a71"}, lotNow); err != nil {
+		t.Fatal(err)
+	}
+	spend, err := s.History(ctx, u, "", FilterSpend)
+	if err != nil || len(spend.Items) != 1 || spend.Items[0].Tur != "render" || spend.Items[0].Amount != -12 ||
+		spend.Items[0].Reason != "render_mix" || spend.Items[0].ProjectID == nil {
+		t.Fatalf("spend: %+v %v", spend, err)
+	}
+	earn, err := s.History(ctx, u, "", FilterEarn)
+	if err != nil || len(earn.Items) != 1 || earn.Items[0].Tur != "paket" || earn.Items[0].Amount != 100 {
+		t.Fatalf("earn: %+v %v", earn, err)
+	}
+}
+
+func TestStore_RefundCopiesProjectAndReason(t *testing.T) {
+	s, u := newStore(t)
+	ctx := context.Background()
+	grant(t, s, u, "paket", "b", LotPack, 100, nil)
+	const project = "3f2c8a10-5b7e-4c1d-9a2f-6e8b0c4d2a71"
+	if _, err := s.Debit(ctx, u, "master", "m1", 3, Meta{Reason: "master", ProjectID: project}, lotNow); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.Refund(ctx, u, "master", "master_iade", "m1", lotNow, 168*time.Hour); err != nil || !ok {
+		t.Fatalf("refund: ok=%v err=%v", ok, err)
+	}
+	var reason, proj string
+	if err := s.pool.QueryRow(ctx, `SELECT sebep, proje_id::text FROM kredi.hareket WHERE tur = 'master_iade'`).Scan(&reason, &proj); err != nil ||
+		reason != "master" || proj != project {
+		t.Fatalf("refund row: %q %q %v", reason, proj, err)
 	}
 }
 
 func TestStore_DeleteUserDataAnonymises(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	s, u := newStore(t)
-	seed(t, s, u, 0, 10)
+	seed(t, s, u, 20, 10)
 	ctx := context.Background()
-	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, 10*time.Minute, 12, false); err != nil {
+	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "act", 2, 10*time.Minute, 12, lotNow); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.pool.Exec(ctx, `
@@ -358,10 +244,13 @@ func TestStore_DeleteUserDataAnonymises(t *testing.T) {
 			t.Fatalf("run %d: %v", i+1, err)
 		}
 	}
-	for _, table := range []string{"hesap", "hareket", "eylem"} {
+	for _, table := range []string{"hesap", "hareket", "eylem", "dilim"} {
 		if n := count(t, s, `SELECT count(*) FROM kredi.`+table+` WHERE kullanici_id = $1::uuid`, u); n != 0 {
 			t.Errorf("%s rows = %d, want 0", table, n)
 		}
+	}
+	if n := count(t, s, `SELECT count(*) FROM kredi.dilim_hareket dh WHERE NOT EXISTS (SELECT 1 FROM kredi.dilim d WHERE d.id = dh.dilim_id)`); n != 0 {
+		t.Errorf("orphan lot movements = %d, want 0", n)
 	}
 	if n := count(t, s, `SELECT count(*) FROM kredi.satin_alma WHERE islem_id = 't1-`+u+`' AND kullanici_id IS NULL`); n != 1 {
 		t.Errorf("anonymised purchases = %d, want 1", n)
@@ -372,7 +261,6 @@ func TestStore_DeleteUserDataAnonymises(t *testing.T) {
 }
 
 func TestStore_ReadAccountMissingCreatesNothing(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	s, u := newStore(t)
 	ctx := context.Background()
 	if _, ok, err := s.ReadAccount(ctx, u); err != nil || ok {
@@ -381,10 +269,59 @@ func TestStore_ReadAccountMissingCreatesNothing(t *testing.T) {
 	if n := count(t, s, `SELECT count(*) FROM kredi.hesap WHERE kullanici_id = $1::uuid`, u); n != 0 {
 		t.Fatalf("ReadAccount created %d rows", n)
 	}
-	seed(t, s, u, 0, 7)
+	setDebt(t, s, u, 7)
 	a, ok, err := s.ReadAccount(ctx, u)
-	if err != nil || !ok || a.Balance() != 7 {
+	if err != nil || !ok || a.Debt != 7 {
 		t.Fatalf("existing account: %+v ok=%v err=%v", a, ok, err)
+	}
+}
+
+func TestStore_GiftIsLatestLiveCampaignLot(t *testing.T) {
+	s, u := newStore(t)
+	ctx := context.Background()
+	if g, err := s.Gift(ctx, u, lotNow); err != nil || g != nil {
+		t.Fatalf("no gift: %+v %v", g, err)
+	}
+	grant(t, s, u, "kampanya", "old", LotCampaign, 10, at(-time.Hour))
+	grant(t, s, u, "kampanya", "new", LotCampaign, 50, at(5*day))
+	g, err := s.Gift(ctx, u, lotNow)
+	if err != nil || g == nil || g.Amount != 50 || g.ExpiresAt == nil || !g.ExpiresAt.Equal(*at(5 * day)) {
+		t.Fatalf("gift: %+v %v", g, err)
+	}
+	if g, err := s.Gift(ctx, u, lotNow.Add(6*day)); err != nil || g != nil {
+		t.Fatalf("expired gift: %+v %v", g, err)
+	}
+}
+
+func TestStore_MovementOwner(t *testing.T) {
+	s, u := newStore(t)
+	grant(t, s, u, "paket", "b", LotPack, 100, nil)
+	if owner, ok, err := s.MovementOwner(context.Background(), "paket", "b"); err != nil || !ok || owner != u {
+		t.Fatalf("owner = %q ok=%v err=%v", owner, ok, err)
+	}
+	if _, ok, err := s.MovementOwner(context.Background(), "paket", "nope"); err != nil || ok {
+		t.Fatalf("missing: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestStore_RefundWithoutAccountRowWritesNothing(t *testing.T) {
+	s, u := newStore(t)
+	seed(t, s, u, 0, 20)
+	ctx := context.Background()
+	if _, err := s.Debit(ctx, u, "render", "orphan-"+u, 12, Meta{}, lotNow); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM kredi.hesap WHERE kullanici_id = $1::uuid`, u); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.Refund(ctx, u, "render", "render_iade", "orphan-"+u, lotNow, 168*time.Hour); err != nil || ok {
+		t.Fatalf("refund: ok=%v err=%v", ok, err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM kredi.hesap WHERE kullanici_id = $1::uuid`, u); n != 0 {
+		t.Errorf("account row recreated: %d", n)
+	}
+	if n := count(t, s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'render_iade' AND ref = $1`, "orphan-"+u); n != 0 {
+		t.Errorf("refund rows = %d, want 0", n)
 	}
 }
 
@@ -406,27 +343,5 @@ func TestStore_LatestSubscription(t *testing.T) {
 	if err != nil || sub == nil || sub.OriginalID != latest || sub.Product != "pro.monthly" ||
 		sub.Status != "aktif" || sub.UserID == nil || *sub.UserID != u || !sub.AutoRenew {
 		t.Fatalf("latest subscription: %+v %v", sub, err)
-	}
-}
-
-func TestStore_RefundWithoutAccountRowWritesNothing(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
-	s, u := newStore(t)
-	seed(t, s, u, 0, 20)
-	ctx := context.Background()
-	if _, _, err := s.DebitBucket(ctx, u, "render", "orphan-"+u, "render_mix", 12, false); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.pool.Exec(ctx, `DELETE FROM kredi.hesap WHERE kullanici_id = $1::uuid`, u); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.RefundBucket(ctx, "render", "render_iade", "orphan-"+u); err != nil {
-		t.Fatal(err)
-	}
-	if n := count(t, s, `SELECT count(*) FROM kredi.hesap WHERE kullanici_id = $1::uuid`, u); n != 0 {
-		t.Errorf("account row recreated: %d", n)
-	}
-	if n := count(t, s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'render_iade' AND ref = $1`, "orphan-"+u); n != 0 {
-		t.Errorf("refund rows = %d, want 0", n)
 	}
 }

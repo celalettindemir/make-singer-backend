@@ -64,7 +64,7 @@ func TestStore_DebitSpendsSoonestExpiryFirst(t *testing.T) {
 	grant(t, s, u, "plan_dolum", "p", LotPlan, 60, at(10*day))
 	grant(t, s, u, "kampanya", "k", LotCampaign, 24, at(3*day))
 	grant(t, s, u, "paket", "b", LotPack, 100, nil)
-	bal, err := s.Debit(context.Background(), u, "render", "r1", 30, lotNow)
+	bal, err := s.Debit(context.Background(), u, "render", "r1", 30, Meta{}, lotNow)
 	if err != nil || bal != 154 {
 		t.Fatalf("Debit = %d, %v; want 154", bal, err)
 	}
@@ -111,7 +111,7 @@ func TestStore_DebitTiesUsePlanCampaignAdminPack(t *testing.T) {
 	}
 	refs := map[LotSource]string{LotPlan: "p", LotCampaign: "k", LotAdmin: "a", LotPack: "b"}
 	for _, st := range steps {
-		if _, err := s.Debit(ctx, u, "render", st.ref, 10, lotNow); err != nil {
+		if _, err := s.Debit(ctx, u, "render", st.ref, 10, Meta{}, lotNow); err != nil {
 			t.Fatal(err)
 		}
 		for src, w := range st.left {
@@ -126,7 +126,7 @@ func TestStore_DebitInsufficientCountsDebt(t *testing.T) {
 	s, u := newStore(t)
 	grant(t, s, u, "paket", "b", LotPack, 20, nil)
 	setDebt(t, s, u, 15)
-	_, err := s.Debit(context.Background(), u, "render", "r1", 12, lotNow)
+	_, err := s.Debit(context.Background(), u, "render", "r1", 12, Meta{}, lotNow)
 	var ie *InsufficientError
 	if !errors.As(err, &ie) || ie.Required != 12 || ie.Balance != 5 {
 		t.Fatalf("err = %v, want InsufficientError{12, 5}", err)
@@ -145,7 +145,7 @@ func TestStore_ConcurrentDebitsNeverOverdraw(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, errs[i] = s.Debit(context.Background(), u, "render", []string{"ra", "rb"}[i], 12, lotNow)
+			_, errs[i] = s.Debit(context.Background(), u, "render", []string{"ra", "rb"}[i], 12, Meta{}, lotNow)
 		}(i)
 	}
 	wg.Wait()
@@ -174,11 +174,11 @@ func TestStore_DebitIsIdempotentPerRef(t *testing.T) {
 	s, u := newStore(t)
 	ctx := context.Background()
 	grant(t, s, u, "paket", "b", LotPack, 20, nil)
-	if b, err := s.Debit(ctx, u, "render", "r1", 12, lotNow); err != nil || b != 8 {
+	if b, err := s.Debit(ctx, u, "render", "r1", 12, Meta{}, lotNow); err != nil || b != 8 {
 		t.Fatalf("first = %d, %v", b, err)
 	}
 	// The repeat would be insufficient, but it is the same debit: no error.
-	if b, err := s.Debit(ctx, u, "render", "r1", 12, lotNow); err != nil || b != 8 {
+	if b, err := s.Debit(ctx, u, "render", "r1", 12, Meta{}, lotNow); err != nil || b != 8 {
 		t.Fatalf("repeat = %d, %v; want 8, nil", b, err)
 	}
 	if n := count(t, s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'render'`); n != 1 {
@@ -191,7 +191,7 @@ func TestStore_RefundReturnsToSameLots(t *testing.T) {
 	ctx := context.Background()
 	grant(t, s, u, "kampanya", "k", LotCampaign, 10, at(2*day))
 	grant(t, s, u, "paket", "b", LotPack, 50, nil)
-	if _, err := s.Debit(ctx, u, "render", "r1", 32, lotNow); err != nil {
+	if _, err := s.Debit(ctx, u, "render", "r1", 32, Meta{}, lotNow); err != nil {
 		t.Fatal(err)
 	}
 	if remain(t, s, LotCampaign, "k") != 0 || remain(t, s, LotPack, "b") != 28 {
@@ -218,7 +218,7 @@ func TestStore_RefundIntoExpiredLotCreatesGraceLot(t *testing.T) {
 	ctx := context.Background()
 	grant(t, s, u, "kampanya", "k", LotCampaign, 20, at(day))
 	grant(t, s, u, "paket", "b", LotPack, 30, nil)
-	if _, err := s.Debit(ctx, u, "render", "r1", 12, lotNow); err != nil {
+	if _, err := s.Debit(ctx, u, "render", "r1", 12, Meta{}, lotNow); err != nil {
 		t.Fatal(err)
 	}
 	later := lotNow.Add(2 * day) // campaign lot ended in between, sweep not run
@@ -253,7 +253,7 @@ func TestStore_RefundOnceOnly(t *testing.T) {
 	s, u := newStore(t)
 	ctx := context.Background()
 	grant(t, s, u, "paket", "b", LotPack, 20, nil)
-	if _, err := s.Debit(ctx, u, "render", "r1", 12, lotNow); err != nil {
+	if _, err := s.Debit(ctx, u, "render", "r1", 12, Meta{}, lotNow); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := s.Refund(ctx, u, "render", "render_iade", "r1", lotNow, 168*time.Hour); err != nil || !ok {
@@ -327,14 +327,14 @@ func TestStore_ExpiredLotsIgnoredBeforeSweep(t *testing.T) {
 	if b := balance(t, s, u, lotNow); b != 20 {
 		t.Fatalf("balance = %d, want 20", b)
 	}
-	if _, err := s.Debit(ctx, u, "render", "r1", 12, lotNow); err != nil {
+	if _, err := s.Debit(ctx, u, "render", "r1", 12, Meta{}, lotNow); err != nil {
 		t.Fatal(err)
 	}
 	if remain(t, s, LotPlan, "p") != 50 || remain(t, s, LotPack, "b") != 8 {
 		t.Fatal("debit took from the expired lot")
 	}
 	var ie *InsufficientError
-	if _, err := s.Debit(ctx, u, "render", "r2", 12, lotNow); !errors.As(err, &ie) || ie.Balance != 8 {
+	if _, err := s.Debit(ctx, u, "render", "r2", 12, Meta{}, lotNow); !errors.As(err, &ie) || ie.Balance != 8 {
 		t.Fatalf("err = %v, want insufficient with balance 8", err)
 	}
 	lots, err := s.Lots(ctx, u, lotNow)
@@ -350,7 +350,7 @@ func TestStore_ExpireSweepIsIdempotent(t *testing.T) {
 	grant(t, s, u, "kampanya", "k", LotCampaign, 24, at(-time.Minute))
 	grant(t, s, u, "yonetici", "a", LotAdmin, 5, at(day))
 	grant(t, s, u, "paket", "b", LotPack, 20, nil)
-	if _, err := s.Debit(ctx, u, "render", "r1", 12, lotNow.Add(-2*time.Hour)); err != nil {
+	if _, err := s.Debit(ctx, u, "render", "r1", 12, Meta{}, lotNow.Add(-2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	before := balance(t, s, u, lotNow)
@@ -391,7 +391,7 @@ func TestStore_ExpireSweepMarksEmptyLotsWithoutMovement(t *testing.T) {
 	s, u := newStore(t)
 	ctx := context.Background()
 	grant(t, s, u, "kampanya", "k", LotCampaign, 12, at(-time.Minute))
-	if _, err := s.Debit(ctx, u, "render", "r1", 12, lotNow.Add(-time.Hour)); err != nil {
+	if _, err := s.Debit(ctx, u, "render", "r1", 12, Meta{}, lotNow.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := s.ExpireLots(ctx, lotNow, 500); err != nil || n != 1 {
@@ -410,7 +410,7 @@ func TestStore_EndPlanLotsZeroesLivePlan(t *testing.T) {
 	ctx := context.Background()
 	grant(t, s, u, "plan_dolum", "p", LotPlan, 300, at(20*day))
 	grant(t, s, u, "paket", "b", LotPack, 100, nil)
-	if _, err := s.Debit(ctx, u, "render", "r1", 12, lotNow); err != nil {
+	if _, err := s.Debit(ctx, u, "render", "r1", 12, Meta{}, lotNow); err != nil {
 		t.Fatal(err)
 	}
 	bal, err := s.EndPlanLots(ctx, u, "plan_bitis", "e1", lotNow)
@@ -475,7 +475,7 @@ func TestStore_ClawBackPackShortfallBecomesDebt(t *testing.T) {
 		t.Fatal(err)
 	}
 	grant(t, s, u, "kampanya", "k2", LotCampaign, 5, nil)
-	if _, err := s.Debit(ctx, u, "render", "r1", 75, lotNow); err != nil {
+	if _, err := s.Debit(ctx, u, "render", "r1", 75, Meta{}, lotNow); err != nil {
 		t.Fatal(err)
 	}
 	if remain(t, s, LotPack, "b") != 30 || remain(t, s, LotCampaign, "k2") != 0 {
@@ -502,7 +502,7 @@ func TestStore_ClawBackPackShortfallBecomesDebt(t *testing.T) {
 		t.Fatalf("unknown pack err = %v", err)
 	}
 	var ie *InsufficientError
-	if _, err := s.Debit(ctx, u, "render", "r2", 1, lotNow); !errors.As(err, &ie) || ie.Balance != -30 {
+	if _, err := s.Debit(ctx, u, "render", "r2", 1, Meta{}, lotNow); !errors.As(err, &ie) || ie.Balance != -30 {
 		t.Fatalf("debt must block spending: %v", err)
 	}
 	assertLotLedger(t, s)
@@ -530,5 +530,82 @@ func TestStore_DeductAdminStopsAtZero(t *testing.T) {
 	}
 	if count(t, s, `SELECT count(*) FROM kredi.hareket WHERE ref = 'd1'`) != 0 {
 		t.Fatal("refused deduct wrote a movement")
+	}
+}
+
+func tierOfMovement(t *testing.T, s *PostgresStore, tur, ref string) string {
+	t.Helper()
+	var tier *string
+	if err := s.pool.QueryRow(context.Background(),
+		`SELECT kademe FROM kredi.hareket WHERE tur = $1 AND ref = $2`, tur, ref).Scan(&tier); err != nil {
+		t.Fatalf("movement %s/%s: %v", tur, ref, err)
+	}
+	if tier == nil {
+		return ""
+	}
+	return *tier
+}
+
+func TestStore_PlanMovementsCarryTier(t *testing.T) {
+	s, u := newStore(t)
+	ctx := context.Background()
+	if _, err := s.Grant(ctx, u, "plan_dolum", "p1", Grant{Source: LotPlan, Amount: 300, ExpiresAt: at(10 * day), Tier: TierPlus}, lotNow); err != nil {
+		t.Fatal(err)
+	}
+	if got := tierOfMovement(t, s, "plan_dolum", "p1"); got != "plus" {
+		t.Fatalf("plan_dolum tier = %q, want plus", got)
+	}
+	if _, err := s.EndPlanLots(ctx, u, "plan_bitis", "e1", lotNow); err != nil {
+		t.Fatal(err)
+	}
+	if got := tierOfMovement(t, s, "plan_bitis", "e1"); got != "plus" {
+		t.Fatalf("plan_bitis tier = %q, want plus", got)
+	}
+	if _, err := s.Grant(ctx, u, "plan_dolum", "p2", Grant{Source: LotPlan, Amount: 1000, ExpiresAt: at(20 * day), Tier: TierPro}, lotNow); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.ExpireLots(ctx, lotNow.Add(21*day), 500); err != nil || n != 1 {
+		t.Fatalf("sweep: n=%d err=%v", n, err)
+	}
+	var lotID string
+	if err := s.pool.QueryRow(ctx, `SELECT id::text FROM kredi.dilim WHERE ref = 'p2'`).Scan(&lotID); err != nil {
+		t.Fatal(err)
+	}
+	if got := tierOfMovement(t, s, "plan_sure", lotID); got != "pro" {
+		t.Fatalf("plan_sure tier = %q, want pro", got)
+	}
+	// Other kinds carry no tier.
+	grant(t, s, u, "kampanya", "k", LotCampaign, 5, at(day))
+	if n, err := s.ExpireLots(ctx, lotNow.Add(2*day), 500); err != nil || n != 1 {
+		t.Fatalf("sweep 2: n=%d err=%v", n, err)
+	}
+	var campaignLot string
+	if err := s.pool.QueryRow(ctx, `SELECT id::text FROM kredi.dilim WHERE ref = 'k'`).Scan(&campaignLot); err != nil {
+		t.Fatal(err)
+	}
+	if got := tierOfMovement(t, s, "kampanya_sure", campaignLot); got != "" {
+		t.Fatalf("kampanya_sure tier = %q, want none", got)
+	}
+}
+
+func TestStore_DebitRecordsProjectAndReason(t *testing.T) {
+	s, u := newStore(t)
+	ctx := context.Background()
+	grant(t, s, u, "paket", "b", LotPack, 50, nil)
+	const project = "3f2c8a10-5b7e-4c1d-9a2f-6e8b0c4d2a71"
+	if _, err := s.Debit(ctx, u, "render", "r1", 12, Meta{Reason: "render_mix", ProjectID: project}, lotNow); err != nil {
+		t.Fatal(err)
+	}
+	var reason, got string
+	if err := s.pool.QueryRow(ctx, `SELECT sebep, proje_id::text FROM kredi.hareket WHERE tur = 'render'`).Scan(&reason, &got); err != nil ||
+		reason != "render_mix" || got != project {
+		t.Fatalf("debit row: %q %q %v", reason, got, err)
+	}
+	// No project: the column stays NULL.
+	if _, err := s.Debit(ctx, u, "soz", "s1", 2, Meta{Reason: "lyrics_generate"}, lotNow); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'soz' AND proje_id IS NULL`); n != 1 {
+		t.Fatalf("soz rows without project = %d, want 1", n)
 	}
 }

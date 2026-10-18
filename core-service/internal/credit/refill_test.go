@@ -40,7 +40,6 @@ func (e *purchaseEnv) yearlySub(t *testing.T, user *string, periodEnd time.Time,
 }
 
 func TestRunRefill_YearlyRefillsOncePerMonth(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, _ := e.user(t)
@@ -58,13 +57,12 @@ func TestRunRefill_YearlyRefillsOncePerMonth(t *testing.T) {
 	if sub.RefillCount != 1 || !sub.NextRefill.Equal(refillAt(refillBase, 2)) {
 		t.Fatalf("schedule = %d %v", sub.RefillCount, sub.NextRefill)
 	}
-	if a := e.account(t, u); a.Plan != 300 {
+	if a := e.view(t, u); a.Plan != 300 {
 		t.Fatalf("plan = %d", a.Plan)
 	}
 }
 
 func TestRunRefill_CatchesUpMissedMonths(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, _ := e.user(t)
 	orig := e.yearlySub(t, &u, refillBase.AddDate(1, 0, 0), 0)
@@ -94,7 +92,6 @@ func TestRunRefill_SkipsOwnerless(t *testing.T) {
 }
 
 func TestRunRefill_StopsAtPeriodEnd(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, _ := e.user(t)
 	// The second refill is due exactly at the period end: it is not
@@ -116,7 +113,6 @@ func TestRunRefill_StopsAtPeriodEnd(t *testing.T) {
 }
 
 func TestRunRefill_PastPeriodEndGivesNothing(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, _ := e.user(t)
 	end := refillAt(refillBase, 1).Add(30 * time.Minute)
@@ -136,7 +132,6 @@ func TestRunRefill_PastPeriodEndGivesNothing(t *testing.T) {
 }
 
 func TestRefillStep_StaleReadChangesNothing(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, _ := e.user(t)
 	end := refillBase.AddDate(1, 0, 0)
@@ -144,7 +139,7 @@ func TestRefillStep_StaleReadChangesNothing(t *testing.T) {
 	stale := *e.sub(t, storeApple, orig)
 	ctx := context.Background()
 	now := refillAt(refillBase, 1).Add(time.Hour)
-	if ok, err := e.s.RefillStep(ctx, stale, now, "r1", 300, refillAt(refillBase, 2)); err != nil || !ok {
+	if ok, err := e.s.RefillStep(ctx, stale, now, "r1", 300, TierPro, refillAt(refillBase, 2)); err != nil || !ok {
 		t.Fatalf("first step = %v %v", ok, err)
 	}
 	// A renewal moves the period end after the snapshot was read.
@@ -154,7 +149,7 @@ func TestRefillStep_StaleReadChangesNothing(t *testing.T) {
 	if err := e.s.UpsertSubscription(ctx, cur); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := e.s.RefillStep(ctx, stale, now, "r1b", 300, refillAt(refillBase, 2)); err != nil || ok {
+	if ok, err := e.s.RefillStep(ctx, stale, now, "r1b", 300, TierPro, refillAt(refillBase, 2)); err != nil || ok {
 		t.Fatalf("stale step = %v %v, want false", ok, err)
 	}
 	if sub := e.sub(t, storeApple, orig); sub.RefillCount != 1 {
@@ -163,16 +158,16 @@ func TestRefillStep_StaleReadChangesNothing(t *testing.T) {
 	// A fresh step applies the CURRENT period end to the plan.
 	fresh := *e.sub(t, storeApple, orig)
 	later := refillAt(refillBase, 2).Add(time.Hour)
-	if ok, err := e.s.RefillStep(ctx, fresh, later, "r2", 300, refillAt(refillBase, 3)); err != nil || !ok {
+	if ok, err := e.s.RefillStep(ctx, fresh, later, "r2", 300, TierPro, refillAt(refillBase, 3)); err != nil || !ok {
 		t.Fatalf("fresh step = %v %v", ok, err)
 	}
-	if a := e.account(t, u); a.PlanPeriodEnd == nil || !a.PlanPeriodEnd.Equal(newEnd) {
+	e.p.now = func() time.Time { return later }
+	if a := e.view(t, u); a.PlanPeriodEnd == nil || !a.PlanPeriodEnd.Equal(newEnd) {
 		t.Fatalf("plan period end = %v, want %v", a.PlanPeriodEnd, newEnd)
 	}
 }
 
 func TestRunRefill_ResyncsOverdueApple(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -183,7 +178,7 @@ func TestRunRefill_ResyncsOverdueApple(t *testing.T) {
 	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
 		t.Fatal(err)
 	}
-	if a := e.account(t, u); a.Plan != 300 {
+	if a := e.view(t, u); a.Plan != 300 {
 		t.Fatalf("plan = %d", a.Plan)
 	}
 	e.api.status, e.api.signedTx = 2, jws
@@ -195,13 +190,12 @@ func TestRunRefill_ResyncsOverdueApple(t *testing.T) {
 	if sub := e.sub(t, storeApple, orig); sub.Status != subExpired {
 		t.Fatalf("status = %q", sub.Status)
 	}
-	if a := e.account(t, u); a.Plan != 0 {
+	if a := e.view(t, u); a.Plan != 0 {
 		t.Fatalf("plan = %d, want 0", a.Plan)
 	}
 }
 
 func TestRunRefill_PrunesOldActions(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, _ := e.user(t)

@@ -47,7 +47,8 @@ type PurchaseStore interface {
 	RecordPurchase(ctx context.Context, r PurchaseRecord) (inserted bool, err error)
 	PurchaseByOrder(ctx context.Context, store, id string) (*PurchaseRecord, error)
 	DueRefills(ctx context.Context, now time.Time, yearlyProduct string, limit int) ([]Subscription, error)
-	RefillStep(ctx context.Context, sub Subscription, now time.Time, ref string, amount int, next time.Time) (bool, error)
+	GrantPlan(ctx context.Context, userID, ref string, amount int, tier Tier, end, now time.Time) error
+	RefillStep(ctx context.Context, sub Subscription, now time.Time, ref string, amount int, tier Tier, next time.Time) (bool, error)
 	OverdueSubscriptions(ctx context.Context, before time.Time, limit int) ([]Subscription, error)
 	PruneActions(ctx context.Context, before time.Time) (int64, error)
 }
@@ -72,11 +73,10 @@ func (s *PostgresStore) SubscriptionByOriginal(ctx context.Context, store, origi
 	var sub Subscription
 	var periodEnd *time.Time
 	err := s.pool.QueryRow(ctx, `
-		SELECT magaza, orijinal_islem_id, kullanici_id::text, urun, durum, donem_sonu,
-		       otomatik_yenile, sonraki_dolum, dolum_capasi, dolum_sayisi, ortam
+		SELECT `+subscriptionColumns+`
 		FROM kredi.abonelik WHERE magaza = $1 AND orijinal_islem_id = $2`, store, originalID).
 		Scan(&sub.Store, &sub.OriginalID, &sub.UserID, &sub.Product, &sub.Status, &periodEnd,
-			&sub.AutoRenew, &sub.NextRefill, &sub.RefillAnchor, &sub.RefillCount, &sub.Env)
+			&sub.AutoRenew, &sub.NextRefill, &sub.RefillAnchor, &sub.RefillCount, &sub.Env, &sub.NextProduct)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -99,8 +99,8 @@ func (s *PostgresStore) UpsertSubscription(ctx context.Context, sub Subscription
 	}
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO kredi.abonelik (kullanici_id, magaza, orijinal_islem_id, urun, durum, donem_sonu,
-		                            otomatik_yenile, sonraki_dolum, dolum_capasi, dolum_sayisi, ortam)
-		VALUES ($1::text::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		                            otomatik_yenile, sonraki_dolum, dolum_capasi, dolum_sayisi, ortam, sonraki_urun)
+		VALUES ($1::text::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (magaza, orijinal_islem_id) DO UPDATE SET
 			kullanici_id    = COALESCE(kredi.abonelik.kullanici_id, EXCLUDED.kullanici_id),
 			urun            = EXCLUDED.urun,
@@ -110,9 +110,10 @@ func (s *PostgresStore) UpsertSubscription(ctx context.Context, sub Subscription
 			sonraki_dolum   = EXCLUDED.sonraki_dolum,
 			dolum_capasi    = EXCLUDED.dolum_capasi,
 			dolum_sayisi    = EXCLUDED.dolum_sayisi,
-			ortam           = EXCLUDED.ortam`,
+			ortam           = EXCLUDED.ortam,
+			sonraki_urun    = EXCLUDED.sonraki_urun`,
 		sub.UserID, sub.Store, sub.OriginalID, sub.Product, sub.Status, periodEnd,
-		sub.AutoRenew, sub.NextRefill, sub.RefillAnchor, sub.RefillCount, sub.Env)
+		sub.AutoRenew, sub.NextRefill, sub.RefillAnchor, sub.RefillCount, sub.Env, sub.NextProduct)
 	if err != nil {
 		return fmt.Errorf("could not write the subscription: %w", err)
 	}
@@ -167,7 +168,7 @@ func (s *PostgresStore) PurchaseByOrder(ctx context.Context, store, id string) (
 }
 
 const subscriptionColumns = `magaza, orijinal_islem_id, kullanici_id::text, urun, durum, donem_sonu,
-	otomatik_yenile, sonraki_dolum, dolum_capasi, dolum_sayisi, ortam`
+	otomatik_yenile, sonraki_dolum, dolum_capasi, dolum_sayisi, ortam, sonraki_urun`
 
 func (s *PostgresStore) querySubscriptions(ctx context.Context, where string, args ...any) ([]Subscription, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+subscriptionColumns+` FROM kredi.abonelik WHERE `+where, args...)
@@ -180,7 +181,7 @@ func (s *PostgresStore) querySubscriptions(ctx context.Context, where string, ar
 		var sub Subscription
 		var periodEnd *time.Time
 		if err := rows.Scan(&sub.Store, &sub.OriginalID, &sub.UserID, &sub.Product, &sub.Status, &periodEnd,
-			&sub.AutoRenew, &sub.NextRefill, &sub.RefillAnchor, &sub.RefillCount, &sub.Env); err != nil {
+			&sub.AutoRenew, &sub.NextRefill, &sub.RefillAnchor, &sub.RefillCount, &sub.Env, &sub.NextProduct); err != nil {
 			return nil, fmt.Errorf("could not read a subscription: %w", err)
 		}
 		if periodEnd != nil {
@@ -207,17 +208,17 @@ func (s *PostgresStore) DueRefills(ctx context.Context, now time.Time, yearlyPro
 
 // RefillStep takes one refill step in a single transaction: it locks the
 // account, then the subscription row, and only if the row is still active
-// with the schedule of sub and now is inside the CURRENT period, it sets the
-// plan bucket under ref (idempotent, with the current period end) and moves
-// the schedule to next. It reports whether the step was taken; a changed
+// with the schedule of sub and now is inside the CURRENT period, it grants the
+// plan lot (ending the previous one, then a new lot of amount valid to the
+// current period end, under ref, idempotent) and moves the schedule to next. It reports whether the step was taken; a changed
 // row (a concurrent renewal, refill or ending) is not an error.
-func (s *PostgresStore) RefillStep(ctx context.Context, sub Subscription, now time.Time, ref string, amount int, next time.Time) (bool, error) {
+func (s *PostgresStore) RefillStep(ctx context.Context, sub Subscription, now time.Time, ref string, amount int, tier Tier, next time.Time) (bool, error) {
 	if sub.UserID == nil || sub.NextRefill == nil {
 		return false, nil
 	}
 	var taken bool
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		acct, err := lockAccount(ctx, tx, *sub.UserID, false)
+		_, err := lockAccount(ctx, tx, *sub.UserID, false)
 		if err != nil {
 			return fmt.Errorf("could not lock the credit account: %w", err)
 		}
@@ -238,15 +239,15 @@ func (s *PostgresStore) RefillStep(ctx context.Context, sub Subscription, now ti
 			(periodEnd != nil && (!now.Before(*periodEnd) || !due.Before(*periodEnd))) {
 			return nil
 		}
-		acct, done, err := apply(ctx, tx, acct, turPlanDolum, ref, "", amount-acct.Plan, 0)
-		if err != nil {
+		if periodEnd == nil {
+			return nil
+		}
+		if err := endLivePlan(ctx, tx, *sub.UserID, ref, now); err != nil {
 			return err
 		}
-		if done {
-			if _, err := tx.Exec(ctx,
-				`UPDATE kredi.hesap SET plan_donem_sonu = $2 WHERE kullanici_id = $1::text::uuid`, *sub.UserID, periodEnd); err != nil {
-				return fmt.Errorf("could not set the plan period end: %w", err)
-			}
+		if _, err := grantTx(ctx, tx, *sub.UserID, turPlanDolum, ref,
+			Grant{Source: LotPlan, Amount: amount, ExpiresAt: periodEnd, Tier: tier}, now); err != nil {
+			return err
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE kredi.abonelik SET dolum_sayisi = dolum_sayisi + 1, sonraki_dolum = $3
@@ -257,6 +258,26 @@ func (s *PostgresStore) RefillStep(ctx context.Context, sub Subscription, now ti
 		return nil
 	})
 	return taken, err
+}
+
+// GrantPlan starts a plan period: it ends the user's live plan lot (P3, if
+// any) and grants a new plan lot of amount valid until end, both under ref
+// and in one transaction. A repeated ref changes nothing.
+func (s *PostgresStore) GrantPlan(ctx context.Context, userID, ref string, amount int, tier Tier, end, now time.Time) error {
+	return s.inTx(ctx, func(tx pgx.Tx) error {
+		if _, err := lockAccount(ctx, tx, userID, true); err != nil {
+			return fmt.Errorf("could not lock the credit account: %w", err)
+		}
+		if done, err := movementDone(ctx, tx, userID, turPlanDolum, ref); err != nil || done {
+			return err
+		}
+		if err := endLivePlan(ctx, tx, userID, ref, now); err != nil {
+			return err
+		}
+		_, err := grantTx(ctx, tx, userID, turPlanDolum, ref,
+			Grant{Source: LotPlan, Amount: amount, ExpiresAt: &end, Tier: tier}, now)
+		return err
+	})
 }
 
 // OverdueSubscriptions lists subscriptions that are not ended or refunded

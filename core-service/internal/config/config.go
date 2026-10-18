@@ -119,19 +119,24 @@ type CreditCosts struct {
 	RenderStems    int
 	LyricsGenerate int
 	LyricsRewrite  int
+	Master         int
 }
 
 // CreditConfig is the configuration of the credit system.
 type CreditConfig struct {
 	// Enforce turns credit deduction on; false = metering only.
 	Enforce bool
-	// Welcome is the one-time gift granted to a new account.
-	Welcome int
-	// PlanMonthly is the plan bucket size a subscription refills to.
-	PlanMonthly int
-	Costs       CreditCosts
+	// PlanPlus and PlanPro are the credits of each monthly plan lot.
+	PlanPlus int
+	PlanPro  int
+	Costs    CreditCosts
+	// RefundGrace is how long the lot lasts that a refund into an expired
+	// lot creates.
+	RefundGrace time.Duration
 	// RefillInterval is how often the annual-plan refill scheduler runs.
 	RefillInterval time.Duration
+	// ExpireInterval is how often the lot expiry sweep runs.
+	ExpireInterval time.Duration
 }
 
 // AppStoreConfig is the Apple App Store configuration.
@@ -341,14 +346,17 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("ratelimit.purchases_per_min", "RATELIMIT_PURCHASES_PER_MIN")
 	_ = viper.BindEnv("ratelimit.webhooks_per_min", "RATELIMIT_WEBHOOKS_PER_MIN")
 	_ = viper.BindEnv("credits.enforce", "CREDITS_ENFORCE")
-	_ = viper.BindEnv("credits.welcome", "CREDITS_WELCOME")
-	_ = viper.BindEnv("credits.plan_monthly", "CREDITS_PLAN_MONTHLY")
+	_ = viper.BindEnv("credits.plan_plus", "CREDITS_PLAN_PLUS")
+	_ = viper.BindEnv("credits.plan_pro", "CREDITS_PLAN_PRO")
 	_ = viper.BindEnv("credits.costs.render_mix", "CREDITS_COST_RENDER_MIX")
 	_ = viper.BindEnv("credits.costs.render_focus", "CREDITS_COST_RENDER_FOCUS")
 	_ = viper.BindEnv("credits.costs.render_stems", "CREDITS_COST_RENDER_STEMS")
 	_ = viper.BindEnv("credits.costs.lyrics_generate", "CREDITS_COST_LYRICS_GENERATE")
 	_ = viper.BindEnv("credits.costs.lyrics_rewrite", "CREDITS_COST_LYRICS_REWRITE")
+	_ = viper.BindEnv("credits.costs.master", "CREDITS_COST_MASTER")
+	_ = viper.BindEnv("credits.refund_grace", "CREDITS_REFUND_GRACE")
 	_ = viper.BindEnv("credits.refill_interval", "CREDITS_REFILL_INTERVAL")
+	_ = viper.BindEnv("credits.expire_interval", "CREDITS_EXPIRE_INTERVAL")
 	_ = viper.BindEnv("appstore.bundle_id", "APPSTORE_BUNDLE_ID")
 	_ = viper.BindEnv("appstore.product_prefix", "APPSTORE_PRODUCT_PREFIX")
 	_ = viper.BindEnv("appstore.issuer_id", "APPSTORE_ISSUER_ID")
@@ -385,14 +393,17 @@ func Load() (*Config, error) {
 	viper.SetDefault("ratelimit.purchases_per_min", 20)
 	viper.SetDefault("ratelimit.webhooks_per_min", 120)
 	viper.SetDefault("credits.enforce", false)
-	viper.SetDefault("credits.welcome", 24)
-	viper.SetDefault("credits.plan_monthly", 300)
+	viper.SetDefault("credits.plan_plus", 300)
+	viper.SetDefault("credits.plan_pro", 1000)
 	viper.SetDefault("credits.costs.render_mix", 12)
 	viper.SetDefault("credits.costs.render_focus", 32)
 	viper.SetDefault("credits.costs.render_stems", 62)
 	viper.SetDefault("credits.costs.lyrics_generate", 2)
 	viper.SetDefault("credits.costs.lyrics_rewrite", 1)
+	viper.SetDefault("credits.costs.master", 3)
+	viper.SetDefault("credits.refund_grace", "168h")
 	viper.SetDefault("credits.refill_interval", "1h")
+	viper.SetDefault("credits.expire_interval", "1h")
 	viper.SetDefault("sosyal.stale_preparation_after", "1h")
 	viper.SetDefault("sosyal.stale_sweep_interval", "15m")
 	viper.SetDefault("ratelimit.cloudflare_ranges", strings.Join(clientip.DefaultCloudflareRanges, ","))
@@ -548,17 +559,20 @@ func Load() (*Config, error) {
 			StaleSweepInterval:    viper.GetDuration("sosyal.stale_sweep_interval"),
 		},
 		Credits: CreditConfig{
-			Enforce:     viper.GetBool("credits.enforce"),
-			Welcome:     viper.GetInt("credits.welcome"),
-			PlanMonthly: viper.GetInt("credits.plan_monthly"),
+			Enforce:  viper.GetBool("credits.enforce"),
+			PlanPlus: viper.GetInt("credits.plan_plus"),
+			PlanPro:  viper.GetInt("credits.plan_pro"),
 			Costs: CreditCosts{
 				RenderMix:      viper.GetInt("credits.costs.render_mix"),
 				RenderFocus:    viper.GetInt("credits.costs.render_focus"),
 				RenderStems:    viper.GetInt("credits.costs.render_stems"),
 				LyricsGenerate: viper.GetInt("credits.costs.lyrics_generate"),
 				LyricsRewrite:  viper.GetInt("credits.costs.lyrics_rewrite"),
+				Master:         viper.GetInt("credits.costs.master"),
 			},
+			RefundGrace:    viper.GetDuration("credits.refund_grace"),
 			RefillInterval: viper.GetDuration("credits.refill_interval"),
+			ExpireInterval: viper.GetDuration("credits.expire_interval"),
 		},
 		AppStore: AppStoreConfig{
 			BundleID:      viper.GetString("appstore.bundle_id"),

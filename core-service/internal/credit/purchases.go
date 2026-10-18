@@ -89,7 +89,7 @@ type GooglePublisher interface {
 
 // PurchasesConfig configures Purchases.
 type PurchasesConfig struct {
-	// PlanMonthly is the plan bucket amount each period.
+	// PlanMonthly is the credits of each plan period lot.
 	PlanMonthly int
 	// AppleProductPrefix + internal id = App Store product id.
 	AppleProductPrefix string
@@ -237,7 +237,8 @@ func (p *Purchases) applyPack(ctx context.Context, pk pack, submitter string) (s
 	if rec.Status == purchaseRefunded {
 		return PurchaseRecorded, nil
 	}
-	if _, _, err := p.store.Credit(ctx, owner, turPaket, pk.store+":"+pk.orderID, pk.product, credits); err != nil {
+	if _, err := p.store.Grant(ctx, owner, turPaket, pk.store+":"+pk.orderID,
+		Grant{Source: LotPack, Amount: credits}, p.now()); err != nil {
 		return "", err
 	}
 	record.Status = purchaseCredited
@@ -250,7 +251,8 @@ func (p *Purchases) applyPack(ctx context.Context, pk pack, submitter string) (s
 		return "", err
 	}
 	if rec != nil && rec.Status == purchaseRefunded {
-		if _, _, err := p.store.ClawBack(ctx, owner, pk.store+":"+pk.orderID, credits); err != nil {
+		ref := pk.store + ":" + pk.orderID
+		if _, err := p.store.ClawBackPack(ctx, owner, ref, ref, credits, p.now()); err != nil {
 			return "", err
 		}
 		return PurchaseRecorded, nil
@@ -269,7 +271,8 @@ func (p *Purchases) refundPack(ctx context.Context, store, orderID, product, env
 		return nil
 	}
 	if rec != nil && rec.UserID != nil && rec.Status == purchaseCredited {
-		if _, _, err := p.store.ClawBack(ctx, *rec.UserID, store+":"+orderID, rec.Credits); err != nil {
+		ref := store + ":" + orderID
+		if _, err := p.store.ClawBackPack(ctx, *rec.UserID, ref, ref, rec.Credits, p.now()); err != nil {
 			return err
 		}
 	}
@@ -400,13 +403,13 @@ func (p *Purchases) applySubscription(ctx context.Context, f subFacts, submitter
 	switch {
 	case f.status == subActive && f.refillRef != "":
 		end := f.periodEnd
-		if _, _, err := p.store.SetPlan(ctx, owner, turPlanDolum, f.refillRef, p.cfg.PlanMonthly, &end); err != nil {
+		if err := p.store.GrantPlan(ctx, owner, f.refillRef, p.cfg.PlanMonthly, tierOf(f.product), end, p.now()); err != nil {
 			return "", "", err
 		}
 		return PurchaseCredited, owner, nil
 	case (f.status == subExpired || f.status == subRefunded) && cur != nil && live(cur.Status):
 		ref := f.store + ":" + f.originalID + ":" + strconv.FormatInt(f.periodEnd.Unix(), 10)
-		if _, _, err := p.store.SetPlan(ctx, owner, turPlanBitis, ref, 0, nil); err != nil {
+		if _, err := p.store.EndPlanLots(ctx, owner, turPlanBitis, ref, p.now()); err != nil {
 			return "", "", err
 		}
 	}
@@ -996,7 +999,7 @@ func (p *Purchases) refillSubscription(ctx context.Context, s Subscription, now 
 		}
 		ref := s.Store + ":" + s.OriginalID + ":" + s.NextRefill.UTC().Format("2006-01")
 		next := refillAt(*s.RefillAnchor, s.RefillCount+2)
-		taken, err := p.store.RefillStep(ctx, s, now, ref, p.cfg.PlanMonthly, next)
+		taken, err := p.store.RefillStep(ctx, s, now, ref, p.cfg.PlanMonthly, tierOf(s.Product), next)
 		if err != nil {
 			return steps, err
 		}

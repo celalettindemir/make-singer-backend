@@ -145,7 +145,8 @@ func newPurchaseEnv(t *testing.T) *purchaseEnv {
 		api:    &fakeAppleAPI{},
 		google: &fakeGoogle{subs: map[string]*googleplay.SubscriptionPurchase{}, products: map[string]*googleplay.ProductPurchase{}},
 	}
-	svc := NewService(s, Settings{Enforce: true, Welcome: 24, PlanMonthly: 300, Costs: Costs{RenderMix: 12}})
+	svc := NewService(s, Settings{Enforce: true, PlanCredits: map[Tier]int{TierPlus: 300, TierPro: 300}, Costs: Costs{RenderMix: 12}, RefundGrace: 168 * time.Hour})
+	svc.now = func() time.Time { return e.p.now() }
 	e.p = NewPurchases(s, svc, e.apple, e.api, e.google,
 		PurchasesConfig{PlanMonthly: 300, AppleProductPrefix: testPrefix, PackageName: "com.test.app"},
 		func() time.Time { return testNow })
@@ -163,13 +164,36 @@ func (e *purchaseEnv) user(t *testing.T) (string, string) {
 	return id, a.StoreToken.String()
 }
 
-func (e *purchaseEnv) account(t *testing.T, id string) Account {
+// acctView is a user's credits split the old way, read from the lots at the
+// purchase clock: Plan is what is left in live plan lots, Permanent the rest
+// minus the debt.
+type acctView struct {
+	Plan          int
+	Permanent     int
+	PlanPeriodEnd *time.Time
+}
+
+func (a acctView) Balance() int { return a.Plan + a.Permanent }
+
+func (e *purchaseEnv) view(t *testing.T, id string) acctView {
 	t.Helper()
-	a, _, err := e.s.ReadAccount(context.Background(), id)
+	ctx := context.Background()
+	now := e.p.now()
+	var v acctView
+	err := e.s.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(kalan) FILTER (WHERE kaynak = 'plan'), 0),
+		       COALESCE(SUM(kalan) FILTER (WHERE kaynak <> 'plan'), 0),
+		       MAX(bitis) FILTER (WHERE kaynak = 'plan')
+		FROM kredi.dilim WHERE `+liveLot, id, now).Scan(&v.Plan, &v.Permanent, &v.PlanPeriodEnd)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return a
+	var debt int
+	if err := e.s.pool.QueryRow(ctx, `SELECT COALESCE((SELECT borc FROM kredi.hesap WHERE kullanici_id = $1::uuid), 0)`, id).Scan(&debt); err != nil {
+		t.Fatal(err)
+	}
+	v.Permanent -= debt
+	return v
 }
 
 func (e *purchaseEnv) sub(t *testing.T, store, orig string) *Subscription {
@@ -220,21 +244,20 @@ func TestRefillAt_ClampsMonthEnd(t *testing.T) {
 }
 
 func TestVerifyApple_PackCreditsOnceAcrossReposts(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
 	jws := e.apple.sign(packTx("tx-pack", "credits.100", tok))
 	for i := range 3 {
 		res, err := e.p.VerifyApple(ctx, u, jws)
-		if err != nil || res.Status != PurchaseCredited || res.Summary.PermanentCredits != 100 || res.Summary.Balance != 100 {
+		if err != nil || res.Status != PurchaseCredited || res.Summary.Balance != 100 {
 			t.Fatalf("post %d: %+v %v", i, res, err)
 		}
 	}
 	if err := e.p.ApplyAppleNotification(ctx, notify("ONE_TIME_CHARGE", "", jws)); err != nil {
 		t.Fatal(err)
 	}
-	if a := e.account(t, u); a.Permanent != 100 {
+	if a := e.view(t, u); a.Permanent != 100 {
 		t.Fatalf("permanent = %d, want 100", a.Permanent)
 	}
 	if n := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'paket' AND ref = 'apple:tx-pack'`); n != 1 {
@@ -246,7 +269,6 @@ func TestVerifyApple_PackCreditsOnceAcrossReposts(t *testing.T) {
 }
 
 func TestVerifyApple_TokenOfOtherLivingUser409(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	_, tokA := e.user(t)
@@ -268,7 +290,6 @@ func TestVerifyApple_TokenOfOtherLivingUser409(t *testing.T) {
 }
 
 func TestVerifyApple_TokenOfDeletedUserSubmitterClaims(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	a, tokA := e.user(t)
@@ -281,7 +302,7 @@ func TestVerifyApple_TokenOfDeletedUserSubmitterClaims(t *testing.T) {
 	}
 	b, _ := e.user(t)
 	res, err := e.p.VerifyApple(ctx, b, jws)
-	if err != nil || res.Status != PurchaseCredited || res.Summary.PlanCredits != 300 {
+	if err != nil || res.Status != PurchaseCredited || res.Summary.Balance != 300 {
 		t.Fatalf("claim: %+v %v", res, err)
 	}
 	if sub := e.sub(t, storeApple, "orig-1"); sub.UserID == nil || *sub.UserID != b {
@@ -293,7 +314,6 @@ func TestVerifyApple_TokenOfDeletedUserSubmitterClaims(t *testing.T) {
 }
 
 func TestVerifyApple_NoTokenSubscriptionByOriginal(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	a, tokA := e.user(t)
@@ -314,13 +334,12 @@ func TestVerifyApple_NoTokenSubscriptionByOriginal(t *testing.T) {
 	if n := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'plan_dolum' AND ref = 'apple:tx-2' AND kullanici_id = $1::uuid`, a); n != 1 {
 		t.Fatalf("refill for tx-2 = %d, want 1", n)
 	}
-	if n := count(t, e.s, `SELECT count(*) FROM kredi.hesap WHERE kullanici_id = $1::uuid AND plan_bakiye <> 0`, b); n != 0 {
+	if n := count(t, e.s, `SELECT count(*) FROM kredi.dilim WHERE kullanici_id = $1::uuid AND kaynak = 'plan'`, b); n != 0 {
 		t.Fatal("other user got plan credits")
 	}
 }
 
 func TestVerifyApple_RevokedIsInvalid(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, tok := e.user(t)
 	tx := packTx("tx-r", "credits.100", tok)
@@ -340,7 +359,6 @@ func TestVerifyApple_RevokedIsInvalid(t *testing.T) {
 }
 
 func TestVerifyApple_SandboxRecordedAsSandbox(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -363,15 +381,14 @@ func TestVerifyApple_SandboxRecordedAsSandbox(t *testing.T) {
 }
 
 func TestVerifyApple_MonthlySubscribeSetsPlan300(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, tok := e.user(t)
 	res, err := e.p.VerifyApple(context.Background(), u, e.apple.sign(subTx("tx-m", "orig-m", productMonthly, tok, testNow, 1)))
-	if err != nil || res.Status != PurchaseCredited || res.Summary.PlanCredits != 300 {
+	if err != nil || res.Status != PurchaseCredited || res.Summary.Balance != 300 {
 		t.Fatalf("got %+v %v", res, err)
 	}
 	pl := res.Summary.Plan
-	if pl == nil || pl.Product != productMonthly || pl.Status != "active" || !pl.PeriodEnd.Equal(testNow.AddDate(0, 1, 0)) {
+	if pl == nil || pl.Tier != TierPro || pl.Period != "monthly" || pl.Status != "active" || !pl.PeriodEnd.Equal(testNow.AddDate(0, 1, 0)) {
 		t.Fatalf("plan = %+v", pl)
 	}
 	if sub := e.sub(t, storeApple, "orig-m"); sub.RefillAnchor != nil || sub.NextRefill != nil {
@@ -380,12 +397,11 @@ func TestVerifyApple_MonthlySubscribeSetsPlan300(t *testing.T) {
 }
 
 func TestVerifyApple_YearlySetsAnchorAndNextRefill(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, tok := e.user(t)
 	start := time.Date(2027, 1, 31, 10, 0, 0, 0, time.UTC)
 	res, err := e.p.VerifyApple(context.Background(), u, e.apple.sign(subTx("tx-y", "orig-y", productYearly, tok, start, 12)))
-	if err != nil || res.Summary.PlanCredits != 300 {
+	if err != nil || res.Summary.Balance != 300 {
 		t.Fatalf("got %+v %v", res, err)
 	}
 	sub := e.sub(t, storeApple, "orig-y")
@@ -396,7 +412,6 @@ func TestVerifyApple_YearlySetsAnchorAndNextRefill(t *testing.T) {
 }
 
 func TestVerifyApple_ExpiredRestoreRecordedNoCredit(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, tok := e.user(t)
 	old := subTx("tx-old", "orig-old", productMonthly, tok, testNow.AddDate(0, -3, 0), 1)
@@ -424,12 +439,11 @@ func googleSub(state, order, basePlan, accountID string, expiry time.Time) *goog
 }
 
 func TestVerifyGoogle_PackCreditsThenConsumes(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, tok := e.user(t)
 	e.google.products["gtok"] = googlePack("GPA.1", 0, tok)
 	res, err := e.p.VerifyGoogle(context.Background(), u, "credits.1000", "gtok")
-	if err != nil || res.Status != PurchaseCredited || res.Summary.PermanentCredits != 1000 {
+	if err != nil || res.Status != PurchaseCredited || res.Summary.Balance != 1000 {
 		t.Fatalf("got %+v %v", res, err)
 	}
 	if e.google.consumed != 1 || e.google.products["gtok"].ConsumptionState != 1 {
@@ -441,7 +455,6 @@ func TestVerifyGoogle_PackCreditsThenConsumes(t *testing.T) {
 }
 
 func TestVerifyGoogle_PendingNoCredit(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, tok := e.user(t)
 	e.google.products["gtok"] = googlePack("GPA.2", 2, tok)
@@ -458,14 +471,13 @@ func TestVerifyGoogle_PendingNoCredit(t *testing.T) {
 }
 
 func TestVerifyGoogle_ConsumeFailureStillCreditedOnce(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, tok := e.user(t)
 	e.google.products["gtok"] = googlePack("GPA.3", 0, tok)
 	e.google.consumeErr = errors.New("google down")
 	for i := range 2 {
 		res, err := e.p.VerifyGoogle(context.Background(), u, "credits.300", "gtok")
-		if err != nil || res.Status != PurchaseCredited || res.Summary.PermanentCredits != 300 {
+		if err != nil || res.Status != PurchaseCredited || res.Summary.Balance != 300 {
 			t.Fatalf("post %d: %+v %v", i, res, err)
 		}
 	}
@@ -478,12 +490,11 @@ func TestVerifyGoogle_ConsumeFailureStillCreditedOnce(t *testing.T) {
 }
 
 func TestVerifyGoogle_SubscriptionAcknowledges(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, tok := e.user(t)
 	e.google.subs["stok"] = googleSub("SUBSCRIPTION_STATE_ACTIVE", "GPA.10", "yearly", tok, testNow.AddDate(1, 0, 0))
 	res, err := e.p.VerifyGoogle(context.Background(), u, "pro", "stok")
-	if err != nil || res.Status != PurchaseCredited || res.Summary.PlanCredits != 300 {
+	if err != nil || res.Status != PurchaseCredited || res.Summary.Balance != 300 {
 		t.Fatalf("got %+v %v", res, err)
 	}
 	if len(e.google.acked) != 1 || e.google.acked[0] != "pro/stok" {
@@ -499,7 +510,6 @@ func TestVerifyGoogle_SubscriptionAcknowledges(t *testing.T) {
 }
 
 func TestVerifyGoogle_LinkedTokenKeepsOwner(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	a, tokA := e.user(t)
@@ -527,7 +537,6 @@ func TestVerifyGoogle_LinkedTokenKeepsOwner(t *testing.T) {
 }
 
 func TestApplyApple_DidRenewRefillsByTransaction(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -535,7 +544,7 @@ func TestApplyApple_DidRenewRefillsByTransaction(t *testing.T) {
 	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(subTx("tx-1", "orig-1", productMonthly, tok, start, 1))); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.s.DebitBucket(ctx, u, "render", "job-1", "render_stems", 250, false); err != nil {
+	if _, err := e.s.Debit(ctx, u, "render", "job-1", 250, Meta{Reason: "render_stems"}, e.p.now()); err != nil {
 		t.Fatal(err)
 	}
 	renew := e.apple.sign(subTx("tx-2", "orig-1", productMonthly, tok, start.AddDate(0, 1, 0), 1))
@@ -544,7 +553,7 @@ func TestApplyApple_DidRenewRefillsByTransaction(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if a := e.account(t, u); a.Plan != 300 {
+	if a := e.view(t, u); a.Plan != 300 {
 		t.Fatalf("plan = %d, want 300", a.Plan)
 	}
 	if n := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'plan_dolum'`); n != 2 {
@@ -556,7 +565,6 @@ func TestApplyApple_DidRenewRefillsByTransaction(t *testing.T) {
 }
 
 func TestApplyApple_FailToRenewGraceThenExpiredZeroesPlan(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -571,7 +579,7 @@ func TestApplyApple_FailToRenewGraceThenExpiredZeroesPlan(t *testing.T) {
 	if sub := e.sub(t, storeApple, "orig-1"); sub.Status != subGrace {
 		t.Fatalf("status = %q, want ek_sure", sub.Status)
 	}
-	if a := e.account(t, u); a.Plan != 300 {
+	if a := e.view(t, u); a.Plan != 300 {
 		t.Fatalf("plan during grace = %d, want 300", a.Plan)
 	}
 	if err := e.p.ApplyAppleNotification(ctx, notify("DID_FAIL_TO_RENEW", "", jws)); err != nil {
@@ -588,7 +596,7 @@ func TestApplyApple_FailToRenewGraceThenExpiredZeroesPlan(t *testing.T) {
 	if sub := e.sub(t, storeApple, "orig-1"); sub.Status != subExpired {
 		t.Fatalf("status = %q, want bitti", sub.Status)
 	}
-	if a := e.account(t, u); a.Plan != 0 {
+	if a := e.view(t, u); a.Plan != 0 {
 		t.Fatalf("plan after expiry = %d, want 0", a.Plan)
 	}
 	ref := "apple:orig-1:" + strconv.FormatInt(tx.ExpiresDate.Unix(), 10)
@@ -598,7 +606,6 @@ func TestApplyApple_FailToRenewGraceThenExpiredZeroesPlan(t *testing.T) {
 }
 
 func TestApplyApple_RefundPackClawsBackNegative(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -606,7 +613,7 @@ func TestApplyApple_RefundPackClawsBackNegative(t *testing.T) {
 	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.s.DebitBucket(ctx, u, "render", "job-1", "render_stems", 80, false); err != nil {
+	if _, err := e.s.Debit(ctx, u, "render", "job-1", 80, Meta{Reason: "render_stems"}, e.p.now()); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
@@ -614,7 +621,7 @@ func TestApplyApple_RefundPackClawsBackNegative(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if a := e.account(t, u); a.Balance() != -80 {
+	if a := e.view(t, u); a.Balance() != -80 {
 		t.Fatalf("balance = %d, want -80", a.Balance())
 	}
 	if n := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'magaza_iade' AND ref = 'apple:tx-p'`); n != 1 {
@@ -630,7 +637,6 @@ func TestApplyApple_RefundPackClawsBackNegative(t *testing.T) {
 }
 
 func TestApplyApple_OwnerlessRenewalRecordedNoCredit(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	jws := e.apple.sign(subTx("tx-o", "orig-o", productMonthly, "", testNow.Add(-time.Hour), 1))
@@ -647,7 +653,7 @@ func TestApplyApple_OwnerlessRenewalRecordedNoCredit(t *testing.T) {
 	// The first account to send it claims it (6-G15).
 	u, _ := e.user(t)
 	res, err := e.p.VerifyApple(ctx, u, jws)
-	if err != nil || res.Status != PurchaseCredited || res.Summary.PlanCredits != 300 {
+	if err != nil || res.Status != PurchaseCredited || res.Summary.Balance != 300 {
 		t.Fatalf("claim: %+v %v", res, err)
 	}
 }
@@ -666,14 +672,13 @@ func TestApplyApple_UnknownTypeIgnored(t *testing.T) {
 }
 
 func TestApplyApple_ProductSwitchResetsPlanAndAnchor(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
 	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(subTx("tx-1", "orig-1", productMonthly, tok, testNow.AddDate(0, 0, -10), 1))); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.s.DebitBucket(ctx, u, "render", "job-1", "render_stems", 62, false); err != nil {
+	if _, err := e.s.Debit(ctx, u, "render", "job-1", 62, Meta{Reason: "render_stems"}, e.p.now()); err != nil {
 		t.Fatal(err)
 	}
 	switchAt := testNow.Add(-time.Hour)
@@ -681,7 +686,7 @@ func TestApplyApple_ProductSwitchResetsPlanAndAnchor(t *testing.T) {
 	if err := e.p.ApplyAppleNotification(ctx, notify("DID_CHANGE_RENEWAL_PREF", "UPGRADE", up)); err != nil {
 		t.Fatal(err)
 	}
-	if a := e.account(t, u); a.Plan != 300 {
+	if a := e.view(t, u); a.Plan != 300 {
 		t.Fatalf("plan = %d, want 300", a.Plan)
 	}
 	sub := e.sub(t, storeApple, "orig-1")
@@ -692,7 +697,6 @@ func TestApplyApple_ProductSwitchResetsPlanAndAnchor(t *testing.T) {
 }
 
 func TestApplyGoogle_RenewedNewOrderRefills(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -700,7 +704,7 @@ func TestApplyGoogle_RenewedNewOrderRefills(t *testing.T) {
 	if _, err := e.p.VerifyGoogle(ctx, u, "pro", "stok"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.s.DebitBucket(ctx, u, "render", "job-1", "render_stems", 200, false); err != nil {
+	if _, err := e.s.Debit(ctx, u, "render", "job-1", 200, Meta{Reason: "render_stems"}, e.p.now()); err != nil {
 		t.Fatal(err)
 	}
 	e.google.subs["stok"] = googleSub("SUBSCRIPTION_STATE_ACTIVE", "GPA.30..0", "monthly", tok, testNow.AddDate(0, 1, 1))
@@ -711,7 +715,7 @@ func TestApplyGoogle_RenewedNewOrderRefills(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if a := e.account(t, u); a.Plan != 300 {
+	if a := e.view(t, u); a.Plan != 300 {
 		t.Fatalf("plan = %d, want 300", a.Plan)
 	}
 	if c := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'plan_dolum' AND ref = 'google:GPA.30..0'`); c != 1 {
@@ -729,7 +733,6 @@ func TestApplyGoogle_RenewedNewOrderRefills(t *testing.T) {
 }
 
 func TestApplyGoogle_VoidedSubscriptionRefunded(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -745,7 +748,7 @@ func TestApplyGoogle_VoidedSubscriptionRefunded(t *testing.T) {
 	if sub := e.sub(t, storeGoogle, "stok"); sub.Status != subRefunded {
 		t.Fatalf("status = %q, want iade", sub.Status)
 	}
-	if a := e.account(t, u); a.Plan != 0 {
+	if a := e.view(t, u); a.Plan != 0 {
 		t.Fatalf("plan = %d, want 0", a.Plan)
 	}
 	// A voided pack is clawed back from its owner.
@@ -757,13 +760,12 @@ func TestApplyGoogle_VoidedSubscriptionRefunded(t *testing.T) {
 	if err := e.p.ApplyGoogleNotification(ctx, n); err != nil {
 		t.Fatal(err)
 	}
-	if a := e.account(t, u); a.Balance() != 0 {
+	if a := e.view(t, u); a.Balance() != 0 {
 		t.Fatalf("balance after voided pack = %d, want 0", a.Balance())
 	}
 }
 
 func TestApplyGoogle_OnHoldBillingIssue(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -808,7 +810,6 @@ func TestPurchases_NotConfigured(t *testing.T) {
 }
 
 func TestResync_AppleStatusExpiredZeroesPlan(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -824,13 +825,12 @@ func TestResync_AppleStatusExpiredZeroesPlan(t *testing.T) {
 	if sub := e.sub(t, storeApple, "orig-1"); sub.Status != subExpired {
 		t.Fatalf("status = %q", sub.Status)
 	}
-	if a := e.account(t, u); a.Plan != 0 {
+	if a := e.view(t, u); a.Plan != 0 {
 		t.Fatalf("plan = %d, want 0", a.Plan)
 	}
 }
 
 func TestVerifyApple_RestoreDuringGraceKeepsPlan(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -844,7 +844,7 @@ func TestVerifyApple_RestoreDuringGraceKeepsPlan(t *testing.T) {
 	}
 	e.p.now = func() time.Time { return testNow.Add(2 * time.Hour) }
 	res, err := e.p.VerifyApple(ctx, u, jws)
-	if err != nil || res.Status != PurchaseRecorded || res.Summary.PlanCredits != 300 {
+	if err != nil || res.Status != PurchaseRecorded {
 		t.Fatalf("restore: %+v %v", res, err)
 	}
 	if sub := e.sub(t, storeApple, "orig-1"); sub.Status != subGrace {
@@ -856,7 +856,6 @@ func TestVerifyApple_RestoreDuringGraceKeepsPlan(t *testing.T) {
 }
 
 func TestVerifyApple_StaleActiveRecordedNotCredited(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -879,7 +878,6 @@ func TestVerifyApple_StaleActiveRecordedNotCredited(t *testing.T) {
 }
 
 func TestApplyApple_ClientThenWebhookSameTxOneRefill(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -887,7 +885,7 @@ func TestApplyApple_ClientThenWebhookSameTxOneRefill(t *testing.T) {
 	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.s.DebitBucket(ctx, u, "render", "job-1", "render_mix", 12, false); err != nil {
+	if _, err := e.s.Debit(ctx, u, "render", "job-1", 12, Meta{Reason: "render_mix"}, e.p.now()); err != nil {
 		t.Fatal(err)
 	}
 	for _, typ := range []string{"SUBSCRIBED", "DID_RENEW"} {
@@ -898,13 +896,12 @@ func TestApplyApple_ClientThenWebhookSameTxOneRefill(t *testing.T) {
 	if n := count(t, e.s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'plan_dolum'`); n != 1 {
 		t.Fatalf("refills = %d, want 1", n)
 	}
-	if a := e.account(t, u); a.Plan != 288 {
+	if a := e.view(t, u); a.Plan != 288 {
 		t.Fatalf("plan = %d, want 288 (no second refill)", a.Plan)
 	}
 }
 
 func TestApplyApple_RefundOfOldPeriodKeepsCurrentPlan(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -925,7 +922,7 @@ func TestApplyApple_RefundOfOldPeriodKeepsCurrentPlan(t *testing.T) {
 	if sub.Status != subActive || !sub.PeriodEnd.Equal(*current.ExpiresDate) {
 		t.Fatalf("subscription = %+v", sub)
 	}
-	if a := e.account(t, u); a.Plan != 300 {
+	if a := e.view(t, u); a.Plan != 300 {
 		t.Fatalf("plan = %d, want 300", a.Plan)
 	}
 	if n := count(t, e.s, `SELECT count(*) FROM kredi.satin_alma WHERE islem_id = 'tx-1' AND durum = 'iade'`); n != 1 {
@@ -934,7 +931,6 @@ func TestApplyApple_RefundOfOldPeriodKeepsCurrentPlan(t *testing.T) {
 }
 
 func TestApplyGoogle_VoidedOldOrderKeepsCurrentPlan(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -954,7 +950,7 @@ func TestApplyGoogle_VoidedOldOrderKeepsCurrentPlan(t *testing.T) {
 	if sub := e.sub(t, storeGoogle, "stok"); sub.Status != subActive {
 		t.Fatalf("status = %q, want aktif", sub.Status)
 	}
-	if a := e.account(t, u); a.Plan != 300 {
+	if a := e.view(t, u); a.Plan != 300 {
 		t.Fatalf("plan = %d, want 300", a.Plan)
 	}
 	if c := count(t, e.s, `SELECT count(*) FROM kredi.satin_alma WHERE islem_id = 'GPA.60' AND durum = 'iade'`); c != 1 {
@@ -963,7 +959,6 @@ func TestApplyGoogle_VoidedOldOrderKeepsCurrentPlan(t *testing.T) {
 }
 
 func TestApplyGoogle_VoidedUnknownPackTombstone(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -988,18 +983,17 @@ type refundingStore struct {
 	*PostgresStore
 }
 
-func (r refundingStore) Credit(ctx context.Context, userID, tur, ref, reason string, amount int) (Account, bool, error) {
+func (r refundingStore) Grant(ctx context.Context, userID, tur, ref string, g Grant, now time.Time) (int, error) {
 	if tur == turPaket {
 		store, order, _ := strings.Cut(ref, ":")
-		if _, err := r.RecordPurchase(ctx, PurchaseRecord{Store: store, OrderID: order, Product: reason, Status: purchaseRefunded, Env: envProduction}); err != nil {
-			return Account{}, false, err
+		if _, err := r.RecordPurchase(ctx, PurchaseRecord{Store: store, OrderID: order, Product: "credits.100", Status: purchaseRefunded, Env: envProduction}); err != nil {
+			return 0, err
 		}
 	}
-	return r.PostgresStore.Credit(ctx, userID, tur, ref, reason, amount)
+	return r.PostgresStore.Grant(ctx, userID, tur, ref, g, now)
 }
 
 func TestApplyPack_RefundDuringCreditClawsBack(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -1039,11 +1033,10 @@ func refundThenReplay(t *testing.T, e *purchaseEnv, u string, tx *appstore.Trans
 }
 
 func TestVerifyApple_ReplayAfterRefundStaysRefunded(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, tok := e.user(t)
 	res := refundThenReplay(t, e, u, subTx("tx-1", "orig-1", productMonthly, tok, testNow.Add(-time.Hour), 1))
-	if res.Status != PurchaseRecorded || res.Summary.PlanCredits != 0 {
+	if res.Status != PurchaseRecorded || res.Summary.Balance != 0 {
 		t.Fatalf("replay result = %+v", res)
 	}
 	if sub := e.sub(t, storeApple, "orig-1"); sub.Status != subRefunded || sub.NextRefill != nil {
@@ -1052,13 +1045,12 @@ func TestVerifyApple_ReplayAfterRefundStaysRefunded(t *testing.T) {
 }
 
 func TestVerifyApple_YearlyReplayAfterRefundNoRefills(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
 	res := refundThenReplay(t, e, u, subTx("tx-y", "orig-y", productYearly, tok, testNow.Add(-time.Hour), 12))
-	if res.Summary.PlanCredits != 0 {
-		t.Fatalf("plan after replay = %d", res.Summary.PlanCredits)
+	if res.Summary.Balance != 0 {
+		t.Fatalf("plan after replay = %d", res.Summary.Balance)
 	}
 	if sub := e.sub(t, storeApple, "orig-y"); sub.Status != subRefunded {
 		t.Fatalf("status = %q, want iade", sub.Status)
@@ -1068,13 +1060,12 @@ func TestVerifyApple_YearlyReplayAfterRefundNoRefills(t *testing.T) {
 	if err != nil || refilled != 0 {
 		t.Fatalf("RunRefill = %d %v, want 0", refilled, err)
 	}
-	if a := e.account(t, u); a.Plan != 0 {
+	if a := e.view(t, u); a.Plan != 0 {
 		t.Fatalf("plan = %d, want 0", a.Plan)
 	}
 }
 
 func TestVerifyGoogle_ReplayAfterVoidStaysRefunded(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -1089,7 +1080,7 @@ func TestVerifyGoogle_ReplayAfterVoidStaysRefunded(t *testing.T) {
 	}
 	// Google still reports the subscription active; the client posts it.
 	res, err := e.p.VerifyGoogle(ctx, u, "pro", "stok")
-	if err != nil || res.Status != PurchaseRecorded || res.Summary.PlanCredits != 0 {
+	if err != nil || res.Status != PurchaseRecorded || res.Summary.Balance != 0 {
 		t.Fatalf("replay: %+v %v", res, err)
 	}
 	if sub := e.sub(t, storeGoogle, "stok"); sub.Status != subRefunded {
@@ -1102,7 +1093,6 @@ func TestVerifyGoogle_ReplayAfterVoidStaysRefunded(t *testing.T) {
 }
 
 func TestVerifyApple_ResubscribeAfterRefundReactivates(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -1110,7 +1100,7 @@ func TestVerifyApple_ResubscribeAfterRefundReactivates(t *testing.T) {
 	refundThenReplay(t, e, u, first)
 	later := subTx("tx-2", "orig-1", productMonthly, tok, testNow.Add(-time.Minute), 1)
 	res, err := e.p.VerifyApple(ctx, u, e.apple.sign(later))
-	if err != nil || res.Status != PurchaseCredited || res.Summary.PlanCredits != 300 {
+	if err != nil || res.Status != PurchaseCredited || res.Summary.Balance != 300 {
 		t.Fatalf("resubscribe: %+v %v", res, err)
 	}
 	if sub := e.sub(t, storeApple, "orig-1"); sub.Status != subActive || !sub.PeriodEnd.Equal(*later.ExpiresDate) {
@@ -1126,7 +1116,6 @@ func withLineOrder(sp *googleplay.SubscriptionPurchase, lineOrder string) *googl
 }
 
 func TestApplyGoogle_RefillRefUsesLineItemLatestSuccessfulOrder(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -1143,7 +1132,6 @@ func TestApplyGoogle_RefillRefUsesLineItemLatestSuccessfulOrder(t *testing.T) {
 }
 
 func TestApplyGoogle_RefillRefFallsBackToTopLevelLatestOrderID(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -1157,7 +1145,6 @@ func TestApplyGoogle_RefillRefFallsBackToTopLevelLatestOrderID(t *testing.T) {
 }
 
 func TestApplyGoogle_VoidedOldOrderDetectedFromLineItem(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
@@ -1180,7 +1167,6 @@ func TestApplyGoogle_VoidedOldOrderDetectedFromLineItem(t *testing.T) {
 }
 
 func TestVerifyGoogle_APIFailureIsTransient(t *testing.T) {
-	t.Skip("moved to lots in Task 3")
 	e := newPurchaseEnv(t)
 	u, _ := e.user(t)
 	e.google.apiErr = errors.New("googleplay: unexpected status 503")

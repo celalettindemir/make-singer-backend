@@ -10,26 +10,12 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// LotSource is where a credit lot came from (kredi.dilim.kaynak).
-type LotSource string
-
-const (
-	LotPlan     LotSource = "plan"
-	LotCampaign LotSource = "kampanya"
-	LotPack     LotSource = "paket"
-	LotAdmin    LotSource = "yonetici"
-)
-
-func (s LotSource) valid() bool {
-	switch s {
-	case LotPlan, LotCampaign, LotPack, LotAdmin:
-		return true
-	}
-	return false
-}
-
 // Lot movement kinds written by the lot primitives (kredi.hareket.tur).
 const (
+	turSoz          = "soz"
+	turPlanDolum    = "plan_dolum"
+	turPlanBitis    = "plan_bitis"
+	turMagazaIade   = "magaza_iade"
 	turYonetici     = "yonetici"
 	turPlanSure     = "plan_sure"
 	turKampanyaSure = "kampanya_sure"
@@ -59,6 +45,8 @@ type Grant struct {
 	ExpiresAt  *time.Time
 	By, Note   string
 	CampaignID *int64
+	// Tier is the plan tier of a plan lot (recorded on plan_dolum).
+	Tier Tier
 }
 
 // Lot is one live, non-empty lot as shown to the user.
@@ -96,23 +84,6 @@ func balanceOf(ctx context.Context, q queryRower, userID string, now time.Time) 
 	return bal, nil
 }
 
-// lockDebt row-locks the account (creating it first with create) and
-// returns its debt. Every lot write takes this lock first, so all writes of
-// one user are serialised and the lock order is always hesap, then dilim.
-// A missing row without create yields pgx.ErrNoRows.
-func lockDebt(ctx context.Context, tx pgx.Tx, userID string, create bool) (int, error) {
-	if create {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO kredi.hesap (kullanici_id) VALUES ($1::text::uuid) ON CONFLICT DO NOTHING`, userID); err != nil {
-			return 0, fmt.Errorf("could not ensure the credit account: %w", err)
-		}
-	}
-	var debt int
-	err := tx.QueryRow(ctx,
-		`SELECT borc FROM kredi.hesap WHERE kullanici_id = $1::text::uuid FOR UPDATE`, userID).Scan(&debt)
-	return debt, err
-}
-
 // movementDone reports whether (tur, ref) is already in the ledger. A row of
 // another user is an error: refs are never shared between users.
 func movementDone(ctx context.Context, tx pgx.Tx, userID, tur, ref string) (bool, error) {
@@ -136,6 +107,23 @@ type movement struct {
 	amount           int
 	by, note         string
 	campaignID       *int64
+	reason           string
+	projectID        string
+	tier             Tier
+}
+
+// Meta is the extra data a debit records on its movement: the operation
+// (sebep, shown as the history operation) and the project it was spent on.
+type Meta struct {
+	Reason    string
+	ProjectID string
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func nullText(s string) *string {
@@ -149,9 +137,10 @@ func nullText(s string) *string {
 func insertMovement(ctx context.Context, tx pgx.Tx, m movement) (int64, error) {
 	var id int64
 	err := tx.QueryRow(ctx, `
-		INSERT INTO kredi.hareket (kullanici_id, tur, ref, tutar, yapan, notu, kampanya_id)
-		VALUES ($1::text::uuid, $2, $3, $4, $5, $6, $7) RETURNING id`,
-		m.userID, m.tur, m.ref, m.amount, nullText(m.by), nullText(m.note), m.campaignID).Scan(&id)
+		INSERT INTO kredi.hareket (kullanici_id, tur, ref, tutar, yapan, notu, kampanya_id, sebep, proje_id, kademe)
+		VALUES ($1::text::uuid, $2, $3, $4, $5, $6, $7, $8, $9::text::uuid, $10) RETURNING id`,
+		m.userID, m.tur, m.ref, m.amount, nullText(m.by), nullText(m.note), m.campaignID,
+		m.reason, nullText(m.projectID), nullText(string(m.tier))).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("could not write the ledger movement: %w", err)
 	}
@@ -219,40 +208,44 @@ func spendLots(ctx context.Context, tx pgx.Tx, userID string, movementID int64, 
 	return nil
 }
 
-// spend is the shared body of Debit and DeductAdmin. short is true (and
-// nothing is written) when the balance does not cover amount.
-func (s *PostgresStore) spend(ctx context.Context, m movement, now time.Time) (balance int, short bool, err error) {
+// spendTx is the shared body of Debit, DeductAdmin and SpendAction. The
+// caller holds the account lock. short is true (and nothing is written)
+// when the balance does not cover amount.
+func spendTx(ctx context.Context, tx pgx.Tx, m movement, now time.Time) (balance int, short bool, err error) {
 	if m.amount <= 0 {
 		return 0, false, fmt.Errorf("credit: spend amount must be positive, got %d", m.amount)
 	}
+	bal, err := balanceOf(ctx, tx, m.userID, now)
+	if err != nil {
+		return 0, false, err
+	}
+	done, err := movementDone(ctx, tx, m.userID, m.tur, m.ref)
+	if err != nil || done {
+		return bal, false, err
+	}
+	if bal < m.amount {
+		return bal, true, nil
+	}
+	amount := m.amount
+	m.amount = -amount
+	id, err := insertMovement(ctx, tx, m)
+	if err != nil {
+		return 0, false, err
+	}
+	if err := spendLots(ctx, tx, m.userID, id, amount, now); err != nil {
+		return 0, false, err
+	}
+	return bal - amount, false, nil
+}
+
+func (s *PostgresStore) spend(ctx context.Context, m movement, now time.Time) (balance int, short bool, err error) {
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
-		if _, err := lockDebt(ctx, tx, m.userID, true); err != nil {
+		if _, err := lockAccount(ctx, tx, m.userID, true); err != nil {
 			return fmt.Errorf("could not lock the credit account: %w", err)
 		}
-		bal, err := balanceOf(ctx, tx, m.userID, now)
-		if err != nil {
-			return err
-		}
-		done, err := movementDone(ctx, tx, m.userID, m.tur, m.ref)
-		if err != nil || done {
-			balance = bal
-			return err
-		}
-		if bal < m.amount {
-			balance, short = bal, true
-			return nil
-		}
-		amount := m.amount
-		m.amount = -amount
-		id, err := insertMovement(ctx, tx, m)
-		if err != nil {
-			return err
-		}
-		if err := spendLots(ctx, tx, m.userID, id, amount, now); err != nil {
-			return err
-		}
-		balance = bal - amount
-		return nil
+		var err error
+		balance, short, err = spendTx(ctx, tx, m, now)
+		return err
 	})
 	return balance, short, err
 }
@@ -266,8 +259,9 @@ func (s *PostgresStore) Balance(ctx context.Context, userID string, now time.Tim
 // Debit takes amount from the live lots in spend order under (tur, ref). A
 // repeated (tur, ref) returns the current balance and changes nothing. A
 // balance (debt counted) below amount gives *InsufficientError.
-func (s *PostgresStore) Debit(ctx context.Context, userID, tur, ref string, amount int, now time.Time) (int, error) {
-	bal, short, err := s.spend(ctx, movement{userID: userID, tur: tur, ref: ref, amount: amount}, now)
+func (s *PostgresStore) Debit(ctx context.Context, userID, tur, ref string, amount int, meta Meta, now time.Time) (int, error) {
+	bal, short, err := s.spend(ctx,
+		movement{userID: userID, tur: tur, ref: ref, amount: amount, reason: meta.Reason, projectID: meta.ProjectID}, now)
 	if err != nil {
 		return 0, err
 	}
@@ -299,7 +293,7 @@ func (s *PostgresStore) DeductAdmin(ctx context.Context, userID, ref string, amo
 // refund already exists or the user has no account.
 func (s *PostgresStore) Refund(ctx context.Context, userID, debitTur, refundTur, ref string, now time.Time, grace time.Duration) (balance int, refunded bool, err error) {
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
-		if _, err := lockDebt(ctx, tx, userID, false); err != nil {
+		if _, err := lockAccount(ctx, tx, userID, false); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
@@ -311,14 +305,24 @@ func (s *PostgresStore) Refund(ctx context.Context, userID, debitTur, refundTur,
 		}
 		balance = bal
 		var debitID int64
+		var reason string
+		var projectID *string
 		err = tx.QueryRow(ctx, `
-			SELECT id FROM kredi.hareket
-			WHERE tur = $1 AND ref = $2 AND kullanici_id = $3::text::uuid`, debitTur, ref, userID).Scan(&debitID)
+			SELECT id, sebep, proje_id::text FROM kredi.hareket
+			WHERE tur = $1 AND ref = $2 AND kullanici_id = $3::text::uuid`, debitTur, ref, userID).
+			Scan(&debitID, &reason, &projectID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("could not read the debit: %w", err)
+		}
+		if debitTur == turSoz {
+			// A refunded lyrics action is closed, even when the refund was
+			// already written.
+			if _, err := tx.Exec(ctx, `DELETE FROM kredi.eylem WHERE ref = $1`, ref); err != nil {
+				return fmt.Errorf("could not close the action: %w", err)
+			}
 		}
 		done, err := movementDone(ctx, tx, userID, refundTur, ref)
 		if err != nil || done {
@@ -356,7 +360,10 @@ func (s *PostgresStore) Refund(ctx context.Context, userID, debitTur, refundTur,
 			return fmt.Errorf("could not read the debited lots: %w", err)
 		}
 
-		id, err := insertMovement(ctx, tx, movement{userID: userID, tur: refundTur, ref: ref, amount: total})
+		id, err := insertMovement(ctx, tx, movement{
+			userID: userID, tur: refundTur, ref: ref, amount: total,
+			reason: reason, projectID: deref(projectID),
+		})
 		if err != nil {
 			return err
 		}
@@ -389,6 +396,18 @@ func (s *PostgresStore) Refund(ctx context.Context, userID, debitTur, refundTur,
 // Amount − paid; the dilim_hareket row records that net start. A repeated
 // (tur, ref) returns the current balance and changes nothing.
 func (s *PostgresStore) Grant(ctx context.Context, userID, tur, ref string, g Grant, now time.Time) (int, error) {
+	var balance int
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		balance, err = grantTx(ctx, tx, userID, tur, ref, g, now)
+		return err
+	})
+	return balance, err
+}
+
+// grantTx is Grant inside tx. It takes the account lock itself (taking it
+// again in the same transaction is harmless).
+func grantTx(ctx context.Context, tx pgx.Tx, userID, tur, ref string, g Grant, now time.Time) (int, error) {
 	if g.Amount <= 0 {
 		return 0, fmt.Errorf("credit: grant amount must be positive, got %d", g.Amount)
 	}
@@ -398,112 +417,149 @@ func (s *PostgresStore) Grant(ctx context.Context, userID, tur, ref string, g Gr
 	if g.Source == LotPack && g.ExpiresAt != nil {
 		return 0, errors.New("credit: pack lots never expire")
 	}
-	var balance int
-	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		debt, err := lockDebt(ctx, tx, userID, true)
-		if err != nil {
-			return fmt.Errorf("could not lock the credit account: %w", err)
-		}
-		bal, err := balanceOf(ctx, tx, userID, now)
-		if err != nil {
-			return err
-		}
-		done, err := movementDone(ctx, tx, userID, tur, ref)
-		if err != nil || done {
-			balance = bal
-			return err
-		}
-		id, err := insertMovement(ctx, tx, movement{
-			userID: userID, tur: tur, ref: ref, amount: g.Amount,
-			by: g.By, note: g.Note, campaignID: g.CampaignID,
-		})
-		if err != nil {
-			return err
-		}
-		paid := min(debt, g.Amount)
-		if paid > 0 {
-			if _, err := tx.Exec(ctx,
-				`UPDATE kredi.hesap SET borc = borc - $2, guncellendi = now() WHERE kullanici_id = $1::text::uuid`,
-				userID, paid); err != nil {
-				return fmt.Errorf("could not pay the debt: %w", err)
-			}
-		}
-		var lotID int64
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO kredi.dilim (kullanici_id, kaynak, ref, ilk_miktar, kalan, bitis)
-			VALUES ($1::text::uuid, $2, $3, $4, $5, $6) RETURNING id`,
-			userID, string(g.Source), ref, g.Amount, g.Amount-paid, g.ExpiresAt).Scan(&lotID); err != nil {
-			return fmt.Errorf("could not write the lot: %w", err)
-		}
-		if err := recordLotDelta(ctx, tx, id, lotID, g.Amount-paid); err != nil {
-			return err
-		}
-		balance = bal + g.Amount
-		return nil
+	acct, err := lockAccount(ctx, tx, userID, true)
+	if err != nil {
+		return 0, fmt.Errorf("could not lock the credit account: %w", err)
+	}
+	bal, err := balanceOf(ctx, tx, userID, now)
+	if err != nil {
+		return 0, err
+	}
+	done, err := movementDone(ctx, tx, userID, tur, ref)
+	if err != nil || done {
+		return bal, err
+	}
+	id, err := insertMovement(ctx, tx, movement{
+		userID: userID, tur: tur, ref: ref, amount: g.Amount,
+		by: g.By, note: g.Note, campaignID: g.CampaignID, tier: g.Tier,
 	})
-	return balance, err
+	if err != nil {
+		return 0, err
+	}
+	paid := min(acct.Debt, g.Amount)
+	if paid > 0 {
+		if _, err := tx.Exec(ctx,
+			`UPDATE kredi.hesap SET borc = borc - $2, guncellendi = now() WHERE kullanici_id = $1::text::uuid`,
+			userID, paid); err != nil {
+			return 0, fmt.Errorf("could not pay the debt: %w", err)
+		}
+	}
+	var lotID int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO kredi.dilim (kullanici_id, kaynak, ref, ilk_miktar, kalan, bitis)
+		VALUES ($1::text::uuid, $2, $3, $4, $5, $6) RETURNING id`,
+		userID, string(g.Source), ref, g.Amount, g.Amount-paid, g.ExpiresAt).Scan(&lotID); err != nil {
+		return 0, fmt.Errorf("could not write the lot: %w", err)
+	}
+	if err := recordLotDelta(ctx, tx, id, lotID, g.Amount-paid); err != nil {
+		return 0, err
+	}
+	return bal + g.Amount, nil
+}
+
+// endLivePlan ends the user's live plan lots under (plan_bitis, ref) when
+// there are any; with none it writes nothing, so a first refill leaves no
+// empty plan_end row. The caller holds the account lock.
+func endLivePlan(ctx context.Context, tx pgx.Tx, userID, ref string, now time.Time) error {
+	var live bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM kredi.dilim WHERE `+liveLot+` AND kaynak = 'plan')`, userID, now).Scan(&live); err != nil {
+		return fmt.Errorf("could not read the plan lots: %w", err)
+	}
+	if !live {
+		return nil
+	}
+	_, err := endPlanLotsTx(ctx, tx, userID, turPlanBitis, ref, now)
+	return err
+}
+
+// lotTier is the plan tier recorded on the grant movement of lot lotID, or
+// "" when there is none (a refund lot, an old row).
+func lotTier(ctx context.Context, tx pgx.Tx, lotID int64) (Tier, error) {
+	var tier *string
+	err := tx.QueryRow(ctx, `
+		SELECT h.kademe FROM kredi.dilim_hareket dh JOIN kredi.hareket h ON h.id = dh.hareket_id
+		WHERE dh.dilim_id = $1 AND h.tur = 'plan_dolum' LIMIT 1`, lotID).Scan(&tier)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("could not read the lot tier: %w", err)
+	}
+	return Tier(deref(tier)), nil
 }
 
 // EndPlanLots ends every live plan lot at once under (tur, ref): remainders
 // go to zero and the lots are marked done, so neither the sweep nor a
 // refund touches them again. The movement is written even when nothing
-// remains (it records the end).
+// remains (it records the end) and carries the tier of the ended lot.
 func (s *PostgresStore) EndPlanLots(ctx context.Context, userID, tur, ref string, now time.Time) (int, error) {
 	var balance int
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		if _, err := lockDebt(ctx, tx, userID, true); err != nil {
-			return fmt.Errorf("could not lock the credit account: %w", err)
-		}
-		bal, err := balanceOf(ctx, tx, userID, now)
-		if err != nil {
-			return err
-		}
-		balance = bal
-		done, err := movementDone(ctx, tx, userID, tur, ref)
-		if err != nil || done {
-			return err
-		}
-		rows, err := tx.Query(ctx, `
-			SELECT id, kalan FROM kredi.dilim
-			WHERE `+liveLot+` AND kaynak = 'plan' ORDER BY id FOR UPDATE`, userID, now)
-		if err != nil {
-			return fmt.Errorf("could not read the plan lots: %w", err)
-		}
-		var ids []int64
-		var remains []int
-		total := 0
-		for rows.Next() {
-			var id int64
-			var remain int
-			if err := rows.Scan(&id, &remain); err != nil {
-				rows.Close()
-				return fmt.Errorf("could not read a plan lot: %w", err)
-			}
-			ids, remains = append(ids, id), append(remains, remain)
-			total += remain
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("could not read the plan lots: %w", err)
-		}
-		mid, err := insertMovement(ctx, tx, movement{userID: userID, tur: tur, ref: ref, amount: -total})
-		if err != nil {
-			return err
-		}
-		for i, id := range ids {
-			if remains[i] > 0 {
-				if err := lotDelta(ctx, tx, mid, id, -remains[i]); err != nil {
-					return err
-				}
-			}
-			if _, err := tx.Exec(ctx, `UPDATE kredi.dilim SET sure_islendi = true WHERE id = $1`, id); err != nil {
-				return fmt.Errorf("could not end the plan lot: %w", err)
-			}
-		}
-		balance = bal - total
-		return nil
+		var err error
+		balance, err = endPlanLotsTx(ctx, tx, userID, tur, ref, now)
+		return err
 	})
 	return balance, err
+}
+
+// endPlanLotsTx is EndPlanLots inside tx.
+func endPlanLotsTx(ctx context.Context, tx pgx.Tx, userID, tur, ref string, now time.Time) (int, error) {
+	if _, err := lockAccount(ctx, tx, userID, true); err != nil {
+		return 0, fmt.Errorf("could not lock the credit account: %w", err)
+	}
+	bal, err := balanceOf(ctx, tx, userID, now)
+	if err != nil {
+		return 0, err
+	}
+	done, err := movementDone(ctx, tx, userID, tur, ref)
+	if err != nil || done {
+		return bal, err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id, kalan FROM kredi.dilim
+		WHERE `+liveLot+` AND kaynak = 'plan' ORDER BY id FOR UPDATE`, userID, now)
+	if err != nil {
+		return 0, fmt.Errorf("could not read the plan lots: %w", err)
+	}
+	var ids []int64
+	var remains []int
+	total := 0
+	for rows.Next() {
+		var id int64
+		var remain int
+		if err := rows.Scan(&id, &remain); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("could not read a plan lot: %w", err)
+		}
+		ids, remains = append(ids, id), append(remains, remain)
+		total += remain
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("could not read the plan lots: %w", err)
+	}
+	var tier Tier
+	if len(ids) > 0 {
+		if tier, err = lotTier(ctx, tx, ids[len(ids)-1]); err != nil {
+			return 0, err
+		}
+	}
+	mid, err := insertMovement(ctx, tx, movement{userID: userID, tur: tur, ref: ref, amount: -total, tier: tier})
+	if err != nil {
+		return 0, err
+	}
+	for i, id := range ids {
+		if remains[i] > 0 {
+			if err := lotDelta(ctx, tx, mid, id, -remains[i]); err != nil {
+				return 0, err
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE kredi.dilim SET sure_islendi = true WHERE id = $1`, id); err != nil {
+			return 0, fmt.Errorf("could not end the plan lot: %w", err)
+		}
+	}
+	return bal - total, nil
 }
 
 // ExtendPlanLot moves the end of the user's current plan lot (the newest
@@ -511,7 +567,7 @@ func (s *PostgresStore) EndPlanLots(ctx context.Context, userID, tur, ref string
 // of bitis. No plan lot is not an error.
 func (s *PostgresStore) ExtendPlanLot(ctx context.Context, userID string, until time.Time) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
-		if _, err := lockDebt(ctx, tx, userID, false); err != nil {
+		if _, err := lockAccount(ctx, tx, userID, false); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
@@ -538,7 +594,7 @@ func (s *PostgresStore) ClawBackPack(ctx context.Context, userID, packRef, refun
 	}
 	var balance int
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		if _, err := lockDebt(ctx, tx, userID, true); err != nil {
+		if _, err := lockAccount(ctx, tx, userID, true); err != nil {
 			return fmt.Errorf("could not lock the credit account: %w", err)
 		}
 		bal, err := balanceOf(ctx, tx, userID, now)
@@ -620,7 +676,7 @@ func (s *PostgresStore) ExpireLots(ctx context.Context, now time.Time, limit int
 	for _, d := range lots {
 		did := false
 		err := s.inTx(ctx, func(tx pgx.Tx) error {
-			if _, err := lockDebt(ctx, tx, d.userID, true); err != nil {
+			if _, err := lockAccount(ctx, tx, d.userID, true); err != nil {
 				return fmt.Errorf("could not lock the credit account: %w", err)
 			}
 			var remain int
@@ -646,7 +702,13 @@ func (s *PostgresStore) ExpireLots(ctx context.Context, now time.Time, limit int
 					return err
 				}
 				if !done {
-					mid, err := insertMovement(ctx, tx, movement{userID: d.userID, tur: tur, ref: ref, amount: -remain})
+					var tier Tier
+					if source == string(LotPlan) {
+						if tier, err = lotTier(ctx, tx, d.id); err != nil {
+							return err
+						}
+					}
+					mid, err := insertMovement(ctx, tx, movement{userID: d.userID, tur: tur, ref: ref, amount: -remain, tier: tier})
 					if err != nil {
 						return err
 					}
@@ -691,4 +753,37 @@ func (s *PostgresStore) Lots(ctx context.Context, userID string, now time.Time) 
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+// Gift returns the user's latest campaign lot that is still live and not
+// empty (amount = what is left of it), or nil.
+func (s *PostgresStore) Gift(ctx context.Context, userID string, now time.Time) (*Lot, error) {
+	var l Lot
+	err := s.pool.QueryRow(ctx, `
+		SELECT kalan, bitis FROM kredi.dilim
+		WHERE `+liveLot+` AND kaynak = 'kampanya' AND kalan > 0
+		ORDER BY id DESC LIMIT 1`, userID, now).Scan(&l.Amount, &l.ExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("could not read the gift lot: %w", err)
+	}
+	l.Source = LotCampaign
+	return &l, nil
+}
+
+// MovementOwner returns the user a ledger movement (tur, ref) belongs to.
+// The bool is false when there is no such movement.
+func (s *PostgresStore) MovementOwner(ctx context.Context, tur, ref string) (string, bool, error) {
+	var owner string
+	err := s.pool.QueryRow(ctx,
+		`SELECT kullanici_id::text FROM kredi.hareket WHERE tur = $1 AND ref = $2`, tur, ref).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("could not read the movement: %w", err)
+	}
+	return owner, true, nil
 }

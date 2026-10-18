@@ -11,6 +11,8 @@ type SpendCall struct {
 	User string
 	Op   Operation
 	ID   string
+	// Project is the projectID of a Spend call.
+	Project string
 }
 
 // RefundCall is one recorded Refund or RefundAction call. User is empty for
@@ -63,10 +65,10 @@ func (f *FakeSpender) fail() error {
 }
 
 // Spend records the call.
-func (f *FakeSpender) Spend(_ context.Context, userID string, op Operation, ref string) (int, error) {
+func (f *FakeSpender) Spend(_ context.Context, userID string, op Operation, ref, projectID string) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.Spends = append(f.Spends, SpendCall{userID, op, ref})
+	f.Spends = append(f.Spends, SpendCall{User: userID, Op: op, ID: ref, Project: projectID})
 	if err := f.fail(); err != nil {
 		return f.Bal, err
 	}
@@ -77,7 +79,7 @@ func (f *FakeSpender) Spend(_ context.Context, userID string, op Operation, ref 
 func (f *FakeSpender) SpendAction(_ context.Context, userID string, op Operation, actionID string) (int, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.Actions = append(f.Actions, SpendCall{userID, op, actionID})
+	f.Actions = append(f.Actions, SpendCall{User: userID, Op: op, ID: actionID})
 	if f.Expired {
 		return 0, false, ErrActionExpired
 	}

@@ -37,14 +37,17 @@ sosyal:
 # Credits
 credits:
   enforce: false # CREDITS_ENFORCE: false = no deduction yet
-  welcome: 24 # CREDITS_WELCOME: one-time gift
-  plan_monthly: 300 # CREDITS_PLAN_MONTHLY: plan bucket size
+  plan_plus: 300 # CREDITS_PLAN_PLUS: credits of each Plus plan lot
+  plan_pro: 1000 # CREDITS_PLAN_PRO: credits of each Pro plan lot
+  refund_grace: 168h # CREDITS_REFUND_GRACE: validity of the lot a refund into an expired lot creates
+  expire_interval: 1h # CREDITS_EXPIRE_INTERVAL: lot expiry sweep period
   costs:
     render_mix: 12 # CREDITS_COST_RENDER_MIX
     render_focus: 32 # CREDITS_COST_RENDER_FOCUS
     render_stems: 62 # CREDITS_COST_RENDER_STEMS
     lyrics_generate: 2 # CREDITS_COST_LYRICS_GENERATE
     lyrics_rewrite: 1 # CREDITS_COST_LYRICS_REWRITE
+    master: 3 # CREDITS_COST_MASTER
   refill_interval: 1h # CREDITS_REFILL_INTERVAL: annual-plan refill sweep period
 
 # Apple App Store

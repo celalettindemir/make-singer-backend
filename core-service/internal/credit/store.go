@@ -2,6 +2,8 @@ package credit
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -11,18 +13,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Ledger movement kinds (kredi.hareket.tur).
-const (
-	turSoz        = "soz"
-	turHediye     = "hediye"
-	turPlanDolum  = "plan_dolum"
-	turPlanBitis  = "plan_bitis"
-	turMagazaIade = "magaza_iade"
-)
-
 // ErrActionExpired is returned by SpendAction when the action's window or
 // request budget is used up, or when the action was refunded or dropped.
 var ErrActionExpired = errors.New("credit: action expired")
+
+// ErrBadCursor is returned by History for a damaged cursor.
+var ErrBadCursor = errors.New("credit: bad history cursor")
+
+// ErrBadFilter is returned by History for an unknown filter.
+var ErrBadFilter = errors.New("credit: bad history filter")
 
 // InsufficientError reports a debit the balance cannot cover.
 type InsufficientError struct {
@@ -34,22 +33,17 @@ func (e *InsufficientError) Error() string {
 	return fmt.Sprintf("credit: insufficient balance (required %d, balance %d)", e.Required, e.Balance)
 }
 
-// Account is a user's credit account.
+// Account is a user's credit account. The balance is never stored: read it
+// with Balance.
 type Account struct {
-	UserID         string
-	Plan           int
-	Permanent      int
-	PlanPeriodEnd  *time.Time
-	StoreToken     uuid.UUID
-	WelcomeClaimed bool
+	UserID     string
+	Debt       int
+	StoreToken uuid.UUID
 }
-
-// Balance is the total spendable balance.
-func (a Account) Balance() int { return a.Plan + a.Permanent }
 
 // ActionCharge is the outcome of SpendAction.
 type ActionCharge struct {
-	Account Account
+	Balance int
 	Charged bool
 }
 
@@ -60,7 +54,26 @@ type Movement struct {
 	Ref       string
 	Reason    string
 	Amount    int
+	ProjectID *string
+	Tier      *string
 	CreatedAt time.Time
+}
+
+// HistoryFilter narrows the history to spends or earnings.
+type HistoryFilter string
+
+// History filters.
+const (
+	FilterAll   HistoryFilter = ""
+	FilterSpend HistoryFilter = "spend"
+	FilterEarn  HistoryFilter = "earn"
+)
+
+// Page is one page of movements, newest first. Next is the opaque cursor
+// of the following page, empty on the last one.
+type Page struct {
+	Items []Movement
+	Next  string
 }
 
 // PostgresStore is the ledger store on the kredi schema.
@@ -88,10 +101,12 @@ func (s *PostgresStore) inTx(ctx context.Context, fn func(tx pgx.Tx) error) erro
 	return nil
 }
 
-const accountColumns = `kullanici_id::text, plan_bakiye, kalici_bakiye, plan_donem_sonu, magaza_token, hediye_alindi`
+const accountColumns = `kullanici_id::text, borc, magaza_token`
 
 // lockAccount reads and row-locks the account; with create it inserts the
 // row first when missing. A missing row without create yields pgx.ErrNoRows.
+// Every write of a user takes this lock first, so writes of one user are
+// serialised and the lock order is always hesap, then dilim.
 func lockAccount(ctx context.Context, tx pgx.Tx, userID string, create bool) (Account, error) {
 	if create {
 		if _, err := tx.Exec(ctx,
@@ -105,51 +120,10 @@ func lockAccount(ctx context.Context, tx pgx.Tx, userID string, create bool) (Ac
 
 func scanAccount(row pgx.Row) (Account, error) {
 	var a Account
-	if err := row.Scan(&a.UserID, &a.Plan, &a.Permanent, &a.PlanPeriodEnd, &a.StoreToken, &a.WelcomeClaimed); err != nil {
+	if err := row.Scan(&a.UserID, &a.Debt, &a.StoreToken); err != nil {
 		return Account{}, err
 	}
 	return a, nil
-}
-
-// movementExists reports whether (tur, ref) is already in the ledger.
-func movementExists(ctx context.Context, tx pgx.Tx, tur, ref string) (bool, error) {
-	var exists bool
-	err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM kredi.hareket WHERE tur = $1 AND ref = $2)`, tur, ref).Scan(&exists)
-	return exists, err
-}
-
-// apply writes a ledger row and moves the buckets. It returns false (and
-// changes nothing) when (tur, ref) already exists. The caller holds the
-// account lock.
-func apply(ctx context.Context, tx pgx.Tx, acct Account, tur, ref, reason string, planDelta, permDelta int) (Account, bool, error) {
-	var id int64
-	err := tx.QueryRow(ctx, `
-		INSERT INTO kredi.hareket (kullanici_id, tur, ref, plan_delta, kalici_delta, sebep)
-		VALUES ($1::text::uuid, $2, $3, $4, $5, $6)
-		ON CONFLICT (tur, ref) DO NOTHING RETURNING id`,
-		acct.UserID, tur, ref, planDelta, permDelta, reason).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return acct, false, nil
-	}
-	if err != nil {
-		return Account{}, false, fmt.Errorf("could not write the ledger movement: %w", err)
-	}
-	acct.Plan += planDelta
-	acct.Permanent += permDelta
-	if _, err := tx.Exec(ctx, `
-		UPDATE kredi.hesap SET plan_bakiye = $2, kalici_bakiye = $3, guncellendi = now()
-		WHERE kullanici_id = $1::text::uuid`, acct.UserID, acct.Plan, acct.Permanent); err != nil {
-		return Account{}, false, fmt.Errorf("could not update the credit account: %w", err)
-	}
-	return acct, true, nil
-}
-
-// split divides amount between the buckets: plan first, the rest from the
-// permanent bucket (which may go negative).
-func split(a Account, amount int) (fromPlan, fromPerm int) {
-	fromPlan = min(max(a.Plan, 0), amount)
-	return fromPlan, amount - fromPlan
 }
 
 // EnsureAccount returns the user's account, creating it when missing.
@@ -166,160 +140,21 @@ func (s *PostgresStore) EnsureAccount(ctx context.Context, userID string) (Accou
 	return a, nil
 }
 
-// debitTx runs the debit inside tx. The caller holds the account lock.
-func debitTx(ctx context.Context, tx pgx.Tx, acct Account, tur, ref, reason string, amount int, allowNegative bool) (Account, bool, error) {
-	exists, err := movementExists(ctx, tx, tur, ref)
-	if err != nil {
-		return Account{}, false, fmt.Errorf("could not check the ledger: %w", err)
-	}
-	if exists {
-		return acct, false, nil
-	}
-	if !allowNegative && acct.Balance() < amount {
-		return Account{}, false, &InsufficientError{Required: amount, Balance: acct.Balance()}
-	}
-	fromPlan, fromPerm := split(acct, amount)
-	return apply(ctx, tx, acct, tur, ref, reason, -fromPlan, -fromPerm)
-}
-
-// DebitBucket takes amount from the plan bucket first, then the permanent bucket.
-// The bool is false when (tur, ref) already exists.
-func (s *PostgresStore) DebitBucket(ctx context.Context, userID string, tur, ref, reason string, amount int, allowNegative bool) (Account, bool, error) {
-	var acct Account
-	var done bool
-	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		a, err := lockAccount(ctx, tx, userID, true)
-		if err != nil {
-			return fmt.Errorf("could not lock the credit account: %w", err)
-		}
-		acct, done, err = debitTx(ctx, tx, a, tur, ref, reason, amount, allowNegative)
-		return err
-	})
-	return acct, done, err
-}
-
-// RefundBucket reverses the debit (debitTur, ref) with a refundTur movement of the
-// negated deltas. It is a no-op when the debit is missing (for example after
-// the account was deleted) or the refund already exists, and it never
-// creates an account.
-func (s *PostgresStore) RefundBucket(ctx context.Context, debitTur, refundTur, ref string) error {
-	return s.inTx(ctx, func(tx pgx.Tx) error {
-		var userID, reason string
-		var planDelta, permDelta int
-		err := tx.QueryRow(ctx, `
-			SELECT kullanici_id::text, plan_delta, kalici_delta, sebep
-			FROM kredi.hareket WHERE tur = $1 AND ref = $2`, debitTur, ref).
-			Scan(&userID, &planDelta, &permDelta, &reason)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("could not read the debit: %w", err)
-		}
-		acct, err := lockAccount(ctx, tx, userID, false)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("could not lock the credit account: %w", err)
-		}
-		if _, _, err := apply(ctx, tx, acct, refundTur, ref, reason, -planDelta, -permDelta); err != nil {
-			return err
-		}
-		if debitTur == turSoz {
-			if _, err := tx.Exec(ctx, `DELETE FROM kredi.eylem WHERE ref = $1`, ref); err != nil {
-				return fmt.Errorf("could not close the action: %w", err)
-			}
-		}
-		return nil
-	})
-}
-
-// Credit adds amount to the permanent bucket. The bool is false when
-// (tur, ref) already exists.
-func (s *PostgresStore) Credit(ctx context.Context, userID, tur, ref, reason string, amount int) (Account, bool, error) {
-	var acct Account
-	var done bool
-	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		a, err := lockAccount(ctx, tx, userID, true)
-		if err != nil {
-			return fmt.Errorf("could not lock the credit account: %w", err)
-		}
-		acct, done, err = apply(ctx, tx, a, tur, ref, reason, 0, amount)
-		if err == nil && done && tur == turHediye {
-			_, err = tx.Exec(ctx, `UPDATE kredi.hesap SET hediye_alindi = true WHERE kullanici_id = $1::text::uuid`, userID)
-			acct.WelcomeClaimed = true
-		}
-		return err
-	})
-	return acct, done, err
-}
-
-// SetPlan sets the plan bucket: to amount for plan_dolum, to 0 for
-// plan_bitis (P5). It records periodEnd as the plan period end. The bool is
-// false when (tur, ref) already exists.
-func (s *PostgresStore) SetPlan(ctx context.Context, userID, tur, ref string, amount int, periodEnd *time.Time) (Account, bool, error) {
-	if tur != turPlanDolum && tur != turPlanBitis {
-		return Account{}, false, fmt.Errorf("credit: SetPlan does not accept tur %q", tur)
-	}
-	target := amount
-	if tur == turPlanBitis {
-		target = 0
-	}
-	var acct Account
-	var done bool
-	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		a, err := lockAccount(ctx, tx, userID, true)
-		if err != nil {
-			return fmt.Errorf("could not lock the credit account: %w", err)
-		}
-		acct, done, err = apply(ctx, tx, a, tur, ref, "", target-a.Plan, 0)
-		if err != nil || !done {
-			return err
-		}
-		if _, err := tx.Exec(ctx,
-			`UPDATE kredi.hesap SET plan_donem_sonu = $2 WHERE kullanici_id = $1::text::uuid`, userID, periodEnd); err != nil {
-			return fmt.Errorf("could not set the plan period end: %w", err)
-		}
-		acct.PlanPeriodEnd = periodEnd
-		return nil
-	})
-	return acct, done, err
-}
-
-// ClawBack removes amount after a store refund: plan bucket first, then the
-// permanent bucket, which may go negative. The bool is false when the
-// refund was already applied.
-func (s *PostgresStore) ClawBack(ctx context.Context, userID, ref string, amount int) (Account, bool, error) {
-	var acct Account
-	var done bool
-	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		a, err := lockAccount(ctx, tx, userID, true)
-		if err != nil {
-			return fmt.Errorf("could not lock the credit account: %w", err)
-		}
-		fromPlan, fromPerm := split(a, amount)
-		acct, done, err = apply(ctx, tx, a, turMagazaIade, ref, "", -fromPlan, -fromPerm)
-		return err
-	})
-	return acct, done, err
-}
-
 // SpendAction charges the first request of an action and lets follow-ups
 // (up to maxUses requests within window) through free. A refunded or
 // dropped action, an elapsed window or an exhausted budget gives
-// ErrActionExpired.
-func (s *PostgresStore) SpendAction(ctx context.Context, userID string, op Operation, actionID string, amount int, window time.Duration, maxUses int, allowNegative bool) (ActionCharge, error) {
+// ErrActionExpired. The first request debits the lots like Debit (tur soz,
+// ref "<user>:<action>"); a balance below amount gives *InsufficientError.
+func (s *PostgresStore) SpendAction(ctx context.Context, userID string, op Operation, actionID string, amount int, window time.Duration, maxUses int, now time.Time) (ActionCharge, error) {
 	ref := userID + ":" + actionID
 	var out ActionCharge
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		acct, err := lockAccount(ctx, tx, userID, true)
-		if err != nil {
+		if _, err := lockAccount(ctx, tx, userID, true); err != nil {
 			return fmt.Errorf("could not lock the credit account: %w", err)
 		}
 		var uses int
 		var elapsed bool
-		err = tx.QueryRow(ctx, `
+		err := tx.QueryRow(ctx, `
 			SELECT kullanim, olusturuldu + make_interval(secs => $2) < now()
 			FROM kredi.eylem WHERE ref = $1`, ref, window.Seconds()).Scan(&uses, &elapsed)
 		switch {
@@ -330,25 +165,36 @@ func (s *PostgresStore) SpendAction(ctx context.Context, userID string, op Opera
 			if _, err := tx.Exec(ctx, `UPDATE kredi.eylem SET kullanim = kullanim + 1 WHERE ref = $1`, ref); err != nil {
 				return fmt.Errorf("could not count the action request: %w", err)
 			}
-			out = ActionCharge{Account: acct}
+			bal, err := balanceOf(ctx, tx, userID, now)
+			if err != nil {
+				return err
+			}
+			out = ActionCharge{Balance: bal}
 			return nil
 		case !errors.Is(err, pgx.ErrNoRows):
 			return fmt.Errorf("could not read the action: %w", err)
 		}
-		updated, charged, err := debitTx(ctx, tx, acct, turSoz, ref, string(op), amount, allowNegative)
+		exists, err := movementDone(ctx, tx, userID, turSoz, ref)
 		if err != nil {
 			return err
 		}
-		if !charged {
+		if exists {
 			// The charge exists but the action row is gone: refunded or dropped.
 			return ErrActionExpired
+		}
+		bal, short, err := spendTx(ctx, tx, movement{userID: userID, tur: turSoz, ref: ref, amount: amount, reason: string(op)}, now)
+		if err != nil {
+			return err
+		}
+		if short {
+			return &InsufficientError{Required: amount, Balance: bal}
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO kredi.eylem (ref, kullanici_id, tur, kullanim) VALUES ($1, $2::text::uuid, $3, 1)`,
 			ref, userID, string(op)); err != nil {
 			return fmt.Errorf("could not record the action: %w", err)
 		}
-		out = ActionCharge{Account: updated, Charged: true}
+		out = ActionCharge{Balance: bal, Charged: true}
 		return nil
 	})
 	if err != nil {
@@ -365,30 +211,86 @@ func (s *PostgresStore) DropAction(ctx context.Context, ref string) error {
 	return nil
 }
 
-// History returns the user's movements, newest first, with id below
-// beforeID (all when beforeID <= 0).
-func (s *PostgresStore) History(ctx context.Context, userID string, beforeID int64, limit int) ([]Movement, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT id, tur, ref, sebep, plan_delta + kalici_delta, olusturuldu
-		FROM kredi.hareket
-		WHERE kullanici_id = $1::text::uuid AND ($2::bigint <= 0 OR id < $2)
-		ORDER BY id DESC LIMIT $3`, userID, beforeID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("could not read the credit history: %w", err)
-	}
-	defer rows.Close()
-	var out []Movement
-	for rows.Next() {
-		var m Movement
-		if err := rows.Scan(&m.ID, &m.Tur, &m.Ref, &m.Reason, &m.Amount, &m.CreatedAt); err != nil {
-			return nil, fmt.Errorf("could not read a credit movement: %w", err)
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
+// historyCursor is the decoded form of a history cursor: the position of
+// the last movement of the previous page in (olusturuldu DESC, id DESC).
+type historyCursor struct {
+	T  time.Time `json:"t"`
+	ID int64     `json:"id"`
 }
 
-// DeleteUserData removes the user's account, movements and actions and
+func encodeCursor(m Movement) string {
+	raw, _ := json.Marshal(historyCursor{T: m.CreatedAt.UTC(), ID: m.ID})
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodeCursor(s string) (historyCursor, error) {
+	var c historyCursor
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil || json.Unmarshal(raw, &c) != nil || c.ID <= 0 || c.T.IsZero() {
+		return historyCursor{}, ErrBadCursor
+	}
+	return c, nil
+}
+
+// HistoryPageSize is the number of movements per history page.
+const HistoryPageSize = 20
+
+// History returns one page of the user's movements, newest first. cursor is
+// the Next of the previous page (empty = first page, a damaged one gives
+// ErrBadCursor); filter narrows to spends or earnings.
+func (s *PostgresStore) History(ctx context.Context, userID, cursor string, filter HistoryFilter) (Page, error) {
+	var cur *historyCursor
+	if cursor != "" {
+		c, err := decodeCursor(cursor)
+		if err != nil {
+			return Page{}, err
+		}
+		cur = &c
+	}
+	cond := ""
+	switch filter {
+	case FilterAll:
+	case FilterSpend:
+		cond = " AND tutar < 0"
+	case FilterEarn:
+		cond = " AND tutar > 0"
+	default:
+		return Page{}, ErrBadFilter
+	}
+	var curT *time.Time
+	var curID int64
+	if cur != nil {
+		curT, curID = &cur.T, cur.ID
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tur, ref, sebep, tutar, proje_id::text, kademe, olusturuldu
+		FROM kredi.hareket
+		WHERE kullanici_id = $1::text::uuid`+cond+`
+		  AND ($2::timestamptz IS NULL OR (olusturuldu, id) < ($2::timestamptz, $3::bigint))
+		ORDER BY olusturuldu DESC, id DESC LIMIT $4`, userID, curT, curID, HistoryPageSize+1)
+	if err != nil {
+		return Page{}, fmt.Errorf("could not read the credit history: %w", err)
+	}
+	defer rows.Close()
+	var page Page
+	for rows.Next() {
+		var m Movement
+		if err := rows.Scan(&m.ID, &m.Tur, &m.Ref, &m.Reason, &m.Amount, &m.ProjectID, &m.Tier, &m.CreatedAt); err != nil {
+			return Page{}, fmt.Errorf("could not read a credit movement: %w", err)
+		}
+		page.Items = append(page.Items, m)
+	}
+	if err := rows.Err(); err != nil {
+		return Page{}, fmt.Errorf("could not read the credit history: %w", err)
+	}
+	if len(page.Items) > HistoryPageSize {
+		page.Items = page.Items[:HistoryPageSize]
+		page.Next = encodeCursor(page.Items[len(page.Items)-1])
+	}
+	return page, nil
+}
+
+// DeleteUserData removes the user's account, lots, movements and actions and
 // anonymises their subscriptions and purchases.
 func (s *PostgresStore) DeleteUserData(ctx context.Context, userID string) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
@@ -400,7 +302,11 @@ func (s *PostgresStore) DeleteUserData(ctx context.Context, userID string) error
 		}
 		for _, q := range []string{
 			`DELETE FROM kredi.eylem WHERE kullanici_id = $1::text::uuid`,
+			`DELETE FROM kredi.dilim_hareket WHERE hareket_id IN
+				(SELECT id FROM kredi.hareket WHERE kullanici_id = $1::text::uuid)`,
+			`DELETE FROM kredi.dilim WHERE kullanici_id = $1::text::uuid`,
 			`DELETE FROM kredi.hareket WHERE kullanici_id = $1::text::uuid`,
+			`UPDATE kredi.kampanya_katilim SET kullanici_id = NULL, dilim_id = NULL WHERE kullanici_id = $1::text::uuid`,
 			`DELETE FROM kredi.hesap WHERE kullanici_id = $1::text::uuid`,
 			`UPDATE kredi.abonelik SET kullanici_id = NULL WHERE kullanici_id = $1::text::uuid`,
 			`UPDATE kredi.satin_alma SET kullanici_id = NULL WHERE kullanici_id = $1::text::uuid`,
@@ -440,6 +346,9 @@ type Subscription struct {
 	RefillAnchor *time.Time
 	RefillCount  int
 	Env          string
+	// NextProduct is the internal product that starts at the next renewal
+	// after a downgrade (sonraki_urun), or nil.
+	NextProduct *string
 }
 
 // LatestSubscription returns the user's subscription with the latest period
@@ -448,12 +357,11 @@ func (s *PostgresStore) LatestSubscription(ctx context.Context, userID string) (
 	var sub Subscription
 	var periodEnd *time.Time
 	err := s.pool.QueryRow(ctx, `
-		SELECT magaza, orijinal_islem_id, kullanici_id::text, urun, durum, donem_sonu,
-		       otomatik_yenile, sonraki_dolum, dolum_capasi, dolum_sayisi, ortam
+		SELECT `+subscriptionColumns+`
 		FROM kredi.abonelik WHERE kullanici_id = $1::text::uuid
 		ORDER BY donem_sonu DESC NULLS LAST, orijinal_islem_id LIMIT 1`, userID).
 		Scan(&sub.Store, &sub.OriginalID, &sub.UserID, &sub.Product, &sub.Status, &periodEnd,
-			&sub.AutoRenew, &sub.NextRefill, &sub.RefillAnchor, &sub.RefillCount, &sub.Env)
+			&sub.AutoRenew, &sub.NextRefill, &sub.RefillAnchor, &sub.RefillCount, &sub.Env, &sub.NextProduct)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

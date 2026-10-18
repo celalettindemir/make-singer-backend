@@ -499,7 +499,7 @@ func TestLoad_CloudflareRangesYAMLList(t *testing.T) {
 
 func TestLoad_CreditDefaults(t *testing.T) {
 	for _, k := range []string{
-		"CREDITS_ENFORCE", "CREDITS_WELCOME", "CREDITS_PLAN_MONTHLY", "CREDITS_REFILL_INTERVAL",
+		"CREDITS_ENFORCE", "CREDITS_PLAN_PLUS", "CREDITS_PLAN_PRO", "CREDITS_REFUND_GRACE", "CREDITS_EXPIRE_INTERVAL", "CREDITS_COST_MASTER", "CREDITS_REFILL_INTERVAL",
 		"CREDITS_COST_RENDER_MIX", "CREDITS_COST_RENDER_FOCUS", "CREDITS_COST_RENDER_STEMS",
 		"CREDITS_COST_LYRICS_GENERATE", "CREDITS_COST_LYRICS_REWRITE",
 		"APPSTORE_PRODUCT_PREFIX", "RATELIMIT_PURCHASES_PER_MIN", "RATELIMIT_WEBHOOKS_PER_MIN",
@@ -513,10 +513,13 @@ func TestLoad_CreditDefaults(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 	c := cfg.Credits
-	if c.Enforce || c.Welcome != 24 || c.PlanMonthly != 300 {
-		t.Errorf("credits = %+v, want enforce=false welcome=24 plan=300", c)
+	if c.Enforce || c.PlanPlus != 300 || c.PlanPro != 1000 {
+		t.Errorf("credits = %+v, want enforce=false plus=300 pro=1000", c)
 	}
-	want := CreditCosts{RenderMix: 12, RenderFocus: 32, RenderStems: 62, LyricsGenerate: 2, LyricsRewrite: 1}
+	if c.RefundGrace != 168*time.Hour || c.ExpireInterval != time.Hour {
+		t.Errorf("grace/expire = %v/%v, want 168h/1h", c.RefundGrace, c.ExpireInterval)
+	}
+	want := CreditCosts{RenderMix: 12, RenderFocus: 32, RenderStems: 62, LyricsGenerate: 2, LyricsRewrite: 1, Master: 3}
 	if c.Costs != want {
 		t.Errorf("costs = %+v, want %+v", c.Costs, want)
 	}

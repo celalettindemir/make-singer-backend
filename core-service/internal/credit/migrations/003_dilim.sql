@@ -50,7 +50,9 @@ ALTER TABLE kredi.hareket
     ADD COLUMN IF NOT EXISTS tutar integer NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS yapan text NULL,
     ADD COLUMN IF NOT EXISTS notu text NULL,
-    ADD COLUMN IF NOT EXISTS kampanya_id bigint NULL;
+    ADD COLUMN IF NOT EXISTS kampanya_id bigint NULL,
+    ADD COLUMN IF NOT EXISTS proje_id uuid NULL,
+    ADD COLUMN IF NOT EXISTS kademe text NULL CHECK (kademe IN ('plus', 'pro'));
 
 -- Gelistirme veritabanlarindaki v1 satirlari: tutar kova deltalarinin
 -- toplami olur; v2'de karsiligi olmayan hosgeldin hediyesi silinir.
