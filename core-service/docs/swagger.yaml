@@ -481,6 +481,8 @@ definitions:
     type: object
   model.LyricsGenerateResponse:
     properties:
+      balance:
+        type: integer
       drafts:
         items:
           items:
@@ -544,6 +546,8 @@ definitions:
     type: object
   model.LyricsRewriteResponse:
     properties:
+      balance:
+        type: integer
       lines:
         items:
           type: string
@@ -579,6 +583,11 @@ definitions:
     type: object
   model.MasterFinalResponse:
     properties:
+      balance:
+        description: |-
+          Balance is the credit balance after the debit; always on the wire
+          (0 when the service runs without credit accounting).
+        type: integer
       estimatedDuration:
         type: integer
       jobId:
@@ -773,6 +782,8 @@ definitions:
     type: object
   model.RenderStartResponse:
     properties:
+      balance:
+        type: integer
       createdAt:
         type: string
       estimatedDuration:
@@ -1302,6 +1313,10 @@ paths:
           description: Unauthorized
           schema:
             $ref: '#/definitions/response.ErrorResponse'
+        "402":
+          description: Payment Required
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
         "404":
           description: Not Found
           schema:
@@ -1532,6 +1547,10 @@ paths:
             $ref: '#/definitions/response.ErrorResponse'
         "401":
           description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "402":
+          description: Payment Required
           schema:
             $ref: '#/definitions/response.ErrorResponse'
         "429":

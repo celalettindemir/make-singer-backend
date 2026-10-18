@@ -350,3 +350,36 @@ func TestCampaignStatus_JSONNames(t *testing.T) {
 		}
 	}
 }
+
+func TestStore_DeleteUserDataRemovesLotsAndAnonymizesCampaignJoin(t *testing.T) {
+	e := newCampaignEnv(t)
+	ctx := context.Background()
+	c := e.start(10, 50, 60, nil)
+	e.advance(time.Minute)
+	u := e.signup("Silinecek@ornek.com", e.clock())
+	if _, err := e.store.SpendAction(ctx, u.ID, OpLyricsGenerate, "act-del", 2, 10*time.Minute, 12, e.clock()); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.DeleteUserData(ctx, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"hesap", "hareket", "dilim"} {
+		var n int
+		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM kredi.`+table+` WHERE kullanici_id = $1::uuid`, u.ID).Scan(&n); err != nil || n != 0 {
+			t.Errorf("%s rows = %d, %v; want 0", table, n, err)
+		}
+	}
+	var orphans int
+	if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM kredi.dilim_hareket dh
+		WHERE NOT EXISTS (SELECT 1 FROM kredi.dilim d WHERE d.id = dh.dilim_id)`).Scan(&orphans); err != nil || orphans != 0 {
+		t.Errorf("orphan lot movements = %d, %v", orphans, err)
+	}
+	var kept int
+	if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM kredi.kampanya_katilim
+		WHERE kampanya_id = $1 AND kullanici_id IS NULL AND dilim_id IS NULL AND eposta_karma <> ''`, c.ID).Scan(&kept); err != nil || kept != 1 {
+		t.Errorf("anonymised joins = %d, %v; want 1 with the e-mail hash kept", kept, err)
+	}
+	if got := e.campaign(c.ID).Joined; got != 1 {
+		t.Errorf("joined = %d, want 1 (counters unchanged)", got)
+	}
+}

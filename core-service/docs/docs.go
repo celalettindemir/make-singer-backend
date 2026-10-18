@@ -496,6 +496,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/response.ErrorResponse"
                         }
                     },
+                    "402": {
+                        "description": "Payment Required",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -856,6 +862,12 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "Payment Required",
                         "schema": {
                             "$ref": "#/definitions/response.ErrorResponse"
                         }
@@ -1802,6 +1814,9 @@ const docTemplate = `{
         "model.LyricsGenerateResponse": {
             "type": "object",
             "properties": {
+                "balance": {
+                    "type": "integer"
+                },
                 "drafts": {
                     "type": "array",
                     "items": {
@@ -1892,6 +1907,9 @@ const docTemplate = `{
         "model.LyricsRewriteResponse": {
             "type": "object",
             "properties": {
+                "balance": {
+                    "type": "integer"
+                },
                 "lines": {
                     "type": "array",
                     "items": {
@@ -1945,6 +1963,10 @@ const docTemplate = `{
         "model.MasterFinalResponse": {
             "type": "object",
             "properties": {
+                "balance": {
+                    "description": "Balance is the credit balance after the debit; always on the wire\n(0 when the service runs without credit accounting).",
+                    "type": "integer"
+                },
                 "estimatedDuration": {
                     "type": "integer"
                 },
@@ -2230,6 +2252,9 @@ const docTemplate = `{
         "model.RenderStartResponse": {
             "type": "object",
             "properties": {
+                "balance": {
+                    "type": "integer"
+                },
                 "createdAt": {
                     "type": "string"
                 },
