@@ -46,7 +46,7 @@ type PurchaseStore interface {
 	UpsertSubscription(ctx context.Context, s Subscription) error
 	RecordPurchase(ctx context.Context, r PurchaseRecord) (inserted bool, err error)
 	PurchaseByOrder(ctx context.Context, store, id string) (*PurchaseRecord, error)
-	DueRefills(ctx context.Context, now time.Time, yearlyProduct string, limit int) ([]Subscription, error)
+	DueRefills(ctx context.Context, now time.Time, limit int) ([]Subscription, error)
 	GrantPlan(ctx context.Context, userID, ref string, amount int, tier Tier, end, now time.Time) error
 	RefillStep(ctx context.Context, sub Subscription, now time.Time, ref string, amount int, tier Tier, next time.Time) (bool, error)
 	OverdueSubscriptions(ctx context.Context, before time.Time, limit int) ([]Subscription, error)
@@ -198,12 +198,12 @@ func (s *PostgresStore) querySubscriptions(ctx context.Context, where string, ar
 // DueRefills lists owned, active yearly subscriptions whose next refill
 // is due, with the period not yet ended and the refill inside it. At most
 // limit rows are returned, oldest due first.
-func (s *PostgresStore) DueRefills(ctx context.Context, now time.Time, yearlyProduct string, limit int) ([]Subscription, error) {
+func (s *PostgresStore) DueRefills(ctx context.Context, now time.Time, limit int) ([]Subscription, error) {
 	return s.querySubscriptions(ctx, `
-		durum = 'aktif' AND urun = $2 AND kullanici_id IS NOT NULL
+		durum = 'aktif' AND urun LIKE '%.yearly' AND kullanici_id IS NOT NULL
 		AND dolum_capasi IS NOT NULL AND sonraki_dolum <= $1
 		AND (donem_sonu IS NULL OR ($1 < donem_sonu AND sonraki_dolum < donem_sonu))
-		ORDER BY sonraki_dolum LIMIT $3`, now, yearlyProduct, limit)
+		ORDER BY sonraki_dolum LIMIT $2`, now, limit)
 }
 
 // RefillStep takes one refill step in a single transaction: it locks the
@@ -245,8 +245,13 @@ func (s *PostgresStore) RefillStep(ctx context.Context, sub Subscription, now ti
 		if err := endLivePlan(ctx, tx, *sub.UserID, ref, now); err != nil {
 			return err
 		}
+		// The lot lasts until the next monthly refill, at most the period end.
+		lotEnd := *periodEnd
+		if next.Before(lotEnd) {
+			lotEnd = next
+		}
 		if _, err := grantTx(ctx, tx, *sub.UserID, turPlanDolum, ref,
-			Grant{Source: LotPlan, Amount: amount, ExpiresAt: periodEnd, Tier: tier}, now); err != nil {
+			Grant{Source: LotPlan, Amount: amount, ExpiresAt: &lotEnd, Tier: tier}, now); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `

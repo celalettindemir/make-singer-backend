@@ -25,6 +25,10 @@ type LineItem struct {
 	// LatestSuccessfulOrderID is the order of the line item's latest
 	// successful charge (lineItems[].latestSuccessfulOrderId).
 	LatestSuccessfulOrderID string
+	// DeferredProductID and DeferredBasePlanID name the replacement that
+	// starts at the period end (lineItems[].deferredItemReplacement).
+	DeferredProductID  string
+	DeferredBasePlanID string
 }
 
 // SubscriptionPurchase is the subset of subscriptionsv2 the backend uses.

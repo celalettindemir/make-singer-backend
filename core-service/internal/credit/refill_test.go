@@ -30,7 +30,7 @@ func (e *purchaseEnv) yearlySub(t *testing.T, user *string, periodEnd time.Time,
 	anchor := refillBase
 	next := refillAt(anchor, count+1)
 	err := e.s.UpsertSubscription(context.Background(), Subscription{
-		Store: storeApple, OriginalID: orig, UserID: user, Product: productYearly, Status: subActive,
+		Store: storeApple, OriginalID: orig, UserID: user, Product: productProYearly, Status: subActive,
 		PeriodEnd: periodEnd, AutoRenew: true, NextRefill: &next, RefillAnchor: &anchor, RefillCount: count, Env: envProduction,
 	})
 	if err != nil {
@@ -155,15 +155,15 @@ func TestRefillStep_StaleReadChangesNothing(t *testing.T) {
 	if sub := e.sub(t, storeApple, orig); sub.RefillCount != 1 {
 		t.Fatalf("count = %d", sub.RefillCount)
 	}
-	// A fresh step applies the CURRENT period end to the plan.
+	// A fresh step reads the CURRENT row; the lot lasts to the next refill.
 	fresh := *e.sub(t, storeApple, orig)
 	later := refillAt(refillBase, 2).Add(time.Hour)
 	if ok, err := e.s.RefillStep(ctx, fresh, later, "r2", 300, TierPro, refillAt(refillBase, 3)); err != nil || !ok {
 		t.Fatalf("fresh step = %v %v", ok, err)
 	}
 	e.p.now = func() time.Time { return later }
-	if a := e.view(t, u); a.PlanPeriodEnd == nil || !a.PlanPeriodEnd.Equal(newEnd) {
-		t.Fatalf("plan period end = %v, want %v", a.PlanPeriodEnd, newEnd)
+	if a := e.view(t, u); a.PlanPeriodEnd == nil || !a.PlanPeriodEnd.Equal(refillAt(refillBase, 3)) {
+		t.Fatalf("plan lot end = %v, want the next refill %v", a.PlanPeriodEnd, refillAt(refillBase, 3))
 	}
 }
 
@@ -173,7 +173,7 @@ func TestRunRefill_ResyncsOverdueApple(t *testing.T) {
 	u, tok := e.user(t)
 	start := refillBase
 	e.p.now = func() time.Time { return start.Add(24 * time.Hour) }
-	jws := e.apple.sign(subTx("tx-r", "orig-r-"+u, productMonthly, tok, start, 1))
+	jws := e.apple.sign(subTx("tx-r", "orig-r-"+u, productProMonthly, tok, start, 1))
 	orig := "orig-r-" + u
 	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
 		t.Fatal(err)
@@ -217,5 +217,21 @@ func TestRunRefill_PrunesOldActions(t *testing.T) {
 	}
 	if err := e.s.pool.QueryRow(ctx, `SELECT count(*) FROM kredi.eylem WHERE ref = $1`, fresh).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("fresh rows = %d, %v", n, err)
+	}
+}
+
+func TestRefillStep_LastMonthLotEndsAtPeriodEnd(t *testing.T) {
+	e := newPurchaseEnv(t)
+	u, _ := e.user(t)
+	end := refillAt(refillBase, 1).Add(10 * 24 * time.Hour)
+	orig := e.yearlySub(t, &u, end, 0)
+	sub := *e.sub(t, storeApple, orig)
+	now := refillAt(refillBase, 1).Add(time.Hour)
+	if ok, err := e.s.RefillStep(context.Background(), sub, now, "last", 300, TierPro, refillAt(refillBase, 2)); err != nil || !ok {
+		t.Fatalf("step = %v %v", ok, err)
+	}
+	e.p.now = func() time.Time { return now }
+	if a := e.view(t, u); a.PlanPeriodEnd == nil || !a.PlanPeriodEnd.Equal(end) {
+		t.Fatalf("plan lot end = %v, want the period end %v", a.PlanPeriodEnd, end)
 	}
 }

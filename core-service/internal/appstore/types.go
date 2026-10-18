@@ -58,6 +58,9 @@ func (t *Transaction) UnmarshalJSON(b []byte) error {
 type RenewalInfo struct {
 	AutoRenewStatus        int
 	GracePeriodExpiresDate *time.Time
+	// AutoRenewProductID is the product of the next renewal (it differs from
+	// the current product when the user scheduled a downgrade).
+	AutoRenewProductID string
 }
 
 // UnmarshalJSON decodes Apple's field names and millisecond dates.
@@ -65,11 +68,12 @@ func (r *RenewalInfo) UnmarshalJSON(b []byte) error {
 	var w struct {
 		AutoRenewStatus        int    `json:"autoRenewStatus"`
 		GracePeriodExpiresDate *int64 `json:"gracePeriodExpiresDate"`
+		AutoRenewProductID     string `json:"autoRenewProductId"`
 	}
 	if err := json.Unmarshal(b, &w); err != nil {
 		return err
 	}
-	*r = RenewalInfo{AutoRenewStatus: w.AutoRenewStatus, GracePeriodExpiresDate: msToTime(w.GracePeriodExpiresDate)}
+	*r = RenewalInfo{AutoRenewStatus: w.AutoRenewStatus, GracePeriodExpiresDate: msToTime(w.GracePeriodExpiresDate), AutoRenewProductID: w.AutoRenewProductID}
 	return nil
 }
 

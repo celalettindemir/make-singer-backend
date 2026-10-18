@@ -56,15 +56,49 @@ const (
 	envSandbox    = "sandbox"
 )
 
-// Internal product ids (P7).
+// Internal subscription product ids.
 const (
-	productMonthly = "pro.monthly"
-	productYearly  = "pro.yearly"
-	// googleSubscription is the Google Play subscription product; its base
-	// plans "monthly" and "yearly" map to productMonthly / productYearly.
-	googleSubscription = "pro"
+	productPlusMonthly = "plus.monthly"
+	productPlusYearly  = "plus.yearly"
+	productProMonthly  = "pro.monthly"
+	productProYearly   = "pro.yearly"
+	periodYearly       = "yearly"
 	turPaket           = "paket"
 )
+
+// subscriptionProducts maps the four internal subscription ids to their tier
+// and billing period. Google Play subscriptions are named after the tier
+// ("plus", "pro") with the base plans "monthly" and "yearly".
+var subscriptionProducts = map[string]struct {
+	Tier   Tier
+	Period string
+}{
+	productPlusMonthly: {TierPlus, "monthly"},
+	productPlusYearly:  {TierPlus, periodYearly},
+	productProMonthly:  {TierPro, "monthly"},
+	productProYearly:   {TierPro, periodYearly},
+}
+
+func isSubscriptionProduct(id string) bool {
+	_, ok := subscriptionProducts[id]
+	return ok
+}
+
+func isYearly(product string) bool { return subscriptionProducts[product].Period == periodYearly }
+
+// tierRank orders the tiers for upgrade detection.
+func tierRank(product string) int {
+	switch subscriptionProducts[product].Tier {
+	case TierPlus:
+		return 1
+	case TierPro:
+		return 2
+	}
+	return 0
+}
+
+// googleSubscriptionID is the Google Play subscription of an internal product.
+func googleSubscriptionID(product string) string { return string(subscriptionProducts[product].Tier) }
 
 var packCredits = map[string]int{"credits.100": 100, "credits.300": 300, "credits.1000": 1000}
 
@@ -89,8 +123,8 @@ type GooglePublisher interface {
 
 // PurchasesConfig configures Purchases.
 type PurchasesConfig struct {
-	// PlanMonthly is the credits of each plan period lot.
-	PlanMonthly int
+	// PlanCredits is the credits of each plan period lot, per tier.
+	PlanCredits map[Tier]int
 	// AppleProductPrefix + internal id = App Store product id.
 	AppleProductPrefix string
 	// PackageName is the Google Play package notifications must carry.
@@ -272,7 +306,7 @@ func (p *Purchases) refundPack(ctx context.Context, store, orderID, product, env
 	}
 	if rec != nil && rec.UserID != nil && rec.Status == purchaseCredited {
 		ref := store + ":" + orderID
-		if _, err := p.store.ClawBackPack(ctx, *rec.UserID, ref, ref, rec.Credits, p.now()); err != nil {
+		if _, err := p.store.ClawBackPack(ctx, *rec.UserID, ref, ref, rec.Credits, p.now()); err != nil && !errors.Is(err, ErrLotNotFound) {
 			return err
 		}
 	}
@@ -298,6 +332,12 @@ type subFacts struct {
 	// linkedID is a previous subscription this one replaces (Google).
 	linkedID string
 	raw      json.RawMessage
+	// graceEnd is the end of the store's grace period (status ek_sure).
+	graceEnd time.Time
+	// nextKnown says the store told what renews next; nextProduct is that
+	// internal product when it differs from product ("" = no change).
+	nextKnown   bool
+	nextProduct string
 }
 
 // applySubscription runs the §4.3 state machine for one verified state.
@@ -340,7 +380,11 @@ func (p *Purchases) applySubscription(ctx context.Context, f subFacts, submitter
 	// client cannot reopen an ended or refunded row either (a JWS signed
 	// before the refund replays as active) unless it brings a strictly
 	// later period.
-	claimOnly := cur != nil && (f.periodEnd.Before(cur.PeriodEnd) ||
+	upgrade, err := p.isUpgrade(ctx, cur, f)
+	if err != nil {
+		return "", "", err
+	}
+	claimOnly := cur != nil && ((f.periodEnd.Before(cur.PeriodEnd) && !upgrade) ||
 		(submitter != "" && (f.status != subActive ||
 			((cur.Status == subRefunded || cur.Status == subExpired) && !f.periodEnd.After(cur.PeriodEnd)))))
 	if claimOnly {
@@ -348,7 +392,7 @@ func (p *Purchases) applySubscription(ctx context.Context, f subFacts, submitter
 		if next.UserID == nil {
 			next.UserID = strPtr(owner)
 		}
-	} else if f.product == productYearly {
+	} else if isYearly(f.product) {
 		restart := cur == nil || cur.Product != f.product || cur.RefillAnchor == nil || !live(cur.Status)
 		if restart && f.status == subActive {
 			anchor := f.periodStart
@@ -359,6 +403,16 @@ func (p *Purchases) applySubscription(ctx context.Context, f subFacts, submitter
 			next.RefillAnchor, next.NextRefill, next.RefillCount = &anchor, &nr, 0
 		} else if cur != nil {
 			next.RefillAnchor, next.NextRefill, next.RefillCount = cur.RefillAnchor, cur.NextRefill, cur.RefillCount
+		}
+	}
+	if !claimOnly {
+		switch {
+		case f.status == subExpired || f.status == subRefunded:
+			next.NextProduct = nil
+		case f.nextKnown:
+			next.NextProduct = strPtr(f.nextProduct)
+		case cur != nil && cur.NextProduct != nil && *cur.NextProduct != f.product:
+			next.NextProduct = cur.NextProduct
 		}
 	}
 	if err := p.store.UpsertSubscription(ctx, next); err != nil {
@@ -402,11 +456,21 @@ func (p *Purchases) applySubscription(ctx context.Context, f subFacts, submitter
 	}
 	switch {
 	case f.status == subActive && f.refillRef != "":
+		// A yearly plan's lot lasts until the next monthly refill (P3).
 		end := f.periodEnd
-		if err := p.store.GrantPlan(ctx, owner, f.refillRef, p.cfg.PlanMonthly, tierOf(f.product), end, p.now()); err != nil {
+		if isYearly(f.product) && stored != nil && stored.NextRefill != nil &&
+			stored.NextRefill.After(p.now()) && stored.NextRefill.Before(end) {
+			end = *stored.NextRefill
+		}
+		if err := p.store.GrantPlan(ctx, owner, f.refillRef, p.cfg.PlanCredits[tierOf(f.product)], tierOf(f.product), end, p.now()); err != nil {
 			return "", "", err
 		}
 		return PurchaseCredited, owner, nil
+	case f.status == subGrace && !f.graceEnd.IsZero():
+		// The store's grace keeps the plan alive: the live lot lasts to its end.
+		if err := p.store.ExtendPlanLot(ctx, owner, f.graceEnd); err != nil {
+			return "", "", err
+		}
 	case (f.status == subExpired || f.status == subRefunded) && cur != nil && live(cur.Status):
 		ref := f.store + ":" + f.originalID + ":" + strconv.FormatInt(f.periodEnd.Unix(), 10)
 		if _, err := p.store.EndPlanLots(ctx, owner, turPlanBitis, ref, p.now()); err != nil {
@@ -414,6 +478,19 @@ func (p *Purchases) applySubscription(ctx context.Context, f subFacts, submitter
 		}
 	}
 	return PurchaseRecorded, owner, nil
+}
+
+// isUpgrade reports whether f is a new, paid order that raises the tier of
+// the stored subscription. Such an order starts a full new period at once,
+// even when it ends before the old one (a yearly Plus replaced by a monthly
+// Pro), so it is never a stale state. An order already recorded is a replay.
+func (p *Purchases) isUpgrade(ctx context.Context, cur *Subscription, f subFacts) (bool, error) {
+	if cur == nil || f.status != subActive || f.refillRef == "" || f.orderID == "" ||
+		tierRank(f.product) <= tierRank(cur.Product) {
+		return false, nil
+	}
+	rec, err := p.store.PurchaseByOrder(ctx, f.store, f.orderID)
+	return rec == nil, err
 }
 
 func subPurchaseStatus(owner, status string) string {
@@ -444,7 +521,7 @@ func (p *Purchases) appleProduct(sku string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if _, isPack := packCredits[id]; isPack || id == productMonthly || id == productYearly {
+	if _, isPack := packCredits[id]; isPack || isSubscriptionProduct(id) {
 		return id, true
 	}
 	return "", false
@@ -462,7 +539,7 @@ func (p *Purchases) verifyAppleTx(jws string) (*appstore.Transaction, error) {
 }
 
 // appleSubFacts builds the facts of a verified subscription transaction.
-func (p *Purchases) appleSubFacts(tx *appstore.Transaction, product, status string, autoRenew bool) subFacts {
+func (p *Purchases) appleSubFacts(tx *appstore.Transaction, product, status string, autoRenew bool, renewal *appstore.RenewalInfo) subFacts {
 	f := subFacts{
 		store: storeApple, originalID: tx.OriginalTransactionID, product: product, status: status,
 		env: appleEnv(tx.Environment), autoRenew: autoRenew, orderID: tx.TransactionID,
@@ -476,6 +553,18 @@ func (p *Purchases) appleSubFacts(tx *appstore.Transaction, product, status stri
 	}
 	if status == subActive {
 		f.refillRef = storeApple + ":" + tx.TransactionID
+	}
+	if renewal != nil {
+		if renewal.GracePeriodExpiresDate != nil {
+			f.graceEnd = *renewal.GracePeriodExpiresDate
+		}
+		if renewal.AutoRenewProductID != "" {
+			// autoRenewProductId names the product of the next renewal (P9).
+			f.nextKnown = true
+			if next, ok := p.appleProduct(renewal.AutoRenewProductID); ok && next != product && isSubscriptionProduct(next) {
+				f.nextProduct = next
+			}
+		}
 	}
 	return f
 }
@@ -502,7 +591,7 @@ func (p *Purchases) applyAppleTx(ctx context.Context, tx *appstore.Transaction, 
 	if renewal != nil {
 		autoRenew = renewal.AutoRenewStatus == 1
 	}
-	return p.applySubscription(ctx, p.appleSubFacts(tx, product, status, autoRenew), submitter)
+	return p.applySubscription(ctx, p.appleSubFacts(tx, product, status, autoRenew, renewal), submitter)
 }
 
 // VerifyApple applies a StoreKit 2 signed transaction sent by userID.
@@ -599,7 +688,7 @@ func (p *Purchases) setAppleStatus(ctx context.Context, tx *appstore.Transaction
 	if renewal != nil {
 		autoRenew = renewal.AutoRenewStatus == 1
 	}
-	f := p.appleSubFacts(tx, product, status, autoRenew)
+	f := p.appleSubFacts(tx, product, status, autoRenew, renewal)
 	_, _, err := p.applySubscription(ctx, f, "")
 	return err
 }
@@ -636,11 +725,18 @@ func lineOrderID(sp *googleplay.SubscriptionPurchase, li googleplay.LineItem) st
 // latestOrderID is the latest successful order of our subscription line item.
 func latestOrderID(sp *googleplay.SubscriptionPurchase) string {
 	for _, li := range sp.LineItems {
-		if li.ProductID == googleSubscription {
+		if _, ok := googleProduct(li); ok {
 			return lineOrderID(sp, li)
 		}
 	}
 	return sp.LatestOrderID
+}
+
+// googleProduct maps a line item (subscription "plus"/"pro", base plan
+// "monthly"/"yearly") to the internal product id.
+func googleProduct(li googleplay.LineItem) (string, bool) {
+	id := li.ProductID + "." + li.BasePlanID
+	return id, isSubscriptionProduct(id)
 }
 
 // googleSubFacts maps a subscriptionsv2 purchase. ok is false for a state
@@ -651,24 +747,30 @@ func googleSubFacts(token string, sp *googleplay.SubscriptionPurchase) (subFacts
 		return subFacts{}, false
 	}
 	for _, li := range sp.LineItems {
-		if li.ProductID != googleSubscription {
+		product, ok := googleProduct(li)
+		if !ok {
 			continue
 		}
 		orderID := lineOrderID(sp, li)
-		var product string
-		switch li.BasePlanID {
-		case "monthly":
-			product = productMonthly
-		case "yearly":
-			product = productYearly
-		default:
-			continue
-		}
 		f := subFacts{
 			store: storeGoogle, originalID: token, product: product, status: status,
 			env: googleEnv(sp.Test), periodEnd: li.Expiry, autoRenew: li.AutoRenew,
 			orderID: orderID, token: sp.AccountID, linkedID: sp.LinkedPurchaseToken,
-			raw: rawJSON(sp),
+			raw: rawJSON(sp), nextKnown: true,
+		}
+		if status == subGrace {
+			// In grace the line item's expiry already includes the grace period.
+			f.graceEnd = li.Expiry
+		}
+		if li.DeferredProductID != "" {
+			// A deferred replacement (a downgrade) renews at the period end (P9).
+			base := li.DeferredBasePlanID
+			if base == "" {
+				base = li.BasePlanID
+			}
+			if next := li.DeferredProductID + "." + base; isSubscriptionProduct(next) && next != product {
+				f.nextProduct = next
+			}
 		}
 		if sp.State == "SUBSCRIPTION_STATE_CANCELED" {
 			f.autoRenew = false
@@ -676,7 +778,7 @@ func googleSubFacts(token string, sp *googleplay.SubscriptionPurchase) (subFacts
 		if status == subActive && orderID != "" {
 			f.refillRef = storeGoogle + ":" + orderID
 		}
-		if product == productYearly && !li.Expiry.IsZero() {
+		if isYearly(product) && !li.Expiry.IsZero() {
 			f.periodStart = li.Expiry.AddDate(-1, 0, 0)
 		}
 		return f, true
@@ -699,7 +801,7 @@ func (p *Purchases) applyGoogleSubscription(ctx context.Context, token string, s
 		return "", err
 	}
 	if owner != "" && !sp.Acknowledged && f.status == subActive {
-		if err := p.google.AcknowledgeSubscription(ctx, googleSubscription, token); err != nil {
+		if err := p.google.AcknowledgeSubscription(ctx, googleSubscriptionID(f.product), token); err != nil {
 			log.Printf("credits: google acknowledge failed token=%s: %v", token, err)
 		}
 	}
@@ -761,7 +863,7 @@ func (p *Purchases) VerifyGoogle(ctx context.Context, userID, productID, purchas
 		if status, err = p.applyGoogleProduct(ctx, productID, purchaseToken, pp, userID); err != nil {
 			return PurchaseResult{}, err
 		}
-	case productID == googleSubscription || productID == productMonthly || productID == productYearly:
+	case productID == string(TierPlus) || productID == string(TierPro) || isSubscriptionProduct(productID):
 		sp, err := p.google.Subscription(ctx, purchaseToken)
 		if errors.Is(err, googleplay.ErrNotFound) {
 			return PurchaseResult{}, fmt.Errorf("%w: %v", ErrPurchaseInvalid, err)
@@ -904,7 +1006,7 @@ func (p *Purchases) Resync(ctx context.Context, s Subscription) error {
 		if renewal != nil {
 			autoRenew = renewal.AutoRenewStatus == 1
 		}
-		f := p.appleSubFacts(tx, product, status, autoRenew)
+		f := p.appleSubFacts(tx, product, status, autoRenew, renewal)
 		_, _, err = p.applySubscription(ctx, f, "")
 		return err
 	case storeGoogle:
@@ -947,7 +1049,7 @@ const (
 // store-level failures are returned.
 func (p *Purchases) RunRefill(ctx context.Context) (refilled, resynced int, err error) {
 	now := p.now()
-	due, err := p.store.DueRefills(ctx, now, productYearly, refillBatch)
+	due, err := p.store.DueRefills(ctx, now, refillBatch)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -999,7 +1101,7 @@ func (p *Purchases) refillSubscription(ctx context.Context, s Subscription, now 
 		}
 		ref := s.Store + ":" + s.OriginalID + ":" + s.NextRefill.UTC().Format("2006-01")
 		next := refillAt(*s.RefillAnchor, s.RefillCount+2)
-		taken, err := p.store.RefillStep(ctx, s, now, ref, p.cfg.PlanMonthly, tierOf(s.Product), next)
+		taken, err := p.store.RefillStep(ctx, s, now, ref, p.cfg.PlanCredits[tierOf(s.Product)], tierOf(s.Product), next)
 		if err != nil {
 			return steps, err
 		}

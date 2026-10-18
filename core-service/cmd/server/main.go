@@ -217,7 +217,7 @@ func main() {
 	}
 	purchases := credit.NewPurchases(creditStore, creditService, appleReplay, appleAPI, googlePub,
 		credit.PurchasesConfig{
-			PlanMonthly:        cfg.Credits.PlanPro, // Task 5 makes this per tier
+			PlanCredits:        map[credit.Tier]int{credit.TierPlus: cfg.Credits.PlanPlus, credit.TierPro: cfg.Credits.PlanPro},
 			AppleProductPrefix: cfg.AppStore.ProductPrefix,
 			PackageName:        cfg.GooglePlay.PackageName,
 		}, time.Now)

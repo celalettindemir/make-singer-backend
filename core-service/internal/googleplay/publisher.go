@@ -112,6 +112,10 @@ type subscriptionV2 struct {
 		OfferDetails            struct {
 			BasePlanID string `json:"basePlanId"`
 		} `json:"offerDetails"`
+		DeferredItemReplacement *struct {
+			ProductID  string `json:"productId"`
+			BasePlanID string `json:"basePlanId"`
+		} `json:"deferredItemReplacement"`
 		AutoRenewingPlan *struct {
 			AutoRenewEnabled bool `json:"autoRenewEnabled"`
 		} `json:"autoRenewingPlan"`
@@ -140,6 +144,9 @@ func (p *Publisher) Subscription(ctx context.Context, token string) (*Subscripti
 				return nil, fmt.Errorf("googleplay: expiryTime: %w", err)
 			}
 			item.Expiry = t
+		}
+		if d := li.DeferredItemReplacement; d != nil {
+			item.DeferredProductID, item.DeferredBasePlanID = d.ProductID, d.BasePlanID
 		}
 		if li.AutoRenewingPlan != nil {
 			item.AutoRenew = li.AutoRenewingPlan.AutoRenewEnabled

@@ -148,7 +148,7 @@ func newPurchaseEnv(t *testing.T) *purchaseEnv {
 	svc := NewService(s, Settings{Enforce: true, PlanCredits: map[Tier]int{TierPlus: 300, TierPro: 300}, Costs: Costs{RenderMix: 12}, RefundGrace: 168 * time.Hour})
 	svc.now = func() time.Time { return e.p.now() }
 	e.p = NewPurchases(s, svc, e.apple, e.api, e.google,
-		PurchasesConfig{PlanMonthly: 300, AppleProductPrefix: testPrefix, PackageName: "com.test.app"},
+		PurchasesConfig{PlanCredits: map[Tier]int{TierPlus: 300, TierPro: 300}, AppleProductPrefix: testPrefix, PackageName: "com.test.app"},
 		func() time.Time { return testNow })
 	return e
 }
@@ -280,7 +280,7 @@ func TestVerifyApple_TokenOfOtherLivingUser409(t *testing.T) {
 	if n := count(t, e.s, `SELECT count(*) FROM kredi.hareket`); n != 0 {
 		t.Fatalf("movements = %d, want 0", n)
 	}
-	sub := subTx("tx-s", "orig-s", productMonthly, tokA, testNow, 1)
+	sub := subTx("tx-s", "orig-s", productProMonthly, tokA, testNow, 1)
 	if _, err := e.p.VerifyApple(ctx, b, e.apple.sign(sub)); !errors.Is(err, ErrOwnedByOther) {
 		t.Fatalf("subscription err = %v, want ErrOwnedByOther", err)
 	}
@@ -293,7 +293,7 @@ func TestVerifyApple_TokenOfDeletedUserSubmitterClaims(t *testing.T) {
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	a, tokA := e.user(t)
-	jws := e.apple.sign(subTx("tx-1", "orig-1", productMonthly, tokA, testNow.AddDate(0, 0, -3), 1))
+	jws := e.apple.sign(subTx("tx-1", "orig-1", productProMonthly, tokA, testNow.AddDate(0, 0, -3), 1))
 	if res, err := e.p.VerifyApple(ctx, a, jws); err != nil || res.Status != PurchaseCredited {
 		t.Fatalf("owner subscribe: %+v %v", res, err)
 	}
@@ -319,11 +319,11 @@ func TestVerifyApple_NoTokenSubscriptionByOriginal(t *testing.T) {
 	a, tokA := e.user(t)
 	b, _ := e.user(t)
 	start := testNow.AddDate(0, -1, 0)
-	if _, err := e.p.VerifyApple(ctx, a, e.apple.sign(subTx("tx-1", "orig-1", productMonthly, tokA, start, 1))); err != nil {
+	if _, err := e.p.VerifyApple(ctx, a, e.apple.sign(subTx("tx-1", "orig-1", productProMonthly, tokA, start, 1))); err != nil {
 		t.Fatal(err)
 	}
 	// A resubscription from the store settings carries no token.
-	renewal := e.apple.sign(subTx("tx-2", "orig-1", productMonthly, "", testNow.Add(-time.Hour), 1))
+	renewal := e.apple.sign(subTx("tx-2", "orig-1", productProMonthly, "", testNow.Add(-time.Hour), 1))
 	if _, err := e.p.VerifyApple(ctx, b, renewal); !errors.Is(err, ErrOwnedByOther) {
 		t.Fatalf("other user: %v, want ErrOwnedByOther", err)
 	}
@@ -367,7 +367,7 @@ func TestVerifyApple_SandboxRecordedAsSandbox(t *testing.T) {
 	if res, err := e.p.VerifyApple(ctx, u, e.apple.sign(pk)); err != nil || res.Status != PurchaseCredited {
 		t.Fatalf("sandbox pack: %+v %v", res, err)
 	}
-	sb := subTx("tx-x", "orig-x", productMonthly, tok, testNow, 1)
+	sb := subTx("tx-x", "orig-x", productProMonthly, tok, testNow, 1)
 	sb.Environment = "Xcode"
 	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(sb)); err != nil {
 		t.Fatal(err)
@@ -383,7 +383,7 @@ func TestVerifyApple_SandboxRecordedAsSandbox(t *testing.T) {
 func TestVerifyApple_MonthlySubscribeSetsPlan300(t *testing.T) {
 	e := newPurchaseEnv(t)
 	u, tok := e.user(t)
-	res, err := e.p.VerifyApple(context.Background(), u, e.apple.sign(subTx("tx-m", "orig-m", productMonthly, tok, testNow, 1)))
+	res, err := e.p.VerifyApple(context.Background(), u, e.apple.sign(subTx("tx-m", "orig-m", productProMonthly, tok, testNow, 1)))
 	if err != nil || res.Status != PurchaseCredited || res.Summary.Balance != 300 {
 		t.Fatalf("got %+v %v", res, err)
 	}
@@ -400,12 +400,12 @@ func TestVerifyApple_YearlySetsAnchorAndNextRefill(t *testing.T) {
 	e := newPurchaseEnv(t)
 	u, tok := e.user(t)
 	start := time.Date(2027, 1, 31, 10, 0, 0, 0, time.UTC)
-	res, err := e.p.VerifyApple(context.Background(), u, e.apple.sign(subTx("tx-y", "orig-y", productYearly, tok, start, 12)))
+	res, err := e.p.VerifyApple(context.Background(), u, e.apple.sign(subTx("tx-y", "orig-y", productProYearly, tok, start, 12)))
 	if err != nil || res.Summary.Balance != 300 {
 		t.Fatalf("got %+v %v", res, err)
 	}
 	sub := e.sub(t, storeApple, "orig-y")
-	if sub.Product != productYearly || sub.RefillAnchor == nil || !sub.RefillAnchor.Equal(start) ||
+	if sub.Product != productProYearly || sub.RefillAnchor == nil || !sub.RefillAnchor.Equal(start) ||
 		sub.NextRefill == nil || !sub.NextRefill.Equal(time.Date(2027, 2, 28, 10, 0, 0, 0, time.UTC)) || sub.RefillCount != 0 {
 		t.Fatalf("schedule = %+v", sub)
 	}
@@ -414,7 +414,7 @@ func TestVerifyApple_YearlySetsAnchorAndNextRefill(t *testing.T) {
 func TestVerifyApple_ExpiredRestoreRecordedNoCredit(t *testing.T) {
 	e := newPurchaseEnv(t)
 	u, tok := e.user(t)
-	old := subTx("tx-old", "orig-old", productMonthly, tok, testNow.AddDate(0, -3, 0), 1)
+	old := subTx("tx-old", "orig-old", productProMonthly, tok, testNow.AddDate(0, -3, 0), 1)
 	res, err := e.p.VerifyApple(context.Background(), u, e.apple.sign(old))
 	if err != nil || res.Status != PurchaseRecorded || res.Summary.Balance != 0 {
 		t.Fatalf("got %+v %v", res, err)
@@ -501,7 +501,7 @@ func TestVerifyGoogle_SubscriptionAcknowledges(t *testing.T) {
 		t.Fatalf("acked = %v", e.google.acked)
 	}
 	sub := e.sub(t, storeGoogle, "stok")
-	if sub.Product != productYearly || sub.Status != subActive || sub.NextRefill == nil {
+	if sub.Product != productProYearly || sub.Status != subActive || sub.NextRefill == nil {
 		t.Fatalf("subscription = %+v", sub)
 	}
 	if _, err := e.p.VerifyGoogle(context.Background(), u, "pro", "stok"); err != nil || len(e.google.acked) != 1 {
@@ -528,7 +528,7 @@ func TestVerifyGoogle_LinkedTokenKeepsOwner(t *testing.T) {
 	if err != nil || res.Status != PurchaseCredited {
 		t.Fatalf("owner: %+v %v", res, err)
 	}
-	if sub := e.sub(t, storeGoogle, "t2"); sub.UserID == nil || *sub.UserID != a || sub.Product != productYearly {
+	if sub := e.sub(t, storeGoogle, "t2"); sub.UserID == nil || *sub.UserID != a || sub.Product != productProYearly {
 		t.Fatalf("t2 = %+v", sub)
 	}
 	if old := e.sub(t, storeGoogle, "t1"); old.Status != subExpired {
@@ -541,13 +541,13 @@ func TestApplyApple_DidRenewRefillsByTransaction(t *testing.T) {
 	ctx := context.Background()
 	u, tok := e.user(t)
 	start := testNow.AddDate(0, -1, 0).Add(time.Hour)
-	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(subTx("tx-1", "orig-1", productMonthly, tok, start, 1))); err != nil {
+	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(subTx("tx-1", "orig-1", productProMonthly, tok, start, 1))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.s.Debit(ctx, u, "render", "job-1", 250, Meta{Reason: "render_stems"}, e.p.now()); err != nil {
 		t.Fatal(err)
 	}
-	renew := e.apple.sign(subTx("tx-2", "orig-1", productMonthly, tok, start.AddDate(0, 1, 0), 1))
+	renew := e.apple.sign(subTx("tx-2", "orig-1", productProMonthly, tok, start.AddDate(0, 1, 0), 1))
 	for range 2 {
 		if err := e.p.ApplyAppleNotification(ctx, notify("DID_RENEW", "", renew)); err != nil {
 			t.Fatal(err)
@@ -568,7 +568,7 @@ func TestApplyApple_FailToRenewGraceThenExpiredZeroesPlan(t *testing.T) {
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
-	tx := subTx("tx-1", "orig-1", productMonthly, tok, testNow.AddDate(0, 0, -20), 1)
+	tx := subTx("tx-1", "orig-1", productProMonthly, tok, testNow.AddDate(0, 0, -20), 1)
 	jws := e.apple.sign(tx)
 	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
 		t.Fatal(err)
@@ -639,7 +639,7 @@ func TestApplyApple_RefundPackClawsBackNegative(t *testing.T) {
 func TestApplyApple_OwnerlessRenewalRecordedNoCredit(t *testing.T) {
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
-	jws := e.apple.sign(subTx("tx-o", "orig-o", productMonthly, "", testNow.Add(-time.Hour), 1))
+	jws := e.apple.sign(subTx("tx-o", "orig-o", productProMonthly, "", testNow.Add(-time.Hour), 1))
 	if err := e.p.ApplyAppleNotification(ctx, notify("DID_RENEW", "", jws)); err != nil {
 		t.Fatal(err)
 	}
@@ -675,14 +675,14 @@ func TestApplyApple_ProductSwitchResetsPlanAndAnchor(t *testing.T) {
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
-	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(subTx("tx-1", "orig-1", productMonthly, tok, testNow.AddDate(0, 0, -10), 1))); err != nil {
+	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(subTx("tx-1", "orig-1", productProMonthly, tok, testNow.AddDate(0, 0, -10), 1))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.s.Debit(ctx, u, "render", "job-1", 62, Meta{Reason: "render_stems"}, e.p.now()); err != nil {
 		t.Fatal(err)
 	}
 	switchAt := testNow.Add(-time.Hour)
-	up := e.apple.sign(subTx("tx-2", "orig-1", productYearly, tok, switchAt, 12))
+	up := e.apple.sign(subTx("tx-2", "orig-1", productProYearly, tok, switchAt, 12))
 	if err := e.p.ApplyAppleNotification(ctx, notify("DID_CHANGE_RENEWAL_PREF", "UPGRADE", up)); err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +690,7 @@ func TestApplyApple_ProductSwitchResetsPlanAndAnchor(t *testing.T) {
 		t.Fatalf("plan = %d, want 300", a.Plan)
 	}
 	sub := e.sub(t, storeApple, "orig-1")
-	if sub.Product != productYearly || sub.RefillAnchor == nil || !sub.RefillAnchor.Equal(switchAt) ||
+	if sub.Product != productProYearly || sub.RefillAnchor == nil || !sub.RefillAnchor.Equal(switchAt) ||
 		sub.RefillCount != 0 || sub.NextRefill == nil || !sub.NextRefill.Equal(refillAt(switchAt, 1)) {
 		t.Fatalf("subscription = %+v", sub)
 	}
@@ -813,7 +813,7 @@ func TestResync_AppleStatusExpiredZeroesPlan(t *testing.T) {
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
-	tx := subTx("tx-1", "orig-1", productMonthly, tok, testNow.AddDate(0, 0, -20), 1)
+	tx := subTx("tx-1", "orig-1", productProMonthly, tok, testNow.AddDate(0, 0, -20), 1)
 	jws := e.apple.sign(tx)
 	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
 		t.Fatal(err)
@@ -835,17 +835,23 @@ func TestVerifyApple_RestoreDuringGraceKeepsPlan(t *testing.T) {
 	ctx := context.Background()
 	u, tok := e.user(t)
 	// Active when first sent; its period has ended by the restore.
-	jws := e.apple.sign(subTx("tx-1", "orig-1", productMonthly, tok, testNow.AddDate(0, -1, 0).Add(time.Hour), 1))
+	jws := e.apple.sign(subTx("tx-1", "orig-1", productProMonthly, tok, testNow.AddDate(0, -1, 0).Add(time.Hour), 1))
 	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.p.ApplyAppleNotification(ctx, notify("DID_FAIL_TO_RENEW", "GRACE_PERIOD", jws)); err != nil {
+	e.apple.renewals["rn-1"] = &appstore.RenewalInfo{AutoRenewStatus: 1, GracePeriodExpiresDate: tp(testNow.Add(72 * time.Hour))}
+	grace := notify("DID_FAIL_TO_RENEW", "GRACE_PERIOD", jws)
+	grace.SignedRenewalInfo = "rn-1"
+	if err := e.p.ApplyAppleNotification(ctx, grace); err != nil {
 		t.Fatal(err)
 	}
 	e.p.now = func() time.Time { return testNow.Add(2 * time.Hour) }
 	res, err := e.p.VerifyApple(ctx, u, jws)
 	if err != nil || res.Status != PurchaseRecorded {
 		t.Fatalf("restore: %+v %v", res, err)
+	}
+	if a := e.view(t, u); a.Plan != 300 {
+		t.Fatalf("plan after restore in grace = %d, want 300", a.Plan)
 	}
 	if sub := e.sub(t, storeApple, "orig-1"); sub.Status != subGrace {
 		t.Fatalf("status = %q, want ek_sure", sub.Status)
@@ -859,10 +865,10 @@ func TestVerifyApple_StaleActiveRecordedNotCredited(t *testing.T) {
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
-	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(subTx("tx-new", "orig-1", productMonthly, tok, testNow.Add(-time.Hour), 2))); err != nil {
+	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(subTx("tx-new", "orig-1", productProMonthly, tok, testNow.Add(-time.Hour), 2))); err != nil {
 		t.Fatal(err)
 	}
-	res, err := e.p.VerifyApple(ctx, u, e.apple.sign(subTx("tx-old", "orig-1", productMonthly, tok, testNow.Add(-2*time.Hour), 1)))
+	res, err := e.p.VerifyApple(ctx, u, e.apple.sign(subTx("tx-old", "orig-1", productProMonthly, tok, testNow.Add(-2*time.Hour), 1)))
 	if err != nil || res.Status != PurchaseRecorded {
 		t.Fatalf("stale: %+v %v", res, err)
 	}
@@ -881,7 +887,7 @@ func TestApplyApple_ClientThenWebhookSameTxOneRefill(t *testing.T) {
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
-	jws := e.apple.sign(subTx("tx-1", "orig-1", productMonthly, tok, testNow.Add(-time.Hour), 1))
+	jws := e.apple.sign(subTx("tx-1", "orig-1", productProMonthly, tok, testNow.Add(-time.Hour), 1))
 	if _, err := e.p.VerifyApple(ctx, u, jws); err != nil {
 		t.Fatal(err)
 	}
@@ -906,11 +912,11 @@ func TestApplyApple_RefundOfOldPeriodKeepsCurrentPlan(t *testing.T) {
 	ctx := context.Background()
 	u, tok := e.user(t)
 	start := testNow.AddDate(0, -1, 0).Add(time.Hour)
-	old := subTx("tx-1", "orig-1", productMonthly, tok, start, 1)
+	old := subTx("tx-1", "orig-1", productProMonthly, tok, start, 1)
 	if _, err := e.p.VerifyApple(ctx, u, e.apple.sign(old)); err != nil {
 		t.Fatal(err)
 	}
-	current := subTx("tx-2", "orig-1", productMonthly, tok, start.AddDate(0, 1, 0), 1)
+	current := subTx("tx-2", "orig-1", productProMonthly, tok, start.AddDate(0, 1, 0), 1)
 	if err := e.p.ApplyAppleNotification(ctx, notify("DID_RENEW", "", e.apple.sign(current))); err != nil {
 		t.Fatal(err)
 	}
@@ -1035,7 +1041,7 @@ func refundThenReplay(t *testing.T, e *purchaseEnv, u string, tx *appstore.Trans
 func TestVerifyApple_ReplayAfterRefundStaysRefunded(t *testing.T) {
 	e := newPurchaseEnv(t)
 	u, tok := e.user(t)
-	res := refundThenReplay(t, e, u, subTx("tx-1", "orig-1", productMonthly, tok, testNow.Add(-time.Hour), 1))
+	res := refundThenReplay(t, e, u, subTx("tx-1", "orig-1", productProMonthly, tok, testNow.Add(-time.Hour), 1))
 	if res.Status != PurchaseRecorded || res.Summary.Balance != 0 {
 		t.Fatalf("replay result = %+v", res)
 	}
@@ -1048,7 +1054,7 @@ func TestVerifyApple_YearlyReplayAfterRefundNoRefills(t *testing.T) {
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
-	res := refundThenReplay(t, e, u, subTx("tx-y", "orig-y", productYearly, tok, testNow.Add(-time.Hour), 12))
+	res := refundThenReplay(t, e, u, subTx("tx-y", "orig-y", productProYearly, tok, testNow.Add(-time.Hour), 12))
 	if res.Summary.Balance != 0 {
 		t.Fatalf("plan after replay = %d", res.Summary.Balance)
 	}
@@ -1096,9 +1102,9 @@ func TestVerifyApple_ResubscribeAfterRefundReactivates(t *testing.T) {
 	e := newPurchaseEnv(t)
 	ctx := context.Background()
 	u, tok := e.user(t)
-	first := subTx("tx-1", "orig-1", productMonthly, tok, testNow.AddDate(0, 0, -5), 1)
+	first := subTx("tx-1", "orig-1", productProMonthly, tok, testNow.AddDate(0, 0, -5), 1)
 	refundThenReplay(t, e, u, first)
-	later := subTx("tx-2", "orig-1", productMonthly, tok, testNow.Add(-time.Minute), 1)
+	later := subTx("tx-2", "orig-1", productProMonthly, tok, testNow.Add(-time.Minute), 1)
 	res, err := e.p.VerifyApple(ctx, u, e.apple.sign(later))
 	if err != nil || res.Status != PurchaseCredited || res.Summary.Balance != 300 {
 		t.Fatalf("resubscribe: %+v %v", res, err)
