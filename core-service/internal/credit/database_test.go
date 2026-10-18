@@ -134,7 +134,7 @@ func TestMigrations_003CreatesLotTables(t *testing.T) {
 	}
 	for _, c := range [][2]string{
 		{"hesap", "borc"}, {"hareket", "tutar"}, {"hareket", "yapan"}, {"hareket", "notu"},
-		{"hareket", "kampanya_id"}, {"abonelik", "sonraki_urun"}, {"dilim", "sure_islendi"},
+		{"hareket", "kampanya_id"}, {"hareket", "proje_id"}, {"hareket", "kademe"}, {"dilim", "iade"}, {"abonelik", "sonraki_urun"}, {"dilim", "sure_islendi"},
 	} {
 		if !column(c[0], c[1]) {
 			t.Errorf("missing column kredi.%s.%s", c[0], c[1])
@@ -166,6 +166,15 @@ func TestMigrations_003CreatesLotTables(t *testing.T) {
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO kredi.hareket (kullanici_id, tur, ref, tutar) VALUES ($1, 'hediye', 'm003', 5)`, u); err == nil {
 		t.Error("hediye must be rejected")
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO kredi.hareket (kullanici_id, tur, ref, tutar, kademe) VALUES ($1, 'plan_dolum', 'm003k', 5, 'gold')`, u); err == nil {
+		t.Error("an unknown tier must be rejected")
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO kredi.hareket (kullanici_id, tur, ref, tutar, kademe, proje_id)
+		VALUES ($1, 'plan_dolum', 'm003t', 5, 'pro', gen_random_uuid())`, u); err != nil {
+		t.Errorf("tier pro with a project id must be accepted: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO kredi.dilim (kullanici_id, kaynak, ref, ilk_miktar, kalan) VALUES ($1, 'iade', 'm003', 5, 5)`, u); err == nil {

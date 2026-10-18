@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 var lotNow = time.Date(2031, 3, 10, 12, 0, 0, 0, time.UTC)
@@ -607,5 +609,164 @@ func TestStore_DebitRecordsProjectAndReason(t *testing.T) {
 	}
 	if n := count(t, s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'soz' AND proje_id IS NULL`); n != 1 {
 		t.Fatalf("soz rows without project = %d, want 1", n)
+	}
+}
+
+func TestStore_DebitBlockedWhileInDebt(t *testing.T) {
+	s, u := newStore(t)
+	ctx := context.Background()
+	grant(t, s, u, "plan_dolum", "p", LotPlan, 300, at(10*day))
+	setDebt(t, s, u, 70)
+	var ie *InsufficientError
+	_, err := s.Debit(ctx, u, "render", "r1", 12, Meta{}, lotNow)
+	if !errors.As(err, &ie) || ie.Required != 12 || ie.Balance != 230 {
+		t.Fatalf("debit in debt: %v, want insufficient 12/230", err)
+	}
+	if remain(t, s, LotPlan, "p") != 300 || count(t, s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'render'`) != 0 {
+		t.Fatal("a blocked debit wrote something")
+	}
+	if _, err := s.SpendAction(ctx, u, OpLyricsGenerate, "a", 2, time.Hour, 12, lotNow); !errors.As(err, &ie) {
+		t.Fatalf("lyrics action in debt: %v", err)
+	}
+	// An admin deduction is not a spend and still works.
+	if _, err := s.DeductAdmin(ctx, u, "d1", 10, "a@b.c", "n", lotNow); err != nil {
+		t.Fatalf("admin deduct in debt: %v", err)
+	}
+	// A grant pays the debt, then spending works again.
+	grant(t, s, u, "paket", "b", LotPack, 100, nil)
+	if _, err := s.Debit(ctx, u, "render", "r2", 12, Meta{}, lotNow); err != nil {
+		t.Fatalf("debit after the debt was paid: %v", err)
+	}
+}
+
+func TestStore_RefundGraceLotIsNotAPlanLot(t *testing.T) {
+	s, u := newStore(t)
+	ctx := context.Background()
+	grant(t, s, u, "plan_dolum", "p1", LotPlan, 50, at(day))
+	if _, err := s.Debit(ctx, u, "render", "r1", 12, Meta{}, lotNow); err != nil {
+		t.Fatal(err)
+	}
+	later := lotNow.Add(2 * day)
+	if _, ok, err := s.Refund(ctx, u, "render", "render_iade", "r1", later, 168*time.Hour); err != nil || !ok {
+		t.Fatalf("refund: ok=%v err=%v", ok, err)
+	}
+	graceEnd := later.Add(168 * time.Hour)
+	if n := count(t, s, `SELECT count(*) FROM kredi.dilim WHERE iade AND kaynak = 'plan'`); n != 1 {
+		t.Fatalf("refund plan lots = %d, want 1", n)
+	}
+	// The new period's plan lot is the only plan lot P3 sees.
+	if err := s.GrantPlan(ctx, u, "p2", 300, TierPlus, later.Add(30*day), later); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM kredi.hareket WHERE tur = 'plan_bitis'`); n != 0 {
+		t.Fatalf("GrantPlan ended the refund lot (plan_bitis rows = %d)", n)
+	}
+	if b := balance(t, s, u, later); b != 312 {
+		t.Fatalf("balance = %d, want 312", b)
+	}
+	if err := s.ExtendPlanLot(ctx, u, later.Add(40*day)); err != nil {
+		t.Fatal(err)
+	}
+	var end time.Time
+	if err := s.pool.QueryRow(ctx, `SELECT bitis FROM kredi.dilim WHERE iade`).Scan(&end); err != nil || !end.Equal(graceEnd) {
+		t.Fatalf("refund lot end = %v (%v), want %v", end, err, graceEnd)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT bitis FROM kredi.dilim WHERE ref = 'p2'`).Scan(&end); err != nil || !end.Equal(later.Add(40*day)) {
+		t.Fatalf("plan lot end = %v (%v), want extended", end, err)
+	}
+	// Ending the plan leaves the refund lot alone.
+	if _, err := s.EndPlanLots(ctx, u, "plan_bitis", "e1", later); err != nil {
+		t.Fatal(err)
+	}
+	if b := balance(t, s, u, later); b != 12 {
+		t.Fatalf("balance after plan end = %d, want 12 (the refund lot)", b)
+	}
+}
+
+func TestStore_ExtendPlanLotOnlyMovesLater(t *testing.T) {
+	s, u := newStore(t)
+	ctx := context.Background()
+	grant(t, s, u, "plan_dolum", "p", LotPlan, 300, at(10*day))
+	if err := s.ExtendPlanLot(ctx, u, lotNow.Add(5*day)); err != nil {
+		t.Fatal(err)
+	}
+	var end time.Time
+	if err := s.pool.QueryRow(ctx, `SELECT bitis FROM kredi.dilim WHERE ref = 'p'`).Scan(&end); err != nil || !end.Equal(lotNow.Add(10*day)) {
+		t.Fatalf("end = %v (%v), want unchanged", end, err)
+	}
+	if err := s.ExtendPlanLot(ctx, u, lotNow.Add(10*day)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT bitis FROM kredi.dilim WHERE ref = 'p'`).Scan(&end); err != nil || !end.Equal(lotNow.Add(10*day)) {
+		t.Fatalf("equal end moved: %v (%v)", end, err)
+	}
+}
+
+func TestStore_ExpireLotsDoesNotRecreateDeletedAccount(t *testing.T) {
+	s, u := newStore(t)
+	ctx := context.Background()
+	grant(t, s, u, "kampanya", "k", LotCampaign, 5, at(-time.Hour))
+	if _, err := s.pool.Exec(ctx, `DELETE FROM kredi.hesap WHERE kullanici_id = $1::uuid`, u); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ExpireLots(ctx, lotNow, 500); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, s, `SELECT count(*) FROM kredi.hesap WHERE kullanici_id = $1::uuid`, u); n != 0 {
+		t.Fatalf("the sweep recreated the account (%d rows)", n)
+	}
+}
+
+func TestStore_ExpireLotsSkipsBadLotAndContinues(t *testing.T) {
+	s, u := newStore(t)
+	other, good := uuid.NewString(), uuid.NewString()
+	ctx := context.Background()
+	grant(t, s, u, "kampanya", "bad", LotCampaign, 5, at(-3*time.Hour))
+	grant(t, s, good, "kampanya", "ok", LotCampaign, 7, at(-time.Hour))
+	var badID string
+	if err := s.pool.QueryRow(ctx, `SELECT id::text FROM kredi.dilim WHERE ref = 'bad'`).Scan(&badID); err != nil {
+		t.Fatal(err)
+	}
+	// Poison: the expiry movement of the bad lot already belongs to someone else.
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO kredi.hareket (kullanici_id, tur, ref, tutar) VALUES ($1::uuid, 'kampanya_sure', $2, -1)`, other, badID); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.ExpireLots(ctx, lotNow, 500)
+	if err != nil || n != 1 {
+		t.Fatalf("sweep = %d, %v; want 1 lot swept and no error", n, err)
+	}
+	if count(t, s, `SELECT count(*) FROM kredi.dilim WHERE ref = 'ok' AND sure_islendi`) != 1 {
+		t.Fatal("the good lot behind the bad one was not swept")
+	}
+}
+
+func TestStore_DebitTiesNoExpiryAdminBeforePack(t *testing.T) {
+	s, u := newStore(t)
+	grant(t, s, u, "paket", "b", LotPack, 10, nil)
+	grant(t, s, u, "yonetici", "a", LotAdmin, 10, nil)
+	lots, err := s.Lots(context.Background(), u, lotNow)
+	if err != nil || len(lots) != 2 || lots[0].Source != LotAdmin || lots[1].Source != LotPack {
+		t.Fatalf("Lots = %+v, %v; want admin then pack", lots, err)
+	}
+	if _, err := s.Debit(context.Background(), u, "render", "r1", 10, Meta{}, lotNow); err != nil {
+		t.Fatal(err)
+	}
+	if remain(t, s, LotAdmin, "a") != 0 || remain(t, s, LotPack, "b") != 10 {
+		t.Fatal("pack was spent before the admin lot")
+	}
+}
+
+func TestStore_DebitFinalTieBreakIsLotID(t *testing.T) {
+	s, u := newStore(t)
+	end := at(5 * day)
+	grant(t, s, u, "plan_dolum", "p-first-id", LotPlan, 10, end)
+	grant(t, s, u, "plan_dolum", "a-later-id", LotPlan, 10, end)
+	if _, err := s.Debit(context.Background(), u, "render", "r1", 10, Meta{}, lotNow); err != nil {
+		t.Fatal(err)
+	}
+	// Same source and end: the lot written first (lower id) is spent first.
+	if remain(t, s, LotPlan, "p-first-id") != 0 || remain(t, s, LotPlan, "a-later-id") != 10 {
+		t.Fatal("the lower lot id was not spent first")
 	}
 }

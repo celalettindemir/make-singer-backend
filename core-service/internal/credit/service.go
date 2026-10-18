@@ -212,7 +212,7 @@ func (s *Service) HasPro(ctx context.Context, userID string) (bool, error) {
 			return false, err
 		}
 		for _, l := range lots {
-			if l.Source == LotPlan {
+			if l.Source == LotPlan && !l.Refund {
 				return true, nil
 			}
 		}

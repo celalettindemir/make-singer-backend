@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -54,6 +55,9 @@ type Lot struct {
 	Source    LotSource
 	Amount    int
 	ExpiresAt *time.Time
+	// Refund marks a grace lot a refund created (P1). It is never the plan
+	// lot of P3 and never a campaign gift.
+	Refund bool
 }
 
 // liveLot is the predicate of a lot that counts: not swept or ended, and
@@ -110,6 +114,9 @@ type movement struct {
 	reason           string
 	projectID        string
 	tier             Tier
+	// allowDebt lets the spend through while the account owes debt (admin
+	// deductions only).
+	allowDebt bool
 }
 
 // Meta is the extra data a debit records on its movement: the operation
@@ -226,6 +233,17 @@ func spendTx(ctx context.Context, tx pgx.Tx, m movement, now time.Time) (balance
 	if bal < m.amount {
 		return bal, true, nil
 	}
+	if !m.allowDebt {
+		// P2 / R-CRD-12: nothing is spent while debt is owed.
+		var debt int
+		if err := tx.QueryRow(ctx,
+			`SELECT COALESCE((SELECT borc FROM kredi.hesap WHERE kullanici_id = $1::text::uuid), 0)`, m.userID).Scan(&debt); err != nil {
+			return 0, false, fmt.Errorf("could not read the debt: %w", err)
+		}
+		if debt > 0 {
+			return bal, true, nil
+		}
+	}
 	amount := m.amount
 	m.amount = -amount
 	id, err := insertMovement(ctx, tx, m)
@@ -275,7 +293,7 @@ func (s *PostgresStore) Debit(ctx context.Context, userID, tur, ref string, amou
 // (yonetici). It gives ErrBalanceTooLow when the balance would go below 0.
 func (s *PostgresStore) DeductAdmin(ctx context.Context, userID, ref string, amount int, by, note string, now time.Time) (int, error) {
 	bal, short, err := s.spend(ctx,
-		movement{userID: userID, tur: turYonetici, ref: ref, amount: amount, by: by, note: note}, now)
+		movement{userID: userID, tur: turYonetici, ref: ref, amount: amount, by: by, note: note, allowDebt: true}, now)
 	if err != nil {
 		return 0, err
 	}
@@ -376,8 +394,8 @@ func (s *PostgresStore) Refund(ctx context.Context, userID, debitTur, refundTur,
 			}
 			var graceID int64
 			if err := tx.QueryRow(ctx, `
-				INSERT INTO kredi.dilim (kullanici_id, kaynak, ref, ilk_miktar, kalan, bitis)
-				VALUES ($1::text::uuid, $2, $3, $4, $4, $5) RETURNING id`,
+				INSERT INTO kredi.dilim (kullanici_id, kaynak, ref, ilk_miktar, kalan, bitis, iade)
+				VALUES ($1::text::uuid, $2, $3, $4, $4, $5, true) RETURNING id`,
 				userID, p.source, ref+":"+strconv.FormatInt(p.lotID, 10), p.amount, now.Add(grace)).Scan(&graceID); err != nil {
 				return fmt.Errorf("could not write the refund lot: %w", err)
 			}
@@ -463,7 +481,7 @@ func grantTx(ctx context.Context, tx pgx.Tx, userID, tur, ref string, g Grant, n
 func endLivePlan(ctx context.Context, tx pgx.Tx, userID, ref string, now time.Time) error {
 	var live bool
 	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM kredi.dilim WHERE `+liveLot+` AND kaynak = 'plan')`, userID, now).Scan(&live); err != nil {
+		`SELECT EXISTS(SELECT 1 FROM kredi.dilim WHERE `+liveLot+` AND kaynak = 'plan' AND NOT iade)`, userID, now).Scan(&live); err != nil {
 		return fmt.Errorf("could not read the plan lots: %w", err)
 	}
 	if !live {
@@ -518,7 +536,7 @@ func endPlanLotsTx(ctx context.Context, tx pgx.Tx, userID, tur, ref string, now 
 	}
 	rows, err := tx.Query(ctx, `
 		SELECT id, kalan FROM kredi.dilim
-		WHERE `+liveLot+` AND kaynak = 'plan' ORDER BY id FOR UPDATE`, userID, now)
+		WHERE `+liveLot+` AND kaynak = 'plan' AND NOT iade ORDER BY id FOR UPDATE`, userID, now)
 	if err != nil {
 		return 0, fmt.Errorf("could not read the plan lots: %w", err)
 	}
@@ -576,8 +594,9 @@ func (s *PostgresStore) ExtendPlanLot(ctx context.Context, userID string, until 
 		if _, err := tx.Exec(ctx, `
 			UPDATE kredi.dilim SET bitis = $2
 			WHERE id = (SELECT id FROM kredi.dilim
-			            WHERE kullanici_id = $1::text::uuid AND kaynak = 'plan' AND NOT sure_islendi
-			            ORDER BY bitis DESC NULLS FIRST, id DESC LIMIT 1)`, userID, until); err != nil {
+			            WHERE kullanici_id = $1::text::uuid AND kaynak = 'plan' AND NOT iade AND NOT sure_islendi
+			            ORDER BY bitis DESC NULLS FIRST, id DESC LIMIT 1)
+			  AND bitis IS NOT NULL AND bitis < $2`, userID, until); err != nil {
 			return fmt.Errorf("could not extend the plan lot: %w", err)
 		}
 		return nil
@@ -676,7 +695,10 @@ func (s *PostgresStore) ExpireLots(ctx context.Context, now time.Time, limit int
 	for _, d := range lots {
 		did := false
 		err := s.inTx(ctx, func(tx pgx.Tx) error {
-			if _, err := lockAccount(ctx, tx, d.userID, true); err != nil {
+			if _, err := lockAccount(ctx, tx, d.userID, false); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return nil // deleted user: never recreate the account
+				}
 				return fmt.Errorf("could not lock the credit account: %w", err)
 			}
 			var remain int
@@ -724,7 +746,9 @@ func (s *PostgresStore) ExpireLots(ctx context.Context, now time.Time, limit int
 			return nil
 		})
 		if err != nil {
-			return swept, err
+			// One bad lot must not stop the sweep; it is retried next run.
+			log.Printf("credits: expiring lot %d failed: %v", d.id, err)
+			continue
 		}
 		if did {
 			swept++
@@ -736,7 +760,7 @@ func (s *PostgresStore) ExpireLots(ctx context.Context, now time.Time, limit int
 // Lots returns the user's live, non-empty lots in spend order.
 func (s *PostgresStore) Lots(ctx context.Context, userID string, now time.Time) ([]Lot, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT kaynak, kalan, bitis FROM kredi.dilim
+		SELECT kaynak, kalan, bitis, iade FROM kredi.dilim
 		WHERE `+liveLot+` AND kalan > 0 `+spendOrder, userID, now)
 	if err != nil {
 		return nil, fmt.Errorf("could not read the lots: %w", err)
@@ -746,7 +770,7 @@ func (s *PostgresStore) Lots(ctx context.Context, userID string, now time.Time) 
 	for rows.Next() {
 		var l Lot
 		var source string
-		if err := rows.Scan(&source, &l.Amount, &l.ExpiresAt); err != nil {
+		if err := rows.Scan(&source, &l.Amount, &l.ExpiresAt, &l.Refund); err != nil {
 			return nil, fmt.Errorf("could not read a lot: %w", err)
 		}
 		l.Source = LotSource(source)
@@ -755,13 +779,14 @@ func (s *PostgresStore) Lots(ctx context.Context, userID string, now time.Time) 
 	return out, rows.Err()
 }
 
-// Gift returns the user's latest campaign lot that is still live and not
-// empty (amount = what is left of it), or nil.
+// Gift returns the user's latest campaign gift lot that has not expired
+// (amount = what the campaign granted, even when spent), or nil. A refund
+// grace lot is never a gift.
 func (s *PostgresStore) Gift(ctx context.Context, userID string, now time.Time) (*Lot, error) {
 	var l Lot
 	err := s.pool.QueryRow(ctx, `
-		SELECT kalan, bitis FROM kredi.dilim
-		WHERE `+liveLot+` AND kaynak = 'kampanya' AND kalan > 0
+		SELECT ilk_miktar, bitis FROM kredi.dilim
+		WHERE `+liveLot+` AND kaynak = 'kampanya' AND NOT iade
 		ORDER BY id DESC LIMIT 1`, userID, now).Scan(&l.Amount, &l.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil

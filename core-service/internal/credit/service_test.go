@@ -367,16 +367,45 @@ func TestService_SummaryGiftIsLatestUnexpiredCampaignLot(t *testing.T) {
 	if got.Balance != 50 || len(got.Lots) != 1 || got.Lots[0].Source != "campaign" {
 		t.Fatalf("summary = %+v", got)
 	}
-	// Spending part of the gift lowers its amount; once it ran out of time it is gone.
+	// The gift amount is what the campaign granted: it stays after spending,
+	// even when the lot is empty, until the lot expires.
 	if _, err := s.Spend(context.Background(), u, OpRenderMix, "r1", ""); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ = s.Summary(context.Background(), u); got.Gift == nil || got.Gift.Amount != 38 {
-		t.Fatalf("gift after spend = %+v", got.Gift)
+	if got, _ = s.Summary(context.Background(), u); got.Gift == nil || got.Gift.Amount != 50 || got.Balance != 38 {
+		t.Fatalf("gift after spend = %+v balance %d", got.Gift, got.Balance)
+	}
+	if _, err := store.Debit(context.Background(), u, "soz", "s-all", 38, Meta{}, lotNow); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.Summary(context.Background(), u); got.Gift == nil || got.Gift.Amount != 50 || got.Balance != 0 || len(got.Lots) != 0 {
+		t.Fatalf("spent gift = %+v summary %+v", got.Gift, got)
 	}
 	s.now = func() time.Time { return lotNow.Add(6 * day) }
 	if got, _ = s.Summary(context.Background(), u); got.Gift != nil || got.Balance != 0 {
 		t.Fatalf("expired summary = %+v", got)
+	}
+}
+
+func TestService_SummaryRefundGraceLotIsNotAGift(t *testing.T) {
+	store, u := newStore(t)
+	ctx := context.Background()
+	grant(t, store, u, "kampanya", "g", LotCampaign, 50, at(day))
+	if _, err := store.Debit(ctx, u, "render", "r1", 12, Meta{}, lotNow); err != nil {
+		t.Fatal(err)
+	}
+	later := lotNow.Add(2 * day) // the gift lot expired
+	if _, ok, err := store.Refund(ctx, u, "render", "render_iade", "r1", later, 168*time.Hour); err != nil || !ok {
+		t.Fatalf("refund: ok=%v err=%v", ok, err)
+	}
+	s := newTestService(store, true)
+	s.now = func() time.Time { return later }
+	got, err := s.Summary(ctx, u)
+	if err != nil || got.Balance != 12 || len(got.Lots) != 1 || got.Lots[0].Source != "campaign" {
+		t.Fatalf("summary = %+v, %v", got, err)
+	}
+	if got.Gift != nil {
+		t.Fatalf("a refund grace lot was reported as a gift: %+v", got.Gift)
 	}
 }
 
@@ -493,6 +522,7 @@ func TestService_HasPro(t *testing.T) {
 		{"pro active", &Subscription{Product: "pro.monthly", Status: "aktif", PeriodEnd: future}, nil, true},
 		{"pro yearly billing issue", &Subscription{Product: "pro.yearly", Status: "odeme_sorunu", PeriodEnd: future}, nil, true},
 		{"pro grace with extended lot", &Subscription{Product: "pro.monthly", Status: "ek_sure", PeriodEnd: past}, []Lot{{Source: LotPlan, Amount: 5}}, true},
+		{"pro grace with only a refund grace lot", &Subscription{Product: "pro.monthly", Status: "ek_sure", PeriodEnd: past}, []Lot{{Source: LotPlan, Amount: 5, Refund: true}}, false},
 		{"pro grace period still open", &Subscription{Product: "pro.monthly", Status: "ek_sure", PeriodEnd: future}, nil, true},
 		{"pro grace over", &Subscription{Product: "pro.monthly", Status: "ek_sure", PeriodEnd: past}, nil, false},
 		{"pro period ended", &Subscription{Product: "pro.monthly", Status: "aktif", PeriodEnd: past}, nil, false},

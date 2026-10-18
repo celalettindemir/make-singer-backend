@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS kredi.dilim (
     kalan         integer NOT NULL CHECK (kalan >= 0 AND kalan <= ilk_miktar),
     bitis         timestamptz NULL,
     sure_islendi  boolean NOT NULL DEFAULT false,
+    -- Iade dilimi (P1): suresi dolmus dilime donen iade. Plan/hediye
+    -- sorgularinda sayilmaz.
+    iade          boolean NOT NULL DEFAULT false,
     olusturuldu   timestamptz NOT NULL DEFAULT now(),
     UNIQUE (kaynak, ref)
 );

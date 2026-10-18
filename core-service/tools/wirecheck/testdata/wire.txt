@@ -9,7 +9,7 @@ FILE	kimlik-template-giris	e33d4301873e55984131125f547c70e0c4d8475ddec6137caba26
 FILE	kimlik-template-kayit	489c424030faaf73e5abbb2eaa5941bd8df6da40e8411ebf0c8715a3a5323cb6
 FILE	kredi-migration-001	0e861d4adf9d53dd66d89fc965ffb94c3a3aceca5e1ec428448958940f2ad79b
 FILE	kredi-migration-002	874b4c4509854089bd36446281b8cb888bfadf8650f9c363fbeac3825aa034cb
-FILE	kredi-migration-003	bc139161a068c614119fca650c484ddc9f747bea07f99fa93ab8facc020f6286
+FILE	kredi-migration-003	aec747f78aa9c72b7c6e43d77610fb09c895c0abadaa0a2c1438e5ed72f800ff
 FILE	sosyal-migration-001	0cffcd1498596f72b1165c70a297b30bdab4b3d2262551d3c5b05b5e8c6d3a34
 FILE	sosyal-migration-002	2516985e441c61869256d4cd778935c947b3b4c2ec7275498506130aa917f0fc
 ROUTE	DELETE /account
@@ -83,9 +83,9 @@ STR	" "
 STR	" = $2"
 STR	" AND kalan > 0 "
 STR	" AND kalan > 0 "
-STR	" AND kaynak = 'kampanya' AND kalan > 0\n\t\tORDER BY id DESC LIMIT 1"
-STR	" AND kaynak = 'plan' ORDER BY id FOR UPDATE"
-STR	" AND kaynak = 'plan')"
+STR	" AND kaynak = 'kampanya' AND NOT iade\n\t\tORDER BY id DESC LIMIT 1"
+STR	" AND kaynak = 'plan' AND NOT iade ORDER BY id FOR UPDATE"
+STR	" AND kaynak = 'plan' AND NOT iade)"
 STR	" AND tutar < 0"
 STR	" AND tutar > 0"
 STR	" AS puan, y.id AS sira_id\n\t\t  "
@@ -1143,6 +1143,7 @@ STR	"SELECT "
 STR	"SELECT "
 STR	"SELECT %s %s\n\t\tWHERE %s\n\t\t  AND ($%d::timestamptz IS NULL OR (y.olusturma, y.id) < ($%d::timestamptz, $%d::uuid))\n\t\tORDER BY y.olusturma DESC, y.id DESC\n\t\tLIMIT $%d"
 STR	"SELECT 1 FROM kredi.hesap WHERE kullanici_id = $1::text::uuid FOR UPDATE"
+STR	"SELECT COALESCE((SELECT borc FROM kredi.hesap WHERE kullanici_id = $1::text::uuid), 0)"
 STR	"SELECT EXISTS(SELECT 1 FROM kredi.dilim WHERE "
 STR	"SELECT EXISTS(SELECT 1 FROM kredi.schema_migrations WHERE version = $1)"
 STR	"SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)"
@@ -1337,8 +1338,8 @@ STR	"\n\t\tSELECT id, kalan FROM kredi.dilim\n\t\tWHERE "
 STR	"\n\t\tSELECT id, kullanici_id::text FROM kredi.dilim\n\t\tWHERE NOT sure_islendi AND bitis IS NOT NULL AND bitis <= $1 AND kaynak <> 'paket'\n\t\tORDER BY bitis, id LIMIT $2"
 STR	"\n\t\tSELECT id, tur, ref, sebep, tutar, proje_id::text, kademe, olusturuldu\n\t\tFROM kredi.hareket\n\t\tWHERE kullanici_id = $1::text::uuid"
 STR	"\n\t\tSELECT id::text, sahip_id::text, durum, silinme IS NOT NULL, hazirlik\n\t\t  FROM sosyal.yayin WHERE id = $1"
-STR	"\n\t\tSELECT kalan, bitis FROM kredi.dilim\n\t\tWHERE "
-STR	"\n\t\tSELECT kaynak, kalan, bitis FROM kredi.dilim\n\t\tWHERE "
+STR	"\n\t\tSELECT ilk_miktar, bitis FROM kredi.dilim\n\t\tWHERE "
+STR	"\n\t\tSELECT kaynak, kalan, bitis, iade FROM kredi.dilim\n\t\tWHERE "
 STR	"\n\t\tSELECT magaza, islem_id, kullanici_id::text, urun, kredi, durum, ortam, ham_yuk\n\t\tFROM kredi.satin_alma WHERE magaza = $1 AND islem_id = $2"
 STR	"\n\t\tSELECT s.* FROM (\n\t\t  SELECT "
 STR	"\n\t\tSELECT y.baslik, y.sahip_id::text, p.kullanici_adi, p.gorunen_ad, y.sure_sn, y.dalga_formu,\n\t\t       y.onizleme_anahtari, y.tur\n\t\t  FROM sosyal.yayin y JOIN sosyal.profil p ON p.kullanici_id = y.sahip_id\n\t\t WHERE y.slug = $1 AND "
@@ -1358,8 +1359,8 @@ STR	"\n\t\t\tSELECT id, kalan FROM kredi.dilim\n\t\t\tWHERE kullanici_id = $1::t
 STR	"\n\t\t\tSELECT id, sebep, proje_id::text FROM kredi.hareket\n\t\t\tWHERE tur = $1 AND ref = $2 AND kullanici_id = $3::text::uuid"
 STR	"\n\t\t\tSELECT kullanim, olusturuldu + make_interval(secs => $2) < now()\n\t\t\tFROM kredi.eylem WHERE ref = $1"
 STR	"\n\t\t\tUPDATE kredi.abonelik SET dolum_sayisi = dolum_sayisi + 1, sonraki_dolum = $3\n\t\t\tWHERE magaza = $1 AND orijinal_islem_id = $2"
-STR	"\n\t\t\tUPDATE kredi.dilim SET bitis = $2\n\t\t\tWHERE id = (SELECT id FROM kredi.dilim\n\t\t\t            WHERE kullanici_id = $1::text::uuid AND kaynak = 'plan' AND NOT sure_islendi\n\t\t\t            ORDER BY bitis DESC NULLS FIRST, id DESC LIMIT 1)"
-STR	"\n\t\t\t\tINSERT INTO kredi.dilim (kullanici_id, kaynak, ref, ilk_miktar, kalan, bitis)\n\t\t\t\tVALUES ($1::text::uuid, $2, $3, $4, $4, $5) RETURNING id"
+STR	"\n\t\t\tUPDATE kredi.dilim SET bitis = $2\n\t\t\tWHERE id = (SELECT id FROM kredi.dilim\n\t\t\t            WHERE kullanici_id = $1::text::uuid AND kaynak = 'plan' AND NOT iade AND NOT sure_islendi\n\t\t\t            ORDER BY bitis DESC NULLS FIRST, id DESC LIMIT 1)\n\t\t\t  AND bitis IS NOT NULL AND bitis < $2"
+STR	"\n\t\t\t\tINSERT INTO kredi.dilim (kullanici_id, kaynak, ref, ilk_miktar, kalan, bitis, iade)\n\t\t\t\tVALUES ($1::text::uuid, $2, $3, $4, $4, $5, true) RETURNING id"
 STR	"\n\t\t\t\tSELECT kalan, kaynak, NOT sure_islendi AND bitis IS NOT NULL AND bitis <= $2\n\t\t\t\tFROM kredi.dilim WHERE id = $1 FOR UPDATE"
 STR	"\n\t\tdurum = 'aktif' AND urun = $2 AND kullanici_id IS NOT NULL\n\t\tAND dolum_capasi IS NOT NULL AND sonraki_dolum <= $1\n\t\tAND (donem_sonu IS NULL OR ($1 < donem_sonu AND sonraki_dolum < donem_sonu))\n\t\tORDER BY sonraki_dolum LIMIT $3"
 STR	"\n\t\tdurum NOT IN ('bitti', 'iade') AND donem_sonu < $1 ORDER BY donem_sonu LIMIT $2"
