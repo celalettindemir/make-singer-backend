@@ -6,6 +6,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/credit"
 	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
@@ -71,6 +72,7 @@ func (h *MasterHandler) Preview(c *fiber.Ctx) error {
 // @Success      202 {object} model.MasterFinalResponse
 // @Failure      400 {object} response.ErrorResponse
 // @Failure      401 {object} response.ErrorResponse
+// @Failure      402 {object} response.ErrorResponse
 // @Failure      404 {object} response.ErrorResponse
 // @Failure      429 {object} response.ErrorResponse
 // @Failure      500 {object} response.ErrorResponse
@@ -98,6 +100,10 @@ func (h *MasterHandler) Final(c *fiber.Ctx) error {
 		}
 		if errors.Is(err, client.ErrInvalidURL) {
 			return response.ValidationError(c, i18n.KeyInvalidFileURL, nil)
+		}
+		var insufficient *credit.InsufficientError
+		if errors.As(err, &insufficient) {
+			return response.InsufficientCredits(c, insufficient.Required, insufficient.Balance)
 		}
 		return internalError(c, err)
 	}

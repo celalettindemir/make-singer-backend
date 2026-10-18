@@ -13,6 +13,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
+	"github.com/makeasinger/api/internal/credit"
 	"github.com/makeasinger/api/internal/deletionmark"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
@@ -29,6 +30,8 @@ type MasterWorker struct {
 	hub             *websocket.Hub
 	r2Cfg           *config.R2Config
 	deletionChecker deletionmark.Checker // nil: no check
+	credits         credit.Spender       // nil: no credit accounting
+	isLastAttempt   func(context.Context) bool
 }
 
 // NewMasterWorker creates a new master worker
@@ -41,7 +44,15 @@ func NewMasterWorker(redisClient *redis.Client, audioClient client.AudioProcesso
 		hub:             hub,
 		r2Cfg:           r2Cfg,
 		deletionChecker: deletionChecker,
+		isLastAttempt:   asynqIsLastAttempt,
 	}
+}
+
+// WithCredits turns on credit accounting: a master job that ends failed is
+// refunded once. A nil spender keeps the worker free of credits.
+func (w *MasterWorker) WithCredits(sp credit.Spender) *MasterWorker {
+	w.credits = sp
+	return w
 }
 
 // ProcessTask handles mastering task processing
@@ -60,8 +71,9 @@ func (w *MasterWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 
 	var payload model.MasterJobPayload
 	if err := json.Unmarshal(taskPayload.Payload, &payload); err != nil {
-		w.failJob(ctx, jobID, "Invalid payload")
-		return fmt.Errorf("failed to unmarshal master payload: %w", err)
+		err = fmt.Errorf("failed to unmarshal master payload: %w: %w", err, asynq.SkipRetry)
+		w.failFinal(ctx, jobID, "Invalid payload", err)
+		return err
 	}
 
 	// Check if audio client is configured
@@ -85,8 +97,9 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	vocalTakes, err := w.buildVocalTakes(payload)
 	if err != nil {
 		log.Printf("Job %s: could not resolve the vocal URL: %v", jobID, err)
-		w.failJob(ctx, jobID, "Could not resolve the vocal URL")
-		return fmt.Errorf("could not resolve the vocal URL: %w: %w", err, asynq.SkipRetry)
+		err = fmt.Errorf("could not resolve the vocal URL: %w: %w", err, asynq.SkipRetry)
+		w.failFinal(ctx, jobID, "Could not resolve the vocal URL", err)
+		return err
 	}
 
 	// Step 3b: Convert stem URLs to keys. Every URL coming from the client
@@ -96,8 +109,9 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 		k, err := client.ResolveOwnedKey(u, payload.OwnerID, w.r2Cfg)
 		if err != nil {
 			log.Printf("Job %s: could not resolve the stem URL: %v", jobID, err)
-			w.failJob(ctx, jobID, "Could not resolve the stem URL")
-			return fmt.Errorf("could not resolve the stem URL: %w: %w", err, asynq.SkipRetry)
+			err = fmt.Errorf("could not resolve the stem URL: %w: %w", err, asynq.SkipRetry)
+			w.failFinal(ctx, jobID, "Could not resolve the stem URL", err)
+			return err
 		}
 		stemKeys = append(stemKeys, k)
 	}
@@ -107,8 +121,9 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 
 	outputKey, err := client.UserKey("masters", payload.OwnerID, payload.ProjectID, uuid.New().String()+".wav")
 	if err != nil {
-		w.failJob(ctx, jobID, "Invalid job owner or project")
-		return fmt.Errorf("master key: %w: %w", err, asynq.SkipRetry)
+		err = fmt.Errorf("master key: %w: %w", err, asynq.SkipRetry)
+		w.failFinal(ctx, jobID, "Invalid job owner or project", err)
+		return err
 	}
 
 	// The audio service writes the output to R2 itself; the Master call is
@@ -117,11 +132,13 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	if err := ownerCanWrite(ctx, w.deletionChecker, payload.OwnerID); err != nil {
 		log.Printf("Job %s: owner check failed: %v", jobID, err)
 		if errors.Is(err, errOwnerDeleted) {
-			w.failJob(ctx, jobID, errOwnerDeleted.Error())
-			return fmt.Errorf("master was not written: %w: %w", err, asynq.SkipRetry)
+			err = fmt.Errorf("master was not written: %w: %w", err, asynq.SkipRetry)
+			w.failFinal(ctx, jobID, errOwnerDeleted.Error(), err)
+			return err
 		}
-		w.failJob(ctx, jobID, "Could not check the account status")
-		return fmt.Errorf("master was not written: %w", err)
+		err = fmt.Errorf("master was not written: %w", err)
+		w.failFinal(ctx, jobID, "Could not check the account status", err)
+		return err
 	}
 
 	masterReq := &client.MasterRequest{
@@ -138,7 +155,7 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	masterResp, err := w.audioClient.Master(ctx, masterReq)
 	if err != nil {
 		log.Printf("Job %s: mastering failed: %v", jobID, err)
-		w.failJob(ctx, jobID, "Mastering failed")
+		w.failFinal(ctx, jobID, "Mastering failed", err)
 		return err
 	}
 
@@ -159,8 +176,9 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	fileURL, expiresAt, err := client.ResolveURL(ctx, w.r2Client, w.r2Cfg, outputKey)
 	if err != nil {
 		log.Printf("Job %s: could not generate the master URL: %v", jobID, err)
-		w.failJob(ctx, jobID, "Could not generate the master URL")
-		return fmt.Errorf("could not generate the master URL: %w", err)
+		err = fmt.Errorf("could not generate the master URL: %w", err)
+		w.failFinal(ctx, jobID, "Could not generate the master URL", err)
+		return err
 	}
 
 	// Complete the job
@@ -193,7 +211,9 @@ func (w *MasterWorker) processWithMock(ctx context.Context, jobID string, payloa
 		select {
 		case <-ctx.Done():
 			log.Printf("Master job %s cancelled", jobID)
-			return ctx.Err()
+			err := ctx.Err()
+			w.failFinal(ctx, jobID, "Mastering failed", err)
+			return err
 		default:
 		}
 
@@ -204,14 +224,16 @@ func (w *MasterWorker) processWithMock(ctx context.Context, jobID string, payloa
 
 	record, err := w.generateMockRecord(payload)
 	if err != nil {
-		w.failJob(ctx, jobID, "Invalid job owner or project")
-		return fmt.Errorf("mock record: %w: %w", err, asynq.SkipRetry)
+		err = fmt.Errorf("mock record: %w: %w", err, asynq.SkipRetry)
+		w.failFinal(ctx, jobID, "Invalid job owner or project", err)
+		return err
 	}
 	fileURL, expiresAt, err := client.ResolveURL(ctx, w.r2Client, w.r2Cfg, record.FileKey)
 	if err != nil {
 		log.Printf("Job %s: could not generate the master URL: %v", jobID, err)
-		w.failJob(ctx, jobID, "Could not generate the master URL")
-		return fmt.Errorf("could not generate the master URL: %w", err)
+		err = fmt.Errorf("could not generate the master URL: %w", err)
+		w.failFinal(ctx, jobID, "Could not generate the master URL", err)
+		return err
 	}
 
 	w.completeJob(ctx, jobID, record)
@@ -314,6 +336,38 @@ func (w *MasterWorker) completeJob(ctx context.Context, jobID string, result *mo
 	job.CompletedAt = &now
 
 	w.saveJob(ctx, job)
+}
+
+// failFinal ends a failed attempt. Only the job's FINAL failure (SkipRetry,
+// or asynq's last attempt) writes the failed status and refunds; an
+// intermediate failure leaves the job running, so a retry that succeeds is
+// not a free master and a visible "failed" always comes with its refund.
+func (w *MasterWorker) failFinal(ctx context.Context, jobID, errMsg string, err error) {
+	last := asynqIsLastAttempt
+	if w.isLastAttempt != nil {
+		last = w.isLastAttempt
+	}
+	if !errors.Is(err, asynq.SkipRetry) && !last(ctx) {
+		log.Printf("Job %s: attempt failed, will retry: %v", jobID, err)
+		return
+	}
+	// Detached: the final failure must be written even when ctx is the
+	// reason for it (shutdown, deadline).
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	w.failJob(fctx, jobID, errMsg)
+	w.refund(fctx, jobID)
+}
+
+// refund reverses the master debit; a failure is logged, never returned:
+// returning it would retry the whole master for a bookkeeping error.
+func (w *MasterWorker) refund(ctx context.Context, jobID string) {
+	if w.credits == nil {
+		return
+	}
+	if err := w.credits.Refund(ctx, credit.OpMaster, jobID); err != nil {
+		log.Printf("Job %s: could not refund %s: %v", jobID, credit.OpMaster, err)
+	}
 }
 
 func (w *MasterWorker) failJob(ctx context.Context, jobID, errMsg string) {

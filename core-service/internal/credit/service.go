@@ -32,6 +32,8 @@ type Spender interface {
 	RefundAction(ctx context.Context, userID string, op Operation, actionID string) error
 	// Balance reads the balance without creating an account.
 	Balance(ctx context.Context, userID string) (int, error)
+	// HasPro reports whether the user has an active Pro plan (P4).
+	HasPro(ctx context.Context, userID string) (bool, error)
 	// Enforced reports whether debits are real (false = shadow mode).
 	Enforced() bool
 }

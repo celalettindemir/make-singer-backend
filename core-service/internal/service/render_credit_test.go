@@ -45,7 +45,7 @@ func TestStartRender_DebitsByStemModeWithJobRef(t *testing.T) {
 	}
 	for mode, want := range cases {
 		rdb := liveRedis(t)
-		fake := &credit.FakeSpender{Bal: 138}
+		fake := &credit.FakeSpender{Bal: 138, Pro: true}
 		s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
 
 		resp, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(mode))
@@ -85,7 +85,7 @@ func TestStartRender_FocusDebitsFocus(t *testing.T) {
 
 func TestStartRender_InsufficientNoJob(t *testing.T) {
 	rdb := liveRedis(t)
-	fake := &credit.FakeSpender{Insufficient: true, Required: 62, Bal: 10}
+	fake := &credit.FakeSpender{Insufficient: true, Required: 62, Bal: 10, Pro: true}
 	// A nil asynq client would panic if the enqueue were reached.
 	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
 
@@ -104,7 +104,7 @@ func TestStartRender_InsufficientNoJob(t *testing.T) {
 
 func TestStartRender_EnqueueFailureRefunds(t *testing.T) {
 	rdb := liveRedis(t)
-	fake := &credit.FakeSpender{}
+	fake := &credit.FakeSpender{Pro: true}
 	closed := asynq.NewClient(asynq.RedisClientOpt{Addr: liveRedisAddr, DB: 13})
 	_ = closed.Close()
 	s := NewRenderService(rdb, closed, nil, testR2Cfg()).WithCredits(fake)
@@ -346,5 +346,52 @@ func TestStartRender_EnforcedSpendErrorFails(t *testing.T) {
 	}
 	if n := jobKeyCount(t, rdb); n != 0 {
 		t.Errorf("job records = %d, want 0", n)
+	}
+}
+
+func TestRenderService_StemsRequiresPro(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: true, Bal: 500}
+	// A nil asynq client would panic if the enqueue were reached.
+	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+
+	_, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(model.StemModeStems))
+	if !errors.Is(err, ErrPlanRequired) {
+		t.Fatalf("err = %v, want ErrPlanRequired", err)
+	}
+	if len(fake.Spends) != 0 {
+		t.Errorf("spends = %+v, want none", fake.Spends)
+	}
+	if n := jobKeyCount(t, rdb); n != 0 {
+		t.Errorf("job records = %d, want 0", n)
+	}
+
+	// Other tiers do not need Pro.
+	s = NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	if _, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(model.StemModeMix)); err != nil {
+		t.Fatalf("mix without Pro: %v", err)
+	}
+
+	fake.Pro = true
+	fake.Spends = nil
+	if _, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(model.StemModeStems)); err != nil {
+		t.Fatalf("stems with Pro: %v", err)
+	}
+	if len(fake.Spends) != 1 || fake.Spends[0].Op != credit.OpRenderStems {
+		t.Errorf("spends = %+v, want one render_stems", fake.Spends)
+	}
+}
+
+func TestRenderService_StemsGateAppliesInShadowMode(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: false}
+	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+
+	_, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(model.StemModeStems))
+	if !errors.Is(err, ErrPlanRequired) {
+		t.Fatalf("err = %v, want ErrPlanRequired in shadow mode", err)
+	}
+	if len(fake.Spends) != 0 {
+		t.Errorf("spends = %+v, want none", fake.Spends)
 	}
 }

@@ -59,6 +59,9 @@ func (h *RenderHandler) Start(c *fiber.Ctx) error {
 		if errors.Is(err, model.ErrInvalidStemSettings) {
 			return response.ValidationError(c, i18n.KeyStemSettingsInvalid, nil)
 		}
+		if errors.Is(err, service.ErrPlanRequired) {
+			return response.PlanRequired(c, "pro")
+		}
 		var insufficient *credit.InsufficientError
 		if errors.As(err, &insufficient) {
 			return response.InsufficientCredits(c, insufficient.Required, insufficient.Balance)

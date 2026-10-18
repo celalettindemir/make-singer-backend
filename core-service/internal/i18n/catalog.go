@@ -68,6 +68,7 @@ var (
 
 	// Credits.
 	KeyInsufficientCredits  = Key{"insufficient_credits"}
+	KeyPlanRequired         = Key{"plan_required"}
 	KeyPurchaseInvalid      = Key{"purchase_invalid"}
 	KeyPurchaseOwnedByOther = Key{"purchase_owned_by_other"}
 	KeyActionIDRequired     = Key{"action_id_required"}
@@ -177,6 +178,7 @@ var catalog = map[Key]texts{
 	KeySocialForbidden:        {"Bu işlem için yetkin yok.", "You are not allowed to do this."},
 
 	KeyInsufficientCredits:  {"Yeterli krediniz yok.", "You do not have enough credits."},
+	KeyPlanRequired:         {"Kanallar render'ı Pro planı gerektirir.", "The channels render needs the Pro plan."},
 	KeyPurchaseInvalid:      {"Satın alma doğrulanamadı.", "The purchase could not be verified."},
 	KeyPurchaseOwnedByOther: {"Bu satın alma başka bir hesaba ait.", "This purchase belongs to another account."},
 	KeyActionIDRequired:     {"X-Action-Id başlığı zorunludur.", "The X-Action-Id header is required."},

@@ -40,6 +40,8 @@ type FakeSpender struct {
 	// ChargedFirst makes SpendAction report charged=true on the first call
 	// per action id.
 	ChargedFirst bool
+	// Pro is the HasPro() answer.
+	Pro bool
 	// IsEnforced is the Enforced() answer.
 	IsEnforced bool
 	// Err, when set, is returned by every call after recording it.
@@ -123,4 +125,11 @@ func (f *FakeSpender) Enforced() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.IsEnforced
+}
+
+// HasPro returns Pro.
+func (f *FakeSpender) HasPro(context.Context, string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.Pro, f.Err
 }

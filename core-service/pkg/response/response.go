@@ -19,6 +19,7 @@ const (
 	CodeInsufficientCredits  = "INSUFFICIENT_CREDITS"
 	CodePurchaseInvalid      = "PURCHASE_INVALID"
 	CodePurchaseOwnedByOther = "PURCHASE_OWNED_BY_OTHER"
+	CodePlanRequired         = "PLAN_REQUIRED"
 )
 
 type ErrorResponse struct {
@@ -110,4 +111,10 @@ func NoContent(c *fiber.Ctx) error {
 func InsufficientCredits(c *fiber.Ctx, required, balance int) error {
 	return Error(c, fiber.StatusPaymentRequired, CodeInsufficientCredits, i18n.KeyInsufficientCredits,
 		map[string]int{"required": required, "balance": balance})
+}
+
+// PlanRequired writes the 403 answer for a feature of a higher plan tier.
+func PlanRequired(c *fiber.Ctx, tier string) error {
+	return Error(c, fiber.StatusForbidden, CodePlanRequired, i18n.KeyPlanRequired,
+		map[string]string{"requiredTier": tier})
 }

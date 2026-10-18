@@ -22,6 +22,9 @@ const (
 	TaskTypeMaster = "master:process"
 )
 
+// ErrPlanRequired: the stems render is for an active Pro plan only (R-CRD-16).
+var ErrPlanRequired = errors.New("the stems render needs the Pro plan")
+
 // RenderService handles render job management
 type RenderService struct {
 	redis       *redis.Client
@@ -119,6 +122,18 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 	stemMode, focus, err := req.StemSettings()
 	if err != nil {
 		return nil, err
+	}
+
+	// The stems tier is a product right of the Pro plan, not a charge: the
+	// gate holds in shadow mode too (P10) and runs before anything is spent.
+	if stemMode == model.StemModeStems && s.credits != nil {
+		pro, err := s.credits.HasPro(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("could not check the plan: %w", err)
+		}
+		if !pro {
+			return nil, ErrPlanRequired
+		}
 	}
 
 	jobID := uuid.New().String()

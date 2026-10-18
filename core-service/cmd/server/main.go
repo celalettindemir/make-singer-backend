@@ -226,7 +226,7 @@ func main() {
 	// Initialize services
 	lyricsService := service.NewLyricsService(groqClient)
 	renderService := service.NewRenderService(redisClient, asynqClient, storage, &cfg.R2).WithCredits(creditService)
-	masterService := service.NewMasterService(redisClient, asynqClient, storage, &cfg.R2)
+	masterService := service.NewMasterService(redisClient, asynqClient, storage, &cfg.R2).WithCredits(creditService)
 	exportService := service.NewExportService(storage, audioClient, &cfg.R2)
 	uploadService := service.NewUploadService(storage, &cfg.R2)
 	fileService := service.NewFileService(storage, &cfg.R2)
@@ -490,7 +490,7 @@ func startWorkerServer(
 	// and before every R2 write.
 	deletionChecker := deletionmark.NewRedisChecker(redisClient)
 	renderWorker := worker.NewRenderWorker(renderService, sunoClient, storage, hub, deletionChecker).WithCredits(creditSpender)
-	masterWorker := worker.NewMasterWorker(redisClient, audioClient, storage, masterService, hub, &cfg.R2, deletionChecker)
+	masterWorker := worker.NewMasterWorker(redisClient, audioClient, storage, masterService, hub, &cfg.R2, deletionChecker).WithCredits(creditSpender)
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)

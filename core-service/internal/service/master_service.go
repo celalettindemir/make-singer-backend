@@ -3,13 +3,16 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
+	"github.com/makeasinger/api/internal/credit"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/redis/go-redis/v9"
 )
@@ -20,6 +23,7 @@ type MasterService struct {
 	asynqClient *asynq.Client
 	r2Client    client.StorageClient
 	r2Cfg       *config.R2Config
+	credits     credit.Spender // nil: no credit accounting
 }
 
 func NewMasterService(redisClient *redis.Client, asynqClient *asynq.Client, r2Client client.StorageClient, r2Cfg *config.R2Config) *MasterService {
@@ -28,6 +32,27 @@ func NewMasterService(redisClient *redis.Client, asynqClient *asynq.Client, r2Cl
 		asynqClient: asynqClient,
 		r2Client:    r2Client,
 		r2Cfg:       r2Cfg,
+	}
+}
+
+// WithCredits turns on credit accounting: StartFinal debits the master price
+// and refunds when the job cannot be queued. A nil spender keeps the service
+// free of credits.
+func (s *MasterService) WithCredits(sp credit.Spender) *MasterService {
+	s.credits = sp
+	return s
+}
+
+// refundJob reverses a master debit on a detached context; a failure is
+// logged, never returned (the ledger refund is idempotent per jobId).
+func (s *MasterService) refundJob(ctx context.Context, jobID string) {
+	if s.credits == nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := s.credits.Refund(rctx, credit.OpMaster, jobID); err != nil {
+		log.Printf("Job %s: could not refund %s: %v", jobID, credit.OpMaster, err)
 	}
 }
 
@@ -98,14 +123,34 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 
 	job.Payload = payloadBytes
 
+	// Debit before the job record (P8); every failure below refunds it. An
+	// *credit.InsufficientError is returned as is: no job, no enqueue.
+	var balance *int
+	if s.credits != nil {
+		b, err := s.credits.Spend(ctx, userID, credit.OpMaster, jobID, req.ProjectID)
+		if err != nil {
+			var insufficient *credit.InsufficientError
+			if errors.As(err, &insufficient) || s.credits.Enforced() {
+				return nil, err
+			}
+			// Shadow mode: nothing is debited, so a failed balance read
+			// must not fail the master.
+			log.Printf("Job %s: shadow credit read failed: %v", jobID, err)
+			b = 0
+		}
+		balance = &b
+	}
+
 	// Save job to Redis
 	if err := s.saveJob(ctx, job); err != nil {
+		s.refundJob(ctx, jobID)
 		return nil, fmt.Errorf("failed to save job: %w", err)
 	}
 
 	// Create Asynq task
 	task, err := newMasterTask(jobID, payloadBytes)
 	if err != nil {
+		s.refundJob(ctx, jobID)
 		return nil, fmt.Errorf("failed to create task: %w", err)
 	}
 
@@ -116,6 +161,7 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 		asynq.Retention(24*time.Hour),
 	)
 	if err != nil {
+		s.refundJob(ctx, jobID)
 		return nil, fmt.Errorf("failed to enqueue task: %w", err)
 	}
 
@@ -123,6 +169,7 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 		JobID:             jobID,
 		Status:            model.JobStatusQueued,
 		EstimatedDuration: 60,
+		Balance:           balance,
 	}, nil
 }
 

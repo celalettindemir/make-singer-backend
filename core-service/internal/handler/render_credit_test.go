@@ -24,7 +24,7 @@ const validRenderBody = `{
 
 func TestRenderHandler_Insufficient402(t *testing.T) {
 	rdb := liveRedis(t)
-	fake := &credit.FakeSpender{Insufficient: true, Required: 62, Bal: 10}
+	fake := &credit.FakeSpender{Insufficient: true, Required: 62, Bal: 10, Pro: true}
 	svc := service.NewRenderService(rdb, nil, nil, &config.R2Config{}).WithCredits(fake)
 	h := NewRenderHandler(svc, validator.New())
 	app := fiber.New()
@@ -77,5 +77,40 @@ func TestRenderHandler_ShadowReadFailure202(t *testing.T) {
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.Balance != 0 {
 		t.Errorf("balance = %d err = %v, want 0", body.Balance, err)
+	}
+}
+
+func TestRenderHandler_PlanRequiredIs403(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{}
+	svc := service.NewRenderService(rdb, nil, nil, &config.R2Config{}).WithCredits(fake)
+	h := NewRenderHandler(svc, validator.New())
+	app := fiber.New()
+	app.Post("/start", asUser("kullanici-a"), h.Start)
+
+	body := strings.Replace(validRenderBody, `"arrangement":{`, `"stemMode":"stems","arrangement":{`, 1)
+	req := httptest.NewRequest(http.MethodPost, "/start", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	var out struct {
+		Error struct {
+			Code    string            `json:"code"`
+			Details map[string]string `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Error.Code != "PLAN_REQUIRED" || out.Error.Details["requiredTier"] != "pro" {
+		t.Errorf("error = %+v, want PLAN_REQUIRED requiredTier pro", out.Error)
+	}
+	if len(fake.Spends) != 0 {
+		t.Errorf("spends = %+v, want none", fake.Spends)
 	}
 }
