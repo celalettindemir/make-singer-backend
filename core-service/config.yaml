@@ -110,6 +110,12 @@ auth:
   crypto_key: "" # Set via AUTH_CRYPTO_KEY env var (secret from Kubernetes)
   # Whitespace-separated redirect URIs (Set via AUTH_REDIRECT_URIS env var)
   redirect_uris: [] # Set via AUTH_REDIRECT_URIS env var
+  # Admin panel client (admin-web, confidential). Registered only when the
+  # secret is set (at least 32 bytes); without it /api/admin answers 404.
+  admin_client_id: "admin-web" # Set via AUTH_ADMIN_CLIENT_ID
+  admin_client_secret: "" # Set via AUTH_ADMIN_CLIENT_SECRET (or _FILE). Never in this file.
+  # Comma or whitespace separated; also the post-logout addresses.
+  admin_redirect_uris: "https://makesinger.celalettindemir.dev/admin/callback,https://makesinger.celalettindemir.dev/admin" # Set via AUTH_ADMIN_REDIRECT_URIS
   access_ttl: "15m" # Set via AUTH_ACCESS_TTL env var
   refresh_ttl: "1440h" # Set via AUTH_REFRESH_TTL env var (default: 60 days)
   # NOTE: access_ttl / refresh_ttl must be values time.ParseDuration
@@ -132,3 +138,8 @@ auth:
   # MUST be set EXPLICITLY to the real proxy count when deployed behind a
   # reverse proxy such as Traefik (Traefik only => 1).
   trusted_proxies: 0 # Set via AUTH_TRUSTED_PROXIES
+
+# Admin panel access list: comma separated e-mail addresses (case-insensitive).
+# A token alone is not enough; the e-mail must be verified and listed here.
+admin:
+  emails: "" # Set via ADMIN_EMAILS env var

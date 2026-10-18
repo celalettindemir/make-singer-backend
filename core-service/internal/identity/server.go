@@ -9,6 +9,7 @@ package identity
 import (
 	"context"
 	"crypto/rsa"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -286,6 +287,9 @@ func validateConfig(cfg *config.AuthConfig) error {
 	}
 	if len(cfg.RedirectURIs) == 0 {
 		return fmt.Errorf("redirect_uris is empty: AUTH_REDIRECT_URIS is required (while it is empty every /authorize is rejected)")
+	}
+	if err := validateAdminClient(cfg); err != nil {
+		return err
 	}
 	for _, uri := range cfg.RedirectURIs {
 		if strings.TrimSpace(uri) == "" {
@@ -682,4 +686,49 @@ func (s *Server) APIPublicKey() *rsa.PublicKey {
 // on the API side comes into play.
 func (s *Server) DeleteAccount(ctx context.Context, userID string) error {
 	return s.users.Delete(ctx, userID)
+}
+
+// minAdminSecretLen is the shortest admin-web client secret accepted.
+const minAdminSecretLen = 32
+
+// validateAdminClient checks the admin-web client. No secret means the
+// client is not registered (and /api/admin answers 404); a secret that is
+// set but weak, or an id that collides with the mobile client, stops the
+// start.
+func validateAdminClient(cfg *config.AuthConfig) error {
+	if cfg.AdminClientSecret == "" {
+		return nil
+	}
+	if len(cfg.AdminClientSecret) < minAdminSecretLen {
+		return fmt.Errorf("admin_client_secret is shorter than %d bytes: AUTH_ADMIN_CLIENT_SECRET must be a long random value", minAdminSecretLen)
+	}
+	if strings.TrimSpace(cfg.AdminClientID) == "" {
+		return fmt.Errorf("admin_client_id is empty: AUTH_ADMIN_CLIENT_ID is required when the admin secret is set")
+	}
+	if cfg.AdminClientID == cfg.ClientID {
+		return fmt.Errorf("admin_client_id must differ from client_id")
+	}
+	if len(cfg.AdminRedirectURIs) == 0 {
+		return fmt.Errorf("admin_redirect_uris is empty: AUTH_ADMIN_REDIRECT_URIS is required when the admin secret is set")
+	}
+	for _, uri := range cfg.AdminRedirectURIs {
+		if strings.TrimSpace(uri) == "" {
+			return fmt.Errorf("admin_redirect_uris contains an empty entry: check the AUTH_ADMIN_REDIRECT_URIS value")
+		}
+	}
+	return nil
+}
+
+// AdminView returns the e-mail and the verified flag of a user for the admin
+// gate. An unknown user is reported as not verified (no error): the gate
+// then answers 403 like for any non-admin.
+func (s *Server) AdminView(ctx context.Context, id string) (string, bool, error) {
+	u, err := s.users.ByID(ctx, id)
+	if errors.Is(err, ErrUserNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return u.Email, u.EmailVerified, nil
 }

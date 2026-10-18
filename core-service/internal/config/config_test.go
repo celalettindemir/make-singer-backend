@@ -559,3 +559,38 @@ func TestLoad_StoreSecretsFromFiles(t *testing.T) {
 		t.Errorf("ServiceAccountJSON = %q", cfg.GooglePlay.ServiceAccountJSON)
 	}
 }
+
+func TestConfig_AdminEmailsParsedAndTrimmed(t *testing.T) {
+	t.Setenv("ADMIN_EMAILS", " Ali@Ornek.dev ,, veli@ornek.dev\tAYSE@ornek.dev , ")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"ali@ornek.dev", "veli@ornek.dev", "ayse@ornek.dev"}
+	if len(cfg.Admin.Emails) != len(want) {
+		t.Fatalf("Admin.Emails = %q, want %q", cfg.Admin.Emails, want)
+	}
+	for i := range want {
+		if cfg.Admin.Emails[i] != want[i] {
+			t.Errorf("Admin.Emails[%d] = %q, want %q", i, cfg.Admin.Emails[i], want[i])
+		}
+	}
+}
+
+func TestConfig_AdminDefaults(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Admin.Emails) != 0 {
+		t.Errorf("Admin.Emails = %q, want none", cfg.Admin.Emails)
+	}
+	if cfg.Auth.AdminClientID != "admin-web" || cfg.Auth.AdminClientSecret != "" {
+		t.Errorf("admin client = %q / secret set=%v", cfg.Auth.AdminClientID, cfg.Auth.AdminClientSecret != "")
+	}
+	if len(cfg.Auth.AdminRedirectURIs) != 2 ||
+		cfg.Auth.AdminRedirectURIs[0] != "https://makesinger.celalettindemir.dev/admin/callback" ||
+		cfg.Auth.AdminRedirectURIs[1] != "https://makesinger.celalettindemir.dev/admin" {
+		t.Errorf("AdminRedirectURIs = %q", cfg.Auth.AdminRedirectURIs)
+	}
+}

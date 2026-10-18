@@ -2,6 +2,8 @@ package identity
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"log"
@@ -28,6 +30,7 @@ type Storage struct {
 	requests   *RequestStore
 	signingKey *SigningKey
 	client     *MobileClient
+	admin      *AdminClient // nil unless the admin secret is configured
 
 	pool *pgxpool.Pool // for Health; may be nil
 	rdb  *redis.Client // for Health; may be nil
@@ -38,7 +41,7 @@ type Storage struct {
 // SetHealthDeps; this way tests can build a Storage without live
 // connections.
 func NewStorage(cfg *config.AuthConfig, users UserStore, tokens TokenStore, requests *RequestStore, signingKey *SigningKey) *Storage {
-	return &Storage{
+	s := &Storage{
 		cfg:        cfg,
 		users:      users,
 		tokens:     tokens,
@@ -46,6 +49,11 @@ func NewStorage(cfg *config.AuthConfig, users UserStore, tokens TokenStore, requ
 		signingKey: signingKey,
 		client:     NewMobileClient(cfg),
 	}
+	// Without a secret the admin client is not registered at all.
+	if cfg.AdminClientSecret != "" && cfg.AdminClientID != "" {
+		s.admin = NewAdminClient(cfg)
+	}
+	return s
 }
 
 // SetHealthDeps wires in the Postgres pool and the Redis client that
@@ -458,21 +466,34 @@ func (s *Storage) KeySet(ctx context.Context) ([]op.Key, error) {
 
 // ---- OPStorage ----
 
-// GetClientByClientID rejects EVERYTHING except our single configured
-// client: makesinger has no second client, and if it had one it must not
-// be accepted without being defined here.
+// GetClientByClientID resolves the mobile client and, when configured, the
+// admin-web client. EVERYTHING else is rejected: a client must be defined
+// here to be accepted.
 func (s *Storage) GetClientByClientID(ctx context.Context, clientID string) (op.Client, error) {
-	if clientID != s.cfg.ClientID {
-		return nil, fmt.Errorf("client not found: %s", clientID)
+	if clientID != "" && clientID == s.cfg.ClientID {
+		return s.client, nil
 	}
-	return s.client, nil
+	if s.admin != nil && clientID == s.cfg.AdminClientID {
+		return s.admin, nil
+	}
+	return nil, fmt.Errorf("client not found: %s", clientID)
 }
 
-// AuthorizeClientIDSecret ALWAYS returns an error: our single client is
-// public (native, AuthMethodNone) so it carries no secret. If it returned
-// success the client could be impersonated with an empty secret.
+// AuthorizeClientIDSecret verifies the admin-web secret. The mobile client
+// is public (native, AuthMethodNone) and carries no secret, so for it (and
+// any unknown id) this ALWAYS errors: success would let the client be
+// impersonated with an empty secret.
 func (s *Storage) AuthorizeClientIDSecret(ctx context.Context, clientID, clientSecret string) error {
-	return fmt.Errorf("client %q carries no secret (public client)", clientID)
+	if s.admin == nil || s.cfg.AdminClientSecret == "" || clientID != s.cfg.AdminClientID {
+		return fmt.Errorf("client %q carries no secret (public client)", clientID)
+	}
+	// Hashing first makes the compare length-independent as well.
+	want := sha256.Sum256([]byte(s.cfg.AdminClientSecret))
+	got := sha256.Sum256([]byte(clientSecret))
+	if subtle.ConstantTimeCompare(want[:], got[:]) != 1 {
+		return fmt.Errorf("client %q: invalid secret", clientID)
+	}
+	return nil
 }
 
 // SetUserinfoFromScopes was declared deprecated by the library but has to

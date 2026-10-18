@@ -52,6 +52,12 @@ services:
       AUTH_DB_URL: ${AUTH_DB_URL}
       AUTH_SIGNING_KEY: ${AUTH_SIGNING_KEY}
       AUTH_CRYPTO_KEY: ${AUTH_CRYPTO_KEY}
+      # Yonetim paneli (admin-web) istemcisi. Sir yoksa istemci kayitli olmaz ve
+      # /api/admin 404 doner. Sir en az 32 bayt olmali.
+      AUTH_ADMIN_CLIENT_ID: ${AUTH_ADMIN_CLIENT_ID:-admin-web}
+      AUTH_ADMIN_CLIENT_SECRET_FILE: /run/secrets/auth_admin_client_secret
+      AUTH_ADMIN_REDIRECT_URIS: ${AUTH_ADMIN_REDIRECT_URIS:-https://makesinger.celalettindemir.dev/admin/callback,https://makesinger.celalettindemir.dev/admin}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       SUNO_API_KEY_FILE: /run/secrets/suno_api_key
       SUNO_BASE_URL: ${SUNO_BASE_URL:-https://api.sunoapi.org}
       AUDIO_SERVICE_URL: http://audio-service:8084
@@ -86,6 +92,7 @@ services:
       - groq_api_key
       - appstore_private_key
       - googleplay_service_account
+      - auth_admin_client_secret
       - r2_account_id
       - r2_access_key_id
       - r2_secret_access_key
@@ -221,6 +228,9 @@ networks:
 #         secret data, so use a non-empty placeholder (e.g. "unset") until the
 #         store is configured. The integration stays off while
 #         APPSTORE_BUNDLE_ID / GOOGLEPLAY_PACKAGE_NAME are empty.
+# Yonetim: auth_admin_client_secret, >= 32 bayt rastgele bir deger olmali
+#         (openssl rand -hex 32). Daha kisa bir yer tutucu api'nin baslamasini
+#         engeller; once gercek degerle olusturun.
 # =============================================================================
 secrets:
   groq_api_key:
@@ -228,6 +238,8 @@ secrets:
   appstore_private_key:
     external: true
   googleplay_service_account:
+    external: true
+  auth_admin_client_secret:
     external: true
   suno_api_key:
     external: true

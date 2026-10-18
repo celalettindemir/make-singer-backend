@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/makeasinger/api/internal/clientip"
 	"github.com/spf13/viper"
@@ -41,9 +42,16 @@ type Config struct {
 	Auth      AuthConfig
 	Social    SocialConfig
 
+	Admin      AdminConfig
 	Credits    CreditConfig
 	AppStore   AppStoreConfig
 	GooglePlay GooglePlayConfig
+}
+
+// AdminConfig is the admin panel access list. Emails are trimmed and lower
+// case; an empty list admits nobody.
+type AdminConfig struct {
+	Emails []string
 }
 
 type ServerConfig struct {
@@ -211,15 +219,21 @@ type AudioConfig struct {
 // Issuer is required: if empty the service does not start (there is no
 // other auth path for /api).
 type AuthConfig struct {
-	Issuer        string        // https://makesinger-auth.celalettindemir.dev
-	Port          string        // port of the second listener
-	DBURL         string        // Postgres DSN
-	SigningKeyPEM string        // RSA private key, PEM
-	CryptoKey     string        // 32-byte secret for op.Config.CryptoKey
-	ClientID      string        // mobile public client
-	RedirectURIs  []string      // allowed redirect URIs
-	AccessTTL     time.Duration // access token lifetime
-	RefreshTTL    time.Duration // refresh token lifetime
+	Issuer        string   // https://makesinger-auth.celalettindemir.dev
+	Port          string   // port of the second listener
+	DBURL         string   // Postgres DSN
+	SigningKeyPEM string   // RSA private key, PEM
+	CryptoKey     string   // 32-byte secret for op.Config.CryptoKey
+	ClientID      string   // mobile public client
+	RedirectURIs  []string // allowed redirect URIs
+
+	// The admin-web client (confidential, used by the admin panel). It is
+	// registered only when AdminClientSecret is set.
+	AdminClientID     string
+	AdminClientSecret string
+	AdminRedirectURIs []string      // redirect and post-logout URIs
+	AccessTTL         time.Duration // access token lifetime
+	RefreshTTL        time.Duration // refresh token lifetime
 
 	// Rate limits for the login/signup endpoints of the OP listener (the
 	// second net/http server). These endpoints are SEPARATE from the main
@@ -278,6 +292,7 @@ func Load() (*Config, error) {
 	readSecret("AUTH_DB_URL")
 	readSecret("AUTH_SIGNING_KEY")
 	readSecret("AUTH_CRYPTO_KEY")
+	readSecret("AUTH_ADMIN_CLIENT_SECRET")
 	readSecret("SOSYAL_WEB_ANAHTARI")
 	readSecret("APPSTORE_PRIVATE_KEY")
 	readSecret("GOOGLEPLAY_SERVICE_ACCOUNT")
@@ -324,6 +339,10 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("auth.crypto_key", "AUTH_CRYPTO_KEY")
 	_ = viper.BindEnv("auth.client_id", "AUTH_CLIENT_ID")
 	_ = viper.BindEnv("auth.redirect_uris", "AUTH_REDIRECT_URIS")
+	_ = viper.BindEnv("auth.admin_client_id", "AUTH_ADMIN_CLIENT_ID")
+	_ = viper.BindEnv("auth.admin_client_secret", "AUTH_ADMIN_CLIENT_SECRET")
+	_ = viper.BindEnv("auth.admin_redirect_uris", "AUTH_ADMIN_REDIRECT_URIS")
+	_ = viper.BindEnv("admin.emails", "ADMIN_EMAILS")
 	_ = viper.BindEnv("auth.access_ttl", "AUTH_ACCESS_TTL")
 	_ = viper.BindEnv("auth.refresh_ttl", "AUTH_REFRESH_TTL")
 	_ = viper.BindEnv("auth.login_ip_per_min", "AUTH_LOGIN_IP_PER_MIN")
@@ -406,6 +425,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("credits.expire_interval", "1h")
 	viper.SetDefault("sosyal.stale_preparation_after", "1h")
 	viper.SetDefault("sosyal.stale_sweep_interval", "15m")
+	viper.SetDefault("auth.admin_client_id", "admin-web")
+	viper.SetDefault("auth.admin_redirect_uris", "https://makesinger.celalettindemir.dev/admin/callback,https://makesinger.celalettindemir.dev/admin")
 	viper.SetDefault("ratelimit.cloudflare_ranges", strings.Join(clientip.DefaultCloudflareRanges, ","))
 
 	// Groq defaults
@@ -543,8 +564,12 @@ func Load() (*Config, error) {
 			CryptoKey:     viper.GetString("auth.crypto_key"),
 			ClientID:      viper.GetString("auth.client_id"),
 			RedirectURIs:  viper.GetStringSlice("auth.redirect_uris"),
-			AccessTTL:     viper.GetDuration("auth.access_ttl"),
-			RefreshTTL:    viper.GetDuration("auth.refresh_ttl"),
+
+			AdminClientID:     strings.TrimSpace(viper.GetString("auth.admin_client_id")),
+			AdminClientSecret: viper.GetString("auth.admin_client_secret"),
+			AdminRedirectURIs: splitList(viper.GetString("auth.admin_redirect_uris"), false),
+			AccessTTL:         viper.GetDuration("auth.access_ttl"),
+			RefreshTTL:        viper.GetDuration("auth.refresh_ttl"),
 
 			LoginIPPerMin:     viper.GetInt("auth.login_ip_per_min"),
 			LoginEmailPerHour: viper.GetInt("auth.login_email_per_hour"),
@@ -552,6 +577,9 @@ func Load() (*Config, error) {
 			TrustedProxies:    viper.GetInt("auth.trusted_proxies"),
 
 			Federation: buildFederationClients(),
+		},
+		Admin: AdminConfig{
+			Emails: splitList(viper.GetString("admin.emails"), true),
 		},
 		Social: SocialConfig{
 			WebKey:                viper.GetString("sosyal.web_anahtari"),
@@ -625,6 +653,22 @@ func Load() (*Config, error) {
 	cfg.Auth.Cloudflare = cloudflare
 
 	return cfg, nil
+}
+
+// splitList splits a comma or whitespace separated list, trimming and
+// dropping empty entries; lower folds the case (e-mail addresses).
+func splitList(raw string, lower bool) []string {
+	var out []string
+	for _, p := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || unicode.IsSpace(r) }) {
+		if p = strings.TrimSpace(p); p == "" {
+			continue
+		}
+		if lower {
+			p = strings.ToLower(p)
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // buildFederationClients builds the federation provider list from the

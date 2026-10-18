@@ -205,3 +205,49 @@ func TestScheduler_RegistersExpiry(t *testing.T) {
 		t.Fatalf("task type = %q", credit.TaskTypeExpire)
 	}
 }
+
+func TestRoutes_AdminDisabledWithoutSecretIs404(t *testing.T) {
+	app := fiber.New(fiber.Config{ErrorHandler: customErrorHandler})
+	registerAdminRoutes(app, nil, false, nil, nil)
+	app.Group("/api", func(c *fiber.Ctx) error { return fiber.ErrUnauthorized })
+	for _, path := range []string{"/api/admin/me", "/api/admin/campaigns"} {
+		resp, err := app.Test(httptest.NewRequest(http.MethodGet, path, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s = %d, want 404 (not the mobile 401)", path, resp.StatusCode)
+		}
+	}
+}
+
+func TestRoutes_AdminMeChain(t *testing.T) {
+	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379", DB: 14})
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		t.Skipf("redis unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = rdb.Close() })
+	rl := middleware.NewRateLimiter(rdb, nil)
+	// An auth stub that admits a fixed user, so only the gate and the route are under test.
+	auth := func(c *fiber.Ctx) error { c.Locals("userId", "u-admin-test"); return c.Next() }
+	gate := middleware.AdminGate(adminStub{email: "Boss@Ornek.dev", verified: true}, []string{"boss@ornek.dev"})
+	app := fiber.New(fiber.Config{ErrorHandler: customErrorHandler})
+	registerAdminRoutes(app, rl, true, auth, gate)
+	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/api/admin/me", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || !strings.Contains(string(raw), `"email":"boss@ornek.dev"`) {
+		t.Fatalf("got %d %s", resp.StatusCode, raw)
+	}
+}
+
+type adminStub struct {
+	email    string
+	verified bool
+}
+
+func (a adminStub) AdminView(context.Context, string) (string, bool, error) {
+	return a.email, a.verified, nil
+}

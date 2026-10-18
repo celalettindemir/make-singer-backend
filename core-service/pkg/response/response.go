@@ -20,6 +20,7 @@ const (
 	CodePurchaseInvalid      = "PURCHASE_INVALID"
 	CodePurchaseOwnedByOther = "PURCHASE_OWNED_BY_OTHER"
 	CodePlanRequired         = "PLAN_REQUIRED"
+	CodeAdminRequired        = "ADMIN_REQUIRED"
 )
 
 type ErrorResponse struct {
@@ -111,6 +112,11 @@ func NoContent(c *fiber.Ctx) error {
 func InsufficientCredits(c *fiber.Ctx, required, balance int) error {
 	return Error(c, fiber.StatusPaymentRequired, CodeInsufficientCredits, i18n.KeyInsufficientCredits,
 		map[string]int{"required": required, "balance": balance})
+}
+
+// AdminRequired writes the 403 answer for a signed-in user who is not an admin.
+func AdminRequired(c *fiber.Ctx) error {
+	return Error(c, fiber.StatusForbidden, CodeAdminRequired, i18n.KeyAdminRequired, nil)
 }
 
 // PlanRequired writes the 403 answer for a feature of a higher plan tier.

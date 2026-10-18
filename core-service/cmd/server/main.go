@@ -355,6 +355,13 @@ func main() {
 	// Store webhooks (Apple, Google Pub/Sub): the stores carry no user token and
 	// authenticate with a signed payload / push JWT inside the handler. Like
 	// /api/public these are registered BEFORE the authenticated /api group.
+	// Admin panel: its own auth chain (admin audience, then the e-mail gate).
+	// Registered BEFORE the mobile /api group, whose middleware would
+	// otherwise answer these paths first.
+	registerAdminRoutes(app, rateLimiter, cfg.Auth.AdminClientSecret != "",
+		middleware.NewAdminAuth(cfg.Auth.Issuer, cfg.Auth.AdminClientID, identityServer.APIPublicKey()),
+		middleware.AdminGate(identityServer, cfg.Admin.Emails))
+
 	// API routes
 	api := newAPIRouter(app, creditRoutes, rateLimiter, cfg,
 		apiAuthMiddleware, middleware.DeletedUserGate(deletionmark.NewRedisChecker(redisClient)))
@@ -631,6 +638,24 @@ func registerWebhookRoutes(app *fiber.App, h creditRouteHandlers, rl *middleware
 		rl.LimitIP("webhook", cfg.RateLimit.WebhooksPerMin, time.Minute, "", 0, 0))
 	webhooks.Post("/appstore", h.Webhooks.AppStore)
 	webhooks.Post("/googleplay", h.Webhooks.GooglePlay)
+}
+
+// adminPerMin is the per-admin request limit of /api/admin.
+const adminPerMin = 120
+
+// registerAdminRoutes binds /api/admin. Without the admin-web client secret
+// the panel is off and every /api/admin path answers 404. The chain is
+// token (admin audience) -> rate limit per admin -> e-mail gate.
+func registerAdminRoutes(app *fiber.App, rl *middleware.RateLimiter, enabled bool, auth, gate fiber.Handler) fiber.Router {
+	if !enabled {
+		app.Use("/api/admin", func(c *fiber.Ctx) error { return fiber.ErrNotFound })
+		return nil
+	}
+	admin := app.Group("/api/admin", auth, rl.Limit("yonetici", adminPerMin, time.Minute), gate)
+	admin.Get("/me", func(c *fiber.Ctx) error {
+		return response.OK(c, fiber.Map{"email": middleware.GetAdminEmail(c)})
+	})
+	return admin
 }
 
 // registerCreditRoutes binds the authenticated credit and purchase routes on

@@ -3,9 +3,11 @@ package identity
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/makeasinger/api/internal/config"
 	"github.com/zitadel/oidc/v3/pkg/oidc"
 	"github.com/zitadel/oidc/v3/pkg/op"
 )
@@ -449,5 +451,130 @@ func TestStorage_TokenRequestByRefreshTokenErrorIndistinguishable(t *testing.T) 
 	}
 	if usedErr.Error() != unknownErr.Error() {
 		t.Errorf("the errors are distinguishable: used=%q unknown=%q", usedErr, unknownErr)
+	}
+}
+
+const testAdminSecret = "0123456789abcdef0123456789abcdef-admin-secret"
+
+func newAdminStorage(t *testing.T, secret string) *Storage {
+	t.Helper()
+	a, err := LoadSigningKey(testPEM(t))
+	if err != nil {
+		t.Fatalf("LoadSigningKey: %v", err)
+	}
+	cfg := testAuthCfg()
+	cfg.AdminClientID = "admin-web"
+	cfg.AdminClientSecret = secret
+	cfg.AdminRedirectURIs = []string{"https://panel.ornek.dev/admin/callback"}
+	return NewStorage(cfg, NewFakeUserStore(), NewFakeTokenStore(), nil, a)
+}
+
+func TestStorage_ResolvesBothClients(t *testing.T) {
+	s := newAdminStorage(t, testAdminSecret)
+	ctx := context.Background()
+	m, err := s.GetClientByClientID(ctx, "makesinger-mobil")
+	if err != nil || m.AuthMethod() != oidc.AuthMethodNone || m.GetID() != "makesinger-mobil" {
+		t.Fatalf("mobile client: %v %v", m, err)
+	}
+	a, err := s.GetClientByClientID(ctx, "admin-web")
+	if err != nil {
+		t.Fatalf("admin client: %v", err)
+	}
+	if a.GetID() != "admin-web" || a.AuthMethod() != oidc.AuthMethodBasic ||
+		a.AccessTokenType() != op.AccessTokenTypeJWT || a.ApplicationType() != op.ApplicationTypeWeb {
+		t.Errorf("admin client misconfigured: id=%s auth=%s", a.GetID(), a.AuthMethod())
+	}
+	if got := a.RedirectURIs(); len(got) != 1 || got[0] != "https://panel.ornek.dev/admin/callback" {
+		t.Errorf("admin RedirectURIs = %v", got)
+	}
+	if got := a.PostLogoutRedirectURIs(); len(got) != 1 {
+		t.Errorf("admin PostLogoutRedirectURIs = %v", got)
+	}
+	if !a.IsScopeAllowed("offline_access") || a.IsScopeAllowed("admin") {
+		t.Error("admin scopes wrong")
+	}
+	if _, err := s.GetClientByClientID(ctx, "baska"); err == nil {
+		t.Error("unknown client accepted")
+	}
+	if _, err := s.GetClientByClientID(ctx, ""); err == nil {
+		t.Error("empty client id accepted")
+	}
+}
+
+func TestStorage_AdminSecretCheckedConstantTime(t *testing.T) {
+	s := newAdminStorage(t, testAdminSecret)
+	ctx := context.Background()
+	if err := s.AuthorizeClientIDSecret(ctx, "admin-web", testAdminSecret); err != nil {
+		t.Errorf("right secret rejected: %v", err)
+	}
+	for _, bad := range []string{"", "yanlis", testAdminSecret + "x", testAdminSecret[:len(testAdminSecret)-1]} {
+		if err := s.AuthorizeClientIDSecret(ctx, "admin-web", bad); err == nil {
+			t.Errorf("secret %q accepted", bad)
+		}
+	}
+	// The mobile client stays secretless: not even the admin secret works.
+	if err := s.AuthorizeClientIDSecret(ctx, "makesinger-mobil", testAdminSecret); err == nil {
+		t.Error("mobile client authorized with a secret")
+	}
+	if err := s.AuthorizeClientIDSecret(ctx, "makesinger-mobil", ""); err == nil {
+		t.Error("mobile client authorized with an empty secret")
+	}
+}
+
+func TestServer_AdminClientMissingSecretDisablesAdmin(t *testing.T) {
+	s := newAdminStorage(t, "")
+	ctx := context.Background()
+	if _, err := s.GetClientByClientID(ctx, "admin-web"); err == nil {
+		t.Error("admin client registered without a secret")
+	}
+	if err := s.AuthorizeClientIDSecret(ctx, "admin-web", ""); err == nil {
+		t.Error("empty secret authorized the admin client")
+	}
+	cfg := testAuthCfg()
+	cfg.AdminClientID = "admin-web"
+	if err := validateConfig(cfg); err != nil {
+		t.Errorf("config without admin secret should be valid: %v", err)
+	}
+}
+
+func TestValidateConfig_AdminSecret(t *testing.T) {
+	cases := map[string]func(*config.AuthConfig){
+		"short secret":      func(c *config.AuthConfig) { c.AdminClientSecret = "kisa" },
+		"31 bytes":          func(c *config.AuthConfig) { c.AdminClientSecret = strings.Repeat("a", 31) },
+		"same id as mobile": func(c *config.AuthConfig) { c.AdminClientID = c.ClientID },
+		"empty id":          func(c *config.AuthConfig) { c.AdminClientID = " " },
+		"no redirects":      func(c *config.AuthConfig) { c.AdminRedirectURIs = nil },
+		"blank redirect":    func(c *config.AuthConfig) { c.AdminRedirectURIs = []string{" "} },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := testAuthCfg()
+			cfg.AdminClientID = "admin-web"
+			cfg.AdminClientSecret = strings.Repeat("s", 32)
+			cfg.AdminRedirectURIs = []string{"https://panel.ornek.dev/admin/callback"}
+			if err := validateConfig(cfg); err != nil {
+				t.Fatalf("baseline invalid: %v", err)
+			}
+			mutate(cfg)
+			if err := validateConfig(cfg); err == nil {
+				t.Error("invalid admin configuration accepted")
+			}
+		})
+	}
+}
+
+func TestServer_AdminViewReadsIdentityStore(t *testing.T) {
+	users := NewFakeUserStore()
+	u, err := users.Create(context.Background(), "Yonetici@Ornek.dev", "Y", "uzun-bir-parola-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{users: users}
+	email, verified, err := srv.AdminView(context.Background(), u.ID)
+	if err != nil || email != u.Email {
+		t.Fatalf("AdminView = %q %v %v", email, verified, err)
+	}
+	if _, v, err := srv.AdminView(context.Background(), "yok"); err != nil || v {
+		t.Errorf("unknown user: verified=%v err=%v, want false/nil", v, err)
 	}
 }
