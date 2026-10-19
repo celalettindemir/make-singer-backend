@@ -196,10 +196,13 @@ type OpenAIConfig struct {
 
 // AnthropicConfig is the Anthropic Messages API client configuration.
 type AnthropicConfig struct {
-	APIKey              string
-	BaseURL             string
-	Model               string
-	MaxTokens           int
+	APIKey    string
+	BaseURL   string
+	Model     string
+	MaxTokens int
+	// Effort is sent as output_config.effort when not empty. Temperatures
+	// are not sent: current Claude models reject non-default sampling.
+	Effort              string
 	TemperatureGenerate float64
 	TemperatureRewrite  float64
 }
@@ -362,6 +365,7 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("anthropic.base_url", "ANTHROPIC_BASE_URL")
 	_ = viper.BindEnv("anthropic.model", "ANTHROPIC_MODEL")
 	_ = viper.BindEnv("anthropic.max_tokens", "ANTHROPIC_MAX_TOKENS")
+	_ = viper.BindEnv("anthropic.effort", "ANTHROPIC_EFFORT")
 	_ = viper.BindEnv("anthropic.temperature_generate", "ANTHROPIC_TEMPERATURE_GENERATE")
 	_ = viper.BindEnv("anthropic.temperature_rewrite", "ANTHROPIC_TEMPERATURE_REWRITE")
 	_ = viper.BindEnv("lyrics.default_provider", "LYRICS_DEFAULT_PROVIDER")
@@ -493,6 +497,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("anthropic.base_url", "https://api.anthropic.com")
 	viper.SetDefault("anthropic.model", "claude-sonnet-5-5")
 	viper.SetDefault("anthropic.max_tokens", 4000)
+	viper.SetDefault("anthropic.effort", "low")
 	viper.SetDefault("anthropic.temperature_generate", 0.8)
 	viper.SetDefault("anthropic.temperature_rewrite", 0.6)
 	viper.SetDefault("lyrics.default_provider", "groq")
@@ -612,6 +617,7 @@ func Load() (*Config, error) {
 			BaseURL:             viper.GetString("anthropic.base_url"),
 			Model:               viper.GetString("anthropic.model"),
 			MaxTokens:           viper.GetInt("anthropic.max_tokens"),
+			Effort:              viper.GetString("anthropic.effort"),
 			TemperatureGenerate: viper.GetFloat64("anthropic.temperature_generate"),
 			TemperatureRewrite:  viper.GetFloat64("anthropic.temperature_rewrite"),
 		},

@@ -89,8 +89,9 @@ anthropic:
   api_key: "" # Set via ANTHROPIC_API_KEY env var
   base_url: "https://api.anthropic.com"
   model: "claude-sonnet-5-5"
-  max_tokens: 4000
-  temperature_generate: 0.8
+  max_tokens: 4000 # covers adaptive thinking too
+  effort: "low" # output_config.effort; empty = not sent
+  temperature_generate: 0.8 # not sent: current Claude models reject sampling params
   temperature_rewrite: 0.6
 
 # Lyrics provider used until the admin chooses one (openai | anthropic | groq)
