@@ -594,3 +594,39 @@ func TestConfig_AdminDefaults(t *testing.T) {
 		t.Errorf("AdminRedirectURIs = %q", cfg.Auth.AdminRedirectURIs)
 	}
 }
+
+func TestLoad_ReadsOpenAIAndAnthropicEnv(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "ok")
+	t.Setenv("OPENAI_MODEL", "gpt-test")
+	t.Setenv("ANTHROPIC_API_KEY", "ak")
+	t.Setenv("LYRICS_DEFAULT_PROVIDER", "anthropic")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.OpenAI.APIKey != "ok" || cfg.OpenAI.Model != "gpt-test" {
+		t.Errorf("OpenAI = %+v", cfg.OpenAI)
+	}
+	if cfg.OpenAI.BaseURL != "https://api.openai.com/v1" || cfg.OpenAI.MaxTokens != 4000 {
+		t.Errorf("OpenAI defaults = %+v", cfg.OpenAI)
+	}
+	if cfg.Anthropic.APIKey != "ak" || cfg.Anthropic.Model != "claude-sonnet-5-5" || cfg.Anthropic.BaseURL != "https://api.anthropic.com" {
+		t.Errorf("Anthropic = %+v", cfg.Anthropic)
+	}
+	if cfg.Lyrics.DefaultProvider != "anthropic" {
+		t.Errorf("Lyrics.DefaultProvider = %q", cfg.Lyrics.DefaultProvider)
+	}
+}
+
+func TestLoad_LyricsDefaultProviderIsGroq(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Lyrics.DefaultProvider != "groq" {
+		t.Errorf("Lyrics.DefaultProvider = %q, want groq", cfg.Lyrics.DefaultProvider)
+	}
+	if cfg.OpenAI.Model != "gpt-6.1-sol" || cfg.OpenAI.ReasoningEffort != "low" {
+		t.Errorf("OpenAI defaults = %+v", cfg.OpenAI)
+	}
+}

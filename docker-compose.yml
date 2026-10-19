@@ -20,6 +20,12 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - GROQ_BASE_URL=${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
       - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      # OpenAI / Anthropic (lyrics providers; the admin picks the active one)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-6.1-sol}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+      - LYRICS_DEFAULT_PROVIDER=${LYRICS_DEFAULT_PROVIDER:-groq}
       # Cloudflare R2
       - R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}

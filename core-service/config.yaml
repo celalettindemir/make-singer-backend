@@ -74,6 +74,29 @@ groq:
   temperature_generate: 0.8
   temperature_rewrite: 0.6
 
+# OpenAI (lyrics provider; the admin picks the active provider)
+openai:
+  api_key: "" # Set via OPENAI_API_KEY env var
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-6.1-sol"
+  max_tokens: 4000 # sent as max_completion_tokens, covers reasoning
+  reasoning_effort: "low" # empty = not sent
+  temperature_generate: 0.8 # not sent: reasoning models reject temperature
+  temperature_rewrite: 0.6
+
+# Anthropic (lyrics provider)
+anthropic:
+  api_key: "" # Set via ANTHROPIC_API_KEY env var
+  base_url: "https://api.anthropic.com"
+  model: "claude-sonnet-5-5"
+  max_tokens: 4000
+  temperature_generate: 0.8
+  temperature_rewrite: 0.6
+
+# Lyrics provider used until the admin chooses one (openai | anthropic | groq)
+lyrics:
+  default_provider: "groq" # LYRICS_DEFAULT_PROVIDER
+
 # Cloudflare R2 Storage Configuration
 r2:
   account_id: "" # Set via R2_ACCOUNT_ID env var

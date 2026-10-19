@@ -36,6 +36,9 @@ type Config struct {
 	Redis     RedisConfig
 	RateLimit RateLimitConfig
 	Groq      GroqConfig
+	OpenAI    OpenAIConfig
+	Anthropic AnthropicConfig
+	Lyrics    LyricsConfig
 	R2        R2Config
 	Suno      SunoConfig
 	Audio     AudioConfig
@@ -178,6 +181,34 @@ type GroqConfig struct {
 	TemperatureRewrite  float64
 }
 
+// OpenAIConfig is the OpenAI chat completions client configuration.
+type OpenAIConfig struct {
+	APIKey  string
+	BaseURL string
+	Model   string
+	// MaxTokens is sent as max_completion_tokens; it also covers reasoning.
+	MaxTokens int
+	// ReasoningEffort is sent as reasoning_effort when not empty.
+	ReasoningEffort     string
+	TemperatureGenerate float64
+	TemperatureRewrite  float64
+}
+
+// AnthropicConfig is the Anthropic Messages API client configuration.
+type AnthropicConfig struct {
+	APIKey              string
+	BaseURL             string
+	Model               string
+	MaxTokens           int
+	TemperatureGenerate float64
+	TemperatureRewrite  float64
+}
+
+// LyricsConfig picks the lyrics provider used when the admin has not chosen one.
+type LyricsConfig struct {
+	DefaultProvider string
+}
+
 // R2Config holds the public and private bucket configuration for
 // Cloudflare R2. The public bucket is for export files, the private bucket
 // for user working files.
@@ -285,6 +316,8 @@ func Load() (*Config, error) {
 	// Read Docker Swarm secrets from _FILE env vars before Viper binds
 	readSecret("REDIS_PASSWORD")
 	readSecret("GROQ_API_KEY")
+	readSecret("OPENAI_API_KEY")
+	readSecret("ANTHROPIC_API_KEY")
 	readSecret("SUNO_API_KEY")
 	readSecret("R2_ACCOUNT_ID")
 	readSecret("R2_ACCESS_KEY_ID")
@@ -318,6 +351,20 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("groq.max_tokens", "GROQ_MAX_TOKENS")
 	_ = viper.BindEnv("groq.temperature_generate", "GROQ_TEMPERATURE_GENERATE")
 	_ = viper.BindEnv("groq.temperature_rewrite", "GROQ_TEMPERATURE_REWRITE")
+	_ = viper.BindEnv("openai.api_key", "OPENAI_API_KEY")
+	_ = viper.BindEnv("openai.base_url", "OPENAI_BASE_URL")
+	_ = viper.BindEnv("openai.model", "OPENAI_MODEL")
+	_ = viper.BindEnv("openai.max_tokens", "OPENAI_MAX_TOKENS")
+	_ = viper.BindEnv("openai.reasoning_effort", "OPENAI_REASONING_EFFORT")
+	_ = viper.BindEnv("openai.temperature_generate", "OPENAI_TEMPERATURE_GENERATE")
+	_ = viper.BindEnv("openai.temperature_rewrite", "OPENAI_TEMPERATURE_REWRITE")
+	_ = viper.BindEnv("anthropic.api_key", "ANTHROPIC_API_KEY")
+	_ = viper.BindEnv("anthropic.base_url", "ANTHROPIC_BASE_URL")
+	_ = viper.BindEnv("anthropic.model", "ANTHROPIC_MODEL")
+	_ = viper.BindEnv("anthropic.max_tokens", "ANTHROPIC_MAX_TOKENS")
+	_ = viper.BindEnv("anthropic.temperature_generate", "ANTHROPIC_TEMPERATURE_GENERATE")
+	_ = viper.BindEnv("anthropic.temperature_rewrite", "ANTHROPIC_TEMPERATURE_REWRITE")
+	_ = viper.BindEnv("lyrics.default_provider", "LYRICS_DEFAULT_PROVIDER")
 	_ = viper.BindEnv("r2.account_id", "R2_ACCOUNT_ID")
 	_ = viper.BindEnv("r2.access_key_id", "R2_ACCESS_KEY_ID")
 	_ = viper.BindEnv("r2.secret_access_key", "R2_SECRET_ACCESS_KEY")
@@ -436,6 +483,20 @@ func Load() (*Config, error) {
 	viper.SetDefault("groq.temperature_generate", 0.8)
 	viper.SetDefault("groq.temperature_rewrite", 0.6)
 
+	// OpenAI and Anthropic defaults (lyrics providers)
+	viper.SetDefault("openai.base_url", "https://api.openai.com/v1")
+	viper.SetDefault("openai.model", "gpt-6.1-sol")
+	viper.SetDefault("openai.max_tokens", 4000)
+	viper.SetDefault("openai.reasoning_effort", "low")
+	viper.SetDefault("openai.temperature_generate", 0.8)
+	viper.SetDefault("openai.temperature_rewrite", 0.6)
+	viper.SetDefault("anthropic.base_url", "https://api.anthropic.com")
+	viper.SetDefault("anthropic.model", "claude-sonnet-5-5")
+	viper.SetDefault("anthropic.max_tokens", 4000)
+	viper.SetDefault("anthropic.temperature_generate", 0.8)
+	viper.SetDefault("anthropic.temperature_rewrite", 0.6)
+	viper.SetDefault("lyrics.default_provider", "groq")
+
 	// Suno defaults
 	viper.SetDefault("suno.base_url", "https://api.sunoapi.org")
 	viper.SetDefault("suno.model", "V6")
@@ -536,6 +597,26 @@ func Load() (*Config, error) {
 			MaxTokens:           viper.GetInt("groq.max_tokens"),
 			TemperatureGenerate: viper.GetFloat64("groq.temperature_generate"),
 			TemperatureRewrite:  viper.GetFloat64("groq.temperature_rewrite"),
+		},
+		OpenAI: OpenAIConfig{
+			APIKey:              viper.GetString("openai.api_key"),
+			BaseURL:             viper.GetString("openai.base_url"),
+			Model:               viper.GetString("openai.model"),
+			MaxTokens:           viper.GetInt("openai.max_tokens"),
+			ReasoningEffort:     viper.GetString("openai.reasoning_effort"),
+			TemperatureGenerate: viper.GetFloat64("openai.temperature_generate"),
+			TemperatureRewrite:  viper.GetFloat64("openai.temperature_rewrite"),
+		},
+		Anthropic: AnthropicConfig{
+			APIKey:              viper.GetString("anthropic.api_key"),
+			BaseURL:             viper.GetString("anthropic.base_url"),
+			Model:               viper.GetString("anthropic.model"),
+			MaxTokens:           viper.GetInt("anthropic.max_tokens"),
+			TemperatureGenerate: viper.GetFloat64("anthropic.temperature_generate"),
+			TemperatureRewrite:  viper.GetFloat64("anthropic.temperature_rewrite"),
+		},
+		Lyrics: LyricsConfig{
+			DefaultProvider: viper.GetString("lyrics.default_provider"),
 		},
 		R2: R2Config{
 			AccountID:       viper.GetString("r2.account_id"),
