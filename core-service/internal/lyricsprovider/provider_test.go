@@ -166,3 +166,56 @@ func TestParseName(t *testing.T) {
 		t.Error("unknown name must fail")
 	}
 }
+
+// blockingStore blocks Get until release is closed or ctx ends.
+type blockingStore struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingStore) Get(ctx context.Context) (Name, bool, error) {
+	close(b.entered)
+	select {
+	case <-b.release:
+		return Anthropic, true, nil
+	case <-ctx.Done():
+		return "", false, ctx.Err()
+	}
+}
+
+func (b *blockingStore) Set(context.Context, Name, string) error { return nil }
+
+func TestSelector_RefreshDoesNotBlockOtherCallers(t *testing.T) {
+	store := &blockingStore{entered: make(chan struct{}), release: make(chan struct{})}
+	s, _, _ := setup(store)
+	done := make(chan Name)
+	go func() { n, _ := s.Active(context.Background()); done <- n }()
+	<-store.entered
+	got := make(chan Name)
+	go func() { n, _ := s.Active(context.Background()); got <- n }()
+	select {
+	case n := <-got:
+		if n != Groq {
+			t.Errorf("concurrent caller = %v, want the fallback while refreshing", n)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a second caller waited for the database read")
+	}
+	close(store.release)
+	if n := <-done; n != Anthropic {
+		t.Errorf("refreshing caller = %v, want anthropic", n)
+	}
+}
+
+func TestSelector_StoreReadHasADeadline(t *testing.T) {
+	store := &blockingStore{entered: make(chan struct{}), release: make(chan struct{})}
+	s, _, _ := setup(store)
+	s.readTimeout = 50 * time.Millisecond
+	start := time.Now()
+	if n, _ := s.Active(context.Background()); n != Groq {
+		t.Errorf("timed-out read = %v, want fallback", n)
+	}
+	if time.Since(start) > time.Second {
+		t.Errorf("read took %v, want bounded by the timeout", time.Since(start))
+	}
+}

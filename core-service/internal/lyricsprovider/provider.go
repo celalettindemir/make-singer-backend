@@ -50,17 +50,24 @@ type Selector struct {
 	ttl      time.Duration
 	now      func() time.Time
 
-	mu       sync.Mutex
-	cached   Name
-	hasCache bool
-	readAt   time.Time
-	fixed    client.ChatClient
+	// readTimeout bounds one store read; a slow database never stalls lyrics.
+	readTimeout time.Duration
+
+	mu         sync.Mutex
+	cached     Name
+	hasCache   bool
+	readAt     time.Time
+	refreshing bool
+	fixed      client.ChatClient
 }
+
+// defaultReadTimeout bounds a store read.
+const defaultReadTimeout = 2 * time.Second
 
 // NewSelector creates a selector over the given clients. fallback is used
 // while the store has no choice, or when the chosen provider is not configured.
 func NewSelector(clients map[Name]client.ChatClient, store Store, fallback Name, ttl time.Duration, now func() time.Time) *Selector {
-	return &Selector{clients: clients, store: store, fallback: fallback, ttl: ttl, now: now}
+	return &Selector{clients: clients, store: store, fallback: fallback, ttl: ttl, now: now, readTimeout: defaultReadTimeout}
 }
 
 // Fixed returns a selector that always answers c (tests, e2e).
@@ -70,29 +77,44 @@ func Fixed(c client.ChatClient) *Selector {
 
 // Active returns the provider to use for one request. A store error keeps
 // the last known choice (or the fallback): lyrics never fail on the setting.
+// One caller refreshes a stale cache outside the lock, with a deadline; the
+// others answer from the cache meanwhile.
 func (s *Selector) Active(ctx context.Context) (Name, client.ChatClient) {
 	if s.store == nil {
 		return "", s.fixed
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.hasCache || s.now().Sub(s.readAt) >= s.ttl {
-		name, ok, err := s.store.Get(ctx)
-		switch {
-		case err != nil:
-			log.Printf("lyrics provider: could not read the setting, keeping %q: %v", s.choiceLocked(), err)
-		case ok:
-			s.cached, s.hasCache = name, true
-		default:
-			s.cached, s.hasCache = s.fallback, true
-		}
-		s.readAt = s.now()
+	stale := !s.hasCache || s.now().Sub(s.readAt) >= s.ttl
+	if stale && !s.refreshing {
+		s.refreshing = true
+		s.mu.Unlock()
+		s.refresh(ctx)
+		s.mu.Lock()
 	}
 	name := s.choiceLocked()
+	s.mu.Unlock()
 	if !s.available(name) {
 		name = s.fallback
 	}
 	return name, s.clients[name]
+}
+
+func (s *Selector) refresh(ctx context.Context) {
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.readTimeout)
+	defer cancel()
+	name, ok, err := s.store.Get(readCtx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refreshing = false
+	s.readAt = s.now()
+	switch {
+	case err != nil:
+		log.Printf("lyrics provider: could not read the setting, keeping %q: %v", s.choiceLocked(), err)
+	case ok:
+		s.cached, s.hasCache = name, true
+	default:
+		s.cached, s.hasCache = s.fallback, true
+	}
 }
 
 func (s *Selector) choiceLocked() Name {
