@@ -30,6 +30,7 @@ import (
 	"github.com/makeasinger/api/internal/handler"
 	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/identity"
+	"github.com/makeasinger/api/internal/lyricsprovider"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/internal/social"
@@ -226,7 +227,7 @@ func main() {
 	creditWorker := worker.NewCreditWorker(purchases, appleVerifier).WithExpiry(creditStore, campaigns)
 
 	// Initialize services
-	lyricsService := service.NewLyricsService(groqClient)
+	lyricsService := service.NewLyricsService(lyricsprovider.Fixed(groqClient))
 	renderService := service.NewRenderService(redisClient, asynqClient, storage, &cfg.R2).WithCredits(creditService)
 	masterService := service.NewMasterService(redisClient, asynqClient, storage, &cfg.R2).WithCredits(creditService)
 	exportService := service.NewExportService(storage, audioClient, &cfg.R2)

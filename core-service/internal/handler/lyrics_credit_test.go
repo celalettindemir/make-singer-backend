@@ -318,3 +318,33 @@ func TestLyrics_UnchargedEmptyResultKeepsOldBehavior(t *testing.T) {
 		t.Errorf("nil spender: status = %d, want 200", status)
 	}
 }
+
+func TestLyricsHandler_BadSectionIndexIs400NoCharge(t *testing.T) {
+	gen := newFakeLyrics()
+	sp := &credit.FakeSpender{IsEnforced: true, ChargedFirst: true}
+	app := lyricsApp(gen, sp)
+	bodies := map[string]string{
+		"/generate": `{"genre":"pop","sectionType":"chorus","vibes":["happy"],"song":[{"type":"verse"}],"sectionIndex":0}`,
+		"/rewrite":  `{"currentLyrics":"la","genre":"pop","sectionType":"verse","vibes":["happy"],"song":[{"type":"verse"}]}`,
+	}
+	for path, body := range bodies {
+		status, out := lyricsCall(t, app, path, body, actionA)
+		if status != http.StatusBadRequest {
+			t.Fatalf("%s status = %d, want 400", path, status)
+		}
+		if errDetails(t, out)["sectionIndex"] != "invalid" {
+			t.Errorf("%s details = %v", path, errDetails(t, out))
+		}
+	}
+	if len(sp.Actions) != 0 || gen.genCalls != 0 || gen.rewCalls != 0 {
+		t.Errorf("spends %d, gen %d, rew %d; want none", len(sp.Actions), gen.genCalls, gen.rewCalls)
+	}
+}
+
+func TestLyricsHandler_ContextRequestOK(t *testing.T) {
+	gen := newFakeLyrics()
+	body := `{"genre":"pop","sectionType":"chorus","vibes":["happy"],"topic":"t","bpm":96,"song":[{"type":"verse","lyrics":"a"},{"type":"chorus"}],"sectionIndex":1}`
+	if status, _ := lyricsCall(t, lyricsApp(gen, nil), "/generate", body, actionA); status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+}

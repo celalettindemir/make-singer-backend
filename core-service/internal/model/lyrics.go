@@ -6,6 +6,7 @@ type LyricsGenerateRequest struct {
 	SectionType SectionType `json:"sectionType" validate:"required,oneof=intro verse prechorus chorus bridge outro instrumental"`
 	Vibes       []string    `json:"vibes" validate:"required,min=1,max=3,dive,min=1"`
 	Language    Language    `json:"language" validate:"omitempty,oneof=en tr fr"`
+	LyricsContext
 }
 
 // LyricsGenerateResponse represents the response for lyrics generation
@@ -22,6 +23,7 @@ type LyricsRewriteRequest struct {
 	Vibes         []string    `json:"vibes" validate:"required,min=1,max=3,dive,min=1"`
 	Instructions  string      `json:"instructions" validate:"omitempty,max=500"`
 	Language      Language    `json:"language" validate:"omitempty,oneof=en tr fr"`
+	LyricsContext
 }
 
 // LyricsRewriteResponse represents the response for lyrics rewriting

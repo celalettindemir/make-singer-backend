@@ -64,6 +64,9 @@ func (h *LyricsHandler) Generate(c *fiber.Ctx) error {
 	if err := h.validator.Struct(&req); err != nil {
 		return response.ValidationError(c, i18n.KeyValidationFailed, formatValidationErrors(err))
 	}
+	if err := req.CheckIndex(req.SectionType); err != nil {
+		return response.ValidationError(c, i18n.KeyValidationFailed, map[string]string{"sectionIndex": "invalid"})
+	}
 
 	act, err := h.begin(c, credit.OpLyricsGenerate)
 	if act == nil {
@@ -107,6 +110,9 @@ func (h *LyricsHandler) Rewrite(c *fiber.Ctx) error {
 
 	if err := h.validator.Struct(&req); err != nil {
 		return response.ValidationError(c, i18n.KeyValidationFailed, formatValidationErrors(err))
+	}
+	if err := req.CheckIndex(req.SectionType); err != nil {
+		return response.ValidationError(c, i18n.KeyValidationFailed, map[string]string{"sectionIndex": "invalid"})
 	}
 
 	act, err := h.begin(c, credit.OpLyricsRewrite)

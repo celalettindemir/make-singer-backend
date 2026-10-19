@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/lyricsprovider"
 	"github.com/makeasinger/api/internal/model"
 )
 
@@ -19,22 +20,26 @@ type LyricsGenerator interface {
 	IsMock() bool
 }
 
-// LyricsService handles lyrics generation and rewriting using Groq AI
-type LyricsService struct {
-	groqClient *client.GroqClient
+// ClientSource hands out the AI client for one request (R-LYR-11).
+type ClientSource interface {
+	Active(ctx context.Context) (lyricsprovider.Name, client.ChatClient)
 }
 
-// NewLyricsService creates a new lyrics service with Groq client
-func NewLyricsService(groqClient *client.GroqClient) *LyricsService {
-	return &LyricsService{
-		groqClient: groqClient,
-	}
+// LyricsService handles lyrics generation and rewriting with the active AI provider.
+type LyricsService struct {
+	source ClientSource
+}
+
+// NewLyricsService creates a lyrics service over a provider source.
+func NewLyricsService(source ClientSource) *LyricsService {
+	return &LyricsService{source: source}
 }
 
 // IsMock reports whether no AI provider is configured, so Generate and
 // Rewrite answer with canned text.
 func (s *LyricsService) IsMock() bool {
-	return s.groqClient == nil || !s.groqClient.IsConfigured()
+	_, c := s.source.Active(context.Background())
+	return c == nil || !c.IsConfigured()
 }
 
 // Generate creates new lyrics based on the given parameters
@@ -44,23 +49,20 @@ func (s *LyricsService) Generate(ctx context.Context, req *model.LyricsGenerateR
 		language = model.LanguageEN
 	}
 
-	// Use mock response if client is not configured
-	if s.IsMock() {
+	name, c := s.source.Active(ctx)
+	if c == nil || !c.IsConfigured() {
 		return s.generateMock(req)
 	}
 
-	systemPrompt := s.buildSystemPrompt(language)
-	userPrompt := s.buildGeneratePrompt(req, language)
-
-	temperature, _ := s.groqClient.Temperatures()
-	response, err := s.groqClient.ChatCompletion(ctx, systemPrompt, userPrompt, temperature)
+	temperature, _ := c.Temperatures()
+	response, err := c.ChatCompletion(ctx, buildSystemPrompt(language), buildGeneratePrompt(req, language), temperature)
 	if err != nil {
-		return nil, fmt.Errorf("AI generation failed: %w", err)
+		return nil, fmt.Errorf("AI generation failed (%s): %w", name, err)
 	}
 
 	drafts, err := s.parseGenerateResponse(response)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse AI response: %w", err)
+		return nil, fmt.Errorf("failed to parse AI response (%s): %w", name, err)
 	}
 
 	return &model.LyricsGenerateResponse{
@@ -70,8 +72,8 @@ func (s *LyricsService) Generate(ctx context.Context, req *model.LyricsGenerateR
 
 // Rewrite rewrites existing lyrics based on the given parameters
 func (s *LyricsService) Rewrite(ctx context.Context, req *model.LyricsRewriteRequest) (*model.LyricsRewriteResponse, error) {
-	// Use mock response if client is not configured
-	if s.IsMock() {
+	name, c := s.source.Active(ctx)
+	if c == nil || !c.IsConfigured() {
 		return s.rewriteMock(req)
 	}
 
@@ -80,80 +82,20 @@ func (s *LyricsService) Rewrite(ctx context.Context, req *model.LyricsRewriteReq
 		language = model.LanguageEN
 	}
 
-	systemPrompt := s.buildSystemPrompt(language)
-	userPrompt := s.buildRewritePrompt(req, language)
-
-	_, temperature := s.groqClient.Temperatures()
-	response, err := s.groqClient.ChatCompletion(ctx, systemPrompt, userPrompt, temperature)
+	_, temperature := c.Temperatures()
+	response, err := c.ChatCompletion(ctx, buildSystemPrompt(language), buildRewritePrompt(req, language), temperature)
 	if err != nil {
-		return nil, fmt.Errorf("AI rewrite failed: %w", err)
+		return nil, fmt.Errorf("AI rewrite failed (%s): %w", name, err)
 	}
 
 	lines, err := s.parseRewriteResponse(response)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse AI response: %w", err)
+		return nil, fmt.Errorf("failed to parse AI response (%s): %w", name, err)
 	}
 
 	return &model.LyricsRewriteResponse{
 		Lines: lines,
 	}, nil
-}
-
-func langName(language model.Language) string {
-	switch language {
-	case model.LanguageTR:
-		return "Turkish"
-	case model.LanguageFR:
-		return "French"
-	}
-	return "English"
-}
-
-func (s *LyricsService) buildSystemPrompt(language model.Language) string {
-	return fmt.Sprintf(`You are a professional %s songwriter with expertise in various music genres.
-Your task is to write compelling, emotionally resonant lyrics that match the requested style and mood.
-Always output your response as valid JSON in the exact format requested.
-Do not include any text outside the JSON structure.`, langName(language))
-}
-
-func (s *LyricsService) buildGeneratePrompt(req *model.LyricsGenerateRequest, language model.Language) string {
-	vibes := strings.Join(req.Vibes, ", ")
-
-	return fmt.Sprintf(`Generate lyrics for a %s song's %s section.
-Vibes/mood: %s
-Write ALL lyrics in %s, even if the vibes are given in another language.
-
-Create 2 different draft versions. Each draft should have 4-8 lines that fit the section type.
-For a verse: tell a story or set the scene.
-For a chorus: create a memorable, singable hook.
-For a bridge: provide contrast or a new perspective.
-For other sections: follow conventions of that section type.
-
-Output a single JSON object with exactly one key, "drafts". Its value is an array of exactly 2 drafts; each draft is an array of 4-8 plain strings (one string per lyric line). Use only plain strings: no nested objects, no extra keys, no line numbers. Escape any double quote inside a line as \" or avoid it.
-Example shape: {"drafts": [["line1","line2","line3","line4"], ["line1","line2","line3","line4"]]}`,
-		req.Genre, req.SectionType, vibes, langName(language))
-}
-
-func (s *LyricsService) buildRewritePrompt(req *model.LyricsRewriteRequest, language model.Language) string {
-	vibes := strings.Join(req.Vibes, ", ")
-
-	instructions := ""
-	if req.Instructions != "" {
-		instructions = fmt.Sprintf("\nSpecific instructions: %s", req.Instructions)
-	}
-
-	return fmt.Sprintf(`Rewrite the following lyrics for a %s song's %s section.
-Current vibes/mood: %s%s
-
-Current lyrics:
-%s
-
-Keep the general meaning but improve the flow, rhyming, and emotional impact.
-Maintain the same number of lines.
-Write ALL lyrics in %s, translating them if the current lyrics are in another language.
-
-Output as JSON: {"lines": ["line1","line2","line3","line4"]}`,
-		req.Genre, req.SectionType, vibes, instructions, req.CurrentLyrics, langName(language))
 }
 
 func (s *LyricsService) parseGenerateResponse(response string) ([][]string, error) {

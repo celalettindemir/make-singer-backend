@@ -11,6 +11,7 @@ import (
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/handler"
+	"github.com/makeasinger/api/internal/lyricsprovider"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/service"
 )
@@ -45,7 +46,7 @@ func setupLyricsRealApp(t *testing.T) *fiber.App {
 		t.Skip("skipping: Groq client not configured")
 	}
 
-	lyricsService := service.NewLyricsService(groqClient)
+	lyricsService := service.NewLyricsService(lyricsprovider.Fixed(groqClient))
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
 
 	authMiddleware := middleware.NewOPAuthMiddleware(testIssuer, testClientID, &testKey.PublicKey)

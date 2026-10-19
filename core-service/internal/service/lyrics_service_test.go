@@ -7,9 +7,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
+	"github.com/makeasinger/api/internal/lyricsprovider"
 	"github.com/makeasinger/api/internal/model"
 )
 
@@ -45,7 +47,7 @@ func systemMessage(t *testing.T, body map[string]any) string {
 
 func TestLyricsService_RewriteUsesRequestedLanguagePrompt(t *testing.T) {
 	var requests []map[string]any
-	s := NewLyricsService(fakeLyricsGroq(t, `{"lines":["bir","iki"]}`, &requests))
+	s := NewLyricsService(lyricsprovider.Fixed(fakeLyricsGroq(t, `{"lines":["bir","iki"]}`, &requests)))
 
 	res, err := s.Rewrite(context.Background(), &model.LyricsRewriteRequest{
 		CurrentLyrics: "bir\niki", Genre: model.Genre("pop"), SectionType: model.SectionChorus,
@@ -67,7 +69,7 @@ func TestLyricsService_RewriteUsesRequestedLanguagePrompt(t *testing.T) {
 
 func TestLyricsService_RewriteDefaultsToEnglish(t *testing.T) {
 	var requests []map[string]any
-	s := NewLyricsService(fakeLyricsGroq(t, `{"lines":["a"]}`, &requests))
+	s := NewLyricsService(lyricsprovider.Fixed(fakeLyricsGroq(t, `{"lines":["a"]}`, &requests)))
 
 	if _, err := s.Rewrite(context.Background(), &model.LyricsRewriteRequest{
 		CurrentLyrics: "a", Genre: model.Genre("pop"), SectionType: model.SectionVerse, Vibes: []string{"x"},
@@ -81,7 +83,7 @@ func TestLyricsService_RewriteDefaultsToEnglish(t *testing.T) {
 
 func TestLyricsService_GenerateUsesGenerateTemperature(t *testing.T) {
 	var requests []map[string]any
-	s := NewLyricsService(fakeLyricsGroq(t, `{"drafts":[["a","b"],["c","d"]]}`, &requests))
+	s := NewLyricsService(lyricsprovider.Fixed(fakeLyricsGroq(t, `{"drafts":[["a","b"],["c","d"]]}`, &requests)))
 
 	res, err := s.Generate(context.Background(), &model.LyricsGenerateRequest{
 		Genre: model.Genre("pop"), SectionType: model.SectionVerse, Vibes: []string{"x"}, Language: model.LanguageTR,
@@ -110,13 +112,13 @@ func userMessage(t *testing.T, body map[string]any) string {
 
 func TestLyricsService_UserPromptsDemandRequestedLanguage(t *testing.T) {
 	var requests []map[string]any
-	gen := NewLyricsService(fakeLyricsGroq(t, `{"drafts":[["bir"]]}`, &requests))
+	gen := NewLyricsService(lyricsprovider.Fixed(fakeLyricsGroq(t, `{"drafts":[["bir"]]}`, &requests)))
 	if _, err := gen.Generate(context.Background(), &model.LyricsGenerateRequest{
 		Genre: model.Genre("pop"), SectionType: model.SectionVerse, Vibes: []string{"happy"}, Language: model.LanguageTR,
 	}); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	rew := NewLyricsService(fakeLyricsGroq(t, `{"lines":["bir"]}`, &requests))
+	rew := NewLyricsService(lyricsprovider.Fixed(fakeLyricsGroq(t, `{"lines":["bir"]}`, &requests)))
 	if _, err := rew.Rewrite(context.Background(), &model.LyricsRewriteRequest{
 		CurrentLyrics: "one", Genre: model.Genre("pop"), SectionType: model.SectionVerse, Vibes: []string{"happy"}, Language: model.LanguageTR,
 	}); err != nil {
@@ -141,7 +143,7 @@ func TestLyricsService_GenerateRecoversFromJSONValidateFailed(t *testing.T) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"drafts\":[[\"a\",\"b\"],[\"c\"]]}"}}]}`))
 	}))
 	t.Cleanup(srv.Close)
-	s := NewLyricsService(client.NewGroqClient(&config.GroqConfig{APIKey: "k", BaseURL: srv.URL, Model: "m"}))
+	s := NewLyricsService(lyricsprovider.Fixed(client.NewGroqClient(&config.GroqConfig{APIKey: "k", BaseURL: srv.URL, Model: "m"})))
 
 	res, err := s.Generate(context.Background(), &model.LyricsGenerateRequest{
 		Genre: model.Genre("pop"), SectionType: model.SectionVerse, Vibes: []string{"x"},
@@ -156,7 +158,7 @@ func TestLyricsService_GenerateRecoversFromJSONValidateFailed(t *testing.T) {
 
 func TestLyricsService_GeneratePromptStatesDraftsShape(t *testing.T) {
 	var requests []map[string]any
-	s := NewLyricsService(fakeLyricsGroq(t, `{"drafts":[["a"]]}`, &requests))
+	s := NewLyricsService(lyricsprovider.Fixed(fakeLyricsGroq(t, `{"drafts":[["a"]]}`, &requests)))
 	if _, err := s.Generate(context.Background(), &model.LyricsGenerateRequest{
 		Genre: model.Genre("pop"), SectionType: model.SectionVerse, Vibes: []string{"x"},
 	}); err != nil {
@@ -166,5 +168,40 @@ func TestLyricsService_GeneratePromptStatesDraftsShape(t *testing.T) {
 	user, _ := msgs[1].(map[string]any)["content"].(string)
 	if !strings.Contains(user, "array of plain strings") && !strings.Contains(user, "plain strings") {
 		t.Errorf("prompt does not state the drafts shape: %q", user)
+	}
+}
+
+type memStore struct{ name lyricsprovider.Name }
+
+func (m *memStore) Get(context.Context) (lyricsprovider.Name, bool, error) {
+	return m.name, m.name != "", nil
+}
+func (m *memStore) Set(_ context.Context, n lyricsprovider.Name, _ string) error {
+	m.name = n
+	return nil
+}
+
+func TestLyricsService_UsesActiveProvider(t *testing.T) {
+	var groqReqs, otherReqs []map[string]any
+	clients := map[lyricsprovider.Name]client.ChatClient{
+		lyricsprovider.Groq:      fakeLyricsGroq(t, `{"drafts":[["g"]]}`, &groqReqs),
+		lyricsprovider.Anthropic: fakeLyricsGroq(t, `{"drafts":[["a"]]}`, &otherReqs),
+	}
+	sel := lyricsprovider.NewSelector(clients, &memStore{name: lyricsprovider.Anthropic}, lyricsprovider.Groq, time.Second, time.Now)
+	res, err := NewLyricsService(sel).Generate(context.Background(), &model.LyricsGenerateRequest{
+		Genre: model.Genre("pop"), SectionType: model.SectionVerse, Vibes: []string{"x"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(otherReqs) != 1 || len(groqReqs) != 0 || res.Drafts[0][0] != "a" {
+		t.Errorf("anthropic calls %d, groq calls %d, drafts %v", len(otherReqs), len(groqReqs), res.Drafts)
+	}
+}
+
+func TestLyricsService_MockWithoutConfiguredClient(t *testing.T) {
+	s := NewLyricsService(lyricsprovider.Fixed(client.NewGroqClient(&config.GroqConfig{})))
+	if !s.IsMock() {
+		t.Error("an unconfigured active client must answer mock")
 	}
 }
