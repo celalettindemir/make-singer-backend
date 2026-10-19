@@ -96,7 +96,7 @@ anthropic:
 
 # Lyrics provider used until the admin chooses one (openai | anthropic | groq)
 lyrics:
-  default_provider: "groq" # LYRICS_DEFAULT_PROVIDER
+  default_provider: "openai" # LYRICS_DEFAULT_PROVIDER
 
 # Cloudflare R2 Storage Configuration
 r2:

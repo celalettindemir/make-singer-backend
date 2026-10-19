@@ -618,13 +618,13 @@ func TestLoad_ReadsOpenAIAndAnthropicEnv(t *testing.T) {
 	}
 }
 
-func TestLoad_LyricsDefaultProviderIsGroq(t *testing.T) {
+func TestLoad_LyricsDefaultProviderIsOpenAI(t *testing.T) {
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Lyrics.DefaultProvider != "groq" {
-		t.Errorf("Lyrics.DefaultProvider = %q, want groq", cfg.Lyrics.DefaultProvider)
+	if cfg.Lyrics.DefaultProvider != "openai" {
+		t.Errorf("Lyrics.DefaultProvider = %q, want openai", cfg.Lyrics.DefaultProvider)
 	}
 	if cfg.OpenAI.Model != "gpt-6.1-sol" || cfg.OpenAI.ReasoningEffort != "low" {
 		t.Errorf("OpenAI defaults = %+v", cfg.OpenAI)

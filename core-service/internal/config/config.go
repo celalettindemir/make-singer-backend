@@ -500,7 +500,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("anthropic.effort", "low")
 	viper.SetDefault("anthropic.temperature_generate", 0.8)
 	viper.SetDefault("anthropic.temperature_rewrite", 0.6)
-	viper.SetDefault("lyrics.default_provider", "groq")
+	viper.SetDefault("lyrics.default_provider", "openai")
 
 	// Suno defaults
 	viper.SetDefault("suno.base_url", "https://api.sunoapi.org")

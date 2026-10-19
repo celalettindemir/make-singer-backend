@@ -67,7 +67,7 @@ HTTP Request → Fiber middleware (auth, rate-limit) → Handler → Service →
 
 | Service | Purpose | Fallback when unconfigured |
 |---------|---------|---------------------------|
-| Groq / OpenAI / Anthropic | AI lyrics. `internal/lyricsprovider.Selector` picks the admin's choice from `kredi.ayar` (`lyrics_provider`, `GET/PUT /api/admin/lyrics-provider`, 30 s cache per pod); without a choice, or when the chosen provider has no key, `LYRICS_DEFAULT_PROVIDER` (default `groq`). No failover between providers | Mock data when the active provider has no key |
+| Groq / OpenAI / Anthropic | AI lyrics. `internal/lyricsprovider.Selector` picks the admin's choice from `kredi.ayar` (`lyrics_provider`, `GET/PUT /api/admin/lyrics-provider`, 30 s cache per pod); without a choice, or when the chosen provider has no key, `LYRICS_DEFAULT_PROVIDER` (default `openai`). No failover between providers | Mock data when the active provider has no key |
 | Suno (`api.sunoapi.org`, model `SUNO_MODEL`, default `V6`) | Instrumental rendering. Per-render stem level chosen by the user via `stemMode`: `mix` (default, 12 credits: the generated track as one `mix` stem), `focus` (32: `split_stem_advanced` on `focusInstrument` → that instrument + `rest`), `stems` (62: `split_stem`, 10 instrument stems kept; vocals and woodwinds skipped) | Simulated render steps |
 | Cloudflare R2 | File storage | Operates without it |
 | Custom OpenID Provider (`internal/identity/`) | RS256 access token authentication, user sign-up/sign-in | None — `AUTH_ISSUER` is required; the service refuses to start without it |

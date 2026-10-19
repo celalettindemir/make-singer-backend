@@ -1,5 +1,5 @@
-FILE	config-yaml	b2893b0d0c634c215daefe9376e8faa4effc1393e1cc7694c94bbc8670d0fe3a
-FILE	env-example	5976e9df6480163cee1ee6c95fe882c42f29690ce7cb0057c5e18ad63f6299b5
+FILE	config-yaml	0e6ae102b07233c1ef3f7bd87ee7e7e6bdf97f7bcc5bd2e6ebd00873a35ce67e
+FILE	env-example	93bdc51818d30bb7e1bfbd8dff0e5ec76f1190dfc20765a13d18ff031ff880ed
 FILE	kimlik-migration-001	805c4a7704084d815a950e8fb3c14ca36de2cfc52e668355def91a7da38c024c
 FILE	kimlik-migration-002	1c8915357fd9a37ca07ca364f134e352d6e8afbabc5520df35d8a70163adfd9f
 FILE	kimlik-migration-003	fc96a44b344fe3e5f359fc07890bb62f09f6515ce2c23f49391391f0bc501401
@@ -2080,7 +2080,6 @@ STR	"grace:"
 STR	"grant_type"
 STR	"groq"
 STR	"groq"
-STR	"groq"
 STR	"groq.api_key"
 STR	"groq.api_key"
 STR	"groq.base_url"
@@ -2390,6 +2389,7 @@ STR	"odeme_sorunu"
 STR	"odeme_sorunu"
 STR	"ok"
 STR	"onizleme.mp3"
+STR	"openai"
 STR	"openai"
 STR	"openai"
 STR	"openai.api_key"

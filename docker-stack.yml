@@ -21,7 +21,7 @@ version: "3.8"
 #                            OPENAI_API_KEY_FILE / ANTHROPIC_API_KEY_FILE from a secret
 #                            once created (unset = that provider is unavailable)
 # OPENAI_MODEL / ANTHROPIC_MODEL - provider models
-# LYRICS_DEFAULT_PROVIDER  - lyrics provider until the admin picks one (default: groq)
+# LYRICS_DEFAULT_PROVIDER  - lyrics provider until the admin picks one (default: openai)
 # SUNO_BASE_URL            - Suno API URL
 # CORS_ORIGINS             - Allowed CORS origins (comma-separated)
 # =============================================================================
@@ -45,7 +45,7 @@ services:
       GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6.1-sol}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
-      LYRICS_DEFAULT_PROVIDER: ${LYRICS_DEFAULT_PROVIDER:-groq}
+      LYRICS_DEFAULT_PROVIDER: ${LYRICS_DEFAULT_PROVIDER:-openai}
       R2_ACCOUNT_ID_FILE: /run/secrets/r2_account_id
       R2_ACCESS_KEY_ID_FILE: /run/secrets/r2_access_key_id
       R2_SECRET_ACCESS_KEY_FILE: /run/secrets/r2_secret_access_key
