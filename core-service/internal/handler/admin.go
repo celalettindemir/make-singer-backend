@@ -40,6 +40,7 @@ type AdminCredits interface {
 type AdminHandler struct {
 	campaigns AdminCampaigns
 	credits   AdminCredits
+	lyrics    LyricsProviderAdmin
 }
 
 // NewAdminHandler builds the handler.
@@ -57,6 +58,10 @@ func (h *AdminHandler) Routes(r fiber.Router) {
 	r.Get("/users/:id", h.GetUser)
 	r.Post("/users/:id/adjust", h.Adjust)
 	r.Get("/movements", h.ListMovements)
+	if h.lyrics != nil {
+		r.Get("/lyrics-provider", h.GetLyricsProvider)
+		r.Put("/lyrics-provider", h.SetLyricsProvider)
+	}
 }
 
 func adminFailure(c *fiber.Ctx, op string, err error) error {

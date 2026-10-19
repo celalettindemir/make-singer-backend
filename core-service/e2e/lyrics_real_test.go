@@ -19,18 +19,30 @@ import (
 // setupLyricsRealApp creates an app with a real Groq client for lyrics testing.
 func setupLyricsRealApp(t *testing.T) *fiber.App {
 	t.Helper()
-	loadEnvFile(t)
+	cfg := loadRealConfig(t)
+	if cfg.Groq.APIKey == "" {
+		t.Skip("skipping: GROQ_API_KEY not configured")
+	}
+	t.Logf("Groq config: baseURL=%s model=%s", cfg.Groq.BaseURL, cfg.Groq.Model)
+	return setupLyricsRealAppWith(t, cfg, client.NewGroqClient(&cfg.Groq))
+}
 
+func loadRealConfig(t *testing.T) *config.Config {
+	t.Helper()
+	loadEnvFile(t)
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("failed to load config: %v", err)
 	}
+	return cfg
+}
 
-	if cfg.Groq.APIKey == "" {
-		t.Skip("skipping: GROQ_API_KEY not configured")
+// setupLyricsRealAppWith creates an app whose lyrics go to the given real client.
+func setupLyricsRealAppWith(t *testing.T, cfg *config.Config, c client.ChatClient) *fiber.App {
+	t.Helper()
+	if !c.IsConfigured() {
+		t.Skip("skipping: client not configured")
 	}
-
-	t.Logf("Groq config: baseURL=%s model=%s", cfg.Groq.BaseURL, cfg.Groq.Model)
 
 	// Redis for rate limiter
 	redisClient := redis.NewClient(&redis.Options{
@@ -38,16 +50,7 @@ func setupLyricsRealApp(t *testing.T) *fiber.App {
 		DB:   15,
 	})
 
-	validate := validator.New()
-
-	// Real Groq client
-	groqClient := client.NewGroqClient(&cfg.Groq)
-	if !groqClient.IsConfigured() {
-		t.Skip("skipping: Groq client not configured")
-	}
-
-	lyricsService := service.NewLyricsService(lyricsprovider.Fixed(groqClient))
-	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
+	lyricsHandler := handler.NewLyricsHandler(service.NewLyricsService(lyricsprovider.Fixed(c)), validator.New())
 
 	authMiddleware := middleware.NewOPAuthMiddleware(testIssuer, testClientID, &testKey.PublicKey)
 	rateLimiter := middleware.NewRateLimiter(redisClient, nil)

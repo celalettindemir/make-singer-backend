@@ -25,7 +25,7 @@ make-singer-backend/
 │   │   ├── model/         # Request/response structs
 │   │   ├── service/       # Business logic
 │   │   ├── worker/        # Asynq job processors (render, master)
-│   │   ├── client/        # HTTP clients (Groq, Suno, R2, audio-service)
+│   │   ├── client/        # HTTP clients (Groq, OpenAI, Anthropic, Suno, R2, audio-service)
 │   │   └── websocket/     # WebSocket broadcast hub
 │   └── pkg/response/      # Standardized API responses
 ├── audio-service/         # Python FFmpeg-based audio mastering

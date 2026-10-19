@@ -165,6 +165,8 @@ Returns service health status.
   "status": "ok",
   "services": {
     "groq": true,
+    "openai": false,
+    "anthropic": true,
     "suno": true,
     "r2": true,
     "audio": true,
@@ -193,6 +195,12 @@ Generate lyrics for a song section using AI.
 | `sectionType` | string | yes | One of [SectionType](#sectiontype) values | Song section type |
 | `vibes` | string[] | yes | 1--3 items, each non-empty | Mood descriptors |
 | `language` | string | no | One of [Language](#language) values | Output language (default: `en`) |
+| `topic` | string | no | max 500 chars | What the song is about (R-LYR-10) |
+| `bpm` | integer | no | 40--220 | The brief's tempo |
+| `song` | object[] | no | max 32; each `{type, bars? 1--64, lyrics? max 2000 chars}` | The whole song in order with each section's current text |
+| `sectionIndex` | integer | with `song` | index into `song`; `song[i].type` must equal `sectionType` | The section being written; otherwise 400 `{"sectionIndex": "invalid"}` |
+
+The lyrics come from the provider the admin chose (`openai`, `anthropic` or `groq`, see `GET/PUT /api/admin/lyrics-provider`). When the song's lyrics exceed 8000 characters, the sections farthest from `sectionIndex` lose their text first.
 
 ```json
 {
@@ -227,6 +235,10 @@ Rewrite existing lyrics for a song section.
 | `sectionType` | string | yes | One of [SectionType](#sectiontype) values | Song section type |
 | `vibes` | string[] | yes | 1--3 items, each non-empty | Mood descriptors |
 | `instructions` | string | no | max 500 chars | Rewrite instructions |
+| `topic` | string | no | max 500 chars | What the song is about (R-LYR-10) |
+| `bpm` | integer | no | 40--220 | The brief's tempo |
+| `song` | object[] | no | max 32; each `{type, bars? 1--64, lyrics? max 2000 chars}` | The whole song in order with each section's current text |
+| `sectionIndex` | integer | with `song` | index into `song`; `song[i].type` must equal `sectionType` | The section being rewritten (its text comes from `currentLyrics`); otherwise 400 `{"sectionIndex": "invalid"}` |
 
 ```json
 {

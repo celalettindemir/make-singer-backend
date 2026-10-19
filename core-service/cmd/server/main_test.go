@@ -22,6 +22,7 @@ import (
 	"github.com/makeasinger/api/internal/credit"
 	"github.com/makeasinger/api/internal/handler"
 	"github.com/makeasinger/api/internal/i18n"
+	"github.com/makeasinger/api/internal/lyricsprovider"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/social"
 )
@@ -210,7 +211,7 @@ func TestRoutes_AdminDisabledWithoutSecretIs404(t *testing.T) {
 	app := fiber.New(fiber.Config{ErrorHandler: customErrorHandler})
 	registerAdminRoutes(app, nil, false, nil, nil)
 	app.Group("/api", func(c *fiber.Ctx) error { return fiber.ErrUnauthorized })
-	for _, path := range []string{"/api/admin/me", "/api/admin/campaigns"} {
+	for _, path := range []string{"/api/admin/me", "/api/admin/campaigns", "/api/admin/lyrics-provider"} {
 		resp, err := app.Test(httptest.NewRequest(http.MethodGet, path, nil))
 		if err != nil {
 			t.Fatal(err)
@@ -254,7 +255,7 @@ func (a adminStub) AdminView(context.Context, string) (string, bool, error) {
 
 func TestRoutes_AdminHandlerBindsTheContractPaths(t *testing.T) {
 	app := fiber.New()
-	handler.NewAdminHandler(nil, nil).Routes(app.Group("/api/admin"))
+	handler.NewAdminHandler(nil, nil).WithLyricsProvider(lyricsprovider.Fixed(nil)).Routes(app.Group("/api/admin"))
 	have := map[string]bool{}
 	for _, r := range app.GetRoutes() {
 		have[r.Method+" "+r.Path] = true
@@ -264,6 +265,7 @@ func TestRoutes_AdminHandlerBindsTheContractPaths(t *testing.T) {
 		"GET /api/admin/campaigns/:id", "POST /api/admin/campaigns/:id/stop",
 		"GET /api/admin/users", "GET /api/admin/users/:id", "POST /api/admin/users/:id/adjust",
 		"GET /api/admin/movements",
+		"GET /api/admin/lyrics-provider", "PUT /api/admin/lyrics-provider",
 	} {
 		if !have[want] {
 			t.Errorf("route %q is not bound", want)

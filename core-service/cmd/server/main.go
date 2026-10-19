@@ -148,6 +148,16 @@ func main() {
 
 	// Initialize external clients
 	groqClient := client.NewGroqClient(&cfg.Groq)
+	openaiClient := client.NewOpenAIClient(&cfg.OpenAI)
+	anthropicClient := client.NewAnthropicClient(&cfg.Anthropic)
+	lyricsSelector, err := newLyricsSelector(cfg, map[lyricsprovider.Name]client.ChatClient{
+		lyricsprovider.Groq:      groqClient,
+		lyricsprovider.OpenAI:    openaiClient,
+		lyricsprovider.Anthropic: anthropicClient,
+	}, lyricsprovider.NewPostgresStore(creditPool))
+	if err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
 	sunoClient := client.NewSunoClient(&cfg.Suno)
 	audioClient := client.NewAudioClient(&cfg.Audio)
 
@@ -227,7 +237,7 @@ func main() {
 	creditWorker := worker.NewCreditWorker(purchases, appleVerifier).WithExpiry(creditStore, campaigns)
 
 	// Initialize services
-	lyricsService := service.NewLyricsService(lyricsprovider.Fixed(groqClient))
+	lyricsService := service.NewLyricsService(lyricsSelector)
 	renderService := service.NewRenderService(redisClient, asynqClient, storage, &cfg.R2).WithCredits(creditService)
 	masterService := service.NewMasterService(redisClient, asynqClient, storage, &cfg.R2).WithCredits(creditService)
 	exportService := service.NewExportService(storage, audioClient, &cfg.R2)
@@ -331,12 +341,14 @@ func main() {
 		return c.JSON(fiber.Map{
 			"status": status,
 			"services": fiber.Map{
-				"groq":   groqClient.IsConfigured(),
-				"suno":   sunoClient.IsConfigured(),
-				"r2":     r2Client != nil,
-				"audio":  audioClient.IsConfigured(),
-				"auth":   identityReady,
-				"kimlik": identityReady,
+				"groq":      groqClient.IsConfigured(),
+				"openai":    openaiClient.IsConfigured(),
+				"anthropic": anthropicClient.IsConfigured(),
+				"suno":      sunoClient.IsConfigured(),
+				"r2":        r2Client != nil,
+				"audio":     audioClient.IsConfigured(),
+				"auth":      identityReady,
+				"kimlik":    identityReady,
 			},
 		})
 	})
@@ -361,7 +373,7 @@ func main() {
 		middleware.AdminGate(identityServer, cfg.Admin.Emails))
 	if adminRoutes != nil {
 		admin := credit.NewAdmin(creditStore, creditStore, identity.NewDirectory(creditPool), time.Now)
-		handler.NewAdminHandler(campaigns, admin).Routes(adminRoutes)
+		handler.NewAdminHandler(campaigns, admin).WithLyricsProvider(lyricsSelector).Routes(adminRoutes)
 	}
 
 	// API routes
