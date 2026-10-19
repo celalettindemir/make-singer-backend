@@ -52,9 +52,7 @@ class SahteStorage:
 @pytest.mark.asyncio
 async def test_tempo_servisi_anahtarla_olcer(monkeypatch):
     tam = np.round(vurus_izi(96) * 32767).astype(np.int16)
-    ses = AudioSegment(
-        tam.tobytes(), frame_rate=ORNEK_HIZI, sample_width=2, channels=1
-    )
+    ses = AudioSegment(tam.tobytes(), frame_rate=ORNEK_HIZI, sample_width=2, channels=1)
     monkeypatch.setattr(
         tempo_module.AudioSegment, "from_file", staticmethod(lambda _yol: ses)
     )

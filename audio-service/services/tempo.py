@@ -32,9 +32,9 @@ def _baslangic_gucu(ornekler: np.ndarray, ornek_hizi: int) -> np.ndarray:
     adet = (len(ornekler) - pencere) // adim
     if adet <= 1:
         return np.zeros(0)
-    cerceveler = np.lib.stride_tricks.sliding_window_view(ornekler, pencere)[
-        ::adim
-    ][:adet]
+    cerceveler = np.lib.stride_tricks.sliding_window_view(ornekler, pencere)[::adim][
+        :adet
+    ]
     spektrum = np.log1p(
         np.abs(np.fft.rfft(cerceveler * np.hanning(pencere), axis=1)) * 100
     )
