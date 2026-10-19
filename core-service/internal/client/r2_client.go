@@ -53,14 +53,7 @@ func NewR2Client(cfg *config.R2Config) (*R2Client, error) {
 
 	endpoint := fmt.Sprintf("https://%s.r2.cloudflarestorage.com", cfg.AccountID)
 
-	r2Resolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-		return aws.Endpoint{
-			URL: endpoint,
-		}, nil
-	})
-
 	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
-		awsconfig.WithEndpointResolverWithOptions(r2Resolver),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			cfg.AccessKeyID,
 			cfg.SecretAccessKey,
@@ -72,7 +65,9 @@ func NewR2Client(cfg *config.R2Config) (*R2Client, error) {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	s3Client := s3.NewFromConfig(awsCfg)
+	s3Client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(endpoint)
+	})
 	presigner := s3.NewPresignClient(s3Client)
 
 	return &R2Client{
