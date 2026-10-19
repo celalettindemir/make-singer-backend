@@ -88,6 +88,12 @@ func TestCleanLine(t *testing.T) {
 		{"«Gece»", "Gece", true},
 		{"Gece\r", "Gece", true},
 		{"Chorus of birds sings", "Chorus of birds sings", true},
+		{"Verse 1:", "", false},
+		{"Nakarat 2", "", false},
+		{"Chorus (x2)", "", false},
+		{"Chorus 2 (x3):", "", false},
+		{"1. [Chorus]", "", false},
+		{"- Nakarat", "", false},
 	}
 	for _, c := range cases {
 		got, ok := cleanLine(c.in)

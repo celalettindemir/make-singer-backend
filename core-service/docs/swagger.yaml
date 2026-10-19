@@ -1345,6 +1345,10 @@ paths:
           description: Too Many Requests
           schema:
             $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
       security:
       - BearerAuth: []
       summary: Generate lyrics as a stream
@@ -1425,6 +1429,10 @@ paths:
             $ref: '#/definitions/response.ErrorResponse'
         "429":
           description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
           schema:
             $ref: '#/definitions/response.ErrorResponse'
       security:

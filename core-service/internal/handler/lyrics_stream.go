@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -29,6 +30,7 @@ const defaultHeartbeat = 15 * time.Second
 // @Failure      401 {object} response.ErrorResponse
 // @Failure      402 {object} response.ErrorResponse
 // @Failure      429 {object} response.ErrorResponse
+// @Failure      500 {object} response.ErrorResponse
 // @Security     BearerAuth
 // @Router       /api/lyrics/generate/stream [post]
 func (h *LyricsHandler) GenerateStream(c *fiber.Ctx) error {
@@ -63,6 +65,7 @@ func (h *LyricsHandler) GenerateStream(c *fiber.Ctx) error {
 // @Failure      401 {object} response.ErrorResponse
 // @Failure      402 {object} response.ErrorResponse
 // @Failure      429 {object} response.ErrorResponse
+// @Failure      500 {object} response.ErrorResponse
 // @Security     BearerAuth
 // @Router       /api/lyrics/rewrite/stream [post]
 func (h *LyricsHandler) RewriteStream(c *fiber.Ctx) error {
@@ -110,6 +113,13 @@ func (h *LyricsHandler) stream(c *fiber.Ctx, op string, act *lyricsAction, run f
 		// failed write is the only signal, and it cancels this context.
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		// fasthttp runs this in a bare goroutine: a panic would kill the process.
+		defer func() {
+			if p := recover(); p != nil {
+				log.Printf("%s: stream writer panic: %v\n%s", where, p, debug.Stack())
+				cancel()
+			}
+		}()
 
 		sent, outcome := 0, "done"
 		defer func() {
@@ -136,6 +146,14 @@ func (h *LyricsHandler) stream(c *fiber.Ctx, op string, act *lyricsAction, run f
 		lines := make(chan string)
 		done := make(chan streamResult, 1)
 		go func() {
+			var res streamResult
+			defer func() {
+				if p := recover(); p != nil {
+					log.Printf("%s: stream service panic: %v\n%s", where, p, debug.Stack())
+					res = streamResult{res.lines, fmt.Errorf("panic: %v", p)}
+				}
+				done <- res
+			}()
 			n, err := run(ctx, func(l string) error {
 				select {
 				case lines <- l:
@@ -144,7 +162,7 @@ func (h *LyricsHandler) stream(c *fiber.Ctx, op string, act *lyricsAction, run f
 					return ctx.Err()
 				}
 			})
-			done <- streamResult{n, err}
+			res = streamResult{n, err}
 		}()
 
 		tick := time.NewTicker(heartbeat)
@@ -170,6 +188,8 @@ func (h *LyricsHandler) stream(c *fiber.Ctx, op string, act *lyricsAction, run f
 					outcome = "error"
 					if r.err != nil {
 						log.Printf("%s: stream failed: %v", where, r.err)
+					} else {
+						log.Printf("%s: stream empty answer", where)
 					}
 					if sent == 0 {
 						act.refundFor(where)

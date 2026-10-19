@@ -52,6 +52,9 @@ func streamChatCompletions(ctx context.Context, hc *http.Client, url, apiKey str
 				return nil
 			}
 			var chunk struct {
+				Error *struct {
+					Message string `json:"message"`
+				} `json:"error"`
 				Choices []struct {
 					Delta struct {
 						Content string `json:"content"`
@@ -61,6 +64,9 @@ func streamChatCompletions(ctx context.Context, hc *http.Client, url, apiKey str
 			if err := json.Unmarshal([]byte(text), &chunk); err != nil {
 				return fmt.Errorf("failed to decode stream chunk: %w", err)
 			}
+			if chunk.Error != nil {
+				return fmt.Errorf("stream error from provider: %s", chunk.Error.Message)
+			}
 			if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
 				if err := onText(chunk.Choices[0].Delta.Content); err != nil {
 					return err
@@ -69,7 +75,7 @@ func streamChatCompletions(ctx context.Context, hc *http.Client, url, apiKey str
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
-				return nil
+				return errors.New("stream ended without [DONE]")
 			}
 			if ctx.Err() != nil {
 				return fmt.Errorf("stream cancelled: %w", ctx.Err())

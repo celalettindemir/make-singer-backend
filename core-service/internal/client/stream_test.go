@@ -197,3 +197,38 @@ func TestOpenAIStream_NoClientTimeout(t *testing.T) {
 		t.Errorf("err=%v got=%q", err, got)
 	}
 }
+
+// rawSSE serves body as one event stream.
+func rawSSE(t *testing.T, body string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestOpenAIStream_TruncatedWithoutDoneIsError(t *testing.T) {
+	raw, err := os.ReadFile("testdata/openai_stream.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trunc := strings.Split(string(raw), "data: [DONE]")[0]
+	c := NewOpenAIClient(openAIConfig(rawSSE(t, trunc).URL))
+	var got []string
+	if err := c.ChatStream(context.Background(), "s", "u", 0, collect(&got)); err == nil {
+		t.Fatal("want error for stream without [DONE]")
+	}
+}
+
+func TestOpenAIStream_ErrorChunkIsError(t *testing.T) {
+	body := "data: {\"choices\":[{\"delta\":{\"content\":\"Gece\\n\"}}]}\n\n" +
+		"data: {\"error\":{\"message\":\"upstream overloaded\"}}\n\n"
+	c := NewOpenAIClient(openAIConfig(rawSSE(t, body).URL))
+	var got []string
+	err := c.ChatStream(context.Background(), "s", "u", 0, collect(&got))
+	if err == nil || !strings.Contains(err.Error(), "upstream overloaded") {
+		t.Fatalf("err = %v", err)
+	}
+}

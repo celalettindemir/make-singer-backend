@@ -264,3 +264,16 @@ func TestLyricsStream_ClientGoneCancelsProvider(t *testing.T) {
 		t.Errorf("refunds = %d, want 0", len(sp.ActionRefunds))
 	}
 }
+
+func TestLyricsStream_PanicBecomesErrorAndRefunds(t *testing.T) {
+	gen := newFakeLyrics()
+	gen.stream = func(context.Context, func(string) error) (int, error) { panic("sdk edge case") }
+	sp := &credit.FakeSpender{IsEnforced: true, ChargedFirst: true}
+	_, body := streamCall(t, streamApp(gen, sp, 0), "/generate/stream", lyricsGenBody, actionA)
+	if !strings.Contains(body, "event: error") || strings.Contains(body, "event: done") {
+		t.Errorf("body = %q", body)
+	}
+	if len(sp.ActionRefunds) != 1 {
+		t.Errorf("refunds = %d, want 1", len(sp.ActionRefunds))
+	}
+}

@@ -19,7 +19,9 @@ var (
 		"nakarat": true, "kita": true, "köprü": true, "giriş": true, "çıkış": true,
 		"couplet": true, "refrain": true, "pont": true,
 	})
-	quotePairs = [][2]string{{`"`, `"`}, {"“", "”"}, {"«", "»"}}
+	repeatSuffixRe = regexp.MustCompile(`\(x\d+\)$`)
+	numberSuffixRe = regexp.MustCompile(`\s\d+$`)
+	quotePairs     = [][2]string{{`"`, `"`}, {"“", "”"}, {"«", "»"}}
 )
 
 // lineSplitter turns arbitrary text chunks into whole cleaned lyric lines.
@@ -85,11 +87,10 @@ func (s *lineSplitter) line(raw string) error {
 
 // cleanLine trims a raw model line; ok is false for blank lines and section labels.
 func cleanLine(raw string) (string, bool) {
-	text := strings.TrimSpace(raw)
+	text := strings.TrimSpace(listMarkerRe.ReplaceAllString(strings.TrimSpace(raw), ""))
 	if text == "" || isSectionLabel(text) {
 		return "", false
 	}
-	text = strings.TrimSpace(listMarkerRe.ReplaceAllString(text, ""))
 	for _, q := range quotePairs {
 		if len(text) >= len(q[0])+len(q[1]) && strings.HasPrefix(text, q[0]) && strings.HasSuffix(text, q[1]) {
 			text = strings.TrimSpace(text[len(q[0]) : len(text)-len(q[1])])
@@ -104,7 +105,12 @@ func isSectionLabel(text string) bool {
 		(strings.HasPrefix(text, "(") && strings.HasSuffix(text, ")")) {
 		return true
 	}
-	return sectionWords[foldTR(strings.TrimSpace(strings.TrimSuffix(text, ":")))]
+	// A section word, then optional number and/or "(x2)", then optional colon.
+	t := strings.TrimSpace(strings.TrimSuffix(text, ":"))
+	t = strings.TrimSpace(repeatSuffixRe.ReplaceAllString(t, ""))
+	t = strings.TrimSpace(strings.TrimSuffix(t, ":"))
+	t = strings.TrimSpace(numberSuffixRe.ReplaceAllString(t, ""))
+	return sectionWords[foldTR(t)]
 }
 
 // foldTR lowercases and maps the dotless ı to i so "KITA" matches "kıta".
