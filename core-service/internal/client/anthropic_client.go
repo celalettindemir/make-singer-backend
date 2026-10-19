@@ -20,6 +20,7 @@ const anthropicFallbackBeta = "server-side-fallback-2026-07-01"
 // AnthropicClient calls Anthropic's Messages API through the official SDK.
 type AnthropicClient struct {
 	client    anthropic.Client
+	stream    anthropic.Client // no request timeout: the deadline comes from ctx
 	apiKey    string
 	model     string
 	maxTokens int
@@ -42,8 +43,13 @@ func NewAnthropicClient(cfg *config.AnthropicConfig) *AnthropicClient {
 	if cfg.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
 	}
+	streamOpts := []option.RequestOption{option.WithAPIKey(cfg.APIKey), option.WithMaxRetries(0)}
+	if cfg.BaseURL != "" {
+		streamOpts = append(streamOpts, option.WithBaseURL(cfg.BaseURL))
+	}
 	return &AnthropicClient{
 		client:              anthropic.NewClient(opts...),
+		stream:              anthropic.NewClient(streamOpts...),
 		apiKey:              cfg.APIKey,
 		model:               cfg.Model,
 		maxTokens:           cfg.MaxTokens,
@@ -64,9 +70,8 @@ func (c *AnthropicClient) IsConfigured() bool {
 	return c.apiKey != ""
 }
 
-// ChatCompletion sends one message and returns its text blocks joined. A
-// refusal (after the server-side fallback) is an error.
-func (c *AnthropicClient) ChatCompletion(ctx context.Context, system, user string, _ float64) (string, error) {
+// params builds the request shared by ChatCompletion and ChatStream.
+func (c *AnthropicClient) params(system, user string) anthropic.MessageNewParams {
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(c.model),
 		MaxTokens: int64(c.maxTokens),
@@ -76,10 +81,21 @@ func (c *AnthropicClient) ChatCompletion(ctx context.Context, system, user strin
 	if c.effort != "" {
 		params.OutputConfig = anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffort(c.effort)}
 	}
-	msg, err := c.client.Messages.New(ctx, params,
+	return params
+}
+
+// fallbackOpts turns on the server-side refusal fallback for one request.
+func fallbackOpts() []option.RequestOption {
+	return []option.RequestOption{
 		option.WithHeaderAdd("anthropic-beta", anthropicFallbackBeta),
 		option.WithJSONSet("fallbacks", "default"),
-	)
+	}
+}
+
+// ChatCompletion sends one message and returns its text blocks joined. A
+// refusal (after the server-side fallback) is an error.
+func (c *AnthropicClient) ChatCompletion(ctx context.Context, system, user string, _ float64) (string, error) {
+	msg, err := c.client.Messages.New(ctx, c.params(system, user), fallbackOpts()...)
 	if err != nil {
 		var apiErr *anthropic.Error
 		if errors.As(err, &apiErr) {
@@ -100,4 +116,36 @@ func (c *AnthropicClient) ChatCompletion(ctx context.Context, system, user strin
 		return "", fmt.Errorf("no text in response (stop reason %q)", msg.StopReason)
 	}
 	return b.String(), nil
+}
+
+// ChatStream streams the answer's text deltas. Thinking deltas are skipped.
+// A refusal (after the server-side fallback) is an error.
+func (c *AnthropicClient) ChatStream(ctx context.Context, system, user string, _ float64, onText func(string) error) error {
+	stream := c.stream.Messages.NewStreaming(ctx, c.params(system, user), fallbackOpts()...)
+	defer stream.Close()
+	for stream.Next() {
+		switch ev := stream.Current().AsAny().(type) {
+		case anthropic.ContentBlockDeltaEvent:
+			if td, ok := ev.Delta.AsAny().(anthropic.TextDelta); ok && td.Text != "" {
+				if err := onText(td.Text); err != nil {
+					return err
+				}
+			}
+		case anthropic.MessageDeltaEvent:
+			if ev.Delta.StopReason == anthropic.StopReasonRefusal {
+				return fmt.Errorf("anthropic refused the request (category %q)", ev.Delta.StopDetails.Category)
+			}
+		}
+	}
+	if err := stream.Err(); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("stream cancelled: %w", ctx.Err())
+		}
+		var apiErr *anthropic.Error
+		if errors.As(err, &apiErr) {
+			return fmt.Errorf("anthropic API error (status %d): %w", apiErr.StatusCode, err)
+		}
+		return fmt.Errorf("failed to read stream: %w", err)
+	}
+	return nil
 }

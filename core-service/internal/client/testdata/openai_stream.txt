@@ -1,0 +1,12 @@
+data: {"choices":[{"delta":{"role":"assistant","content":""}}]}
+
+data: {"choices":[{"delta":{"content":"Gece "}}]}
+
+data: {"choices":[{"delta":{"content":"boyunca\n"}}]}
+
+data: {"choices":[{"delta":{"content":"Şehir"}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

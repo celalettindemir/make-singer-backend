@@ -15,6 +15,9 @@ type fakeClient struct{ configured bool }
 func (f *fakeClient) ChatCompletion(context.Context, string, string, float64) (string, error) {
 	return "", nil
 }
+func (f *fakeClient) ChatStream(context.Context, string, string, float64, func(string) error) error {
+	return nil
+}
 func (f *fakeClient) Temperatures() (float64, float64) { return 0, 0 }
 func (f *fakeClient) IsConfigured() bool               { return f.configured }
 

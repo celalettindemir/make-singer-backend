@@ -15,6 +15,7 @@ import (
 // GroqClient handles communication with Groq API
 type GroqClient struct {
 	httpClient *http.Client
+	streamHTTP *http.Client // no Timeout: the deadline comes from ctx
 	baseURL    string
 	apiKey     string
 	model      string
@@ -49,6 +50,7 @@ type ChatCompletionRequest struct {
 	Temperature    float64         `json:"temperature"`
 	MaxTokens      int             `json:"max_tokens,omitempty"`
 	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
+	Stream         bool            `json:"stream,omitempty"`
 }
 
 // ResponseFormat turns on Groq's JSON mode. json_object guarantees valid JSON
@@ -84,9 +86,10 @@ func NewGroqClient(cfg *config.GroqConfig) *GroqClient {
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second,
 		},
-		baseURL: cfg.BaseURL,
-		apiKey:  cfg.APIKey,
-		model:   cfg.Model,
+		streamHTTP: &http.Client{},
+		baseURL:    cfg.BaseURL,
+		apiKey:     cfg.APIKey,
+		model:      cfg.Model,
 
 		maxTokens:           cfg.MaxTokens,
 		temperatureGenerate: cfg.TemperatureGenerate,
@@ -198,4 +201,16 @@ func (c *GroqClient) chatCompletionOnce(ctx context.Context, system, user string
 // IsConfigured returns true if the client has valid configuration
 func (c *GroqClient) IsConfigured() bool {
 	return c.apiKey != ""
+}
+
+// ChatStream streams the answer as plain text. There is no JSON mode, so
+// there is no json_validate_failed retry.
+func (c *GroqClient) ChatStream(ctx context.Context, system, user string, temperature float64, onText func(string) error) error {
+	return streamChatCompletions(ctx, c.streamHTTP, c.baseURL+"/chat/completions", c.apiKey, ChatCompletionRequest{
+		Model:       c.model,
+		Messages:    []ChatMessage{{Role: "system", Content: system}, {Role: "user", Content: user}},
+		Temperature: temperature,
+		MaxTokens:   c.maxTokens,
+		Stream:      true,
+	}, onText)
 }

@@ -15,6 +15,7 @@ import (
 // OpenAIClient calls OpenAI's chat completions API in JSON mode.
 type OpenAIClient struct {
 	httpClient      *http.Client
+	streamHTTP      *http.Client // no Timeout: the deadline comes from ctx
 	baseURL         string
 	apiKey          string
 	model           string
@@ -34,13 +35,15 @@ type openAIRequest struct {
 	Messages            []ChatMessage   `json:"messages"`
 	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
 	ReasoningEffort     string          `json:"reasoning_effort,omitempty"`
-	ResponseFormat      *ResponseFormat `json:"response_format"`
+	ResponseFormat      *ResponseFormat `json:"response_format,omitempty"`
+	Stream              bool            `json:"stream,omitempty"`
 }
 
 // NewOpenAIClient creates an OpenAI client.
 func NewOpenAIClient(cfg *config.OpenAIConfig) *OpenAIClient {
 	return &OpenAIClient{
 		httpClient:          &http.Client{Timeout: 60 * time.Second},
+		streamHTTP:          &http.Client{},
 		baseURL:             cfg.BaseURL,
 		apiKey:              cfg.APIKey,
 		model:               cfg.Model,
@@ -104,4 +107,15 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, system, user string, 
 		return "", fmt.Errorf("no choices in response")
 	}
 	return chatResp.Choices[0].Message.Content, nil
+}
+
+// ChatStream streams the answer as plain text (no JSON mode).
+func (c *OpenAIClient) ChatStream(ctx context.Context, system, user string, _ float64, onText func(string) error) error {
+	return streamChatCompletions(ctx, c.streamHTTP, c.baseURL+"/chat/completions", c.apiKey, openAIRequest{
+		Model:               c.model,
+		Messages:            []ChatMessage{{Role: "system", Content: system}, {Role: "user", Content: user}},
+		MaxCompletionTokens: c.maxTokens,
+		ReasoningEffort:     c.reasoningEffort,
+		Stream:              true,
+	}, onText)
 }
