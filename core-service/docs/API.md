@@ -520,7 +520,9 @@ Start a final mastering job.
 | `sectionId` | string | yes | | Section identifier |
 | `takeId` | string | yes | | Take identifier |
 | `fileUrl` | string | yes | Valid URL | Vocal file URL |
-| `offsetMs` | int | no | | Timing offset in milliseconds |
+| `offsetMs` | int | no | | Timing offset in milliseconds (latency offset already applied to the file; not used for placement) |
+| `startMs` | int | no | min 0 | Where the take's first sample lands on the song timeline; missing = 0 |
+| `endMs` | int | no | min 0, must be greater than `startMs` when both given | Section end on the song timeline; the take is trimmed to `endMs - startMs` |
 
 **Response** `202`
 

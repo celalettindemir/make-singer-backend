@@ -961,12 +961,23 @@ definitions:
     type: object
   model.VocalTake:
     properties:
+      endMs:
+        description: |-
+          StartMs is where the take's first sample lands on the song timeline;
+          EndMs is the section end on the same timeline. Both optional: a missing
+          StartMs means 0 (the old behaviour). OffsetMs is the latency offset
+          already applied to the file and plays no part in placement.
+        minimum: 0
+        type: integer
       fileUrl:
         type: string
       offsetMs:
         type: integer
       sectionId:
         type: string
+      startMs:
+        minimum: 0
+        type: integer
       takeId:
         type: string
     required:

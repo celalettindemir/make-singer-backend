@@ -42,6 +42,8 @@ HIGH_SHELF_HZ = 8000
 
 # Summed or equalized audio is scaled down to this peak instead of clipping.
 HEADROOM_PEAK = 0.98
+# Fade-out where a take is cut at its section end, so the cut does not click.
+TAKE_FADE_MS = 30
 
 _INT32_FULL_SCALE = 2**31 - 1
 
@@ -201,9 +203,31 @@ class MasterService:
                 volume_db = 20 * np.log10(max(volume, 0.001))
                 vocal = vocal + volume_db
 
-            takes.append(vocal)
+            takes.append(self._place_take(vocal, take))
 
         return self._sum(takes)
+
+    @staticmethod
+    def _place_take(vocal: AudioSegment, take: dict[str, Any]) -> AudioSegment:
+        """Put a take on the song timeline.
+
+        Frame 0 of the file is already the section start. end_ms keeps only
+        the first (end_ms - start_ms) ms with a short fade-out at the cut;
+        start_ms prepends that much silence. Missing fields leave the take
+        untouched, so it still plays from t=0.
+        """
+        start_ms = take.get("start_ms") or 0
+        end_ms = take.get("end_ms")
+        if end_ms is not None:
+            keep_ms = end_ms - start_ms
+            if keep_ms < len(vocal):
+                vocal = vocal[:keep_ms].fade_out(min(TAKE_FADE_MS, keep_ms))
+        if start_ms > 0:
+            silence = AudioSegment.silent(
+                duration=start_ms, frame_rate=vocal.frame_rate
+            ).set_channels(vocal.channels)
+            vocal = silence + vocal
+        return vocal
 
     @staticmethod
     def _sum(segments: list[AudioSegment]) -> AudioSegment:

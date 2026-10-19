@@ -42,6 +42,9 @@ type VocalTakeInput struct {
 	Key    string  `json:"key"`
 	Volume float64 `json:"volume"`
 	Pan    float64 `json:"pan,omitempty"`
+	// StartMs/EndMs place the take on the song timeline; nil is omitted.
+	StartMs *int `json:"start_ms,omitempty"`
+	EndMs   *int `json:"end_ms,omitempty"`
 }
 
 // MasterRequest represents the request for mastering

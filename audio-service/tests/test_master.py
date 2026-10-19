@@ -106,3 +106,79 @@ def test_duz_eq_sesi_degistirmez():
     cikis = MasterService()._apply_eq(giris, {"eq": PROFILES["clean"]["eq"]})
 
     assert np.allclose(ornekler(cikis), ornekler(giris), atol=1e-4)
+
+
+def _yerlestir(vokal, **alanlar):
+    return MasterService._place_take(vokal, alanlar)
+
+
+def test_vokal_start_ms_kadar_sessizlikle_baslar():
+    vokal = sinus(440, saniye=1.0, genlik=0.5)
+
+    yerlesik = _yerlestir(vokal, start_ms=1000)
+
+    assert len(yerlesik) == 2000
+    s = ornekler(yerlesik)
+    assert np.max(np.abs(s[: ORNEK_HIZI * yerlesik.channels])) == 0
+    assert np.max(np.abs(s[ORNEK_HIZI * yerlesik.channels :])) > 0.4
+    assert yerlesik.channels == vokal.channels
+    assert yerlesik.frame_rate == vokal.frame_rate
+
+
+def test_vokal_end_ms_ile_kesilir_ve_sonu_solar():
+    vokal = sinus(440, saniye=2.0, genlik=0.5)
+
+    yerlesik = _yerlestir(vokal, start_ms=500, end_ms=1500)
+
+    assert len(yerlesik) == 1500  # 500 sessizlik + 1000 kesilmis vokal
+    s = ornekler(yerlesik)[:: yerlesik.channels]
+    assert np.max(np.abs(s[-10:])) < 0.05  # fade-out kesimde sifira iner
+    assert np.max(np.abs(s[-ORNEK_HIZI // 10 : -ORNEK_HIZI // 20])) > 0.4
+
+
+def test_vokal_end_ms_vokalden_uzunsa_dokunmaz():
+    vokal = sinus(440, saniye=1.0, genlik=0.5)
+
+    yerlesik = _yerlestir(vokal, end_ms=5000)
+
+    assert len(yerlesik) == 1000
+    assert ornekler(yerlesik).tolist() == ornekler(vokal).tolist()
+
+
+def test_alan_yoksa_eski_davranis():
+    vokal = sinus(440, saniye=1.0, genlik=0.5)
+
+    yerlesik = _yerlestir(vokal, key="x", volume=1.0, start_ms=None, end_ms=None)
+
+    assert yerlesik.raw_data == vokal.raw_data
+
+
+def test_farkli_bolumlerdeki_vokaller_cakismaz():
+    a = sinus(440, saniye=1.0, genlik=0.5)
+    b = sinus(660, saniye=1.0, genlik=0.5)
+
+    toplam = MasterService._sum(
+        [_yerlestir(a, start_ms=0, end_ms=1000), _yerlestir(b, start_ms=1000)]
+    )
+
+    assert len(toplam) == 2000
+    ilk = toplam[:1000]
+    ikinci = toplam[1000:]
+    assert frekans_genligi(ilk, 440) > 0.3
+    assert frekans_genligi(ilk, 660) < 0.01
+    assert frekans_genligi(ikinci, 660) > 0.3
+    assert frekans_genligi(ikinci, 440) < 0.01
+
+
+def test_pydantic_end_start_dogrulamasi():
+    import pytest
+    from pydantic import ValidationError
+
+    from main import VocalTakeInput
+
+    assert VocalTakeInput(key="k", start_ms=0, end_ms=10).end_ms == 10
+    assert VocalTakeInput(key="k").start_ms is None
+    with pytest.raises(ValidationError):
+        VocalTakeInput(key="k", start_ms=100, end_ms=100)
+    with pytest.raises(ValidationError):
+        VocalTakeInput(key="k", start_ms=-1)

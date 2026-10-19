@@ -12,7 +12,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from services.analiz import AnalizService
 from services.archiver import ArchiverService
@@ -54,6 +54,19 @@ class VocalTakeInput(BaseModel):
     key: str
     volume: float = 1.0
     pan: float = 0.0
+    # Place on the song timeline; missing start_ms means 0 (old behaviour).
+    start_ms: int | None = Field(default=None, ge=0)
+    end_ms: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _end_after_start(self):
+        if (
+            self.start_ms is not None
+            and self.end_ms is not None
+            and self.end_ms <= self.start_ms
+        ):
+            raise ValueError("end_ms must be greater than start_ms")
+        return self
 
 
 class MasterRequest(BaseModel):

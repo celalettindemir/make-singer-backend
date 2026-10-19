@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // MasterPreviewRequest represents the request for a master preview
 type MasterPreviewRequest struct {
@@ -47,6 +50,27 @@ type VocalTake struct {
 	TakeID    string `json:"takeId" validate:"required"`
 	FileURL   string `json:"fileUrl" validate:"required,url"`
 	OffsetMs  *int   `json:"offsetMs" validate:"omitempty"`
+	// StartMs is where the take's first sample lands on the song timeline;
+	// EndMs is the section end on the same timeline. Both optional: a missing
+	// StartMs means 0 (the old behaviour). OffsetMs is the latency offset
+	// already applied to the file and plays no part in placement.
+	StartMs *int `json:"startMs" validate:"omitempty,min=0"`
+	EndMs   *int `json:"endMs" validate:"omitempty,min=0"`
+}
+
+// TimelineErrors reports takes whose endMs is not after their startMs, keyed
+// by "vocalTakes[i].endMs" like the validator's field map. Nil when all is well.
+func (r *MasterFinalRequest) TimelineErrors() map[string]string {
+	var errs map[string]string
+	for i, take := range r.VocalTakes {
+		if take.StartMs != nil && take.EndMs != nil && *take.EndMs <= *take.StartMs {
+			if errs == nil {
+				errs = make(map[string]string)
+			}
+			errs[fmt.Sprintf("vocalTakes[%d].endMs", i)] = "gtfield"
+		}
+	}
+	return errs
 }
 
 // MasterFinalResponse represents the response when starting final mastering

@@ -93,6 +93,10 @@ func (h *MasterHandler) Final(c *fiber.Ctx) error {
 		return response.ValidationError(c, i18n.KeyValidationFailed, formatValidationErrors(err))
 	}
 
+	if errs := req.TimelineErrors(); errs != nil {
+		return response.ValidationError(c, i18n.KeyValidationFailed, errs)
+	}
+
 	result, err := h.service.StartFinal(c.Context(), userID, &req)
 	if err != nil {
 		if errors.Is(err, client.ErrKeyNotOwned) {

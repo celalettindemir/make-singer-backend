@@ -2502,6 +2502,10 @@ const docTemplate = `{
                 "takeId"
             ],
             "properties": {
+                "endMs": {
+                    "type": "integer",
+                    "minimum": 0
+                },
                 "fileUrl": {
                     "type": "string"
                 },
@@ -2510,6 +2514,10 @@ const docTemplate = `{
                 },
                 "sectionId": {
                     "type": "string"
+                },
+                "startMs": {
+                    "type": "integer",
+                    "minimum": 0
                 },
                 "takeId": {
                     "type": "string"

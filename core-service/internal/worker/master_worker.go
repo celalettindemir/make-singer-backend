@@ -293,8 +293,10 @@ func (w *MasterWorker) buildVocalTakes(payload *model.MasterJobPayload) ([]clien
 			return nil, fmt.Errorf("could not resolve the vocal URL: %w", err)
 		}
 		takes = append(takes, client.VocalTakeInput{
-			Key:    k,
-			Volume: 1.0, // Default volume, could be configurable
+			Key:     k,
+			Volume:  1.0, // Default volume, could be configurable
+			StartMs: take.StartMs,
+			EndMs:   take.EndMs,
 		})
 	}
 

@@ -93,3 +93,23 @@ func TestZipFileEntry_KeyJSON(t *testing.T) {
 		t.Errorf("key = %v", out["key"])
 	}
 }
+
+func TestVocalTakeInput_TimelineJSON(t *testing.T) {
+	start, end := 1000, 2500
+	b, _ := json.Marshal(VocalTakeInput{Key: "k", Volume: 1, StartMs: &start, EndMs: &end})
+	var out map[string]interface{}
+	_ = json.Unmarshal(b, &out)
+	if out["start_ms"] != float64(1000) || out["end_ms"] != float64(2500) {
+		t.Errorf("start_ms/end_ms wrong: %s", b)
+	}
+
+	b, _ = json.Marshal(VocalTakeInput{Key: "k", Volume: 1})
+	out = nil
+	_ = json.Unmarshal(b, &out)
+	if _, present := out["start_ms"]; present {
+		t.Errorf("start_ms must be omitted when nil: %s", b)
+	}
+	if _, present := out["end_ms"]; present {
+		t.Errorf("end_ms must be omitted when nil: %s", b)
+	}
+}
