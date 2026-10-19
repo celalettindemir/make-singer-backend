@@ -40,23 +40,51 @@ func langName(language model.Language) string {
 }
 
 func buildSystemPrompt(language model.Language) string {
+	return systemPrompt(language, `Always output your response as valid JSON in the exact format requested.
+Do not include any text outside the JSON structure.`)
+}
+
+// buildStreamSystemPrompt is the system prompt of the streaming routes: the
+// same writer brief, but plain lines instead of JSON.
+func buildStreamSystemPrompt(language model.Language) string {
+	return systemPrompt(language, `Output only the lyric lines, one per line, plain text. No title, no section labels, no numbering, no quotes, no explanation.`)
+}
+
+func systemPrompt(language model.Language, outputRule string) string {
 	return fmt.Sprintf(`You are a professional %s songwriter with expertise in various music genres.
 Your task is to write compelling, emotionally resonant lyrics that match the requested style and mood.
 %s
 Lines must flow when sung: keep the syllable count of neighbouring lines close, let rhymes come naturally, and keep one voice and one story across the whole song.
-Always output your response as valid JSON in the exact format requested.
-Do not include any text outside the JSON structure.`, langName(language), languageGuidance[language])
+%s`, langName(language), languageGuidance[language], outputRule)
 }
 
 func buildGeneratePrompt(req *model.LyricsGenerateRequest, language model.Language) string {
 	minLines, maxLines := targetLines(req.SectionType, sectionBars(req.LyricsContext))
 	var b strings.Builder
-	fmt.Fprintf(&b, "Generate lyrics for a %s song's %s section.\n", req.Genre, req.SectionType)
-	fmt.Fprintf(&b, "Vibes/mood: %s\n", strings.Join(req.Vibes, ", "))
-	fmt.Fprintf(&b, "Write ALL lyrics in %s, even if the vibes are given in another language.\n", langName(language))
-	writeContext(&b, req.LyricsContext, false)
-	b.WriteString(`
-Create 2 different draft versions. Each draft should have ` + lineRange(minLines, maxLines) + ` that fit the section type.
+	writeGenerateBody(&b, req, language, "Create 2 different draft versions. Each draft should have "+lineRange(minLines, maxLines)+" that fit the section type.")
+	fmt.Fprintf(&b, `
+Output a single JSON object with exactly one key, "drafts". Its value is an array of exactly 2 drafts; each draft is an array of %d-%d plain strings (one string per lyric line). Use only plain strings: no nested objects, no extra keys, no line numbers. Escape any double quote inside a line as \" or avoid it.
+Example shape: {"drafts": [["line1","line2","line3","line4"], ["line1","line2","line3","line4"]]}`, minLines, maxLines)
+	return b.String()
+}
+
+// buildStreamGeneratePrompt asks for one draft of plain lines; the context,
+// the section guidance and the chorus rule are the sync prompt's.
+func buildStreamGeneratePrompt(req *model.LyricsGenerateRequest, language model.Language) string {
+	minLines, maxLines := targetLines(req.SectionType, sectionBars(req.LyricsContext))
+	var b strings.Builder
+	writeGenerateBody(&b, req, language, "Write one draft with "+lineRange(minLines, maxLines)+" that fit the section type.")
+	return b.String()
+}
+
+// writeGenerateBody writes the part of the generate prompt both variants
+// share; ask is the sentence that sets the number of drafts and lines.
+func writeGenerateBody(b *strings.Builder, req *model.LyricsGenerateRequest, language model.Language, ask string) {
+	fmt.Fprintf(b, "Generate lyrics for a %s song's %s section.\n", req.Genre, req.SectionType)
+	fmt.Fprintf(b, "Vibes/mood: %s\n", strings.Join(req.Vibes, ", "))
+	fmt.Fprintf(b, "Write ALL lyrics in %s, even if the vibes are given in another language.\n", langName(language))
+	writeContext(b, req.LyricsContext, false)
+	b.WriteString("\n" + ask + `
 For a verse: move the story forward or set the scene.
 For a chorus: create a memorable, singable hook that sums up the song.
 For a bridge: provide contrast or a new perspective.
@@ -65,30 +93,39 @@ For other sections: follow conventions of that section type.
 	if repeatsChorus(req.SectionType, req.LyricsContext) {
 		b.WriteString(repeatChorusRule + "\n")
 	}
-	fmt.Fprintf(&b, `
-Output a single JSON object with exactly one key, "drafts". Its value is an array of exactly 2 drafts; each draft is an array of %d-%d plain strings (one string per lyric line). Use only plain strings: no nested objects, no extra keys, no line numbers. Escape any double quote inside a line as \" or avoid it.
-Example shape: {"drafts": [["line1","line2","line3","line4"], ["line1","line2","line3","line4"]]}`, minLines, maxLines)
-	return b.String()
 }
 
 func buildRewritePrompt(req *model.LyricsRewriteRequest, language model.Language) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Rewrite the following lyrics for a %s song's %s section.\n", req.Genre, req.SectionType)
-	fmt.Fprintf(&b, "Current vibes/mood: %s\n", strings.Join(req.Vibes, ", "))
+	writeRewriteBody(&b, req, language)
+	b.WriteString(`
+
+Output as JSON: {"lines": ["line1","line2","line3","line4"]}`)
+	return b.String()
+}
+
+// buildStreamRewritePrompt is the rewrite prompt without the JSON format
+// line; the stream system prompt asks for plain lines.
+func buildStreamRewritePrompt(req *model.LyricsRewriteRequest, language model.Language) string {
+	var b strings.Builder
+	writeRewriteBody(&b, req, language)
+	return b.String()
+}
+
+func writeRewriteBody(b *strings.Builder, req *model.LyricsRewriteRequest, language model.Language) {
+	fmt.Fprintf(b, "Rewrite the following lyrics for a %s song's %s section.\n", req.Genre, req.SectionType)
+	fmt.Fprintf(b, "Current vibes/mood: %s\n", strings.Join(req.Vibes, ", "))
 	if req.Instructions != "" {
-		fmt.Fprintf(&b, "Specific instructions: %s\n", req.Instructions)
+		fmt.Fprintf(b, "Specific instructions: %s\n", req.Instructions)
 	}
-	writeContext(&b, req.LyricsContext, true)
-	fmt.Fprintf(&b, `
+	writeContext(b, req.LyricsContext, true)
+	fmt.Fprintf(b, `
 Current lyrics:
 %s
 
 Keep the general meaning but improve the flow, rhyming, and emotional impact.
 Maintain the same number of lines.
-Write ALL lyrics in %s, translating them if the current lyrics are in another language.
-
-Output as JSON: {"lines": ["line1","line2","line3","line4"]}`, req.CurrentLyrics, langName(language))
-	return b.String()
+Write ALL lyrics in %s, translating them if the current lyrics are in another language.`, req.CurrentLyrics, langName(language))
 }
 
 // writeContext adds the topic, tempo and song blocks when the request has them.

@@ -385,6 +385,69 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/lyrics/generate/stream": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Same request as /api/lyrics/generate; answers a text/event-stream of start, line, done and error events. Errors before the stream use the JSON error envelope.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "Lyrics"
+                ],
+                "summary": "Generate lyrics as a stream",
+                "parameters": [
+                    {
+                        "description": "Generate request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LyricsGenerateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "Payment Required",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/lyrics/rewrite": {
             "post": {
                 "security": [
@@ -441,6 +504,69 @@ const docTemplate = `{
                     },
                     "502": {
                         "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/lyrics/rewrite/stream": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Same request as /api/lyrics/rewrite; answers a text/event-stream of start, line, done and error events. Errors before the stream use the JSON error envelope.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "Lyrics"
+                ],
+                "summary": "Rewrite lyrics as a stream",
+                "parameters": [
+                    {
+                        "description": "Rewrite request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LyricsRewriteRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "Payment Required",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
                         "schema": {
                             "$ref": "#/definitions/response.ErrorResponse"
                         }
@@ -1752,6 +1878,11 @@ const docTemplate = `{
                 "vibes"
             ],
             "properties": {
+                "bpm": {
+                    "type": "integer",
+                    "maximum": 220,
+                    "minimum": 40
+                },
                 "genre": {
                     "enum": [
                         "pop",
@@ -1785,6 +1916,9 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "sectionIndex": {
+                    "type": "integer"
+                },
                 "sectionType": {
                     "enum": [
                         "intro",
@@ -1800,6 +1934,17 @@ const docTemplate = `{
                             "$ref": "#/definitions/model.SectionType"
                         }
                     ]
+                },
+                "song": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                        "$ref": "#/definitions/model.LyricsSongSection"
+                    }
+                },
+                "topic": {
+                    "type": "string",
+                    "maxLength": 500
                 },
                 "vibes": {
                     "type": "array",
@@ -1837,6 +1982,11 @@ const docTemplate = `{
                 "vibes"
             ],
             "properties": {
+                "bpm": {
+                    "type": "integer",
+                    "maximum": 220,
+                    "minimum": 40
+                },
                 "currentLyrics": {
                     "type": "string",
                     "minLength": 1
@@ -1878,6 +2028,9 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "sectionIndex": {
+                    "type": "integer"
+                },
                 "sectionType": {
                     "enum": [
                         "intro",
@@ -1893,6 +2046,17 @@ const docTemplate = `{
                             "$ref": "#/definitions/model.SectionType"
                         }
                     ]
+                },
+                "song": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                        "$ref": "#/definitions/model.LyricsSongSection"
+                    }
+                },
+                "topic": {
+                    "type": "string",
+                    "maxLength": 500
                 },
                 "vibes": {
                     "type": "array",
@@ -1915,6 +2079,39 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "model.LyricsSongSection": {
+            "type": "object",
+            "required": [
+                "type"
+            ],
+            "properties": {
+                "bars": {
+                    "type": "integer",
+                    "maximum": 64,
+                    "minimum": 1
+                },
+                "lyrics": {
+                    "type": "string",
+                    "maxLength": 2000
+                },
+                "type": {
+                    "enum": [
+                        "intro",
+                        "verse",
+                        "prechorus",
+                        "chorus",
+                        "bridge",
+                        "outro",
+                        "instrumental"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.SectionType"
+                        }
+                    ]
                 }
             }
         },
@@ -2516,6 +2713,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "startMs": {
+                    "description": "StartMs is where the take's first sample lands on the song timeline;\nEndMs is the section end on the same timeline. Both optional: a missing\nStartMs means 0 (the old behaviour). OffsetMs is the latency offset\nalready applied to the file and plays no part in placement.",
                     "type": "integer",
                     "minimum": 0
                 },

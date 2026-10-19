@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/lyricsprovider"
@@ -18,7 +20,16 @@ type LyricsGenerator interface {
 	// IsMock reports whether the generator answers with canned text instead
 	// of calling the AI provider.
 	IsMock() bool
+	// GenerateStream writes one draft line by line to onLine and returns how
+	// many lines it emitted. An onLine error stops the provider call and is
+	// returned.
+	GenerateStream(ctx context.Context, req *model.LyricsGenerateRequest, onLine func(string) error) (int, error)
+	// RewriteStream is GenerateStream for a rewrite.
+	RewriteStream(ctx context.Context, req *model.LyricsRewriteRequest, onLine func(string) error) (int, error)
 }
+
+// streamTimeout is the deadline of one provider stream.
+const streamTimeout = 60 * time.Second
 
 // ClientSource hands out the AI client for one request (R-LYR-11).
 type ClientSource interface {
@@ -28,11 +39,13 @@ type ClientSource interface {
 // LyricsService handles lyrics generation and rewriting with the active AI provider.
 type LyricsService struct {
 	source ClientSource
+	// mockDelay is the pause before each line of a mock stream.
+	mockDelay time.Duration
 }
 
 // NewLyricsService creates a lyrics service over a provider source.
 func NewLyricsService(source ClientSource) *LyricsService {
-	return &LyricsService{source: source}
+	return &LyricsService{source: source, mockDelay: 300 * time.Millisecond}
 }
 
 // IsMock reports whether no AI provider is configured, so Generate and
@@ -96,6 +109,70 @@ func (s *LyricsService) Rewrite(ctx context.Context, req *model.LyricsRewriteReq
 	return &model.LyricsRewriteResponse{
 		Lines: lines,
 	}, nil
+}
+
+// GenerateStream streams one draft. Without a provider it streams the first
+// mock draft.
+func (s *LyricsService) GenerateStream(ctx context.Context, req *model.LyricsGenerateRequest, onLine func(string) error) (int, error) {
+	language := req.Language
+	if language == "" {
+		language = model.LanguageEN
+	}
+	name, c := s.source.Active(ctx)
+	if c == nil || !c.IsConfigured() {
+		mock, _ := s.generateMock(req)
+		return s.streamMock(ctx, mock.Drafts[0], onLine)
+	}
+	temperature, _ := c.Temperatures()
+	return streamChat(ctx, name, c, buildStreamSystemPrompt(language), buildStreamGeneratePrompt(req, language), temperature, onLine)
+}
+
+// RewriteStream streams the rewritten lines.
+func (s *LyricsService) RewriteStream(ctx context.Context, req *model.LyricsRewriteRequest, onLine func(string) error) (int, error) {
+	language := req.Language
+	if language == "" {
+		language = model.LanguageEN
+	}
+	name, c := s.source.Active(ctx)
+	if c == nil || !c.IsConfigured() {
+		mock, _ := s.rewriteMock(req)
+		return s.streamMock(ctx, mock.Lines, onLine)
+	}
+	_, temperature := c.Temperatures()
+	return streamChat(ctx, name, c, buildStreamSystemPrompt(language), buildStreamRewritePrompt(req, language), temperature, onLine)
+}
+
+// streamChat runs one provider stream under streamTimeout and returns the
+// number of lines emitted. Hitting the line limit is a normal end.
+func streamChat(ctx context.Context, name lyricsprovider.Name, c client.ChatClient, system, user string, temperature float64, onLine func(string) error) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, streamTimeout)
+	defer cancel()
+	split := newLineSplitter(onLine)
+	err := c.ChatStream(ctx, system, user, temperature, split.Write)
+	if err == nil {
+		err = split.Close()
+	}
+	if errors.Is(err, errLineLimit) {
+		err = nil
+	}
+	if err != nil {
+		return split.Count(), fmt.Errorf("AI stream failed (%s): %w", name, err)
+	}
+	return split.Count(), nil
+}
+
+func (s *LyricsService) streamMock(ctx context.Context, lines []string, onLine func(string) error) (int, error) {
+	for i, l := range lines {
+		select {
+		case <-ctx.Done():
+			return i, ctx.Err()
+		case <-time.After(s.mockDelay):
+		}
+		if err := onLine(l); err != nil {
+			return i, err
+		}
+	}
+	return len(lines), nil
 }
 
 func (s *LyricsService) parseGenerateResponse(response string) ([][]string, error) {

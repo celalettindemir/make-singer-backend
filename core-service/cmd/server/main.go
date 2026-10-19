@@ -384,6 +384,8 @@ func main() {
 	lyrics := api.Group("/lyrics", rateLimiter.LyricsLimit(cfg.RateLimit.LyricsPerMin))
 	lyrics.Post("/generate", lyricsHandler.Generate)
 	lyrics.Post("/rewrite", lyricsHandler.Rewrite)
+	lyrics.Post("/generate/stream", lyricsHandler.GenerateStream)
+	lyrics.Post("/rewrite/stream", lyricsHandler.RewriteStream)
 
 	// Render routes
 	render := api.Group("/render")

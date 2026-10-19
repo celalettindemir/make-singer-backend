@@ -25,6 +25,8 @@ type LyricsHandler struct {
 	service   service.LyricsGenerator
 	validator *validator.Validate
 	credits   credit.Spender
+	// heartbeat is the pause before a stream sends ": ping"; 0 means 15 s.
+	heartbeat time.Duration
 }
 
 // WithCredits turns on per-action credit charging. Without it the handler
@@ -214,13 +216,19 @@ func (h *LyricsHandler) begin(c *fiber.Ctx, op credit.Operation) (*lyricsAction,
 // the same action never refunds. A failed refund is logged, since the user
 // already gets the AI error.
 func (a *lyricsAction) refund(c *fiber.Ctx) {
+	a.refundFor(c.Method() + " " + c.Route().Path)
+}
+
+// refundFor is refund for callers that no longer hold the fiber.Ctx (the
+// stream writer); where only labels the log line.
+func (a *lyricsAction) refundFor(where string) {
 	if !a.charged {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Context()), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := a.h.credits.RefundAction(ctx, a.userID, a.op, a.id); err != nil {
-		log.Printf("%s %s: refund action %s: %v", c.Method(), c.Route().Path, a.id, err)
+		log.Printf("%s: refund action %s: %v", where, a.id, err)
 	}
 }
 

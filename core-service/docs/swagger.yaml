@@ -434,6 +434,10 @@ definitions:
     - LanguageFR
   model.LyricsGenerateRequest:
     properties:
+      bpm:
+        maximum: 220
+        minimum: 40
+        type: integer
       genre:
         allOf:
         - $ref: '#/definitions/model.Genre'
@@ -457,6 +461,8 @@ definitions:
         - en
         - tr
         - fr
+      sectionIndex:
+        type: integer
       sectionType:
         allOf:
         - $ref: '#/definitions/model.SectionType'
@@ -468,6 +474,14 @@ definitions:
         - bridge
         - outro
         - instrumental
+      song:
+        items:
+          $ref: '#/definitions/model.LyricsSongSection'
+        maxItems: 32
+        type: array
+      topic:
+        maxLength: 500
+        type: string
       vibes:
         items:
           type: string
@@ -492,6 +506,10 @@ definitions:
     type: object
   model.LyricsRewriteRequest:
     properties:
+      bpm:
+        maximum: 220
+        minimum: 40
+        type: integer
       currentLyrics:
         minLength: 1
         type: string
@@ -521,6 +539,8 @@ definitions:
         - en
         - tr
         - fr
+      sectionIndex:
+        type: integer
       sectionType:
         allOf:
         - $ref: '#/definitions/model.SectionType'
@@ -532,6 +552,14 @@ definitions:
         - bridge
         - outro
         - instrumental
+      song:
+        items:
+          $ref: '#/definitions/model.LyricsSongSection'
+        maxItems: 32
+        type: array
+      topic:
+        maxLength: 500
+        type: string
       vibes:
         items:
           type: string
@@ -552,6 +580,29 @@ definitions:
         items:
           type: string
         type: array
+    type: object
+  model.LyricsSongSection:
+    properties:
+      bars:
+        maximum: 64
+        minimum: 1
+        type: integer
+      lyrics:
+        maxLength: 2000
+        type: string
+      type:
+        allOf:
+        - $ref: '#/definitions/model.SectionType'
+        enum:
+        - intro
+        - verse
+        - prechorus
+        - chorus
+        - bridge
+        - outro
+        - instrumental
+    required:
+    - type
     type: object
   model.MasterFinalRequest:
     properties:
@@ -962,11 +1013,6 @@ definitions:
   model.VocalTake:
     properties:
       endMs:
-        description: |-
-          StartMs is where the take's first sample lands on the song timeline;
-          EndMs is the section end on the same timeline. Both optional: a missing
-          StartMs means 0 (the old behaviour). OffsetMs is the latency offset
-          already applied to the file and plays no part in placement.
         minimum: 0
         type: integer
       fileUrl:
@@ -976,6 +1022,11 @@ definitions:
       sectionId:
         type: string
       startMs:
+        description: |-
+          StartMs is where the take's first sample lands on the song timeline;
+          EndMs is the section end on the same timeline. Both optional: a missing
+          StartMs means 0 (the old behaviour). OffsetMs is the latency offset
+          already applied to the file and plays no part in placement.
         minimum: 0
         type: integer
       takeId:
@@ -1257,6 +1308,48 @@ paths:
       summary: Generate lyrics
       tags:
       - Lyrics
+  /api/lyrics/generate/stream:
+    post:
+      consumes:
+      - application/json
+      description: Same request as /api/lyrics/generate; answers a text/event-stream
+        of start, line, done and error events. Errors before the stream use the JSON
+        error envelope.
+      parameters:
+      - description: Generate request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LyricsGenerateRequest'
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: SSE stream
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "402":
+          description: Payment Required
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Generate lyrics as a stream
+      tags:
+      - Lyrics
   /api/lyrics/rewrite:
     post:
       consumes:
@@ -1295,6 +1388,48 @@ paths:
       security:
       - BearerAuth: []
       summary: Rewrite lyrics
+      tags:
+      - Lyrics
+  /api/lyrics/rewrite/stream:
+    post:
+      consumes:
+      - application/json
+      description: Same request as /api/lyrics/rewrite; answers a text/event-stream
+        of start, line, done and error events. Errors before the stream use the JSON
+        error envelope.
+      parameters:
+      - description: Rewrite request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LyricsRewriteRequest'
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: SSE stream
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "402":
+          description: Payment Required
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Rewrite lyrics as a stream
       tags:
       - Lyrics
   /api/master/final:
