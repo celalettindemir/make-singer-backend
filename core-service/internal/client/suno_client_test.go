@@ -329,37 +329,6 @@ func TestSunoStemName(t *testing.T) {
 	}
 }
 
-func TestAddVocals_ProviderContract(t *testing.T) {
-	var body map[string]any
-	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/generate/add-vocals" {
-			t.Errorf("request = %s %s", r.Method, r.URL.Path)
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		writeEnvelope(w, 200, map[string]any{"taskId": "av1"})
-	})
-	id, err := c.AddVocals(context.Background(), &AddVocalsRequest{
-		UploadURL: "https://cdn.test/inst.mp3", Style: "pop, A minor", Title: "pop guide",
-		Lyrics: "[Verse]\na", VocalGender: "f",
-	})
-	if err != nil || id != "av1" {
-		t.Fatalf("AddVocals = %q, %v", id, err)
-	}
-	want := map[string]any{
-		"uploadUrl": "https://cdn.test/inst.mp3", "title": "pop guide", "negativeTags": "rap, spoken word",
-		"style": "pop, A minor", "lyrics": "[Verse]\na", "vocalGender": "f", "model": "V6",
-		"callBackUrl": "https://ornek.test/geri",
-	}
-	if len(body) != len(want) {
-		t.Errorf("body keys = %v, want exactly %v", body, want)
-	}
-	for k, v := range want {
-		if body[k] != v {
-			t.Errorf("body[%q] = %v, want %v", k, body[k], v)
-		}
-	}
-}
-
 func TestSeparateVocal_ProviderContract(t *testing.T) {
 	var body map[string]any
 	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {

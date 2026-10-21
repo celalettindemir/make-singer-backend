@@ -7,18 +7,6 @@ import (
 	"time"
 )
 
-// GuideGenerator is what the guided render needs from Suno on top of
-// MusicGenerator: a guide singer over an existing instrumental, its vocal
-// separated, and its word timings. Add-vocals results are polled with
-// WaitMusic (same record-info endpoint).
-type GuideGenerator interface {
-	AddVocals(ctx context.Context, req *AddVocalsRequest) (string, error)
-	WaitMusic(ctx context.Context, taskID string, interval, maxWait time.Duration) (*Track, error)
-	SeparateVocal(ctx context.Context, taskID, audioID string) (string, error)
-	WaitSeparated(ctx context.Context, separationTaskID string, interval, maxWait time.Duration) (*SeparatedVocal, error)
-	TimestampedLyrics(ctx context.Context, taskID, audioID string) ([]AlignedWord, error)
-}
-
 // VocalSeparator is what the vocal render needs from Suno on top of
 // MusicGenerator: a vocal take separated from a track or an uploaded
 // recording, and the word timings of a sung track.
@@ -29,20 +17,7 @@ type VocalSeparator interface {
 	TimestampedLyrics(ctx context.Context, taskID, audioID string) ([]AlignedWord, error)
 }
 
-var _ GuideGenerator = (*SunoClient)(nil)
 var _ VocalSeparator = (*SunoClient)(nil)
-
-// guideNegativeTags keeps the guide sung: add-vocals rejects an empty value.
-const guideNegativeTags = "rap, spoken word"
-
-// AddVocalsRequest asks Suno to sing lyrics over the instrumental at UploadURL.
-type AddVocalsRequest struct {
-	UploadURL   string
-	Style       string
-	Title       string
-	Lyrics      string
-	VocalGender string
-}
 
 // SeparatedVocal is the separate_vocal result. The URLs expire.
 type SeparatedVocal struct {
@@ -57,31 +32,6 @@ type AlignedWord struct {
 	StartS  float64 `json:"startS"`
 	EndS    float64 `json:"endS"`
 	Success bool    `json:"success"`
-}
-
-// AddVocals starts a guide singer over the instrumental and returns the task
-// id. If this call succeeds, credits have been spent.
-func (c *SunoClient) AddVocals(ctx context.Context, req *AddVocalsRequest) (string, error) {
-	body := map[string]any{
-		"uploadUrl":    req.UploadURL,
-		"title":        req.Title,
-		"negativeTags": guideNegativeTags,
-		"style":        req.Style,
-		"lyrics":       req.Lyrics,
-		"vocalGender":  req.VocalGender,
-		"model":        c.model,
-		"callBackUrl":  c.callbackURL,
-	}
-	var data struct {
-		TaskID string `json:"taskId"`
-	}
-	if err := c.post(ctx, "/api/v1/generate/add-vocals", body, &data); err != nil {
-		return "", err
-	}
-	if data.TaskID == "" {
-		return "", fmt.Errorf("suno: no taskId in add-vocals response")
-	}
-	return data.TaskID, nil
 }
 
 // SeparateVocal splits a track into vocal and instrumental (separate_vocal).

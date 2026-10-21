@@ -65,7 +65,7 @@ type RenderWorker struct {
 	pollInterval    time.Duration
 	deletionChecker deletionmark.Checker // nil: no check
 	credits         credit.Spender       // nil: no credit accounting
-	guideAudio      client.GuideAudio    // nil: guided renders fail before Suno
+	guideAudio      client.GuideAudio    // nil: vocal renders skip the analysis
 	isLastAttempt   func(context.Context) bool
 
 	// afterStatusCheck is a test seam called after the attempt-start status
@@ -224,10 +224,15 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 		return nil, fmt.Errorf("invalid stem setting, Suno was not called: %w: %w", err, asynq.SkipRetry)
 	}
 
-	// BEFORE the paid call: a guided job needs the guide calls and audio-service.
-	guideGen, err := w.guideGenerator(payload)
+	// BEFORE the paid call: a vocal job needs the Suno separation calls.
+	vocalSep, err := w.vocalSeparator(payload)
 	if err != nil {
-		return nil, fmt.Errorf("guide unavailable, Suno was not called: %w: %w", err, asynq.SkipRetry)
+		return nil, fmt.Errorf("vocal render unavailable, Suno was not called: %w: %w", err, asynq.SkipRetry)
+	}
+	vocal := vocalSep != nil
+	analyze := w.analyzeVocal(payload)
+	if vocal && payload.GuideAnalysis && !analyze {
+		log.Printf("Render: vocal analysis requested but audio-service is not configured; skipping it")
 	}
 
 	// BEFORE the paid call: Suno is not charged for a deleted account.
@@ -245,6 +250,15 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 		Style:        buildMusicStyle(payload),
 		Title:        fmt.Sprintf("%s instrumental", payload.Brief.Genre),
 		Instrumental: true,
+	}
+	if vocal {
+		req.Title = payload.Vocal.Title
+		if req.Title == "" {
+			req.Title = fmt.Sprintf("%s song", payload.Brief.Genre)
+		}
+		req.Instrumental = false
+		req.Lyrics = client.SunoLyrics(payload.Vocal.Sections)
+		req.VocalGender = payload.Vocal.Voice.SunoGender()
 	}
 
 	progress(10, "Generating music...")
@@ -279,6 +293,7 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 	if err != nil {
 		return nil, charged("music generation failed", err)
 	}
+	log.Printf("Render: suno task %s, audio %s", taskID, track.ID)
 
 	// If Suno returns no duration, it is estimated from the structure.
 	duration := track.Duration
@@ -286,21 +301,27 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 		duration = estimateDuration(payload)
 	}
 
-	var guide *rawGuide
-	if guideGen != nil {
-		if guide, err = w.makeGuide(ctx, guideGen, payload, mode, track, progress); err != nil {
-			return nil, charged("guide failed", err)
-		}
-	}
-
 	var stems []client.Stem
+	var vocalURL string
 	switch mode {
 	case model.StemModeMix:
-		// The generation is instrumental; the track itself is the single stem, no splitting.
 		if track.AudioURL == "" {
 			return nil, charged("mix render failed", errors.New("suno did not return a track URL"))
 		}
-		stems = []client.Stem{{Instrument: model.InstrumentMix, URL: track.AudioURL}}
+		if !vocal {
+			// The generation is instrumental; the track itself is the single stem, no splitting.
+			stems = []client.Stem{{Instrument: model.InstrumentMix, URL: track.AudioURL}}
+			break
+		}
+		progress(60, "Separating vocals...")
+		sep, err := w.separate(ctx, vocalSep, func() (string, error) {
+			return vocalSep.SeparateVocal(ctx, taskID, track.ID)
+		}, "suno task "+taskID+", audio "+track.ID)
+		if err != nil {
+			return nil, charged("vocal separation failed", err)
+		}
+		vocalURL = sep.VocalURL
+		stems = []client.Stem{{Instrument: model.InstrumentMix, URL: sep.InstrumentalURL}}
 
 	case model.StemModeFocus:
 		progress(60, "Isolating instrument...")
@@ -313,9 +334,22 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 		if err != nil {
 			return nil, charged("instrument isolation failed", err)
 		}
+		log.Printf("Render: isolation task %s", isolateID)
+		rest := isolated.RemoveURL
+		if vocal {
+			// The rest still carries the vocal; it is separated from it.
+			progress(80, "Separating vocals...")
+			sep, err := w.separate(ctx, vocalSep, func() (string, error) {
+				return vocalSep.SeparateVocalURL(ctx, isolated.RemoveURL)
+			}, "rest of isolation "+isolateID)
+			if err != nil {
+				return nil, charged("vocal separation failed", err)
+			}
+			vocalURL, rest = sep.VocalURL, sep.InstrumentalURL
+		}
 		stems = []client.Stem{
 			{Instrument: *payload.FocusInstrument, URL: isolated.ExtractURL},
-			{Instrument: model.InstrumentRest, URL: isolated.RemoveURL},
+			{Instrument: model.InstrumentRest, URL: rest},
 		}
 
 	default: // stems
@@ -325,25 +359,70 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 			return nil, charged("stem splitting failed", err)
 		}
 		progress(75, "Waiting for stem separation...")
-		stems, _, err = w.music.WaitStems(ctx, stemTaskID, w.pollInterval, 5*time.Minute)
+		log.Printf("Render: stem split task %s", stemTaskID)
+		stems, vocalURL, err = w.music.WaitStems(ctx, stemTaskID, w.pollInterval, 5*time.Minute)
 		if err != nil {
 			return nil, charged("stem splitting failed", err)
 		}
 		if len(stems) == 0 {
 			return nil, charged("stem splitting failed", errors.New("suno returned no instrument stems"))
 		}
+		if vocal && vocalURL == "" {
+			return nil, charged("stem splitting failed", errors.New("suno returned no vocal stem"))
+		}
+	}
+
+	// Word timings only place the lyrics; a failure leaves them unplaced.
+	var timeline []model.LyricTimelineSection
+	var words []client.AlignedWord
+	if vocal {
+		progress(85, "Timing lyrics...")
+		if words, err = vocalSep.TimestampedLyrics(ctx, taskID, track.ID); err != nil {
+			log.Printf("Render: word timings failed (suno task %s), no lyric timeline: %v", taskID, err)
+			words = nil
+		} else if timeline = BuildLyricTimeline(payload.Vocal.Sections, words, duration); timeline == nil {
+			log.Printf("Render: word timings did not map to the lyrics (suno task %s), no lyric timeline", taskID)
+		}
 	}
 
 	progress(90, "Uploading stems...")
+	var take *vocalTake
+	if vocal {
+		fullURL := ""
+		if analyze && mode == model.StemModeStems {
+			fullURL = track.AudioURL
+		}
+		if take, err = w.storeVocal(ctx, payload, vocalURL, fullURL); err != nil {
+			return nil, charged("vocal upload failed", err)
+		}
+	}
 	records, err := w.uploadStems(ctx, payload.OwnerID, payload.ProjectID, stems, duration)
 	if err != nil {
 		return nil, charged("stem upload failed", err)
 	}
+	if take != nil {
+		vocalRec := model.StemResultRecord{
+			ID:           take.id,
+			Instrument:   model.InstrumentVocal,
+			FileKey:      take.key,
+			Duration:     duration,
+			WaveformData: generateWaveform(100),
+		}
+		records = append([]model.StemResultRecord{vocalRec}, records...)
+	}
 
 	result = w.generateResult(payload, mode, duration, records)
-	if guide != nil {
+	result.LyricTimeline = timeline
+	if analyze {
+		// The alignment reference: Suno's full track in the stems tier,
+		// otherwise the instrumental stem (mix, or the rest in focus),
+		// which is the last one.
+		ref := take.instKey
+		if ref == "" {
+			ref = result.Stems[len(result.Stems)-1].FileKey
+		}
 		var shift int
-		result.Guide, shift = w.finishGuide(ctx, payload, guide, result.Stems, result.BPM, progress)
+		result.Guide, shift = w.finishVocal(ctx, payload, take, ref, words, result.Stems, result.BPM, progress)
 		result.Key.Tonic = TransposeKey(result.Key.Tonic, shift)
 	}
 	progress(95, "Finalizing...")
@@ -620,6 +699,20 @@ func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) (*mod
 	}
 
 	var stems []model.StemResultRecord
+	if payload.Vocal != nil {
+		// The mock has no sung take; the mock mix file stands in for it.
+		key, err := client.UserKey("stems", payload.OwnerID, payload.ProjectID, string(model.InstrumentMix)+".wav")
+		if err != nil {
+			return nil, err
+		}
+		stems = append(stems, model.StemResultRecord{
+			ID:           uuid.New().String(),
+			Instrument:   model.InstrumentVocal,
+			FileKey:      key,
+			Duration:     duration,
+			WaveformData: generateWaveform(100),
+		})
+	}
 	for _, instrument := range instruments {
 		stemID := uuid.New().String()
 		key, err := client.UserKey("stems", payload.OwnerID, payload.ProjectID, string(instrument)+".wav")

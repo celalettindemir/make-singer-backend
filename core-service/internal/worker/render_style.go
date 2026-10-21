@@ -14,8 +14,12 @@ const maxStyleLen = 1000
 
 // buildMusicStyle builds the Suno style text from the brief and arrangement.
 // Fields without a value are omitted; if BPM/key is missing Suno picks its own.
+// A vocal render is sung, so its style has no "instrumental" part.
 func buildMusicStyle(p *model.RenderJobPayload) string {
-	parts := []string{string(p.Brief.Genre), "instrumental"}
+	parts := []string{string(p.Brief.Genre)}
+	if p.Vocal == nil {
+		parts = append(parts, "instrumental")
+	}
 
 	if v := p.Brief.BPM.Value; v != nil {
 		parts = append(parts, fmt.Sprintf("%d BPM", *v))

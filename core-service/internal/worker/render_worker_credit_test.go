@@ -377,3 +377,25 @@ func TestRenderWorker_FinishedBeforeClaimNoRefund(t *testing.T) {
 
 // renderRefunds are the refunds of the render debit.
 func renderRefunds(f *credit.FakeSpender) []credit.RefundCall { return f.Refunds }
+
+func TestVocal_StemsWithoutVocal_FailsAndRefunds(t *testing.T) {
+	cs := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
+	srv := audioServer(t)
+	s := &vocalSuno{fakeSuno: fakeSuno{
+		track: &client.Track{ID: "a1", AudioURL: srv.URL + "/tam.mp3", Duration: 140},
+		stems: []client.Stem{{Instrument: model.InstrumentBass, URL: srv.URL + "/bas.mp3"}},
+	}}
+	cs.w.music = s
+	p := vocalPayload()
+	p.StemMode = model.StemModeStems
+	err := cs.w.ProcessTask(context.Background(), vocalTask(t, p))
+	if !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("want SkipRetry, got %v", err)
+	}
+	if st := jobStatus(t, cs.svc); st != model.JobStatusFailed {
+		t.Errorf("status = %s, want failed", st)
+	}
+	if got := renderRefunds(cs.fake); len(got) != 1 || got[0].Op != credit.OpRenderStems || got[0].ID != "is1" {
+		t.Errorf("refunds = %+v, want one render_stems for is1", got)
+	}
+}

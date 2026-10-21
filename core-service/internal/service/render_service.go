@@ -335,9 +335,7 @@ func (s *RenderService) CancelRender(ctx context.Context, userID, jobID string) 
 	if wasQueued {
 		// The stored job keeps no stem mode (Job.Payload is not persisted),
 		// and the ledger refund is keyed by jobId within the render family,
-		// so any render operation names the right debit. The guide is
-		// refunded too; a job without a guide has no such debit and the
-		// refund finds nothing.
+		// so any render operation names the right debit.
 		s.refundJob(ctx, credit.OpRenderMix, jobID)
 	}
 

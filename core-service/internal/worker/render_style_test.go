@@ -40,3 +40,13 @@ func TestBuildMusicStyle(t *testing.T) {
 		t.Errorf("long style %d bytes, valid UTF-8: %v", len(got), utf8.ValidString(got))
 	}
 }
+
+func TestBuildMusicStyle_VocalHasNoInstrumentalWord(t *testing.T) {
+	p := &model.RenderJobPayload{
+		Brief: model.Brief{Genre: model.Genre("rock"), Vibes: []string{"x"}},
+		Vocal: &model.VocalRequest{Voice: model.VoiceMale},
+	}
+	if got := buildMusicStyle(p); got != "rock, x" {
+		t.Errorf("vocal style = %q, want %q", got, "rock, x")
+	}
+}

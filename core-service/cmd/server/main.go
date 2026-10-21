@@ -516,7 +516,7 @@ func startWorkerServer(
 	deletionChecker := deletionmark.NewRedisChecker(redisClient)
 	renderWorker := worker.NewRenderWorker(renderService, sunoClient, storage, hub, deletionChecker).WithCredits(creditSpender)
 	if audioClient.IsConfigured() {
-		// Guided renders (spec 9) need audio-service; without it they fail before Suno.
+		// The vocal analysis (note strip, key shift) needs audio-service; without it it is skipped.
 		renderWorker.WithGuideAudio(audioClient)
 	}
 	masterWorker := worker.NewMasterWorker(redisClient, audioClient, storage, masterService, hub, &cfg.R2, deletionChecker).WithCredits(creditSpender)
