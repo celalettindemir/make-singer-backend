@@ -701,12 +701,13 @@ func (w *RenderWorker) generateMockResult(payload *model.RenderJobPayload) (*mod
 	var stems []model.StemResultRecord
 	if payload.Vocal != nil {
 		// The mock has no sung take; the mock mix file stands in for it.
-		key, err := client.UserKey("stems", payload.OwnerID, payload.ProjectID, string(model.InstrumentMix)+".wav")
+		vocalID := uuid.New().String()
+		key, err := client.UserKey("guides", payload.OwnerID, payload.ProjectID, vocalID+".mp3")
 		if err != nil {
 			return nil, err
 		}
 		stems = append(stems, model.StemResultRecord{
-			ID:           uuid.New().String(),
+			ID:           vocalID,
 			Instrument:   model.InstrumentVocal,
 			FileKey:      key,
 			Duration:     duration,

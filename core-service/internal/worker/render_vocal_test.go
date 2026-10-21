@@ -474,6 +474,34 @@ func TestVocal_DeletedOwnerBeforeVocalUpload(t *testing.T) {
 	}
 }
 
+func TestVocal_DeletedOwnerDuringAnalysis(t *testing.T) {
+	s, a, d, _ := vocalSetup(t)
+	p := vocalPayload()
+	p.GuideAnalysis = true
+	// Let the checks before the analysis pass (probe the count).
+	for allow := 1; allow < 8; allow++ {
+		a.analyzeCalls = 0
+		w := workerWithChecker(&s.fakeSuno, d, &afterNChecker{allow: allow})
+		w.music = s
+		w.guideAudio = a
+		res, err := w.generateWithSuno(context.Background(), p, noProgress, claimOK)
+		if err != nil {
+			continue // owner already deleted before the vocal was stored
+		}
+		if a.analyzeCalls != 0 {
+			t.Fatalf("allow %d: AnalyzeGuide called for a deleted owner", allow)
+		}
+		if res.Stems[0].Instrument != model.InstrumentVocal || strings.Contains(res.Stems[0].FileKey, "-aligned") {
+			t.Fatalf("allow %d: want the raw vocal, got %+v", allow, res.Stems[0])
+		}
+		if res.Guide == nil || res.Guide.NotesKey != nil || res.Guide.PitchShiftSemitones != 0 {
+			t.Fatalf("allow %d: guide = %+v, want no notes and no shift", allow, res.Guide)
+		}
+		return
+	}
+	t.Fatal("no check count produced a render that skipped the analysis")
+}
+
 func TestVocal_NotConfiguredFailsBeforeSuno(t *testing.T) {
 	s := &fakeSuno{track: &client.Track{ID: "a1"}}
 	w := testWorker(s, &fakeStorage{}) // fakeSuno has no vocal separation
@@ -526,8 +554,8 @@ func TestVocal_Mock_AddsVocalStem(t *testing.T) {
 		if len(rec.Stems) < 2 || rec.Stems[0].Instrument != model.InstrumentVocal {
 			t.Fatalf("%s: stems = %v, want vocal first", mode, instruments(rec.Stems))
 		}
-		if rec.Stems[0].FileKey != "stems/kullanici-a/p1/mix.wav" {
-			t.Errorf("%s: mock vocal key = %s, want the mock mix file", mode, rec.Stems[0].FileKey)
+		if k := rec.Stems[0].FileKey; k != "guides/kullanici-a/p1/"+rec.Stems[0].ID+".mp3" {
+			t.Errorf("%s: mock vocal key = %s, want a guides/ key (master gate)", mode, k)
 		}
 		if rec.LyricTimeline != nil || rec.Guide != nil {
 			t.Errorf("%s: timeline %+v guide %+v, want nil", mode, rec.LyricTimeline, rec.Guide)

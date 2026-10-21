@@ -135,6 +135,10 @@ func (w *RenderWorker) finishVocal(ctx context.Context, payload *model.RenderJob
 		}
 		sections = append(sections, client.GuideSectionInput{ID: s.ID, Type: s.Type, Lines: lines})
 	}
+	if err := ownerCanWrite(ctx, w.deletionChecker, payload.OwnerID); err != nil {
+		log.Printf("Vocal %s: no analysis: %v", take.id, err)
+		return &model.GuideRecord{}, 0
+	}
 	res, err := w.guideAudio.AnalyzeGuide(ctx, &client.GuideAnalyzeRequest{
 		GuideKey:        take.key,
 		ReferenceKey:    ref,
