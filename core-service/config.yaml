@@ -42,10 +42,9 @@ credits:
   refund_grace: 168h # CREDITS_REFUND_GRACE: validity of the lot a refund into an expired lot creates
   expire_interval: 1h # CREDITS_EXPIRE_INTERVAL: lot expiry sweep period
   costs:
-    render_mix: 12 # CREDITS_COST_RENDER_MIX
-    render_focus: 32 # CREDITS_COST_RENDER_FOCUS
-    render_stems: 62 # CREDITS_COST_RENDER_STEMS
-    render_guide: 23 # CREDITS_COST_RENDER_GUIDE (guided render extra, Plus/Pro)
+    render_mix: 23 # CREDITS_COST_RENDER_MIX
+    render_focus: 43 # CREDITS_COST_RENDER_FOCUS
+    render_stems: 63 # CREDITS_COST_RENDER_STEMS
     lyrics_generate: 2 # CREDITS_COST_LYRICS_GENERATE
     lyrics_rewrite: 1 # CREDITS_COST_LYRICS_REWRITE
     master: 3 # CREDITS_COST_MASTER

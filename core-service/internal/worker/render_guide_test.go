@@ -223,13 +223,12 @@ func TestGuided_SeparationFails_RefundsBoth(t *testing.T) {
 	if st := jobStatus(t, cs.svc); st != model.JobStatusFailed {
 		t.Errorf("status = %s, want failed", st)
 	}
-	var render, guide bool
+	var render bool
 	for _, r := range cs.fake.Refunds {
 		render = render || (r.Op == credit.OpRenderMix && r.ID == "is1")
-		guide = guide || (r.Op == credit.OpRenderGuide && r.ID == "is1:rehber")
 	}
-	if !render || !guide {
-		t.Errorf("refunds = %+v, want render_mix is1 and render_guide is1:rehber", cs.fake.Refunds)
+	if !render {
+		t.Errorf("refunds = %+v, want render_mix is1", cs.fake.Refunds)
 	}
 }
 
@@ -338,21 +337,6 @@ func guideTask(t *testing.T) *asynq.Task {
 	pb, _ := json.Marshal(guidePayload())
 	data, _ := json.Marshal(map[string]any{"jobId": "is1", "payload": json.RawMessage(pb)})
 	return asynq.NewTask(service.TaskTypeRender, data)
-}
-
-// A job whose payload cannot be read may have a guide debit; the final
-// failure refunds it too (review I-4).
-func TestRenderWorker_InvalidPayloadRefundsGuide(t *testing.T) {
-	cs := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
-	data, _ := json.Marshal(map[string]any{"jobId": "is1", "payload": []int{1}})
-	_ = cs.w.ProcessTask(context.Background(), asynq.NewTask(service.TaskTypeRender, data))
-	found := false
-	for _, r := range cs.fake.Refunds {
-		found = found || (r.Op == credit.OpRenderGuide && r.ID == "is1:rehber")
-	}
-	if !found {
-		t.Errorf("refunds = %+v, want the guide refund", cs.fake.Refunds)
-	}
 }
 
 // In the stems tier the first stem is one instrument; the guide is aligned

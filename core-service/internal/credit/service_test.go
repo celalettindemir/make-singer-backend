@@ -98,7 +98,7 @@ func testSettings(enforce bool) Settings {
 	return Settings{
 		Enforce:     enforce,
 		PlanCredits: map[Tier]int{TierPlus: 300, TierPro: 1000},
-		Costs:       Costs{RenderMix: 12, RenderFocus: 32, RenderStems: 62, RenderGuide: 23, LyricsGenerate: 2, LyricsRewrite: 1, Master: 3},
+		Costs:       Costs{RenderMix: 23, RenderFocus: 43, RenderStems: 63, LyricsGenerate: 2, LyricsRewrite: 1, Master: 3},
 		RefundGrace: 168 * time.Hour,
 	}
 }
@@ -215,8 +215,8 @@ func TestService_EnforcedSpendInsufficient(t *testing.T) {
 	s := newTestService(l, true)
 	_, err := s.Spend(context.Background(), "u1", OpRenderMix, "job1", "")
 	var ins *InsufficientError
-	if !errors.As(err, &ins) || ins.Required != 12 || ins.Balance != 10 {
-		t.Fatalf("err = %v; want InsufficientError 12/10", err)
+	if !errors.As(err, &ins) || ins.Required != 23 || ins.Balance != 10 {
+		t.Fatalf("err = %v; want InsufficientError 23/10", err)
 	}
 }
 
@@ -224,10 +224,10 @@ func TestService_SpendUsesConfiguredCost(t *testing.T) {
 	l := &fakeLedger{bal: 100}
 	s := newTestService(l, true)
 	bal, err := s.Spend(context.Background(), "u1", OpRenderFocus, "job1", "p1")
-	if err != nil || bal != 68 {
-		t.Fatalf("Spend = %d, %v; want 68", bal, err)
+	if err != nil || bal != 57 {
+		t.Fatalf("Spend = %d, %v; want 57", bal, err)
 	}
-	if l.debit.amount != 32 || l.debit.tur != "render" || l.debit.ref != "job1" ||
+	if l.debit.amount != 43 || l.debit.tur != "render" || l.debit.ref != "job1" ||
 		l.debit.meta.Reason != "render_focus" || l.debit.meta.ProjectID != "p1" {
 		t.Fatalf("debit = %+v", l.debit)
 	}
@@ -298,7 +298,7 @@ func TestLyrics_ActionChargesLots(t *testing.T) {
 	assertLotLedger(t, store)
 }
 
-const getCreditsFixture = `{"balance": 84, "debt": 0, "lots": [{"source": "plan", "amount": 60, "expiresAt": "2026-11-01T00:00:00Z"}, {"source": "campaign", "amount": 24, "expiresAt": "2026-12-31T23:59:59Z"}], "plan": {"tier": "plus", "period": "monthly", "status": "active", "periodEnd": "2026-11-01T00:00:00Z", "autoRenew": true, "pendingTier": null}, "planCredits": {"plus": 300, "pro": 1000}, "costs": {"render": {"mix": 12, "focus": 32, "stems": 62, "guide": 23}, "lyrics": {"generate": 2, "rewrite": 1}, "master": 3}, "gift": {"amount": 24, "expiresAt": "2026-12-31T23:59:59Z"}, "storeAccountToken": "3f6c1a52-8d47-4b1e-9a60-2c5d7e91b0a4", "enforced": true}`
+const getCreditsFixture = `{"balance": 84, "debt": 0, "lots": [{"source": "plan", "amount": 60, "expiresAt": "2026-11-01T00:00:00Z"}, {"source": "campaign", "amount": 24, "expiresAt": "2026-12-31T23:59:59Z"}], "plan": {"tier": "plus", "period": "monthly", "status": "active", "periodEnd": "2026-11-01T00:00:00Z", "autoRenew": true, "pendingTier": null}, "planCredits": {"plus": 300, "pro": 1000}, "costs": {"render": {"mix": 23, "focus": 43, "stems": 63}, "lyrics": {"generate": 2, "rewrite": 1}, "master": 3}, "gift": {"amount": 24, "expiresAt": "2026-12-31T23:59:59Z"}, "storeAccountToken": "3f6c1a52-8d47-4b1e-9a60-2c5d7e91b0a4", "enforced": true}`
 
 func decodeJSON(t *testing.T, v any) any {
 	t.Helper()
@@ -609,13 +609,24 @@ func TestService_HasPlan(t *testing.T) {
 	}
 }
 
-func TestService_SpendRenderGuideIsKnown(t *testing.T) {
+func TestKnownOperation_RenderGuideUnknown(t *testing.T) {
 	l := &fakeLedger{bal: 100}
 	s := newTestService(l, true)
-	if _, err := s.Spend(context.Background(), "u1", OpRenderGuide, "job1:rehber", "p1"); errors.Is(err, ErrUnknownOperation) {
-		t.Fatalf("Spend(OpRenderGuide) = %v; want a known operation", err)
+	if _, err := s.Spend(context.Background(), "u1", Operation("render_guide"), "job1:rehber", "p1"); !errors.Is(err, ErrUnknownOperation) {
+		t.Fatalf("Spend(render_guide) = %v; want ErrUnknownOperation", err)
 	}
-	if got := debitTur(OpRenderGuide); got != "render" {
-		t.Fatalf("debitTur(OpRenderGuide) = %q, want render", got)
+}
+
+func TestSummary_CostsHaveNoGuide(t *testing.T) {
+	got, err := newTestService(&fakeLedger{acct: &Account{UserID: "u1"}}, true).Summary(context.Background(), "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(got.Costs.Render)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != `{"mix":23,"focus":43,"stems":63}` {
+		t.Fatalf("render costs = %s", b)
 	}
 }

@@ -375,14 +375,5 @@ func TestRenderWorker_FinishedBeforeClaimNoRefund(t *testing.T) {
 	}
 }
 
-// renderRefunds are the refunds of the render debit itself; every final
-// failure and cancel also tries the (possibly absent) guide debit.
-func renderRefunds(f *credit.FakeSpender) []credit.RefundCall {
-	var out []credit.RefundCall
-	for _, r := range f.Refunds {
-		if r.Op != credit.OpRenderGuide {
-			out = append(out, r)
-		}
-	}
-	return out
-}
+// renderRefunds are the refunds of the render debit.
+func renderRefunds(f *credit.FakeSpender) []credit.RefundCall { return f.Refunds }

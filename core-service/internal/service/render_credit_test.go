@@ -421,60 +421,6 @@ func TestStartRender_GuideNeedsPlus(t *testing.T) {
 	}
 }
 
-func TestStartRender_GuideSpendsBoth(t *testing.T) {
-	rdb := liveRedis(t)
-	fake := &credit.FakeSpender{Plus: true, Bal: 500}
-	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
-	resp, err := s.StartRender(context.Background(), "kullanici-a", guideRenderRequest(model.StemModeMix))
-	if err != nil {
-		t.Fatalf("StartRender: %v", err)
-	}
-	if len(fake.Spends) != 2 {
-		t.Fatalf("spends = %+v, want 2", fake.Spends)
-	}
-	if got := fake.Spends[0]; got.Op != credit.OpRenderMix || got.ID != resp.JobID {
-		t.Errorf("first spend = %+v, want render_mix %s", got, resp.JobID)
-	}
-	if got := fake.Spends[1]; got.Op != credit.OpRenderGuide || got.ID != GuideRef(resp.JobID) || got.Project != "p1" {
-		t.Errorf("second spend = %+v, want render_guide %s", got, GuideRef(resp.JobID))
-	}
-	if GuideRef("j1") != "j1:rehber" {
-		t.Errorf("GuideRef = %q", GuideRef("j1"))
-	}
-}
-
-func TestStartRender_GuideSpendFails_RefundsRender(t *testing.T) {
-	rdb := liveRedis(t)
-	fake := &failSecondSpend{FakeSpender: credit.FakeSpender{Plus: true, Bal: 20, IsEnforced: true}}
-	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
-	_, err := s.StartRender(context.Background(), "kullanici-a", guideRenderRequest(model.StemModeMix))
-	var insufficient *credit.InsufficientError
-	if !errors.As(err, &insufficient) {
-		t.Fatalf("err = %v, want InsufficientError", err)
-	}
-	if len(fake.Refunds) != 1 || fake.Refunds[0].Op != credit.OpRenderMix || fake.Refunds[0].ID != fake.Spends[0].ID {
-		t.Errorf("refunds = %+v, want the render spend back", fake.Refunds)
-	}
-	if n := jobKeyCount(t, rdb); n != 0 {
-		t.Errorf("job records = %d, want 0", n)
-	}
-}
-
-// failSecondSpend lets the first Spend through and fails the second.
-type failSecondSpend struct {
-	credit.FakeSpender
-	n int
-}
-
-func (f *failSecondSpend) Spend(ctx context.Context, userID string, op credit.Operation, ref, projectID string) (int, error) {
-	f.n++
-	bal, err := f.FakeSpender.Spend(ctx, userID, op, ref, projectID)
-	if f.n == 2 {
-		return bal, &credit.InsufficientError{Required: 23, Balance: 8}
-	}
-	return bal, err
-}
-
 func TestStartRender_StemsAndGuideNeedPro(t *testing.T) {
 	rdb := liveRedis(t)
 	fake := &credit.FakeSpender{Plus: true, Bal: 500}
@@ -482,19 +428,5 @@ func TestStartRender_StemsAndGuideNeedPro(t *testing.T) {
 	_, err := s.StartRender(context.Background(), "kullanici-a", guideRenderRequest(model.StemModeStems))
 	if !errors.Is(err, ErrPlanRequired) {
 		t.Fatalf("err = %v, want ErrPlanRequired (Pro gate first)", err)
-	}
-}
-
-func TestCancel_RefundsGuide(t *testing.T) {
-	rdb := liveRedis(t)
-	fake := &credit.FakeSpender{}
-	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
-	storeRenderJob(t, rdb, model.JobStatusQueued)
-	if _, err := s.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
-		t.Fatalf("CancelRender: %v", err)
-	}
-	want := []credit.RefundCall{{Op: credit.OpRenderMix, ID: "is1"}, {Op: credit.OpRenderGuide, ID: "is1:rehber"}}
-	if len(fake.Refunds) != 2 || fake.Refunds[0] != want[0] || fake.Refunds[1] != want[1] {
-		t.Errorf("refunds = %+v, want %+v", fake.Refunds, want)
 	}
 }

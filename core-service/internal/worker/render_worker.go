@@ -563,12 +563,9 @@ func (w *RenderWorker) failFinal(ctx context.Context, jobID string, op credit.Op
 	w.refundRender(ctx, op, jobID)
 }
 
-// refundRender refunds the render debit and the guide debit. The guide
-// refund runs for every job: the payload may be unreadable, and a job
-// without a guide has no such debit, so the ledger finds nothing.
+// refundRender refunds the render debit.
 func (w *RenderWorker) refundRender(ctx context.Context, op credit.Operation, jobID string) {
 	w.refund(ctx, op, jobID)
-	w.refund(ctx, credit.OpRenderGuide, service.GuideRef(jobID))
 }
 
 func (w *RenderWorker) lastAttempt(ctx context.Context) bool {

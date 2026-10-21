@@ -128,7 +128,6 @@ type CreditCosts struct {
 	RenderMix      int
 	RenderFocus    int
 	RenderStems    int
-	RenderGuide    int
 	LyricsGenerate int
 	LyricsRewrite  int
 	Master         int
@@ -422,7 +421,6 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("credits.costs.render_mix", "CREDITS_COST_RENDER_MIX")
 	_ = viper.BindEnv("credits.costs.render_focus", "CREDITS_COST_RENDER_FOCUS")
 	_ = viper.BindEnv("credits.costs.render_stems", "CREDITS_COST_RENDER_STEMS")
-	_ = viper.BindEnv("credits.costs.render_guide", "CREDITS_COST_RENDER_GUIDE")
 	_ = viper.BindEnv("credits.costs.lyrics_generate", "CREDITS_COST_LYRICS_GENERATE")
 	_ = viper.BindEnv("credits.costs.lyrics_rewrite", "CREDITS_COST_LYRICS_REWRITE")
 	_ = viper.BindEnv("credits.costs.master", "CREDITS_COST_MASTER")
@@ -467,10 +465,9 @@ func Load() (*Config, error) {
 	viper.SetDefault("credits.enforce", false)
 	viper.SetDefault("credits.plan_plus", 300)
 	viper.SetDefault("credits.plan_pro", 1000)
-	viper.SetDefault("credits.costs.render_mix", 12)
-	viper.SetDefault("credits.costs.render_focus", 32)
-	viper.SetDefault("credits.costs.render_stems", 62)
-	viper.SetDefault("credits.costs.render_guide", 23)
+	viper.SetDefault("credits.costs.render_mix", 23)
+	viper.SetDefault("credits.costs.render_focus", 43)
+	viper.SetDefault("credits.costs.render_stems", 63)
 	viper.SetDefault("credits.costs.lyrics_generate", 2)
 	viper.SetDefault("credits.costs.lyrics_rewrite", 1)
 	viper.SetDefault("credits.costs.master", 3)
@@ -684,7 +681,6 @@ func Load() (*Config, error) {
 				RenderMix:      viper.GetInt("credits.costs.render_mix"),
 				RenderFocus:    viper.GetInt("credits.costs.render_focus"),
 				RenderStems:    viper.GetInt("credits.costs.render_stems"),
-				RenderGuide:    viper.GetInt("credits.costs.render_guide"),
 				LyricsGenerate: viper.GetInt("credits.costs.lyrics_generate"),
 				LyricsRewrite:  viper.GetInt("credits.costs.lyrics_rewrite"),
 				Master:         viper.GetInt("credits.costs.master"),

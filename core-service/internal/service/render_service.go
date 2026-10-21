@@ -29,10 +29,6 @@ var ErrPlanRequired = errors.New("the stems render needs the Pro plan")
 // (spec 9 §3.4).
 var ErrPlusRequired = errors.New("the guided render needs the Plus plan")
 
-// GuideRef is the credit ref of a job's guide spend: the guide is its own
-// debit in the render family, next to the render's own (ref = jobID).
-func GuideRef(jobID string) string { return jobID + ":rehber" }
-
 // RenderService handles render job management
 type RenderService struct {
 	redis       *redis.Client
@@ -87,14 +83,6 @@ func (s *RenderService) refundJob(ctx context.Context, op credit.Operation, jobI
 	defer cancel()
 	if err := s.credits.Refund(rctx, op, jobID); err != nil {
 		log.Printf("Job %s: could not refund %s: %v", jobID, op, err)
-	}
-}
-
-// refundRender refunds the render's debit and, with guide, its guide debit.
-func (s *RenderService) refundRender(ctx context.Context, op credit.Operation, jobID string, guide bool) {
-	s.refundJob(ctx, op, jobID)
-	if guide {
-		s.refundJob(ctx, credit.OpRenderGuide, GuideRef(jobID))
 	}
 }
 
@@ -244,31 +232,18 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 			log.Printf("Job %s: shadow credit read failed: %v", jobID, err)
 			balance = 0
 		}
-		if req.Guide != nil {
-			guideBalance, err := s.credits.Spend(ctx, userID, credit.OpRenderGuide, GuideRef(jobID), req.ProjectID)
-			if err != nil {
-				var insufficient *credit.InsufficientError
-				if errors.As(err, &insufficient) || s.credits.Enforced() {
-					s.refundJob(ctx, op, jobID)
-					return nil, err
-				}
-				log.Printf("Job %s: shadow guide credit read failed: %v", jobID, err)
-			} else {
-				balance = guideBalance
-			}
-		}
 	}
 
 	// Save job to Redis
 	if err := s.saveJob(ctx, job); err != nil {
-		s.refundRender(ctx, op, jobID, req.Guide != nil)
+		s.refundJob(ctx, op, jobID)
 		return nil, fmt.Errorf("failed to save job: %w", err)
 	}
 
 	// Create Asynq task
 	task, err := newRenderTask(jobID, payloadBytes)
 	if err != nil {
-		s.refundRender(ctx, op, jobID, req.Guide != nil)
+		s.refundJob(ctx, op, jobID)
 		return nil, fmt.Errorf("failed to create task: %w", err)
 	}
 
@@ -279,7 +254,7 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 		asynq.Retention(24*time.Hour),
 	)
 	if err != nil {
-		s.refundRender(ctx, op, jobID, req.Guide != nil)
+		s.refundJob(ctx, op, jobID)
 		return nil, fmt.Errorf("failed to enqueue task: %w", err)
 	}
 
@@ -370,7 +345,7 @@ func (s *RenderService) CancelRender(ctx context.Context, userID, jobID string) 
 		// so any render operation names the right debit. The guide is
 		// refunded too; a job without a guide has no such debit and the
 		// refund finds nothing.
-		s.refundRender(ctx, credit.OpRenderMix, jobID, true)
+		s.refundJob(ctx, credit.OpRenderMix, jobID)
 	}
 
 	return &model.RenderCancelResponse{
