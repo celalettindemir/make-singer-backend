@@ -150,3 +150,40 @@ func TestLyricTimeline_NoWords_Nil(t *testing.T) {
 	tags := timedWords(0, "[Verse]", "  ")
 	isNil(t, BuildLyricTimeline(sections, tags, 10))
 }
+
+func TestLyricTimeline_TagGluedToFirstWord(t *testing.T) {
+	sections := []model.GuideSection{
+		{ID: "v1", Type: "verse", Lines: []string{"la si"}},
+		{ID: "c1", Type: "chorus", Lines: []string{"bir iki"}},
+	}
+	words := []client.AlignedWord{
+		{Word: "[Verse]\nla ", StartS: 1.0, EndS: 1.5, Success: true},
+		{Word: "si ", StartS: 1.5, EndS: 2.0, Success: true},
+		{Word: "[Chorus]\nbir ", StartS: 3.0, EndS: 3.5, Success: true},
+		{Word: "iki", StartS: 3.5, EndS: 4.0, Success: true},
+	}
+
+	got := BuildLyricTimeline(sections, words, 6)
+
+	eq(t, []model.LyricTimelineSection{
+		{SectionID: "v1", StartMs: 1000, EndMs: 3000, Lines: []model.LyricTimelineLine{
+			{Index: 0, StartMs: iptr(1000), EndMs: iptr(2000)},
+		}},
+		{SectionID: "c1", StartMs: 3000, EndMs: 6000, Lines: []model.LyricTimelineLine{
+			{Index: 0, StartMs: iptr(3000), EndMs: iptr(4000)},
+		}},
+	}, got)
+}
+
+func TestLyricTimeline_UnsuccessfulWordSkipped(t *testing.T) {
+	sections := []model.GuideSection{{ID: "v1", Type: "verse", Lines: []string{"ay dede"}}}
+	words := []client.AlignedWord{
+		{Word: "ay", StartS: 0, EndS: 0.5, Success: true},
+		{Word: "dede", StartS: 9, EndS: 9.5, Success: false},
+		{Word: "dede", StartS: 1, EndS: 1.5, Success: true},
+	}
+
+	got := BuildLyricTimeline(sections, words, 3)
+
+	eq(t, []model.LyricTimelineLine{{Index: 0, StartMs: iptr(0), EndMs: iptr(1500)}}, got[0].Lines)
+}

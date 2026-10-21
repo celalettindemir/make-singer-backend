@@ -2,6 +2,7 @@ package worker
 
 import (
 	"math"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -52,15 +53,22 @@ func normalizeToken(s string) string {
 	return b.String()
 }
 
-// timelineWords keeps Suno's successfully timed, non-empty, non-tag words.
+var sectionTagRe = regexp.MustCompile(`\[[^\]]*\]`)
+
+// timelineWords turns Suno's successfully timed words into tokens. Suno glues
+// section tags to the first sung word ("[Verse]\nla "), so tags are cut out
+// and the rest is split on whitespace; every token carries the original
+// word's times. A tag-only word yields nothing.
 func timelineWords(words []client.AlignedWord) []timelineWord {
 	var out []timelineWord
 	for _, w := range words {
-		if !w.Success || strings.HasPrefix(strings.TrimSpace(w.Word), "[") {
+		if !w.Success {
 			continue
 		}
-		if tok := normalizeToken(w.Word); tok != "" {
-			out = append(out, timelineWord{tok, w.StartS, w.EndS})
+		for _, f := range strings.Fields(sectionTagRe.ReplaceAllString(w.Word, " ")) {
+			if tok := normalizeToken(f); tok != "" {
+				out = append(out, timelineWord{tok, w.StartS, w.EndS})
+			}
 		}
 	}
 	return out
