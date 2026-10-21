@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -48,6 +49,11 @@ func (h *RenderHandler) Start(c *fiber.Ctx) error {
 	var req model.RenderStartRequest
 	if err := c.BodyParser(&req); err != nil {
 		return response.ValidationError(c, i18n.KeyInvalidBody, nil)
+	}
+
+	// The title is trimmed before its 80-character limit applies.
+	if req.Vocal != nil {
+		req.Vocal.Title = strings.TrimSpace(req.Vocal.Title)
 	}
 
 	if err := h.validator.Struct(&req); err != nil {

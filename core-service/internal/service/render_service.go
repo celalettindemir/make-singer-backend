@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -159,6 +160,7 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 	}
 	// Lyrics that cannot be sung are refused before any job or debit.
 	if req.Vocal != nil {
+		req.Vocal.Title = strings.TrimSpace(req.Vocal.Title)
 		if err := req.Vocal.CheckLyrics(); err != nil {
 			return nil, err
 		}
@@ -169,7 +171,7 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 	if req.Vocal != nil && s.credits != nil {
 		plus, err := s.credits.HasPlan(ctx, userID, credit.TierPlus)
 		if err != nil {
-			log.Printf("Render %s: could not check the plan, no note analysis: %v", userID, err)
+			log.Printf("User %s: could not check the plan, no note analysis: %v", userID, err)
 		} else {
 			guideAnalysis = plus
 		}

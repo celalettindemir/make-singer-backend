@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -507,5 +508,23 @@ func TestStartRender_StemsWithVocalNeedsPro(t *testing.T) {
 	_, err := s.StartRender(context.Background(), "kullanici-a", vocalRenderRequest(model.StemModeStems))
 	if !errors.Is(err, ErrPlanRequired) {
 		t.Fatalf("err = %v, want ErrPlanRequired", err)
+	}
+}
+
+func TestStartRender_Vocal_TitleTrimmed(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: true, Bal: 500}
+	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	long := strings.Repeat("a", 80)
+	for in, want := range map[string]string{"  My Song  ": "My Song", "   ": "", "  " + long + "  ": long} {
+		req := vocalRenderRequest(model.StemModeMix)
+		req.Vocal.Title = in
+		resp, err := s.StartRender(context.Background(), "kullanici-a", req)
+		if err != nil {
+			t.Fatalf("title %q: %v", in, err)
+		}
+		if got := storedPayload(t, resp.JobID).Vocal.Title; got != want {
+			t.Errorf("title %q stored as %q, want %q", in, got, want)
+		}
 	}
 }
