@@ -1724,6 +1724,81 @@ const docTemplate = `{
                 "GrooveHalfTime"
             ]
         },
+        "model.GuideRequest": {
+            "type": "object",
+            "required": [
+                "sections",
+                "vocalGender"
+            ],
+            "properties": {
+                "range": {
+                    "$ref": "#/definitions/model.VocalRange"
+                },
+                "sections": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/definitions/model.GuideSection"
+                    }
+                },
+                "vocalGender": {
+                    "enum": [
+                        "m",
+                        "f"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.VocalGender"
+                        }
+                    ]
+                }
+            }
+        },
+        "model.GuideResult": {
+            "type": "object",
+            "properties": {
+                "expiresAt": {
+                    "type": "string"
+                },
+                "fileUrl": {
+                    "type": "string"
+                },
+                "notesUrl": {
+                    "type": "string"
+                },
+                "offsetMs": {
+                    "type": "integer"
+                },
+                "pitchShiftSemitones": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.GuideSection": {
+            "type": "object",
+            "required": [
+                "id",
+                "type"
+            ],
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "lines": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "type": {
+                    "type": "string",
+                    "maxLength": 32
+                }
+            }
+        },
         "model.Instrument": {
             "type": "string",
             "enum": [
@@ -2389,6 +2464,9 @@ const docTemplate = `{
                 "duration": {
                     "type": "number"
                 },
+                "guide": {
+                    "$ref": "#/definitions/model.GuideResult"
+                },
                 "id": {
                     "type": "string"
                 },
@@ -2438,6 +2516,14 @@ const docTemplate = `{
                     "allOf": [
                         {
                             "$ref": "#/definitions/model.Instrument"
+                        }
+                    ]
+                },
+                "guide": {
+                    "description": "Guide asks for a guide singer over the instrumental (Plus/Pro, spec 9).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.GuideRequest"
                         }
                     ]
                 },
@@ -2700,6 +2786,32 @@ const docTemplate = `{
                 },
                 "sampleRate": {
                     "type": "integer"
+                }
+            }
+        },
+        "model.VocalGender": {
+            "type": "string",
+            "enum": [
+                "m",
+                "f"
+            ],
+            "x-enum-varnames": [
+                "VocalGenderMale",
+                "VocalGenderFemale"
+            ]
+        },
+        "model.VocalRange": {
+            "type": "object",
+            "properties": {
+                "high": {
+                    "type": "integer",
+                    "maximum": 96,
+                    "minimum": 24
+                },
+                "low": {
+                    "type": "integer",
+                    "maximum": 96,
+                    "minimum": 24
                 }
             }
         },
