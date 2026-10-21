@@ -181,6 +181,11 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 			return nil, ErrPlanRequired
 		}
 	}
+	if req.Guide != nil {
+		if err := req.Guide.CheckLyrics(); err != nil {
+			return nil, err
+		}
+	}
 	// The guide is a Plus product right, gated like stems (shadow mode too).
 	if req.Guide != nil && s.credits != nil {
 		plus, err := s.credits.HasPlan(ctx, userID, credit.TierPlus)

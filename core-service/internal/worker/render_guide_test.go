@@ -339,3 +339,44 @@ func guideTask(t *testing.T) *asynq.Task {
 	data, _ := json.Marshal(map[string]any{"jobId": "is1", "payload": json.RawMessage(pb)})
 	return asynq.NewTask(service.TaskTypeRender, data)
 }
+
+// A job whose payload cannot be read may have a guide debit; the final
+// failure refunds it too (review I-4).
+func TestRenderWorker_InvalidPayloadRefundsGuide(t *testing.T) {
+	cs := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
+	data, _ := json.Marshal(map[string]any{"jobId": "is1", "payload": []int{1}})
+	_ = cs.w.ProcessTask(context.Background(), asynq.NewTask(service.TaskTypeRender, data))
+	found := false
+	for _, r := range cs.fake.Refunds {
+		found = found || (r.Op == credit.OpRenderGuide && r.ID == "is1:rehber")
+	}
+	if !found {
+		t.Errorf("refunds = %+v, want the guide refund", cs.fake.Refunds)
+	}
+}
+
+// In the stems tier the first stem is one instrument; the guide is aligned
+// to Suno's full track instead (review I-6).
+func TestGuided_StemsModeAlignsToFullTrack(t *testing.T) {
+	s, a, d, w := guideSetup(t)
+	srv := audioServer(t)
+	s.stems = []client.Stem{
+		{Instrument: model.InstrumentBass, URL: srv.URL + "/bas.mp3"},
+		{Instrument: model.InstrumentDrums, URL: srv.URL + "/davul.mp3"},
+	}
+	p := guidePayload()
+	p.StemMode = model.StemModeStems
+	if _, err := w.generateWithSuno(context.Background(), p, noProgress, claimOK); err != nil {
+		t.Fatalf("generateWithSuno: %v", err)
+	}
+	if !strings.HasSuffix(a.analyzeReq.InstrumentalKey, "-inst.mp3") || !strings.HasPrefix(a.analyzeReq.InstrumentalKey, "guides/kullanici-a/p1/") {
+		t.Fatalf("instrumental key = %s, want the stored full track", a.analyzeReq.InstrumentalKey)
+	}
+	var stored bool
+	for _, u := range d.uploads {
+		stored = stored || (u.key == a.analyzeReq.InstrumentalKey && strings.HasSuffix(string(u.data), "/tam.mp3"))
+	}
+	if !stored {
+		t.Errorf("the full track was not stored at %s", a.analyzeReq.InstrumentalKey)
+	}
+}

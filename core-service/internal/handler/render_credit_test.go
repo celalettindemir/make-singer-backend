@@ -147,3 +147,27 @@ func TestRenderHandler_GuideNeedsPlus403(t *testing.T) {
 		t.Errorf("error = %+v, want PLAN_REQUIRED requiredTier plus", out.Error)
 	}
 }
+
+func TestRenderHandler_BlankGuideLyrics400(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{Plus: true}
+	svc := service.NewRenderService(rdb, nil, nil, &config.R2Config{}).WithCredits(fake)
+	h := NewRenderHandler(svc, validator.New())
+	app := fiber.New()
+	app.Post("/start", asUser("kullanici-a"), h.Start)
+
+	body := strings.Replace(validRenderBody, `"arrangement":{`,
+		`"guide":{"vocalGender":"f","sections":[{"id":"s1","type":"verse","lines":["  "]}]},"arrangement":{`, 1)
+	req := httptest.NewRequest(http.MethodPost, "/start", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	if len(fake.Spends) != 0 {
+		t.Errorf("spends = %+v, want none", fake.Spends)
+	}
+}

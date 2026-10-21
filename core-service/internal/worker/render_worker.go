@@ -131,7 +131,7 @@ func (w *RenderWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	switch status {
 	case model.JobStatusCanceled:
 		log.Printf("Job %s was canceled before it started; skipping", jobID)
-		w.refundRender(ctx, op, jobID, &payload)
+		w.refundRender(ctx, op, jobID)
 		return nil
 	case model.JobStatusSucceeded, model.JobStatusFailed:
 		// A redelivered task of a finished job (e.g. a crash after
@@ -167,7 +167,7 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, op cre
 		// (succeeded/failed) already has its outcome.
 		if claimStatus == model.JobStatusCanceled {
 			log.Printf("Job %s was canceled before the Suno call; skipping", jobID)
-			w.refundRender(ctx, op, jobID, payload)
+			w.refundRender(ctx, op, jobID)
 		} else {
 			log.Printf("Job %s is already %s; skipping", jobID, claimStatus)
 		}
@@ -175,14 +175,14 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, op cre
 	}
 	if err != nil {
 		log.Printf("Job %s: render failed: %v", jobID, err)
-		w.failRender(ctx, jobID, op, payload, "Render failed", err)
+		w.failFinal(ctx, jobID, op, "Render failed", err)
 		return err
 	}
 
 	if err := w.renderService.CompleteJob(ctx, jobID, result); err != nil {
 		// The Suno fee was paid; a retry would rerun the job and charge again.
 		err = fmt.Errorf("could not save the result: %w: %w", err, asynq.SkipRetry)
-		w.failRender(ctx, jobID, op, payload, "Failed to save result", err)
+		w.failFinal(ctx, jobID, op, "Failed to save result", err)
 		return err
 	}
 
@@ -192,7 +192,7 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, op cre
 		log.Printf("Job %s: could not generate the stem URL: %v", jobID, err)
 		// Same reason: the paid generation finished and a retry would charge again.
 		err = fmt.Errorf("could not generate the stem URL: %w: %w", err, asynq.SkipRetry)
-		w.failRender(ctx, jobID, op, payload, "Could not generate the stem URL", err)
+		w.failFinal(ctx, jobID, op, "Could not generate the stem URL", err)
 		return err
 	}
 	w.hub.BroadcastComplete(jobID, resp)
@@ -288,7 +288,7 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 
 	var guide *rawGuide
 	if guideGen != nil {
-		if guide, err = w.makeGuide(ctx, guideGen, payload, track, progress); err != nil {
+		if guide, err = w.makeGuide(ctx, guideGen, payload, mode, track, progress); err != nil {
 			return nil, charged("guide failed", err)
 		}
 	}
@@ -396,7 +396,7 @@ func (w *RenderWorker) processWithMock(ctx context.Context, jobID string, op cre
 	if !claimed {
 		if claimStatus == model.JobStatusCanceled {
 			log.Printf("Job %s was canceled before it started; skipping (mock)", jobID)
-			w.refund(ctx, op, jobID)
+			w.refundRender(ctx, op, jobID)
 		} else {
 			log.Printf("Job %s is already %s; skipping (mock)", jobID, claimStatus)
 		}
@@ -550,34 +550,25 @@ func (w *RenderWorker) failJob(ctx context.Context, jobID, errMsg string) {
 // intermediate failure leaves the job as it is, so a later retry that
 // succeeds is not a free render and a visible "failed" always comes with its
 // refund (6-G16).
-// It reports whether this was the final failure.
-func (w *RenderWorker) failFinal(ctx context.Context, jobID string, op credit.Operation, errMsg string, err error) bool {
+func (w *RenderWorker) failFinal(ctx context.Context, jobID string, op credit.Operation, errMsg string, err error) {
 	if !errors.Is(err, asynq.SkipRetry) && !w.lastAttempt(ctx) {
 		log.Printf("Job %s: attempt failed, will retry: %v", jobID, err)
-		return false
+		return
 	}
 	// Detached: the final failure must be written even when ctx is the
 	// reason for it (shutdown, deadline).
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	w.failJob(fctx, jobID, errMsg)
-	w.refund(ctx, op, jobID)
-	return true
+	w.refundRender(ctx, op, jobID)
 }
 
-// failRender is failFinal plus the guide refund of a guided job.
-func (w *RenderWorker) failRender(ctx context.Context, jobID string, op credit.Operation, payload *model.RenderJobPayload, errMsg string, err error) {
-	if w.failFinal(ctx, jobID, op, errMsg, err) && payload.Guide != nil {
-		w.refund(ctx, credit.OpRenderGuide, service.GuideRef(jobID))
-	}
-}
-
-// refundRender refunds the render debit and, for a guided job, the guide's.
-func (w *RenderWorker) refundRender(ctx context.Context, op credit.Operation, jobID string, payload *model.RenderJobPayload) {
+// refundRender refunds the render debit and the guide debit. The guide
+// refund runs for every job: the payload may be unreadable, and a job
+// without a guide has no such debit, so the ledger finds nothing.
+func (w *RenderWorker) refundRender(ctx context.Context, op credit.Operation, jobID string) {
 	w.refund(ctx, op, jobID)
-	if payload.Guide != nil {
-		w.refund(ctx, credit.OpRenderGuide, service.GuideRef(jobID))
-	}
+	w.refund(ctx, credit.OpRenderGuide, service.GuideRef(jobID))
 }
 
 func (w *RenderWorker) lastAttempt(ctx context.Context) bool {

@@ -35,6 +35,7 @@ var (
 	KeyJobNotCompleted     = Key{"job_not_completed"}
 	KeyJobAlreadyCompleted = Key{"job_already_completed"}
 	KeyStemSettingsInvalid = Key{"stem_settings_invalid"}
+	KeyGuideLyricsInvalid  = Key{"guide_lyrics_invalid"}
 	KeyFileNotFound        = Key{"file_not_found"}
 	KeyInvalidFileURL      = Key{"invalid_file_url"}
 	KeyURLSignFailed       = Key{"url_sign_failed"}
@@ -151,6 +152,7 @@ var catalog = map[Key]texts{
 	KeyJobNotCompleted:     {"İş henüz tamamlanmadı.", "The job has not completed yet."},
 	KeyJobAlreadyCompleted: {"İş zaten tamamlandı.", "The job has already completed."},
 	KeyStemSettingsInvalid: {"Geçersiz stem ayarları: mod, odak enstrümanı ve enstrüman listesini kontrol edin.", "Invalid stem settings: check mode, focusInstrument and instrument list."},
+	KeyGuideLyricsInvalid:  {"Örnek şarkıcı için söz yok ya da sözler çok uzun (en çok 5000 karakter).", "The guide singer has no lyrics, or the lyrics are too long (at most 5000 characters)."},
 	KeyFileNotFound:        {"Dosya bulunamadı.", "File not found."},
 	KeyInvalidFileURL:      {"Geçersiz dosya adresi.", "Invalid file URL."},
 	KeyURLSignFailed:       {"Dosya adresi üretilemedi.", "Could not generate the file URL."},

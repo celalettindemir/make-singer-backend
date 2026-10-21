@@ -108,3 +108,23 @@ func TestRenderStartRequest_GuideIsValidatedInside(t *testing.T) {
 		t.Fatalf("err = %v, want a VocalGender error", err)
 	}
 }
+
+func TestGuideRequest_CheckLyrics(t *testing.T) {
+	g := validGuide()
+	if err := g.CheckLyrics(); err != nil {
+		t.Fatalf("valid lyrics rejected: %v", err)
+	}
+	blank := validGuide()
+	blank.Sections = []GuideSection{{ID: "s1", Type: "verse", Lines: []string{"  ", ""}}, {ID: "s2", Type: "chorus"}}
+	if err := blank.CheckLyrics(); !errors.Is(err, ErrInvalidGuide) {
+		t.Errorf("blank lyrics: err = %v, want ErrInvalidGuide", err)
+	}
+	long := validGuide()
+	long.Sections = nil
+	for i := 0; i < 32; i++ {
+		long.Sections = append(long.Sections, GuideSection{ID: "s", Type: "verse", Lines: []string{strings.Repeat("a", 200)}})
+	}
+	if err := long.CheckLyrics(); !errors.Is(err, ErrInvalidGuide) {
+		t.Errorf("6400 chars: err = %v, want ErrInvalidGuide (limit %d)", err, MaxGuideLyricsChars)
+	}
+}

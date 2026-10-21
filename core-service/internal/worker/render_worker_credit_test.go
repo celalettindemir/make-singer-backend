@@ -89,8 +89,8 @@ func TestRenderWorker_CanceledJobSkipsSunoAndRefunds(t *testing.T) {
 	if s.suno.generateCalls != 0 {
 		t.Errorf("GenerateMusic was called %d times for a canceled job", s.suno.generateCalls)
 	}
-	if len(s.fake.Refunds) != 1 || s.fake.Refunds[0].ID != "is1" || s.fake.Refunds[0].Op != credit.OpRenderStems {
-		t.Errorf("refunds = %+v, want one render_stems for is1", s.fake.Refunds)
+	if len(renderRefunds(s.fake)) != 1 || renderRefunds(s.fake)[0].ID != "is1" || renderRefunds(s.fake)[0].Op != credit.OpRenderStems {
+		t.Errorf("refunds = %+v, want one render_stems for is1", renderRefunds(s.fake))
 	}
 	if st := jobStatus(t, s.svc); st != model.JobStatusCanceled {
 		t.Errorf("status = %s, want canceled", st)
@@ -108,8 +108,8 @@ func TestRenderWorker_RetryableFailureKeepsRunning(t *testing.T) {
 	if st := jobStatus(t, s.svc); st == model.JobStatusFailed {
 		t.Errorf("an intermediate failure marked the job failed")
 	}
-	if len(s.fake.Refunds) != 0 {
-		t.Errorf("refunds = %+v, want none before the last attempt", s.fake.Refunds)
+	if len(renderRefunds(s.fake)) != 0 {
+		t.Errorf("refunds = %+v, want none before the last attempt", renderRefunds(s.fake))
 	}
 }
 
@@ -124,8 +124,8 @@ func TestRenderWorker_LastAttemptFailsAndRefunds(t *testing.T) {
 	if st := jobStatus(t, s.svc); st != model.JobStatusFailed {
 		t.Errorf("status = %s, want failed", st)
 	}
-	if len(s.fake.Refunds) != 1 || s.fake.Refunds[0].ID != "is1" || s.fake.Refunds[0].Op != credit.OpRenderFocus {
-		t.Errorf("refunds = %+v, want one render_focus for is1", s.fake.Refunds)
+	if len(renderRefunds(s.fake)) != 1 || renderRefunds(s.fake)[0].ID != "is1" || renderRefunds(s.fake)[0].Op != credit.OpRenderFocus {
+		t.Errorf("refunds = %+v, want one render_focus for is1", renderRefunds(s.fake))
 	}
 }
 
@@ -141,8 +141,8 @@ func TestRenderWorker_SkipRetryBeforeChargeFailsAndRefundsEarly(t *testing.T) {
 	if st := jobStatus(t, s.svc); st != model.JobStatusFailed {
 		t.Errorf("status = %s, want failed", st)
 	}
-	if len(s.fake.Refunds) != 1 {
-		t.Errorf("refunds = %+v, want one", s.fake.Refunds)
+	if len(renderRefunds(s.fake)) != 1 {
+		t.Errorf("refunds = %+v, want one", renderRefunds(s.fake))
 	}
 }
 
@@ -177,7 +177,7 @@ func TestRenderWorker_SkipRetryAfterChargeRefunds(t *testing.T) {
 	if suno.generateCalls != 1 {
 		t.Fatalf("generateCalls = %d, want 1", suno.generateCalls)
 	}
-	if len(fake.Refunds) != 1 || fake.Refunds[0].ID != "is1" || fake.Refunds[0].Op != credit.OpRenderMix {
+	if got := renderRefunds(fake); len(got) != 1 || got[0].ID != "is1" || got[0].Op != credit.OpRenderMix {
 		t.Errorf("refunds = %+v, want one render_mix for is1", fake.Refunds)
 	}
 }
@@ -231,16 +231,10 @@ func TestRenderWorker_CancelBeforeClaimSkipsSunoAndRefundsOnce(t *testing.T) {
 	}
 	// The cancel refunds (queued) and the worker refunds again; the ledger
 	// keys both on the jobId, so they are one refund row.
-	// The cancel refunds the render and the (absent) guide debit; the
-	// worker refunds the render again (a no-op in the ledger).
-	renderRefunds := 0
-	for _, r := range s.fake.Refunds {
-		if r.Op != credit.OpRenderGuide && r.ID == "is1" {
-			renderRefunds++
-		}
-	}
-	if renderRefunds != 2 {
-		t.Errorf("refunds = %+v, want two render calls for is1", s.fake.Refunds)
+	// The cancel and the worker each refund the render (and try the absent
+	// guide debit); the ledger keys the render refunds on the jobId.
+	if got := renderRefunds(s.fake); len(got) != 2 || got[0].ID != "is1" || got[1].ID != "is1" {
+		t.Errorf("refunds = %+v, want two render calls for is1", got)
 	}
 	if st := jobStatus(t, s.svc); st != model.JobStatusCanceled {
 		t.Errorf("status = %s, want canceled", st)
@@ -298,8 +292,8 @@ func TestRenderWorker_InvalidPayloadFailsAndRefunds(t *testing.T) {
 	if st := jobStatus(t, s.svc); st != model.JobStatusFailed {
 		t.Errorf("status = %s, want failed", st)
 	}
-	if len(s.fake.Refunds) != 1 || s.fake.Refunds[0].ID != "is1" {
-		t.Errorf("refunds = %+v, want one for is1", s.fake.Refunds)
+	if len(renderRefunds(s.fake)) != 1 || renderRefunds(s.fake)[0].ID != "is1" {
+		t.Errorf("refunds = %+v, want one for is1", renderRefunds(s.fake))
 	}
 }
 
@@ -316,8 +310,8 @@ func TestRenderWorker_MockContextDoneOnLastAttemptRefunds(t *testing.T) {
 	if st := jobStatus(t, s.svc); st != model.JobStatusFailed {
 		t.Errorf("status = %s, want failed", st)
 	}
-	if len(s.fake.Refunds) != 1 {
-		t.Errorf("refunds = %+v, want one", s.fake.Refunds)
+	if len(renderRefunds(s.fake)) != 1 {
+		t.Errorf("refunds = %+v, want one", renderRefunds(s.fake))
 	}
 }
 
@@ -333,8 +327,8 @@ func TestRenderWorker_MockCanceledBeforeClaimRefunds(t *testing.T) {
 	if err := s.w.ProcessTask(context.Background(), renderTask(t, model.StemModeMix)); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
-	if len(s.fake.Refunds) != 1 || s.fake.Refunds[0].ID != "is1" {
-		t.Errorf("refunds = %+v, want one for is1", s.fake.Refunds)
+	if len(renderRefunds(s.fake)) != 1 || renderRefunds(s.fake)[0].ID != "is1" {
+		t.Errorf("refunds = %+v, want one for is1", renderRefunds(s.fake))
 	}
 	if st := jobStatus(t, s.svc); st != model.JobStatusCanceled {
 		t.Errorf("status = %s, want canceled (the mock must not run)", st)
@@ -354,8 +348,8 @@ func TestRenderWorker_RedeliveredFinishedJobNoRefundNoSuno(t *testing.T) {
 			if s.suno.generateCalls != 0 {
 				t.Errorf("%s mock=%v: GenerateMusic called", st, mock)
 			}
-			if len(s.fake.Refunds) != 0 {
-				t.Errorf("%s mock=%v: refunds = %+v, want none", st, mock, s.fake.Refunds)
+			if len(renderRefunds(s.fake)) != 0 {
+				t.Errorf("%s mock=%v: refunds = %+v, want none", st, mock, renderRefunds(s.fake))
 			}
 			if got := jobStatus(t, s.svc); got != st {
 				t.Errorf("%s mock=%v: status changed to %s", st, mock, got)
@@ -376,7 +370,19 @@ func TestRenderWorker_FinishedBeforeClaimNoRefund(t *testing.T) {
 	if err := s.w.ProcessTask(context.Background(), renderTask(t, model.StemModeMix)); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
-	if s.suno.generateCalls != 0 || len(s.fake.Refunds) != 0 {
-		t.Errorf("generateCalls=%d refunds=%+v, want 0 and none", s.suno.generateCalls, s.fake.Refunds)
+	if s.suno.generateCalls != 0 || len(renderRefunds(s.fake)) != 0 {
+		t.Errorf("generateCalls=%d refunds=%+v, want 0 and none", s.suno.generateCalls, renderRefunds(s.fake))
 	}
+}
+
+// renderRefunds are the refunds of the render debit itself; every final
+// failure and cancel also tries the (possibly absent) guide debit.
+func renderRefunds(f *credit.FakeSpender) []credit.RefundCall {
+	var out []credit.RefundCall
+	for _, r := range f.Refunds {
+		if r.Op != credit.OpRenderGuide {
+			out = append(out, r)
+		}
+	}
+	return out
 }

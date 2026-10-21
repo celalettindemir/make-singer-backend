@@ -46,7 +46,11 @@ type rawGuide struct {
 	id     string
 	rawKey string
 	refKey string
-	words  []client.AlignedWord
+	// instKey is Suno's full instrumental, stored when the stems are split
+	// (focus, stems): one instrument is a poor alignment reference. Empty in
+	// the mix tier, where the single stem is that track.
+	instKey string
+	words   []client.AlignedWord
 }
 
 // guideKey is guides/<owner>/<project>/<id><suffix>.
@@ -57,7 +61,7 @@ func guideKey(payload *model.RenderJobPayload, id, suffix string) (string, error
 // makeGuide has Suno sing the lyrics over the instrumental, separates the
 // vocal, times its words and stores the vocal and the separated
 // instrumental (the alignment reference). Every error is on the paid path.
-func (w *RenderWorker) makeGuide(ctx context.Context, g client.GuideGenerator, payload *model.RenderJobPayload, track *client.Track, progress func(int, string)) (*rawGuide, error) {
+func (w *RenderWorker) makeGuide(ctx context.Context, g client.GuideGenerator, payload *model.RenderJobPayload, mode model.StemMode, track *client.Track, progress func(int, string)) (*rawGuide, error) {
 	progress(35, "Adding guide vocals...")
 	addTask, err := g.AddVocals(ctx, &client.AddVocalsRequest{
 		UploadURL:   track.AudioURL,
@@ -103,7 +107,14 @@ func (w *RenderWorker) makeGuide(ctx context.Context, g client.GuideGenerator, p
 	if raw.refKey, err = guideKey(payload, raw.id, "-ref.mp3"); err != nil {
 		return nil, err
 	}
-	for _, f := range []struct{ url, key string }{{sep.VocalURL, raw.rawKey}, {sep.InstrumentalURL, raw.refKey}} {
+	files := []struct{ url, key string }{{sep.VocalURL, raw.rawKey}, {sep.InstrumentalURL, raw.refKey}}
+	if mode != model.StemModeMix {
+		if raw.instKey, err = guideKey(payload, raw.id, "-inst.mp3"); err != nil {
+			return nil, err
+		}
+		files = append(files, struct{ url, key string }{track.AudioURL, raw.instKey})
+	}
+	for _, f := range files {
 		if err := ownerCanWrite(ctx, w.deletionChecker, payload.OwnerID); err != nil {
 			return nil, err
 		}
@@ -141,10 +152,14 @@ func (w *RenderWorker) finishGuide(ctx context.Context, payload *model.RenderJob
 		}
 		sections = append(sections, client.GuideSectionInput{ID: s.ID, Type: s.Type, Lines: lines})
 	}
+	instrumentalKey := raw.instKey
+	if instrumentalKey == "" {
+		instrumentalKey = stems[0].FileKey
+	}
 	res, err := w.guideAudio.AnalyzeGuide(ctx, &client.GuideAnalyzeRequest{
 		GuideKey:        raw.rawKey,
 		ReferenceKey:    raw.refKey,
-		InstrumentalKey: stems[0].FileKey,
+		InstrumentalKey: instrumentalKey,
 		Words:           words,
 		Sections:        sections,
 		VocalGender:     string(payload.Guide.VocalGender),

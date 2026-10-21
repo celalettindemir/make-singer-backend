@@ -3,7 +3,9 @@ package model
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // RenderStartRequest represents the request to start a render job
@@ -23,6 +25,34 @@ type GuideRequest struct {
 	VocalGender VocalGender    `json:"vocalGender" validate:"required,oneof=m f"`
 	Sections    []GuideSection `json:"sections" validate:"required,min=1,max=32,dive"`
 	Range       *VocalRange    `json:"range,omitempty" validate:"omitempty"`
+}
+
+// MaxGuideLyricsChars caps the lyrics sent to Suno (its V6 limit is 5000).
+const MaxGuideLyricsChars = 5000
+
+// ErrInvalidGuide: the guide's lyrics cannot be sung (no line, or too long).
+var ErrInvalidGuide = errors.New("invalid guide lyrics")
+
+// CheckLyrics refuses lyrics that would make the paid generation fail
+// afterwards: at least one non-blank line, at most MaxGuideLyricsChars
+// characters in all.
+func (g *GuideRequest) CheckLyrics() error {
+	total, lines := 0, 0
+	for _, s := range g.Sections {
+		for _, l := range s.Lines {
+			if t := strings.TrimSpace(l); t != "" {
+				lines++
+				total += utf8.RuneCountInString(t) + 1
+			}
+		}
+	}
+	if lines == 0 {
+		return fmt.Errorf("%w: no line to sing", ErrInvalidGuide)
+	}
+	if total > MaxGuideLyricsChars {
+		return fmt.Errorf("%w: %d characters, at most %d", ErrInvalidGuide, total, MaxGuideLyricsChars)
+	}
+	return nil
 }
 
 // GuideSection is one song section with its lyric lines.
