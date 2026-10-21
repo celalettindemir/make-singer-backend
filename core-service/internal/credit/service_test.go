@@ -165,7 +165,7 @@ func TestService_RefundWithoutDebitTouchesNothing(t *testing.T) {
 // CREDITS_ENFORCE rollback): the refund row is written.
 func TestService_DebitEnforcedRefundThroughShadowWritesRefund(t *testing.T) {
 	store, u := newStore(t)
-	seed(t, store, u, 0, 20)
+	seed(t, store, u, 0, 30)
 	ctx := context.Background()
 	enforcing := newTestService(store, true)
 	if _, err := enforcing.Spend(ctx, u, OpRenderMix, "job9", "3f2c8a10-5b7e-4c1d-9a2f-6e8b0c4d2a71"); err != nil {
@@ -178,8 +178,8 @@ func TestService_DebitEnforcedRefundThroughShadowWritesRefund(t *testing.T) {
 	if n := count(t, store, `SELECT count(*) FROM kredi.hareket WHERE kullanici_id = $1::uuid AND tur = 'render_iade'`, u); n != 1 {
 		t.Fatalf("refund rows = %d, want 1", n)
 	}
-	if b := balance(t, store, u, lotNow); b != 20 {
-		t.Fatalf("balance = %d, want 20", b)
+	if b := balance(t, store, u, lotNow); b != 30 {
+		t.Fatalf("balance = %d, want 30", b)
 	}
 	// No debit, no refund row.
 	if err := shadow.Refund(ctx, OpRenderMix, "never-debited"); err != nil {
@@ -372,10 +372,10 @@ func TestService_SummaryGiftIsLatestUnexpiredCampaignLot(t *testing.T) {
 	if _, err := s.Spend(context.Background(), u, OpRenderMix, "r1", ""); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ = s.Summary(context.Background(), u); got.Gift == nil || got.Gift.Amount != 50 || got.Balance != 38 {
+	if got, _ = s.Summary(context.Background(), u); got.Gift == nil || got.Gift.Amount != 50 || got.Balance != 27 {
 		t.Fatalf("gift after spend = %+v balance %d", got.Gift, got.Balance)
 	}
-	if _, err := store.Debit(context.Background(), u, "soz", "s-all", 38, Meta{}, lotNow); err != nil {
+	if _, err := store.Debit(context.Background(), u, "soz", "s-all", 27, Meta{}, lotNow); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ = s.Summary(context.Background(), u); got.Gift == nil || got.Gift.Amount != 50 || got.Balance != 0 || len(got.Lots) != 0 {
