@@ -328,3 +328,107 @@ func TestSunoStemName(t *testing.T) {
 		}
 	}
 }
+
+func TestAddVocals_ProviderContract(t *testing.T) {
+	var body map[string]any
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/generate/add-vocals" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeEnvelope(w, 200, map[string]any{"taskId": "av1"})
+	})
+	id, err := c.AddVocals(context.Background(), &AddVocalsRequest{
+		UploadURL: "https://cdn.test/inst.mp3", Style: "pop, A minor", Title: "pop guide",
+		Lyrics: "[Verse]\na", VocalGender: "f",
+	})
+	if err != nil || id != "av1" {
+		t.Fatalf("AddVocals = %q, %v", id, err)
+	}
+	want := map[string]any{
+		"uploadUrl": "https://cdn.test/inst.mp3", "title": "pop guide", "negativeTags": "rap, spoken word",
+		"style": "pop, A minor", "lyrics": "[Verse]\na", "vocalGender": "f", "model": "V6",
+		"callBackUrl": "https://ornek.test/geri",
+	}
+	if len(body) != len(want) {
+		t.Errorf("body keys = %v, want exactly %v", body, want)
+	}
+	for k, v := range want {
+		if body[k] != v {
+			t.Errorf("body[%q] = %v, want %v", k, body[k], v)
+		}
+	}
+}
+
+func TestSeparateVocal_ProviderContract(t *testing.T) {
+	var body map[string]any
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/vocal-removal/generate" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeEnvelope(w, 200, map[string]any{"taskId": "sv1"})
+	})
+	id, err := c.SeparateVocal(context.Background(), "av1", "aud1")
+	if err != nil || id != "sv1" {
+		t.Fatalf("SeparateVocal = %q, %v", id, err)
+	}
+	want := map[string]any{"taskId": "av1", "audioId": "aud1", "type": "separate_vocal", "callBackUrl": "https://ornek.test/geri"}
+	for k, v := range want {
+		if body[k] != v {
+			t.Errorf("body[%q] = %v, want %v", k, body[k], v)
+		}
+	}
+}
+
+func TestWaitSeparated_ReadsUrls(t *testing.T) {
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/vocal-removal/record-info" || r.URL.Query().Get("taskId") != "sv1" {
+			t.Errorf("request = %s", r.URL)
+		}
+		writeEnvelope(w, 200, map[string]any{"successFlag": "SUCCESS", "response": map[string]any{
+			"vocalUrl": "https://cdn.test/v.mp3", "instrumentalUrl": "https://cdn.test/i.mp3",
+		}})
+	})
+	got, err := c.WaitSeparated(context.Background(), "sv1", time.Millisecond, time.Second)
+	if err != nil {
+		t.Fatalf("WaitSeparated: %v", err)
+	}
+	if got.VocalURL != "https://cdn.test/v.mp3" || got.InstrumentalURL != "https://cdn.test/i.mp3" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestWaitSeparated_EmptyVocalIsError(t *testing.T) {
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		writeEnvelope(w, 200, map[string]any{"successFlag": "SUCCESS", "response": map[string]any{"instrumentalUrl": "https://cdn.test/i.mp3"}})
+	})
+	if _, err := c.WaitSeparated(context.Background(), "sv1", time.Millisecond, time.Second); err == nil {
+		t.Fatal("want an error for a missing vocalUrl")
+	}
+}
+
+func TestTimestampedLyrics_ProviderContract(t *testing.T) {
+	var body map[string]any
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/generate/get-timestamped-lyrics" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeEnvelope(w, 200, map[string]any{"alignedWords": []map[string]any{
+			{"word": "[Verse]\nSabah ", "startS": 27.7, "endS": 28.4, "success": true, "palign": 0},
+			{"word": "oldu ", "startS": 28.5, "endS": 29.3, "success": false},
+		}, "hootCer": 0.3})
+	})
+	words, err := c.TimestampedLyrics(context.Background(), "av1", "aud1")
+	if err != nil {
+		t.Fatalf("TimestampedLyrics: %v", err)
+	}
+	if body["taskId"] != "av1" || body["audioId"] != "aud1" {
+		t.Errorf("body = %v", body)
+	}
+	want := []AlignedWord{{Word: "[Verse]\nSabah ", StartS: 27.7, EndS: 28.4, Success: true}, {Word: "oldu ", StartS: 28.5, EndS: 29.3}}
+	if len(words) != 2 || words[0] != want[0] || words[1] != want[1] {
+		t.Errorf("words = %+v, want %+v", words, want)
+	}
+}
