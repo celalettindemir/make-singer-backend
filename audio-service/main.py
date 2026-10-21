@@ -20,6 +20,7 @@ from services.archiver import ArchiverService
 from services.encoder import EncoderService
 from services.guide import GuideService
 from services.master import MasterService
+from services.pitch import PitchService
 from services.storage import StorageService
 from services.tempo import TempoService
 
@@ -177,6 +178,30 @@ class GuideAnalyzeResponse(BaseModel):
     lines_matched: int
 
 
+class PitchShiftItem(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    input_key: str
+    output_key: str
+
+
+class PitchShiftRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    items: list[PitchShiftItem] = Field(min_length=1, max_length=16)
+    semitones: int = Field(ge=-4, le=4)
+
+    @model_validator(mode="after")
+    def _not_zero(self):
+        if self.semitones == 0:
+            raise ValueError("semitones must not be 0")
+        return self
+
+
+class PitchShiftResponse(BaseModel):
+    outputs: list[str]
+
+
 class TempoRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -196,13 +221,14 @@ archiver_service: ArchiverService | None = None
 analiz_service: AnalizService | None = None
 tempo_service: TempoService | None = None
 guide_service: GuideService | None = None
+pitch_service: PitchService | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     global storage_service, master_service, encoder_service, archiver_service
-    global analiz_service, tempo_service, guide_service
+    global analiz_service, tempo_service, guide_service, pitch_service
 
     # Initialize storage service
     if R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY:
@@ -222,6 +248,7 @@ async def lifespan(app: FastAPI):
     analiz_service = AnalizService(storage_service)
     tempo_service = TempoService(storage_service)
     guide_service = GuideService(storage_service)
+    pitch_service = PitchService(storage_service)
 
     yield
 
@@ -356,6 +383,22 @@ async def guide_analyze(request: GuideAnalyzeRequest):
             notes_key=request.notes_key,
         )
         return GuideAnalyzeResponse(**result)
+    # Broad catch on purpose, like the other endpoints: every error is a 500.
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/perde-kaydir", response_model=PitchShiftResponse)
+async def pitch_shift(request: PitchShiftRequest):
+    """Shifts every item by the same semitones; outputs in item order."""
+    if pitch_service is None:
+        raise HTTPException(status_code=503, detail="Pitch service not initialized")
+
+    try:
+        outputs = await pitch_service.shift(
+            [i.model_dump() for i in request.items], request.semitones
+        )
+        return PitchShiftResponse(outputs=outputs)
     # Broad catch on purpose, like the other endpoints: every error is a 500.
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(e))
