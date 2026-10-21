@@ -136,7 +136,7 @@ func refundTur(op Operation) string { return debitTur(op) + "_iade" }
 
 func knownOperation(op Operation) bool {
 	switch op {
-	case OpRenderMix, OpRenderFocus, OpRenderStems, OpLyricsGenerate, OpLyricsRewrite, OpMaster:
+	case OpRenderMix, OpRenderFocus, OpRenderStems, OpRenderGuide, OpLyricsGenerate, OpLyricsRewrite, OpMaster:
 		return true
 	}
 	return false
@@ -193,15 +193,21 @@ func (s *Service) RefundAction(ctx context.Context, userID string, op Operation,
 // maxGrace caps a grace period whose end is unknown (Apple's longest is 16 days).
 const maxGrace = 16 * 24 * time.Hour
 
-// HasPro reports whether the user has an active Pro plan (P4): the latest
-// subscription is a pro product in status active, billing issue or grace,
-// and, except in grace, its period has not ended.
+// HasPro reports whether the user has an active Pro plan (P4).
 func (s *Service) HasPro(ctx context.Context, userID string) (bool, error) {
+	return s.HasPlan(ctx, userID, TierPro)
+}
+
+// HasPlan reports whether the user has an active plan of tier min or above
+// (Pro covers Plus): the latest subscription is such a product in status
+// active, billing issue or grace, and, except in grace, its period has not
+// ended.
+func (s *Service) HasPlan(ctx context.Context, userID string, min Tier) (bool, error) {
 	sub, err := s.ledger.LatestSubscription(ctx, userID)
 	if err != nil || sub == nil {
 		return false, err
 	}
-	if tierOf(sub.Product) != TierPro {
+	if tierLevel(tierOf(sub.Product)) < tierLevel(min) {
 		return false, nil
 	}
 	now := s.now()
@@ -229,6 +235,17 @@ func tierOf(product string) Tier {
 		return TierPlus
 	}
 	return ""
+}
+
+// tierLevel orders the tiers: no plan < Plus < Pro.
+func tierLevel(t Tier) int {
+	switch t {
+	case TierPro:
+		return 2
+	case TierPlus:
+		return 1
+	}
+	return 0
 }
 
 // periodOf is the billing period of an internal subscription product.
@@ -274,6 +291,7 @@ type RenderCosts struct {
 	Mix   int `json:"mix"`
 	Focus int `json:"focus"`
 	Stems int `json:"stems"`
+	Guide int `json:"guide"`
 }
 
 // LyricsCosts are the lyrics prices.
@@ -355,7 +373,7 @@ func (s *Service) Summary(ctx context.Context, userID string) (Summary, error) {
 		Lots:        []LotView{},
 		PlanCredits: PlanCredits{Plus: s.set.PlanCredits[TierPlus], Pro: s.set.PlanCredits[TierPro]},
 		Costs: CostTable{
-			Render: RenderCosts{Mix: c.RenderMix, Focus: c.RenderFocus, Stems: c.RenderStems},
+			Render: RenderCosts{Mix: c.RenderMix, Focus: c.RenderFocus, Stems: c.RenderStems, Guide: c.RenderGuide},
 			Lyrics: LyricsCosts{Generate: c.LyricsGenerate, Rewrite: c.LyricsRewrite},
 			Master: c.Master,
 		},

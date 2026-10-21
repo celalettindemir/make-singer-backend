@@ -623,6 +623,7 @@ func creditSettings(cfg *config.Config) credit.Settings {
 			RenderMix:      c.Costs.RenderMix,
 			RenderFocus:    c.Costs.RenderFocus,
 			RenderStems:    c.Costs.RenderStems,
+			RenderGuide:    c.Costs.RenderGuide,
 			LyricsGenerate: c.Costs.LyricsGenerate,
 			LyricsRewrite:  c.Costs.LyricsRewrite,
 			Master:         c.Costs.Master,

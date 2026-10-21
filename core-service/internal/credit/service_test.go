@@ -98,7 +98,7 @@ func testSettings(enforce bool) Settings {
 	return Settings{
 		Enforce:     enforce,
 		PlanCredits: map[Tier]int{TierPlus: 300, TierPro: 1000},
-		Costs:       Costs{RenderMix: 12, RenderFocus: 32, RenderStems: 62, LyricsGenerate: 2, LyricsRewrite: 1, Master: 3},
+		Costs:       Costs{RenderMix: 12, RenderFocus: 32, RenderStems: 62, RenderGuide: 23, LyricsGenerate: 2, LyricsRewrite: 1, Master: 3},
 		RefundGrace: 168 * time.Hour,
 	}
 }
@@ -298,7 +298,7 @@ func TestLyrics_ActionChargesLots(t *testing.T) {
 	assertLotLedger(t, store)
 }
 
-const getCreditsFixture = `{"balance": 84, "debt": 0, "lots": [{"source": "plan", "amount": 60, "expiresAt": "2026-11-01T00:00:00Z"}, {"source": "campaign", "amount": 24, "expiresAt": "2026-12-31T23:59:59Z"}], "plan": {"tier": "plus", "period": "monthly", "status": "active", "periodEnd": "2026-11-01T00:00:00Z", "autoRenew": true, "pendingTier": null}, "planCredits": {"plus": 300, "pro": 1000}, "costs": {"render": {"mix": 12, "focus": 32, "stems": 62}, "lyrics": {"generate": 2, "rewrite": 1}, "master": 3}, "gift": {"amount": 24, "expiresAt": "2026-12-31T23:59:59Z"}, "storeAccountToken": "3f6c1a52-8d47-4b1e-9a60-2c5d7e91b0a4", "enforced": true}`
+const getCreditsFixture = `{"balance": 84, "debt": 0, "lots": [{"source": "plan", "amount": 60, "expiresAt": "2026-11-01T00:00:00Z"}, {"source": "campaign", "amount": 24, "expiresAt": "2026-12-31T23:59:59Z"}], "plan": {"tier": "plus", "period": "monthly", "status": "active", "periodEnd": "2026-11-01T00:00:00Z", "autoRenew": true, "pendingTier": null}, "planCredits": {"plus": 300, "pro": 1000}, "costs": {"render": {"mix": 12, "focus": 32, "stems": 62, "guide": 23}, "lyrics": {"generate": 2, "rewrite": 1}, "master": 3}, "gift": {"amount": 24, "expiresAt": "2026-12-31T23:59:59Z"}, "storeAccountToken": "3f6c1a52-8d47-4b1e-9a60-2c5d7e91b0a4", "enforced": true}`
 
 func decodeJSON(t *testing.T, v any) any {
 	t.Helper()
@@ -579,5 +579,43 @@ func TestMovementKind_MapsEveryDBKind(t *testing.T) {
 		if got := src.JSONSource(); got != want {
 			t.Errorf("JSONSource(%q) = %q, want %q", src, got, want)
 		}
+	}
+}
+
+func TestService_HasPlan(t *testing.T) {
+	future := lotNow.Add(10 * day)
+	past := lotNow.Add(-day)
+	cases := []struct {
+		name string
+		sub  *Subscription
+		min  Tier
+		want bool
+	}{
+		{"none needs plus", nil, TierPlus, false},
+		{"plus covers plus", &Subscription{Product: "plus.monthly", Status: "aktif", PeriodEnd: future}, TierPlus, true},
+		{"plus does not cover pro", &Subscription{Product: "plus.monthly", Status: "aktif", PeriodEnd: future}, TierPro, false},
+		{"pro covers plus", &Subscription{Product: "pro.yearly", Status: "aktif", PeriodEnd: future}, TierPlus, true},
+		{"plus period ended", &Subscription{Product: "plus.monthly", Status: "aktif", PeriodEnd: past}, TierPlus, false},
+		{"plus billing issue", &Subscription{Product: "plus.yearly", Status: "odeme_sorunu", PeriodEnd: future}, TierPlus, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestService(&fakeLedger{sub: tc.sub}, true)
+			got, err := s.HasPlan(context.Background(), "u1", tc.min)
+			if err != nil || got != tc.want {
+				t.Fatalf("HasPlan(%s) = %v, %v; want %v", tc.min, got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestService_SpendRenderGuideIsKnown(t *testing.T) {
+	l := &fakeLedger{bal: 100}
+	s := newTestService(l, true)
+	if _, err := s.Spend(context.Background(), "u1", OpRenderGuide, "job1:rehber", "p1"); errors.Is(err, ErrUnknownOperation) {
+		t.Fatalf("Spend(OpRenderGuide) = %v; want a known operation", err)
+	}
+	if got := debitTur(OpRenderGuide); got != "render" {
+		t.Fatalf("debitTur(OpRenderGuide) = %q, want render", got)
 	}
 }

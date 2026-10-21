@@ -5,6 +5,7 @@ type Costs struct {
 	RenderMix      int
 	RenderFocus    int
 	RenderStems    int
+	RenderGuide    int
 	LyricsGenerate int
 	LyricsRewrite  int
 	Master         int
@@ -17,6 +18,7 @@ const (
 	OpRenderMix      Operation = "render_mix"
 	OpRenderFocus    Operation = "render_focus"
 	OpRenderStems    Operation = "render_stems"
+	OpRenderGuide    Operation = "render_guide"
 	OpLyricsGenerate Operation = "lyrics_generate"
 	OpLyricsRewrite  Operation = "lyrics_rewrite"
 	OpMaster         Operation = "master"
@@ -31,6 +33,8 @@ func (c Costs) Of(op Operation) int {
 		return c.RenderFocus
 	case OpRenderStems:
 		return c.RenderStems
+	case OpRenderGuide:
+		return c.RenderGuide
 	case OpLyricsGenerate:
 		return c.LyricsGenerate
 	case OpLyricsRewrite:

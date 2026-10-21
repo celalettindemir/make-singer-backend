@@ -500,7 +500,7 @@ func TestLoad_CloudflareRangesYAMLList(t *testing.T) {
 func TestLoad_CreditDefaults(t *testing.T) {
 	for _, k := range []string{
 		"CREDITS_ENFORCE", "CREDITS_PLAN_PLUS", "CREDITS_PLAN_PRO", "CREDITS_REFUND_GRACE", "CREDITS_EXPIRE_INTERVAL", "CREDITS_COST_MASTER", "CREDITS_REFILL_INTERVAL",
-		"CREDITS_COST_RENDER_MIX", "CREDITS_COST_RENDER_FOCUS", "CREDITS_COST_RENDER_STEMS",
+		"CREDITS_COST_RENDER_MIX", "CREDITS_COST_RENDER_FOCUS", "CREDITS_COST_RENDER_STEMS", "CREDITS_COST_RENDER_GUIDE",
 		"CREDITS_COST_LYRICS_GENERATE", "CREDITS_COST_LYRICS_REWRITE",
 		"APPSTORE_PRODUCT_PREFIX", "RATELIMIT_PURCHASES_PER_MIN", "RATELIMIT_WEBHOOKS_PER_MIN",
 	} {
@@ -519,7 +519,7 @@ func TestLoad_CreditDefaults(t *testing.T) {
 	if c.RefundGrace != 168*time.Hour || c.ExpireInterval != time.Hour {
 		t.Errorf("grace/expire = %v/%v, want 168h/1h", c.RefundGrace, c.ExpireInterval)
 	}
-	want := CreditCosts{RenderMix: 12, RenderFocus: 32, RenderStems: 62, LyricsGenerate: 2, LyricsRewrite: 1, Master: 3}
+	want := CreditCosts{RenderMix: 12, RenderFocus: 32, RenderStems: 62, RenderGuide: 23, LyricsGenerate: 2, LyricsRewrite: 1, Master: 3}
 	if c.Costs != want {
 		t.Errorf("costs = %+v, want %+v", c.Costs, want)
 	}
@@ -628,5 +628,17 @@ func TestLoad_LyricsDefaultProviderIsOpenAI(t *testing.T) {
 	}
 	if cfg.OpenAI.Model != "gpt-6.1-sol" || cfg.OpenAI.ReasoningEffort != "low" {
 		t.Errorf("OpenAI defaults = %+v", cfg.OpenAI)
+	}
+}
+
+func TestLoad_RenderGuideCostFromEnv(t *testing.T) {
+	t.Setenv("CREDITS_COST_RENDER_GUIDE", "30")
+	t.Setenv("APPSTORE_BUNDLE_ID", "com.example.app")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if got := cfg.Credits.Costs.RenderGuide; got != 30 {
+		t.Fatalf("RenderGuide = %d, want 30", got)
 	}
 }

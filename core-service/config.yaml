@@ -45,6 +45,7 @@ credits:
     render_mix: 12 # CREDITS_COST_RENDER_MIX
     render_focus: 32 # CREDITS_COST_RENDER_FOCUS
     render_stems: 62 # CREDITS_COST_RENDER_STEMS
+    render_guide: 23 # CREDITS_COST_RENDER_GUIDE (guided render extra, Plus/Pro)
     lyrics_generate: 2 # CREDITS_COST_LYRICS_GENERATE
     lyrics_rewrite: 1 # CREDITS_COST_LYRICS_REWRITE
     master: 3 # CREDITS_COST_MASTER

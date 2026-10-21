@@ -95,9 +95,9 @@ func TestMigrate_RunsTwiceAndCreatesTables(t *testing.T) {
 }
 
 func TestCosts_Of(t *testing.T) {
-	c := Costs{RenderMix: 12, RenderFocus: 32, RenderStems: 62, LyricsGenerate: 2, LyricsRewrite: 1}
+	c := Costs{RenderMix: 12, RenderFocus: 32, RenderStems: 62, RenderGuide: 23, LyricsGenerate: 2, LyricsRewrite: 1}
 	cases := map[Operation]int{
-		OpRenderMix: 12, OpRenderFocus: 32, OpRenderStems: 62,
+		OpRenderMix: 12, OpRenderFocus: 32, OpRenderStems: 62, OpRenderGuide: 23,
 		OpLyricsGenerate: 2, OpLyricsRewrite: 1, Operation("bogus"): 0,
 	}
 	for op, want := range cases {
