@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,6 +17,38 @@ import (
 	"github.com/makeasinger/api/internal/model"
 	"github.com/redis/go-redis/v9"
 )
+
+// ErrPlusRequired: mastering with the app's AI vocal is for an active Plus (or
+// Pro) plan only.
+var ErrPlusRequired = errors.New("the app's vocal needs the Plus plan")
+
+// usesAppVocal reports whether any key is the app's AI vocal (stored under
+// guides/), as opposed to the user's own takes (vocals/) and stems (stems/).
+func usesAppVocal(keys []string) bool {
+	for _, k := range keys {
+		if strings.HasPrefix(k, "guides/") {
+			return true
+		}
+	}
+	return false
+}
+
+// requirePlusForAppVocal refuses when the keys include the app's vocal and the
+// user has no Plus plan. It is a product right, not a charge: it holds in
+// shadow mode too and runs before anything is spent or saved.
+func (s *MasterService) requirePlusForAppVocal(ctx context.Context, userID string, keys []string) error {
+	if s.credits == nil || !usesAppVocal(keys) {
+		return nil
+	}
+	plus, err := s.credits.HasPlan(ctx, userID, credit.TierPlus)
+	if err != nil {
+		return fmt.Errorf("could not check the plan: %w", err)
+	}
+	if !plus {
+		return ErrPlusRequired
+	}
+	return nil
+}
 
 // MasterService handles mastering operations
 type MasterService struct {
@@ -61,6 +94,18 @@ func (s *MasterService) Preview(ctx context.Context, userID string, req *model.M
 	// TODO: Implement actual preview generation
 	// This would call your audio processing service
 
+	keys := make([]string, 0, len(req.StemURLs))
+	for _, u := range req.StemURLs {
+		k, err := client.ResolveOwnedKey(u, userID, s.r2Cfg)
+		if err != nil {
+			return nil, fmt.Errorf("stem URL: %w", err)
+		}
+		keys = append(keys, k)
+	}
+	if err := s.requirePlusForAppVocal(ctx, userID, keys); err != nil {
+		return nil, err
+	}
+
 	previewID := uuid.New().String()
 	key, err := client.UserKey("previews", userID, previewID+".mp3")
 	if err != nil {
@@ -82,15 +127,23 @@ func (s *MasterService) Preview(ctx context.Context, userID string, req *model.M
 func (s *MasterService) StartFinal(ctx context.Context, userID string, req *model.MasterFinalRequest) (*model.MasterFinalResponse, error) {
 	// Input check BEFORE the job record: the worker will read these keys, and
 	// a foreign key would pull someone else's file into the master.
+	keys := make([]string, 0, len(req.StemURLs)+len(req.VocalTakes))
 	for _, u := range req.StemURLs {
-		if _, err := client.ResolveOwnedKey(u, userID, s.r2Cfg); err != nil {
+		k, err := client.ResolveOwnedKey(u, userID, s.r2Cfg)
+		if err != nil {
 			return nil, fmt.Errorf("stem URL: %w", err)
 		}
+		keys = append(keys, k)
 	}
 	for _, take := range req.VocalTakes {
-		if _, err := client.ResolveOwnedKey(take.FileURL, userID, s.r2Cfg); err != nil {
+		k, err := client.ResolveOwnedKey(take.FileURL, userID, s.r2Cfg)
+		if err != nil {
 			return nil, fmt.Errorf("vocal URL: %w", err)
 		}
+		keys = append(keys, k)
+	}
+	if err := s.requirePlusForAppVocal(ctx, userID, keys); err != nil {
+		return nil, err
 	}
 
 	jobID := uuid.New().String()

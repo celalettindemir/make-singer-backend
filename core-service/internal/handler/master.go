@@ -25,6 +25,20 @@ func NewMasterHandler(svc *service.MasterService, v *validator.Validate) *Master
 	}
 }
 
+// masterInputError answers the input and plan refusals shared by preview and
+// final; handled is false for any other error.
+func masterInputError(c *fiber.Ctx, err error) (error, bool) {
+	switch {
+	case errors.Is(err, client.ErrKeyNotOwned):
+		return response.NotFound(c, i18n.KeyFileNotFound), true
+	case errors.Is(err, client.ErrInvalidURL):
+		return response.ValidationError(c, i18n.KeyInvalidFileURL, nil), true
+	case errors.Is(err, service.ErrPlusRequired):
+		return response.PlanRequired(c, string(credit.TierPlus)), true
+	}
+	return nil, false
+}
+
 // Preview handles POST /api/master/preview
 // @Summary      Master preview
 // @Description  Generate a quick mastering preview of the mix
@@ -56,6 +70,9 @@ func (h *MasterHandler) Preview(c *fiber.Ctx) error {
 
 	result, err := h.service.Preview(c.Context(), userID, &req)
 	if err != nil {
+		if r, handled := masterInputError(c, err); handled {
+			return r
+		}
 		return internalError(c, err)
 	}
 
@@ -99,11 +116,8 @@ func (h *MasterHandler) Final(c *fiber.Ctx) error {
 
 	result, err := h.service.StartFinal(c.Context(), userID, &req)
 	if err != nil {
-		if errors.Is(err, client.ErrKeyNotOwned) {
-			return response.NotFound(c, i18n.KeyFileNotFound)
-		}
-		if errors.Is(err, client.ErrInvalidURL) {
-			return response.ValidationError(c, i18n.KeyInvalidFileURL, nil)
+		if r, handled := masterInputError(c, err); handled {
+			return r
 		}
 		var insufficient *credit.InsufficientError
 		if errors.As(err, &insufficient) {

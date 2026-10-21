@@ -52,3 +52,44 @@ func TestMasterHandler_InsufficientIs402(t *testing.T) {
 		t.Errorf("error = %+v, want INSUFFICIENT_CREDITS required 3 balance 1", out.Error)
 	}
 }
+
+func TestMasterHandler_GuidesKeyNeedsPlusIs403(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: true}
+	cfg := &config.R2Config{AccountID: "hesap123", PublicBucket: "pub", PrivateBucket: "priv", PublicURL: "https://cdn.example.com"}
+	svc := service.NewMasterService(rdb, nil, nil, cfg).WithCredits(fake)
+	h := NewMasterHandler(svc, validator.New())
+	app := fiber.New()
+	app.Post("/final", asUser("kullanici-a"), h.Final)
+
+	key, err := client.UserKey("guides", "kullanici-a", "p1", "ai.mp3")
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	body := `{"projectId":"11111111-1111-4111-8111-111111111111","profile":"clean","stemUrls":["` + client.UnsignedURL(key, cfg) +
+		`"],"mixSnapshot":{"channels":[{"stemId":"s1","volumeDb":0}],"preset":"default"}}`
+	req := httptest.NewRequest(http.MethodPost, "/final", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	var out struct {
+		Error struct {
+			Code    string            `json:"code"`
+			Details map[string]string `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Error.Code != "PLAN_REQUIRED" || out.Error.Details["requiredTier"] != "plus" {
+		t.Errorf("error = %+v, want PLAN_REQUIRED requiredTier plus", out.Error)
+	}
+	if len(fake.Spends) != 0 {
+		t.Errorf("spends = %+v, want none", fake.Spends)
+	}
+}

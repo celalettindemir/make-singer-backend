@@ -115,3 +115,106 @@ func TestMasterService_RefundsWhenEnqueueFails(t *testing.T) {
 		t.Errorf("refund = %+v, want master with ref %s", r, fake.Spends[0].ID)
 	}
 }
+
+func masterKeyURL(t *testing.T, kind, user, file string) string {
+	t.Helper()
+	key, err := client.UserKey(kind, user, "p1", file)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	return client.UnsignedURL(key, testR2Cfg())
+}
+
+func TestMaster_GuidesKeyAsStem_NeedsPlus(t *testing.T) {
+	rdb := liveRedis(t)
+	for _, enforced := range []bool{true, false} {
+		fake := &credit.FakeSpender{IsEnforced: enforced}
+		s := NewMasterService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+		req := masterFinalRequest(t, "kullanici-a")
+		req.StemURLs = append(req.StemURLs, masterKeyURL(t, "guides", "kullanici-a", "ai.mp3"))
+		n := jobKeyCount(t, rdb)
+		if _, err := s.StartFinal(context.Background(), "kullanici-a", req); !errors.Is(err, ErrPlusRequired) {
+			t.Fatalf("enforced=%v err = %v, want ErrPlusRequired", enforced, err)
+		}
+		if len(fake.Spends) != 0 || jobKeyCount(t, rdb) != n {
+			t.Errorf("enforced=%v: spends=%v, job records changed", enforced, fake.Spends)
+		}
+	}
+}
+
+func TestMaster_GuidesKeyAsTake_NeedsPlus(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: true}
+	s := NewMasterService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+	req := masterFinalRequest(t, "kullanici-a")
+	req.VocalTakes = []model.VocalTake{{SectionID: "s1", TakeID: "t1", FileURL: masterKeyURL(t, "guides", "kullanici-a", "ai.mp3")}}
+	if _, err := s.StartFinal(context.Background(), "kullanici-a", req); !errors.Is(err, ErrPlusRequired) {
+		t.Fatalf("err = %v, want ErrPlusRequired", err)
+	}
+	if len(fake.Spends) != 0 {
+		t.Errorf("spends = %v, want none", fake.Spends)
+	}
+}
+
+func TestMaster_PlanReadError_NoSpend(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: true, Err: errors.New("db down")}
+	s := NewMasterService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+	req := masterFinalRequest(t, "kullanici-a")
+	req.StemURLs = append(req.StemURLs, masterKeyURL(t, "guides", "kullanici-a", "ai.mp3"))
+	err := func() error { _, err := s.StartFinal(context.Background(), "kullanici-a", req); return err }()
+	if err == nil || errors.Is(err, ErrPlusRequired) {
+		t.Fatalf("err = %v, want a plain plan read error", err)
+	}
+	if len(fake.Spends) != 0 {
+		t.Errorf("spends = %v, want none", fake.Spends)
+	}
+}
+
+func TestMaster_GuidesKey_PlusUser_OK(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: true, Plus: true}
+	s := NewMasterService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	req := masterFinalRequest(t, "kullanici-a")
+	req.StemURLs = append(req.StemURLs, masterKeyURL(t, "guides", "kullanici-a", "ai.mp3"))
+	if _, err := s.StartFinal(context.Background(), "kullanici-a", req); err != nil {
+		t.Fatalf("StartFinal: %v", err)
+	}
+	if len(fake.Spends) != 1 {
+		t.Errorf("spends = %d, want 1", len(fake.Spends))
+	}
+}
+
+func TestMaster_OwnTakes_NoPlan(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: true}
+	s := NewMasterService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	req := masterFinalRequest(t, "kullanici-a")
+	req.VocalTakes = []model.VocalTake{{SectionID: "s1", TakeID: "t1", FileURL: masterKeyURL(t, "vocals", "kullanici-a", "t.wav")}}
+	if _, err := s.StartFinal(context.Background(), "kullanici-a", req); err != nil {
+		t.Fatalf("StartFinal: %v", err)
+	}
+}
+
+func TestMasterPreview_GuidesKey_NeedsPlus(t *testing.T) {
+	fake := &credit.FakeSpender{}
+	s := NewMasterService(nil, nil, nil, testR2Cfg()).WithCredits(fake)
+	req := &model.MasterPreviewRequest{StemURLs: []string{masterKeyURL(t, "guides", "kullanici-a", "ai.mp3")}}
+	if _, err := s.Preview(context.Background(), "kullanici-a", req); !errors.Is(err, ErrPlusRequired) {
+		t.Fatalf("err = %v, want ErrPlusRequired", err)
+	}
+	plus := &credit.FakeSpender{Plus: true}
+	s = NewMasterService(nil, nil, nil, testR2Cfg()).WithCredits(plus)
+	if _, err := s.Preview(context.Background(), "kullanici-a", req); err != nil {
+		t.Fatalf("plus Preview: %v", err)
+	}
+}
+
+func TestUsesAppVocal(t *testing.T) {
+	if usesAppVocal([]string{"stems/u/p/a.mp3", "vocals/u/p/t.wav"}) {
+		t.Error("own keys must not count")
+	}
+	if !usesAppVocal([]string{"stems/u/p/a.mp3", "guides/u/p/ai.mp3"}) {
+		t.Error("guides key must count")
+	}
+}
