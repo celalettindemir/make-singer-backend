@@ -228,3 +228,69 @@ def test_request_forbids_extra():
         GuideAnalyzeRequest(**base, extra_field=1)
     with pytest.raises(ValidationError):
         GuideAnalyzeRequest(**{**base, "vocal_gender": "x"})
+
+
+def test_track_pitch_memory_bounded():
+    """A 4-minute guide must fit well inside the pod's 2 GiB (review C-1)."""
+    import tracemalloc
+
+    rng = np.random.default_rng(1)
+    long = np.tile(tone(64, 1.0), 240) + rng.normal(0, 0.01, RATE * 240)
+    tracemalloc.start()
+    track_pitch(long, RATE, "f")
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert peak < 300 * 1024 * 1024, f"peak {peak / 2**20:.0f} MiB"
+
+
+def test_offset_memory_bounded():
+    import tracemalloc
+
+    x = np.random.default_rng(1).normal(0, 0.1, RATE * 240)
+    tracemalloc.start()
+    estimate_offset_ms(x, x, RATE)
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert peak < 150 * 1024 * 1024, f"peak {peak / 2**20:.0f} MiB"
+
+
+def test_skipped_line_does_not_break_rest():
+    """Suno skips a whole line; the following lines still match (review I-1)."""
+    lines = [
+        "a1 a2 a3 a4 a5 a6 a7 a8",
+        "b1 b2 b3 b4 b5 b6 b7 b8",
+        "c1 c2 c3 c4 c5 c6 c7 c8",
+    ]
+    sections = [{"id": "v", "type": "verse", "lines": lines}]
+    sung = lines[0].split() + lines[2].split()
+    words = [word(w, i * 0.5, i * 0.5 + 0.4) for i, w in enumerate(sung)]
+    times, extra = match_words(words, sections)
+    assert (0, 7) in times and (2, 0) in times and (2, 7) in times
+    assert not any(li == 1 for li, _ in times)
+    assert extra == 0
+
+
+def test_note_in_one_word_only():
+    """Back-to-back words: a note belongs to one word (review I-2)."""
+    sections = [{"id": "v", "type": "verse", "lines": ["sen ben"]}]
+    notes = [
+        {"startMs": 0, "endMs": 400, "midi": 60},
+        {"startMs": 420, "endMs": 900, "midi": 64},
+    ]
+    times = {(0, 0): (0.0, 400.0), (0, 1): (400.0, 900.0)}
+    first, second = build_lines(notes, sections, times, bpm=120)[0]["syllables"]
+    assert [n["midi"] for n in first["notes"]] == [60]
+    assert [n["midi"] for n in second["notes"]] == [64]
+    assert "rise" in second["cues"] and "rise" not in first["cues"]
+
+
+def test_display_text_keeps_the_lyrics():
+    """Syllables show the user's words, not the matching form (review I-3)."""
+    sections = [{"id": "v", "type": "verse", "lines": ["Saat Anne, dikkat!"]}]
+    texts = [s["text"] for s in build_lines([], sections, {}, bpm=100)[0]["syllables"]]
+    assert texts == ["Sa", "at", "An", "ne", "dik", "kat"]
+
+
+def test_syllables_dotted_capital_i():
+    assert syllables("İzlerini") == ["İz", "le", "ri", "ni"]
+    assert syllables("Işık") == ["I", "şık"]

@@ -4,10 +4,12 @@ a note strip (spec 9 §4.3, Faz 0 `_spikes/guide-9/analyze.py`).
 Pure numpy so it runs (and is tested) without librosa or ffmpeg.
 """
 
+import difflib
 import itertools
 import json
 import os
 import re
+import string
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,8 @@ from .storage import StorageService
 # Analysis rate: enough for singing, cheap for YIN.
 ANALYSIS_RATE = 16000
 FRAME = 2048
+# Loud frames analysed per FFT batch (memory bound).
+PITCH_CHUNK = 512
 YIN_THRESHOLD = 0.15
 # Guide singer pitch range per voice (Faz 0 §6.4: a female guide tracked
 # down to 65 Hz picked up leakage as fake low notes).
@@ -42,6 +46,9 @@ BREATH_MS = 250
 MAX_OFFSET_MS = 2000
 
 VOWELS = set("aeıioöuüâîû")
+_PUNCT = string.punctuation + "“”‘’…«»"
+# A word keeps the notes sung this long after Suno's word end.
+WORD_TAIL_MS = 150
 _TAG = re.compile(r"\[[^\]]*\]")
 
 
@@ -57,53 +64,73 @@ def _frames(x: np.ndarray, frame: int, hop: int) -> np.ndarray:
 
 
 def track_pitch(samples: np.ndarray, rate: int, gender: str) -> np.ndarray:
-    """MIDI pitch every 10 ms (YIN); NaN where nothing is sung."""
+    """MIDI pitch every 10 ms (YIN); NaN where nothing is sung.
+
+    Frames are a strided view and only loud frames are analysed, in chunks
+    of PITCH_CHUNK, so a whole song stays far below the pod's memory limit.
+    """
     fmin, fmax = PITCH_RANGE_HZ[gender]
     hop = rate // 100
     tau_min = max(2, int(rate / fmax))
     tau_max = min(FRAME // 2, int(rate / fmin) + 1)
-    frames = _frames(np.asarray(samples, dtype=np.float64), FRAME, hop)
-    width = FRAME - tau_max
-
-    # Difference function d(tau) = e0 + e_tau - 2 r(tau), r by FFT.
-    size = 1 << int(np.ceil(np.log2(FRAME + width)))
-    spec_full = np.fft.rfft(frames, n=size, axis=1)
-    spec_head = np.fft.rfft(frames[:, :width], n=size, axis=1)
-    r = np.fft.irfft(spec_full * np.conj(spec_head), n=size, axis=1)[:, : tau_max + 1]
-    sq = np.cumsum(np.pad(frames**2, ((0, 0), (1, 0))), axis=1)
-    e0 = sq[:, width][:, None]
-    taus = np.arange(tau_max + 1)
-    e_tau = sq[:, taus + width] - sq[:, taus]
-    d = np.maximum(e0 + e_tau - 2 * r, 0.0)
-
-    # Cumulative mean normalized difference.
-    cum = np.cumsum(d[:, 1:], axis=1)
-    cmnd = np.ones_like(d)
-    cmnd[:, 1:] = d[:, 1:] * taus[1:] / np.maximum(cum, 1e-12)
+    x = np.asarray(samples, dtype=np.float64)
+    if len(x) < FRAME:
+        x = np.pad(x, (0, FRAME - len(x)))
+    frames = np.lib.stride_tricks.sliding_window_view(x, FRAME)[::hop]
 
     midi = np.full(len(frames), np.nan)
-    rms = np.sqrt(np.mean(frames**2, axis=1))
+    # Frame energy from a running sum: no per-frame copy.
+    csum = np.concatenate([[0.0], np.cumsum(x * x)])
+    starts = np.arange(len(frames)) * hop
+    rms = np.sqrt((csum[starts + FRAME] - csum[starts]) / FRAME)
     peak = rms.max() if len(rms) else 0.0
     if peak <= 1e-6:
         return midi
-    loud = 20 * np.log10(np.maximum(rms, 1e-12) / peak) > -RMS_FLOOR_DB
-    for i in np.flatnonzero(loud):
-        row = cmnd[i]
-        below = np.flatnonzero(row[tau_min : tau_max + 1] < YIN_THRESHOLD)
-        if not len(below):
-            continue
-        t = tau_min + below[0]
-        while t + 1 <= tau_max and row[t + 1] < row[t]:
-            t += 1
-        if t >= tau_max:
-            continue  # the minimum is at the edge: below fmin
-        a, b, c = row[t - 1], row[t], row[t + 1]
-        denom = a - 2 * b + c
-        shift = 0.5 * (a - c) / denom if abs(denom) > 1e-12 else 0.0
-        hz = rate / (t + shift)
-        if fmin <= hz <= fmax:
-            midi[i] = 69 + 12 * np.log2(hz / 440.0)
+    loud = np.flatnonzero(20 * np.log10(np.maximum(rms, 1e-12) / peak) > -RMS_FLOOR_DB)
+
+    width = FRAME - tau_max
+    size = 1 << int(np.ceil(np.log2(FRAME + width)))
+    taus = np.arange(tau_max + 1)
+    for c0 in range(0, len(loud), PITCH_CHUNK):
+        idx = loud[c0 : c0 + PITCH_CHUNK]
+        chunk = frames[idx]
+        # Difference function d(tau) = e0 + e_tau - 2 r(tau), r by FFT.
+        spec_full = np.fft.rfft(chunk, n=size, axis=1)
+        spec_head = np.fft.rfft(chunk[:, :width], n=size, axis=1)
+        r = np.fft.irfft(spec_full * np.conj(spec_head), n=size, axis=1)[
+            :, : tau_max + 1
+        ]
+        del spec_full, spec_head
+        sq = np.cumsum(np.pad(chunk**2, ((0, 0), (1, 0))), axis=1)
+        e0 = sq[:, width][:, None]
+        e_tau = sq[:, taus + width] - sq[:, taus]
+        d = np.maximum(e0 + e_tau - 2 * r, 0.0)
+        # Cumulative mean normalized difference.
+        cmnd = np.ones_like(d)
+        cmnd[:, 1:] = (
+            d[:, 1:] * taus[1:] / np.maximum(np.cumsum(d[:, 1:], axis=1), 1e-12)
+        )
+        for row, i in zip(cmnd, idx, strict=True):
+            hz = _yin_pick(row, tau_min, tau_max, rate)
+            if hz is not None and fmin <= hz <= fmax:
+                midi[i] = 69 + 12 * np.log2(hz / 440.0)
     return _fix_octaves(midi)
+
+
+def _yin_pick(row: np.ndarray, tau_min: int, tau_max: int, rate: int) -> float | None:
+    """The first dip under the threshold, refined by parabolic interpolation."""
+    below = np.flatnonzero(row[tau_min : tau_max + 1] < YIN_THRESHOLD)
+    if not len(below):
+        return None
+    t = tau_min + below[0]
+    while t + 1 <= tau_max and row[t + 1] < row[t]:
+        t += 1
+    if t >= tau_max:
+        return None  # the minimum is at the edge: below fmin
+    a, b, c = row[t - 1], row[t], row[t + 1]
+    denom = a - 2 * b + c
+    shift = 0.5 * (a - c) / denom if abs(denom) > 1e-12 else 0.0
+    return rate / (t + shift)
 
 
 def _fix_octaves(midi: np.ndarray) -> np.ndarray:
@@ -195,12 +222,17 @@ def _norm(word: str) -> str:
     return re.sub(r"(.)\1+", r"\1", w)  # "sensiiiz" -> "sensiz"
 
 
+def _lower_tr(ch: str) -> str:
+    """One character lowercased the Turkish way, always one character."""
+    return {"İ": "i", "I": "ı"}.get(ch, ch.lower()[:1])
+
+
 def syllables(word: str, language: str = "tr") -> list[str]:
     """Turkish syllables: each vowel is a nucleus, a single consonant between
     two vowels and the last of a consonant cluster start the next syllable."""
     if language != "tr":
         return [word]
-    idx = [i for i, ch in enumerate(word.lower()) if ch in VOWELS]
+    idx = [i for i, ch in enumerate(word) if _lower_tr(ch) in VOWELS]
     if len(idx) <= 1:
         return [word]
     cuts = [b if b - a == 1 else b - 1 for a, b in itertools.pairwise(idx)]
@@ -222,34 +254,51 @@ def match_words(
 ) -> tuple[dict[tuple[int, int], tuple[float, float]], int]:
     """Suno's words matched in order to (line, word) of the lyrics, in ms.
 
-    Section tags are dropped. A Suno word that does not match within a short
-    look-ahead (an extra chorus, a changed word) is counted as extra.
+    Section tags are dropped. The two token lists are aligned as a whole
+    (difflib), so a skipped or changed line only loses its own words; Suno
+    words left over (an extra chorus, a changed word) are counted as extra.
     """
     lines = _lyric_words(sections)
-    flat = [
-        (li, wi, _norm(w)) for li, ws in enumerate(lines) for wi, w in enumerate(ws)
-    ]
-    tokens = []
+    flat = [(li, wi) for li, ws in enumerate(lines) for wi, _ in enumerate(ws)]
+    lyric_tokens = [_norm(w) for ws in lines for w in ws]
+    tokens, sources = [], []
     for w in words:
         for tok in _TAG.sub(" ", w["word"]).split():
             if _norm(tok):
-                tokens.append((_norm(tok), w))
+                tokens.append(_norm(tok))
+                sources.append(w)
+    matcher = difflib.SequenceMatcher(None, tokens, lyric_tokens, autojunk=False)
     times: dict[tuple[int, int], tuple[float, float]] = {}
-    extra, k = 0, 0
-    for tok, w in tokens:
-        found = next(
-            (j for j in range(k, min(k + 6, len(flat))) if flat[j][2] == tok), None
-        )
-        if found is None:
-            extra += 1
-            continue
-        if w.get("success", True):
-            times[(flat[found][0], flat[found][1])] = (
-                w["start_s"] * 1000.0,
-                w["end_s"] * 1000.0,
-            )
-        k = found + 1
-    return times, extra
+    matched = 0
+    for block in matcher.get_matching_blocks():
+        for k in range(block.size):
+            matched += 1
+            w = sources[block.a + k]
+            if w.get("success", True):
+                times[flat[block.b + k]] = (w["start_s"] * 1000.0, w["end_s"] * 1000.0)
+    return times, len(tokens) - matched
+
+
+def _display(word: str) -> str:
+    """The word as the user wrote it, without surrounding punctuation."""
+    return word.strip(_PUNCT) or word
+
+
+def _note_owners(
+    notes: list[dict[str, int]], times: dict[tuple[int, int], tuple[float, float]]
+) -> dict[tuple[int, int], list[dict[str, int]]]:
+    """Each note goes to the one word it overlaps most (sung tails count)."""
+    owners: dict[tuple[int, int], list[dict[str, int]]] = {}
+    spans = sorted(times.items(), key=lambda kv: kv[1][0])
+    for n in notes:
+        best, best_overlap = None, 0.0
+        for key, (start, end) in spans:
+            overlap = min(n["endMs"], end + WORD_TAIL_MS) - max(n["startMs"], start)
+            if overlap > best_overlap:
+                best, best_overlap = key, overlap
+        if best is not None:
+            owners.setdefault(best, []).append(n)
+    return owners
 
 
 def build_lines(
@@ -260,21 +309,14 @@ def build_lines(
 ) -> list[dict[str, Any]]:
     """Lines in lyric order with their syllables, notes and cues."""
     beat_ms = 60000.0 / bpm if bpm and bpm > 0 else 500.0
+    owners = _note_owners(notes, times)
     out, prev_midi, li = [], None, 0
     for section in sections:
         for line in section["lines"]:
             sylls: list[dict[str, Any]] = []
             for wi, word in enumerate(line.split()):
-                parts = syllables(_norm(word) or word)
-                span = times.get((li, wi))
-                if span is None:
-                    sylls += [{"text": p, "notes": [], "cues": []} for p in parts]
-                    continue
-                in_word = [
-                    n
-                    for n in notes
-                    if n["endMs"] > span[0] and n["startMs"] < span[1] + 150
-                ]
+                parts = syllables(_display(word))
+                in_word = owners.get((li, wi), [])
                 per: list[list[dict[str, int]]] = [[] for _ in parts]
                 for i, n in enumerate(in_word):
                     per[
@@ -318,13 +360,27 @@ def build_lines(
 
 
 def _onset_envelope(samples: np.ndarray, rate: int) -> np.ndarray:
+    """Spectral flux every 10 ms, computed in chunks of PITCH_CHUNK frames."""
     hop = rate // 100
-    frames = _frames(np.asarray(samples, dtype=np.float64), 1024, hop) * np.hanning(
-        1024
-    )
-    mag = np.abs(np.fft.rfft(frames, axis=1))
-    flux = np.maximum(np.diff(np.log1p(mag), axis=0), 0).sum(axis=1)
-    return np.concatenate([[0.0], flux])
+    x = np.asarray(samples, dtype=np.float64)
+    if len(x) < 1024:
+        x = np.pad(x, (0, 1024 - len(x)))
+    frames = np.lib.stride_tricks.sliding_window_view(x, 1024)[::hop]
+    window = np.hanning(1024)
+    flux = np.zeros(len(frames))
+    prev = None
+    for c0 in range(0, len(frames), PITCH_CHUNK):
+        mag = np.log1p(
+            np.abs(np.fft.rfft(frames[c0 : c0 + PITCH_CHUNK] * window, axis=1))
+        )
+        if prev is not None:
+            mag_all = np.vstack([prev, mag])
+        else:
+            mag_all = np.vstack([mag[:1], mag])
+        flux[c0 : c0 + len(mag)] = np.maximum(np.diff(mag_all, axis=0), 0).sum(axis=1)
+        prev = mag[-1:]
+    flux[0] = 0.0
+    return flux
 
 
 def estimate_offset_ms(a: np.ndarray, b: np.ndarray, rate: int) -> int:
