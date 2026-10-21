@@ -1724,51 +1724,11 @@ const docTemplate = `{
                 "GrooveHalfTime"
             ]
         },
-        "model.GuideRequest": {
-            "type": "object",
-            "required": [
-                "sections",
-                "vocalGender"
-            ],
-            "properties": {
-                "range": {
-                    "$ref": "#/definitions/model.VocalRange"
-                },
-                "sections": {
-                    "type": "array",
-                    "maxItems": 32,
-                    "minItems": 1,
-                    "items": {
-                        "$ref": "#/definitions/model.GuideSection"
-                    }
-                },
-                "vocalGender": {
-                    "enum": [
-                        "m",
-                        "f"
-                    ],
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/model.VocalGender"
-                        }
-                    ]
-                }
-            }
-        },
         "model.GuideResult": {
             "type": "object",
             "properties": {
-                "expiresAt": {
-                    "type": "string"
-                },
-                "fileUrl": {
-                    "type": "string"
-                },
                 "notesUrl": {
                     "type": "string"
-                },
-                "offsetMs": {
-                    "type": "integer"
                 },
                 "pitchShiftSemitones": {
                     "type": "integer"
@@ -1814,12 +1774,14 @@ const docTemplate = `{
                 "pads",
                 "lead",
                 "fx",
+                "vocal",
                 "mix",
                 "rest"
             ],
             "x-enum-comments": {
                 "InstrumentMix": "the full track (mix mode)",
-                "InstrumentRest": "the track with the chosen instrument removed (focus mode)"
+                "InstrumentRest": "the track with the chosen instrument removed (focus mode)",
+                "InstrumentVocal": "the sung vocal stem of a vocal render"
             },
             "x-enum-descriptions": [
                 "",
@@ -1834,6 +1796,7 @@ const docTemplate = `{
                 "",
                 "",
                 "",
+                "the sung vocal stem of a vocal render",
                 "the full track (mix mode)",
                 "the track with the chosen instrument removed (focus mode)"
             ],
@@ -1850,6 +1813,7 @@ const docTemplate = `{
                 "InstrumentPads",
                 "InstrumentLead",
                 "InstrumentFX",
+                "InstrumentVocal",
                 "InstrumentMix",
                 "InstrumentRest"
             ]
@@ -1956,6 +1920,40 @@ const docTemplate = `{
                 "LanguageTR",
                 "LanguageFR"
             ]
+        },
+        "model.LyricTimelineLine": {
+            "type": "object",
+            "properties": {
+                "endMs": {
+                    "type": "integer"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "startMs": {
+                    "type": "integer"
+                }
+            }
+        },
+        "model.LyricTimelineSection": {
+            "type": "object",
+            "properties": {
+                "endMs": {
+                    "type": "integer"
+                },
+                "lines": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LyricTimelineLine"
+                    }
+                },
+                "sectionId": {
+                    "type": "string"
+                },
+                "startMs": {
+                    "type": "integer"
+                }
+            }
         },
         "model.LyricsGenerateRequest": {
             "type": "object",
@@ -2473,6 +2471,13 @@ const docTemplate = `{
                 "key": {
                     "$ref": "#/definitions/model.KeyResult"
                 },
+                "lyricTimeline": {
+                    "description": "LyricTimeline is where each lyric line sits in the song; null when none.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.LyricTimelineSection"
+                    }
+                },
                 "stemMode": {
                     "$ref": "#/definitions/model.StemMode"
                 },
@@ -2519,14 +2524,6 @@ const docTemplate = `{
                         }
                     ]
                 },
-                "guide": {
-                    "description": "Guide asks for a guide singer over the instrumental (Plus/Pro, spec 9).",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/model.GuideRequest"
-                        }
-                    ]
-                },
                 "projectId": {
                     "type": "string"
                 },
@@ -2539,6 +2536,14 @@ const docTemplate = `{
                     "allOf": [
                         {
                             "$ref": "#/definitions/model.StemMode"
+                        }
+                    ]
+                },
+                "vocal": {
+                    "description": "Vocal asks for a sung vocal over the instrumental (every plan).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.VocalRequest"
                         }
                     ]
                 }
@@ -2789,17 +2794,6 @@ const docTemplate = `{
                 }
             }
         },
-        "model.VocalGender": {
-            "type": "string",
-            "enum": [
-                "m",
-                "f"
-            ],
-            "x-enum-varnames": [
-                "VocalGenderMale",
-                "VocalGenderFemale"
-            ]
-        },
         "model.VocalRange": {
             "type": "object",
             "properties": {
@@ -2812,6 +2806,41 @@ const docTemplate = `{
                     "type": "integer",
                     "maximum": 96,
                     "minimum": 24
+                }
+            }
+        },
+        "model.VocalRequest": {
+            "type": "object",
+            "required": [
+                "sections",
+                "voice"
+            ],
+            "properties": {
+                "range": {
+                    "$ref": "#/definitions/model.VocalRange"
+                },
+                "sections": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/definitions/model.GuideSection"
+                    }
+                },
+                "title": {
+                    "type": "string",
+                    "maxLength": 80
+                },
+                "voice": {
+                    "enum": [
+                        "female",
+                        "male"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Voice"
+                        }
+                    ]
                 }
             }
         },
@@ -2845,6 +2874,17 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "model.Voice": {
+            "type": "string",
+            "enum": [
+                "female",
+                "male"
+            ],
+            "x-enum-varnames": [
+                "VoiceFemale",
+                "VoiceMale"
+            ]
         },
         "model.WSTicketRequest": {
             "type": "object",

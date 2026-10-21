@@ -1,9 +1,7 @@
 package e2e
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"testing"
@@ -13,12 +11,11 @@ import (
 	"github.com/makeasinger/api/internal/model"
 )
 
-// TestRenderGuide_RealSuno runs a guided render end to end: the instrumental,
-// the guide singer over it, the separation, the word timings and the
-// audio-service analysis. Paid (about 35 Suno credits: generate 12 +
-// add-vocals 12 + separate_vocal 10 + word timings 0.5); it needs R2 and an
-// audio-service (AUDIO_SERVICE_URL) on the same bucket.
-func TestRenderGuide_RealSuno(t *testing.T) {
+// TestRenderVocal_RealSuno runs a vocal render end to end on the mix tier: one
+// Suno generate with lyrics, vocal separation and the word timings. Paid
+// (about 22.5 Suno credits); it needs R2 and an audio-service
+// (AUDIO_SERVICE_URL) on the same bucket.
+func TestRenderVocal_RealSuno(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping real Suno API test in short mode")
 	}
@@ -40,8 +37,9 @@ func TestRenderGuide_RealSuno(t *testing.T) {
 			"structure": [{"id": "v", "type": "verse", "bars": 8}, {"id": "c", "type": "chorus", "bars": 8}]
 		},
 		"arrangement": {"instruments": ["drums", "bass", "piano"], "density": "medium", "groove": "straight"},
-		"guide": {
-			"vocalGender": "f",
+		"vocal": {
+			"voice": "female",
+			"title": "Sabah",
 			"sections": [
 				{"id": "v", "type": "verse", "lines": ["Sabah oldu yine sensiz", "Pencereden doğdu güneş"]},
 				{"id": "c", "type": "chorus", "lines": ["Gel bu gece yanıma", "Sar beni kollarına"]}
@@ -86,45 +84,25 @@ func TestRenderGuide_RealSuno(t *testing.T) {
 	}
 	assertStatus(t, resp, http.StatusOK)
 	result := parseJSON(t, resp)
-	guide, ok := result["guide"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected a guide in the result: %v", result)
+	stems, _ := result["stems"].([]any)
+	if len(stems) == 0 {
+		t.Fatalf("expected stems in the result: %v", result)
 	}
-	t.Logf("guide: offsetMs=%v pitchShift=%v key=%v", guide["offsetMs"], guide["pitchShiftSemitones"], result["key"])
-
-	fileURL, _ := guide["fileUrl"].(string)
-	if fr, err := http.Get(fileURL); err != nil || fr.StatusCode != http.StatusOK {
-		t.Fatalf("guide file not downloadable: %v %v", err, fr)
+	first, _ := stems[0].(map[string]any)
+	if first["instrument"] != "vocal" {
+		t.Fatalf("expected the first stem to be the vocal: %v", first)
+	}
+	if u, _ := first["fileUrl"].(string); u == "" {
+		t.Fatal("expected a vocal stem url")
+	} else if fr, err := http.Get(u); err != nil || fr.StatusCode != http.StatusOK {
+		t.Fatalf("vocal stem not downloadable: %v %v", err, fr)
 	} else {
 		_ = fr.Body.Close()
 	}
-	notesURL, _ := guide["notesUrl"].(string)
-	if notesURL == "" {
-		t.Fatal("expected notesUrl")
+
+	timeline, ok := result["lyricTimeline"].([]any)
+	if !ok || len(timeline) < 1 {
+		t.Fatalf("expected at least one section in lyricTimeline: %v", result["lyricTimeline"])
 	}
-	nr, err := http.Get(notesURL)
-	if err != nil {
-		t.Fatalf("notes download: %v", err)
-	}
-	defer nr.Body.Close()
-	raw, _ := io.ReadAll(nr.Body)
-	var notes struct {
-		Version int `json:"version"`
-		Lines   []struct {
-			StartMs *int `json:"startMs"`
-		} `json:"lines"`
-	}
-	if err := json.Unmarshal(raw, &notes); err != nil {
-		t.Fatalf("notes JSON: %v", err)
-	}
-	matched := 0
-	for _, l := range notes.Lines {
-		if l.StartMs != nil {
-			matched++
-		}
-	}
-	if notes.Version != 1 || len(notes.Lines) != 4 || matched == 0 {
-		t.Fatalf("notes = version %d, %d lines, %d matched", notes.Version, len(notes.Lines), matched)
-	}
-	t.Logf("notes: %d/%d lines matched", matched, len(notes.Lines))
+	t.Logf("vocal stem ok; lyricTimeline sections: %d", len(timeline))
 }

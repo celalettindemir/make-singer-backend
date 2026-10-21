@@ -125,7 +125,7 @@ func (w *RenderWorker) finishVocal(ctx context.Context, payload *model.RenderJob
 	}
 	gw := make([]client.GuideWord, 0, len(words))
 	for _, aw := range words {
-		gw = append(gw, client.GuideWord{Word: aw.Word, StartS: aw.StartS, EndS: aw.EndS, Success: aw.Success})
+		gw = append(gw, client.GuideWord(aw))
 	}
 	sections := make([]client.GuideSectionInput, 0, len(payload.Vocal.Sections))
 	for _, s := range payload.Vocal.Sections {

@@ -310,36 +310,10 @@ definitions:
     - GrooveStraight
     - GrooveSwing
     - GrooveHalfTime
-  model.GuideRequest:
-    properties:
-      range:
-        $ref: '#/definitions/model.VocalRange'
-      sections:
-        items:
-          $ref: '#/definitions/model.GuideSection'
-        maxItems: 32
-        minItems: 1
-        type: array
-      vocalGender:
-        allOf:
-        - $ref: '#/definitions/model.VocalGender'
-        enum:
-        - m
-        - f
-    required:
-    - sections
-    - vocalGender
-    type: object
   model.GuideResult:
     properties:
-      expiresAt:
-        type: string
-      fileUrl:
-        type: string
       notesUrl:
         type: string
-      offsetMs:
-        type: integer
       pitchShiftSemitones:
         type: integer
     type: object
@@ -374,12 +348,14 @@ definitions:
     - pads
     - lead
     - fx
+    - vocal
     - mix
     - rest
     type: string
     x-enum-comments:
       InstrumentMix: the full track (mix mode)
       InstrumentRest: the track with the chosen instrument removed (focus mode)
+      InstrumentVocal: the sung vocal stem of a vocal render
     x-enum-descriptions:
     - ""
     - ""
@@ -393,6 +369,7 @@ definitions:
     - ""
     - ""
     - ""
+    - the sung vocal stem of a vocal render
     - the full track (mix mode)
     - the track with the chosen instrument removed (focus mode)
     x-enum-varnames:
@@ -408,6 +385,7 @@ definitions:
     - InstrumentPads
     - InstrumentLead
     - InstrumentFX
+    - InstrumentVocal
     - InstrumentMix
     - InstrumentRest
   model.JobStatus:
@@ -482,6 +460,28 @@ definitions:
     - LanguageEN
     - LanguageTR
     - LanguageFR
+  model.LyricTimelineLine:
+    properties:
+      endMs:
+        type: integer
+      index:
+        type: integer
+      startMs:
+        type: integer
+    type: object
+  model.LyricTimelineSection:
+    properties:
+      endMs:
+        type: integer
+      lines:
+        items:
+          $ref: '#/definitions/model.LyricTimelineLine'
+        type: array
+      sectionId:
+        type: string
+      startMs:
+        type: integer
+    type: object
   model.LyricsGenerateRequest:
     properties:
       bpm:
@@ -840,6 +840,12 @@ definitions:
         type: string
       key:
         $ref: '#/definitions/model.KeyResult'
+      lyricTimeline:
+        description: LyricTimeline is where each lyric line sits in the song; null
+          when none.
+        items:
+          $ref: '#/definitions/model.LyricTimelineSection'
+        type: array
       stemMode:
         $ref: '#/definitions/model.StemMode'
       stems:
@@ -869,11 +875,6 @@ definitions:
         - pads
         - lead
         - fx
-      guide:
-        allOf:
-        - $ref: '#/definitions/model.GuideRequest'
-        description: Guide asks for a guide singer over the instrumental (Plus/Pro,
-          spec 9).
       projectId:
         type: string
       stemMode:
@@ -883,6 +884,10 @@ definitions:
         - mix
         - focus
         - stems
+      vocal:
+        allOf:
+        - $ref: '#/definitions/model.VocalRequest'
+        description: Vocal asks for a sung vocal over the instrumental (every plan).
     required:
     - arrangement
     - brief
@@ -1067,14 +1072,6 @@ definitions:
       sampleRate:
         type: integer
     type: object
-  model.VocalGender:
-    enum:
-    - m
-    - f
-    type: string
-    x-enum-varnames:
-    - VocalGenderMale
-    - VocalGenderFemale
   model.VocalRange:
     properties:
       high:
@@ -1085,6 +1082,29 @@ definitions:
         maximum: 96
         minimum: 24
         type: integer
+    type: object
+  model.VocalRequest:
+    properties:
+      range:
+        $ref: '#/definitions/model.VocalRange'
+      sections:
+        items:
+          $ref: '#/definitions/model.GuideSection'
+        maxItems: 32
+        minItems: 1
+        type: array
+      title:
+        maxLength: 80
+        type: string
+      voice:
+        allOf:
+        - $ref: '#/definitions/model.Voice'
+        enum:
+        - female
+        - male
+    required:
+    - sections
+    - voice
     type: object
   model.VocalTake:
     properties:
@@ -1112,6 +1132,14 @@ definitions:
     - sectionId
     - takeId
     type: object
+  model.Voice:
+    enum:
+    - female
+    - male
+    type: string
+    x-enum-varnames:
+    - VoiceFemale
+    - VoiceMale
   model.WSTicketRequest:
     properties:
       jobId:
