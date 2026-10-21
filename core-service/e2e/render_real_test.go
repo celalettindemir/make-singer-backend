@@ -176,6 +176,10 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 
 	// e2e never deletes accounts; no deleted-mark check is needed.
 	renderWorker := worker.NewRenderWorker(renderService, sunoClient, r2Client, hub, nil)
+	// Guided renders need an audio-service on the same R2 bucket.
+	if audioClient := client.NewAudioClient(&cfg.Audio); audioClient.IsConfigured() {
+		renderWorker.WithGuideAudio(audioClient)
+	}
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 
