@@ -10,6 +10,7 @@ Provides endpoints for:
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, model_validator
@@ -17,6 +18,7 @@ from pydantic import BaseModel, Field, model_validator
 from services.analiz import AnalizService
 from services.archiver import ArchiverService
 from services.encoder import EncoderService
+from services.guide import GuideService
 from services.master import MasterService
 from services.storage import StorageService
 from services.tempo import TempoService
@@ -134,6 +136,47 @@ class AnalizResponse(BaseModel):
     preview_url: str
 
 
+class GuideWord(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    word: str
+    start_s: float
+    end_s: float
+    success: bool = True
+
+
+class GuideSectionInput(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    id: str
+    type: str
+    lines: list[str] = []
+
+
+class GuideAnalyzeRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # Keys are R2 object keys; no signed URL travels.
+    guide_key: str
+    reference_key: str
+    instrumental_key: str
+    words: list[GuideWord]
+    sections: list[GuideSectionInput] = Field(min_length=1)
+    vocal_gender: Literal["m", "f"]
+    bpm: float = Field(gt=0)
+    aligned_key: str
+    notes_key: str
+
+
+class GuideAnalyzeResponse(BaseModel):
+    aligned_url: str
+    notes_url: str
+    offset_ms: int
+    range_midi: list[int] | None
+    note_count: int
+    lines_matched: int
+
+
 class TempoRequest(BaseModel):
     model_config = {"extra": "forbid"}
 
@@ -152,13 +195,14 @@ encoder_service: EncoderService | None = None
 archiver_service: ArchiverService | None = None
 analiz_service: AnalizService | None = None
 tempo_service: TempoService | None = None
+guide_service: GuideService | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     global storage_service, master_service, encoder_service, archiver_service
-    global analiz_service, tempo_service
+    global analiz_service, tempo_service, guide_service
 
     # Initialize storage service
     if R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY:
@@ -177,6 +221,7 @@ async def lifespan(app: FastAPI):
     archiver_service = ArchiverService(storage_service)
     analiz_service = AnalizService(storage_service)
     tempo_service = TempoService(storage_service)
+    guide_service = GuideService(storage_service)
 
     yield
 
@@ -288,6 +333,30 @@ async def analiz_audio(request: AnalizRequest):
         return AnalizResponse(**result)
     # Genis yakalama BILINCLI: FastAPI ucunda son siginak, her hata 500
     # olarak donsun. BLE001 bu yuzden susturuldu.
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/rehber-analiz", response_model=GuideAnalyzeResponse)
+async def guide_analyze(request: GuideAnalyzeRequest):
+    """Aligns the guide singer to the instrumental and writes its note strip."""
+    if guide_service is None:
+        raise HTTPException(status_code=503, detail="Guide service not initialized")
+
+    try:
+        result = await guide_service.analyze(
+            guide_key=request.guide_key,
+            reference_key=request.reference_key,
+            instrumental_key=request.instrumental_key,
+            words=[w.model_dump() for w in request.words],
+            sections=[s.model_dump() for s in request.sections],
+            vocal_gender=request.vocal_gender,
+            bpm=request.bpm,
+            aligned_key=request.aligned_key,
+            notes_key=request.notes_key,
+        )
+        return GuideAnalyzeResponse(**result)
+    # Broad catch on purpose, like the other endpoints: every error is a 500.
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(e))
 
