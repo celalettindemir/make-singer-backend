@@ -34,6 +34,8 @@ type Spender interface {
 	Balance(ctx context.Context, userID string) (int, error)
 	// HasPro reports whether the user has an active Pro plan (P4).
 	HasPro(ctx context.Context, userID string) (bool, error)
+	// HasPlan reports whether the user has an active plan of tier min or above.
+	HasPlan(ctx context.Context, userID string, min Tier) (bool, error)
 	// Enforced reports whether debits are real (false = shadow mode).
 	Enforced() bool
 }

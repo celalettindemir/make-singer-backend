@@ -34,12 +34,13 @@ const (
 
 // RenderJobPayload contains the data for a render job
 type RenderJobPayload struct {
-	OwnerID         string      `json:"ownerId"`
-	ProjectID       string      `json:"projectId"`
-	Brief           Brief       `json:"brief"`
-	Arrangement     Arrangement `json:"arrangement"`
-	StemMode        StemMode    `json:"stemMode"`
-	FocusInstrument *Instrument `json:"focusInstrument,omitempty"`
+	OwnerID         string        `json:"ownerId"`
+	ProjectID       string        `json:"projectId"`
+	Brief           Brief         `json:"brief"`
+	Arrangement     Arrangement   `json:"arrangement"`
+	StemMode        StemMode      `json:"stemMode"`
+	FocusInstrument *Instrument   `json:"focusInstrument,omitempty"`
+	Guide           *GuideRequest `json:"guide,omitempty"`
 }
 
 // MasterJobPayload contains the data for a master job

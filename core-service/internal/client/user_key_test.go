@@ -97,6 +97,7 @@ func TestUserPrefixes(t *testing.T) {
 	}
 	want := []string{
 		"exports/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
+		"guides/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
 		"masters/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
 		"previews/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
 		"stems/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
@@ -112,5 +113,12 @@ func TestUserPrefixes_InvalidID(t *testing.T) {
 		if _, err := UserPrefixes(id); !errors.Is(err, ErrInvalidSegment) {
 			t.Errorf("expected ErrInvalidSegment for %q, got %v", id, err)
 		}
+	}
+}
+
+func TestUserKey_Guides(t *testing.T) {
+	got, err := UserKey("guides", "u1", "p1", "j1.mp3")
+	if err != nil || got != "guides/u1/p1/j1.mp3" {
+		t.Fatalf("UserKey(guides) = %q, %v; want guides/u1/p1/j1.mp3", got, err)
 	}
 }

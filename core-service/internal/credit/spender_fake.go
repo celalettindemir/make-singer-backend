@@ -42,8 +42,10 @@ type FakeSpender struct {
 	// ChargedFirst makes SpendAction report charged=true on the first call
 	// per action id.
 	ChargedFirst bool
-	// Pro is the HasPro() answer.
+	// Pro is the HasPro() answer; a Pro plan also covers Plus in HasPlan.
 	Pro bool
+	// Plus makes HasPlan(TierPlus) true.
+	Plus bool
 	// IsEnforced is the Enforced() answer.
 	IsEnforced bool
 	// Err, when set, is returned by every call after recording it.
@@ -134,4 +136,14 @@ func (f *FakeSpender) HasPro(context.Context, string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.Pro, f.Err
+}
+
+// HasPlan answers from Pro and Plus.
+func (f *FakeSpender) HasPlan(_ context.Context, _ string, min Tier) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if min == TierPro {
+		return f.Pro, f.Err
+	}
+	return f.Pro || f.Plus, f.Err
 }

@@ -25,6 +25,14 @@ const (
 // ErrPlanRequired: the stems render is for an active Pro plan only (R-CRD-16).
 var ErrPlanRequired = errors.New("the stems render needs the Pro plan")
 
+// ErrPlusRequired: the guided render is for an active Plus or Pro plan only
+// (spec 9 §3.4).
+var ErrPlusRequired = errors.New("the guided render needs the Plus plan")
+
+// GuideRef is the credit ref of a job's guide spend: the guide is its own
+// debit in the render family, next to the render's own (ref = jobID).
+func GuideRef(jobID string) string { return jobID + ":rehber" }
+
 // RenderService handles render job management
 type RenderService struct {
 	redis       *redis.Client
@@ -82,6 +90,14 @@ func (s *RenderService) refundJob(ctx context.Context, op credit.Operation, jobI
 	}
 }
 
+// refundRender refunds the render's debit and, with guide, its guide debit.
+func (s *RenderService) refundRender(ctx context.Context, op credit.Operation, jobID string, guide bool) {
+	s.refundJob(ctx, op, jobID)
+	if guide {
+		s.refundJob(ctx, credit.OpRenderGuide, GuideRef(jobID))
+	}
+}
+
 // BuildResult produces the client response from the stored record: each
 // stem's URL and expiry are regenerated ON EVERY CALL; the record holds no
 // signed URL.
@@ -105,6 +121,10 @@ func (s *RenderService) BuildResult(ctx context.Context, record *model.RenderRes
 		})
 	}
 
+	guide, err := s.buildGuide(ctx, record.Guide)
+	if err != nil {
+		return nil, err
+	}
 	return &model.RenderResultResponse{
 		ID:        record.ID,
 		BPM:       record.BPM,
@@ -113,7 +133,33 @@ func (s *RenderService) BuildResult(ctx context.Context, record *model.RenderRes
 		CreatedAt: record.CreatedAt,
 		StemMode:  record.StemMode,
 		Stems:     stems,
+		Guide:     guide,
 	}, nil
+}
+
+// buildGuide signs the guide's file and notes; nil stays nil.
+func (s *RenderService) buildGuide(ctx context.Context, rec *model.GuideRecord) (*model.GuideResult, error) {
+	if rec == nil {
+		return nil, nil
+	}
+	fileURL, expiresAt, err := client.ResolveURL(ctx, s.r2Client, s.r2Cfg, rec.FileKey)
+	if err != nil {
+		return nil, fmt.Errorf("could not generate the guide URL: %w", err)
+	}
+	out := &model.GuideResult{
+		FileURL:             fileURL,
+		PitchShiftSemitones: rec.PitchShiftSemitones,
+		OffsetMs:            rec.OffsetMs,
+		ExpiresAt:           model.ExpiresPtr(expiresAt),
+	}
+	if rec.NotesKey != nil {
+		notesURL, _, err := client.ResolveURL(ctx, s.r2Client, s.r2Cfg, *rec.NotesKey)
+		if err != nil {
+			return nil, fmt.Errorf("could not generate the guide notes URL: %w", err)
+		}
+		out.NotesURL = &notesURL
+	}
+	return out, nil
 }
 
 // StartRender queues a new render job
@@ -133,6 +179,16 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 		}
 		if !pro {
 			return nil, ErrPlanRequired
+		}
+	}
+	// The guide is a Plus product right, gated like stems (shadow mode too).
+	if req.Guide != nil && s.credits != nil {
+		plus, err := s.credits.HasPlan(ctx, userID, credit.TierPlus)
+		if err != nil {
+			return nil, fmt.Errorf("could not check the plan: %w", err)
+		}
+		if !plus {
+			return nil, ErrPlusRequired
 		}
 	}
 
@@ -157,6 +213,7 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 		Arrangement:     req.Arrangement,
 		StemMode:        stemMode,
 		FocusInstrument: focus,
+		Guide:           req.Guide,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -182,18 +239,31 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 			log.Printf("Job %s: shadow credit read failed: %v", jobID, err)
 			balance = 0
 		}
+		if req.Guide != nil {
+			guideBalance, err := s.credits.Spend(ctx, userID, credit.OpRenderGuide, GuideRef(jobID), req.ProjectID)
+			if err != nil {
+				var insufficient *credit.InsufficientError
+				if errors.As(err, &insufficient) || s.credits.Enforced() {
+					s.refundJob(ctx, op, jobID)
+					return nil, err
+				}
+				log.Printf("Job %s: shadow guide credit read failed: %v", jobID, err)
+			} else {
+				balance = guideBalance
+			}
+		}
 	}
 
 	// Save job to Redis
 	if err := s.saveJob(ctx, job); err != nil {
-		s.refundJob(ctx, op, jobID)
+		s.refundRender(ctx, op, jobID, req.Guide != nil)
 		return nil, fmt.Errorf("failed to save job: %w", err)
 	}
 
 	// Create Asynq task
 	task, err := newRenderTask(jobID, payloadBytes)
 	if err != nil {
-		s.refundJob(ctx, op, jobID)
+		s.refundRender(ctx, op, jobID, req.Guide != nil)
 		return nil, fmt.Errorf("failed to create task: %w", err)
 	}
 
@@ -204,7 +274,7 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 		asynq.Retention(24*time.Hour),
 	)
 	if err != nil {
-		s.refundJob(ctx, op, jobID)
+		s.refundRender(ctx, op, jobID, req.Guide != nil)
 		return nil, fmt.Errorf("failed to enqueue task: %w", err)
 	}
 
@@ -292,8 +362,10 @@ func (s *RenderService) CancelRender(ctx context.Context, userID, jobID string) 
 	if wasQueued {
 		// The stored job keeps no stem mode (Job.Payload is not persisted),
 		// and the ledger refund is keyed by jobId within the render family,
-		// so any render operation names the right debit.
-		s.refundJob(ctx, credit.OpRenderMix, jobID)
+		// so any render operation names the right debit. The guide is
+		// refunded too; a job without a guide has no such debit and the
+		// refund finds nothing.
+		s.refundRender(ctx, credit.OpRenderMix, jobID, true)
 	}
 
 	return &model.RenderCancelResponse{

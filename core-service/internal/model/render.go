@@ -13,6 +13,29 @@ type RenderStartRequest struct {
 	Arrangement     Arrangement `json:"arrangement" validate:"required"`
 	StemMode        StemMode    `json:"stemMode" validate:"omitempty,oneof=mix focus stems"`
 	FocusInstrument *Instrument `json:"focusInstrument" validate:"omitempty,oneof=drums bass piano guitar synth strings brass woodwinds percussion pads lead fx"`
+	// Guide asks for a guide singer over the instrumental (Plus/Pro, spec 9).
+	Guide *GuideRequest `json:"guide,omitempty" validate:"omitempty"`
+}
+
+// GuideRequest is what the guided render needs: the singer's voice, the
+// lyrics in song order and, when measured, the user's comfortable range.
+type GuideRequest struct {
+	VocalGender VocalGender    `json:"vocalGender" validate:"required,oneof=m f"`
+	Sections    []GuideSection `json:"sections" validate:"required,min=1,max=32,dive"`
+	Range       *VocalRange    `json:"range,omitempty" validate:"omitempty"`
+}
+
+// GuideSection is one song section with its lyric lines.
+type GuideSection struct {
+	ID    string   `json:"id" validate:"required,max=64"`
+	Type  string   `json:"type" validate:"required,max=32"`
+	Lines []string `json:"lines" validate:"max=32,dive,max=200"`
+}
+
+// VocalRange is a comfortable singing range in MIDI note numbers.
+type VocalRange struct {
+	Low  int `json:"low" validate:"min=24,max=96"`
+	High int `json:"high" validate:"min=24,max=96,gtfield=Low"`
 }
 
 // ErrInvalidStemSettings: stemMode and focusInstrument are inconsistent.
@@ -122,6 +145,17 @@ type RenderResultResponse struct {
 	CreatedAt time.Time    `json:"createdAt"`
 	StemMode  StemMode     `json:"stemMode"`
 	Stems     []StemResult `json:"stems"`
+	Guide     *GuideResult `json:"guide"`
+}
+
+// GuideResult is the guide singer of a guided render; null otherwise.
+// NotesURL is null when the note strip could not be made.
+type GuideResult struct {
+	FileURL             string     `json:"fileUrl"`
+	NotesURL            *string    `json:"notesUrl"`
+	PitchShiftSemitones int        `json:"pitchShiftSemitones"`
+	OffsetMs            int        `json:"offsetMs"`
+	ExpiresAt           *time.Time `json:"expiresAt,omitempty"`
 }
 
 // KeyResult represents the final key of the render
@@ -151,6 +185,15 @@ type RenderResultRecord struct {
 	CreatedAt time.Time          `json:"createdAt"`
 	StemMode  StemMode           `json:"stemMode"`
 	Stems     []StemResultRecord `json:"stems"`
+	Guide     *GuideRecord       `json:"guide,omitempty"`
+}
+
+// GuideRecord is the stored form of the guide: object keys, not URLs.
+type GuideRecord struct {
+	FileKey             string  `json:"fileKey"`
+	NotesKey            *string `json:"notesKey,omitempty"`
+	PitchShiftSemitones int     `json:"pitchShiftSemitones"`
+	OffsetMs            int     `json:"offsetMs"`
 }
 
 // StemResultRecord is the stored form of a single stem.

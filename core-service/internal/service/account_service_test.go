@@ -62,8 +62,8 @@ func TestAccountService_DeleteRemovesAllAndSchedulesCleanup(t *testing.T) {
 	if !slices.Equal(ident.deleted, []string{accountID}) {
 		t.Fatalf("deleted ID = %v", ident.deleted)
 	}
-	if len(deleter.prefixes) != 5 {
-		t.Fatalf("expected 5 prefixes, got %v", deleter.prefixes)
+	if len(deleter.prefixes) != 6 {
+		t.Fatalf("expected 6 prefixes, got %v", deleter.prefixes)
 	}
 	if len(queue.tasks) != 1 || queue.tasks[0].Type() != TaskTypeAccountCleanup {
 		t.Fatalf("the second cleanup task was not set up: %v", queue.tasks)

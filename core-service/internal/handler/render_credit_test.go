@@ -114,3 +114,36 @@ func TestRenderHandler_PlanRequiredIs403(t *testing.T) {
 		t.Errorf("spends = %+v, want none", fake.Spends)
 	}
 }
+
+func TestRenderHandler_GuideNeedsPlus403(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{}
+	svc := service.NewRenderService(rdb, nil, nil, &config.R2Config{}).WithCredits(fake)
+	h := NewRenderHandler(svc, validator.New())
+	app := fiber.New()
+	app.Post("/start", asUser("kullanici-a"), h.Start)
+
+	body := strings.Replace(validRenderBody, `"arrangement":{`,
+		`"guide":{"vocalGender":"f","sections":[{"id":"s1","type":"verse","lines":["a b"]}]},"arrangement":{`, 1)
+	req := httptest.NewRequest(http.MethodPost, "/start", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	var out struct {
+		Error struct {
+			Code    string            `json:"code"`
+			Details map[string]string `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Error.Code != "PLAN_REQUIRED" || out.Error.Details["requiredTier"] != "plus" {
+		t.Errorf("error = %+v, want PLAN_REQUIRED requiredTier plus", out.Error)
+	}
+}

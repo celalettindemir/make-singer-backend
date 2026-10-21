@@ -62,6 +62,9 @@ func (h *RenderHandler) Start(c *fiber.Ctx) error {
 		if errors.Is(err, service.ErrPlanRequired) {
 			return response.PlanRequired(c, string(credit.TierPro))
 		}
+		if errors.Is(err, service.ErrPlusRequired) {
+			return response.PlanRequired(c, string(credit.TierPlus))
+		}
 		var insufficient *credit.InsufficientError
 		if errors.As(err, &insufficient) {
 			return response.InsufficientCredits(c, insufficient.Required, insufficient.Balance, insufficient.Debt)

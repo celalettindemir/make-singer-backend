@@ -27,8 +27,8 @@ func TestAccountWorker_CleansPrefixes(t *testing.T) {
 	if err := NewAccountWorker(svc).ProcessTask(context.Background(), task); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(s.prefixes) != 5 {
-		t.Fatalf("expected 5 prefixes: %v", s.prefixes)
+	if len(s.prefixes) != 6 {
+		t.Fatalf("expected 6 prefixes: %v", s.prefixes)
 	}
 }
 

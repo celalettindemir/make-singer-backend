@@ -231,8 +231,16 @@ func TestRenderWorker_CancelBeforeClaimSkipsSunoAndRefundsOnce(t *testing.T) {
 	}
 	// The cancel refunds (queued) and the worker refunds again; the ledger
 	// keys both on the jobId, so they are one refund row.
-	if len(s.fake.Refunds) != 2 || s.fake.Refunds[0].ID != "is1" || s.fake.Refunds[1].ID != "is1" {
-		t.Errorf("refunds = %+v, want two calls, both for is1", s.fake.Refunds)
+	// The cancel refunds the render and the (absent) guide debit; the
+	// worker refunds the render again (a no-op in the ledger).
+	renderRefunds := 0
+	for _, r := range s.fake.Refunds {
+		if r.Op != credit.OpRenderGuide && r.ID == "is1" {
+			renderRefunds++
+		}
+	}
+	if renderRefunds != 2 {
+		t.Errorf("refunds = %+v, want two render calls for is1", s.fake.Refunds)
 	}
 	if st := jobStatus(t, s.svc); st != model.JobStatusCanceled {
 		t.Errorf("status = %s, want canceled", st)

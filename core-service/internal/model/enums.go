@@ -175,3 +175,11 @@ const (
 	StemModeFocus StemMode = "focus"
 	StemModeStems StemMode = "stems"
 )
+
+// VocalGender is the guide singer's voice.
+type VocalGender string
+
+const (
+	VocalGenderMale   VocalGender = "m"
+	VocalGenderFemale VocalGender = "f"
+)

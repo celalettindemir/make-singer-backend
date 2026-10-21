@@ -63,16 +63,16 @@ func TestAccountService_DeleteRemovesSocialPrefixesAndRows(t *testing.T) {
 	if err := svc.Delete(context.Background(), accountID); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(deleter.prefixes) != 7 {
-		t.Fatalf("expected 5 user + 2 social prefixes: %v", deleter.prefixes)
+	if len(deleter.prefixes) != 8 {
+		t.Fatalf("expected 6 user + 2 social prefixes: %v", deleter.prefixes)
 	}
-	if !slices.Equal(deleter.prefixes[5:], []string{"sosyal/" + socialPub1 + "/", "sosyal/" + socialPub2 + "/"}) {
-		t.Fatalf("social prefixes = %v", deleter.prefixes[5:])
+	if !slices.Equal(deleter.prefixes[6:], []string{"sosyal/" + socialPub1 + "/", "sosyal/" + socialPub2 + "/"}) {
+		t.Fatalf("social prefixes = %v", deleter.prefixes[6:])
 	}
 	if !slices.Equal(social.deleted, []string{accountID}) {
 		t.Fatalf("social rows must be deleted: %v", social.deleted)
 	}
-	if !slices.Equal(social.tracesDeleted, []string{accountID}) || social.prefixCountAtTraces != 5 {
+	if !slices.Equal(social.tracesDeleted, []string{accountID}) || social.prefixCountAtTraces != 6 {
 		t.Fatalf("traces must be deleted before the social prefix loop: %v, prefix %d", social.tracesDeleted, social.prefixCountAtTraces)
 	}
 }
@@ -86,7 +86,7 @@ func TestAccountService_CleanupDeletesProfileDespiteR2Error(t *testing.T) {
 	if err := svc.Cleanup(context.Background(), accountID); err == nil {
 		t.Fatal("an R2 error must be returned")
 	}
-	if !slices.Equal(social.tracesDeleted, []string{accountID}) || social.prefixCountAtTraces != 5 {
+	if !slices.Equal(social.tracesDeleted, []string{accountID}) || social.prefixCountAtTraces != 6 {
 		t.Fatalf("the profile must be deleted before R2: %v, prefix %d", social.tracesDeleted, social.prefixCountAtTraces)
 	}
 	if len(social.deleted) != 0 {
@@ -98,7 +98,7 @@ func TestAccountService_CleanupDeletesProfileDespiteR2Error(t *testing.T) {
 	if err := svc.Cleanup(context.Background(), accountID); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	if !slices.Equal(deleter.prefixes[12:], []string{"sosyal/" + socialPub1 + "/", "sosyal/" + socialPub2 + "/"}) {
+	if !slices.Equal(deleter.prefixes[14:], []string{"sosyal/" + socialPub1 + "/", "sosyal/" + socialPub2 + "/"}) {
 		t.Fatalf("the retry must delete the same social prefixes: %v", deleter.prefixes)
 	}
 	if !slices.Equal(social.deleted, []string{accountID}) {
@@ -115,7 +115,7 @@ func TestAccountService_CleanupTraceErrorDoesNotStopR2(t *testing.T) {
 	if err := svc.Cleanup(context.Background(), accountID); !errors.Is(err, traceErr) {
 		t.Fatalf("a trace delete error must be returned: %v", err)
 	}
-	if len(deleter.prefixes) != 7 {
+	if len(deleter.prefixes) != 8 {
 		t.Fatalf("all prefixes must be deleted despite the trace error: %v", deleter.prefixes)
 	}
 	if !slices.Equal(social.deleted, []string{accountID}) {
@@ -134,7 +134,7 @@ func TestAccountService_CleanupSocialR2ErrorKeepsRows(t *testing.T) {
 	if len(social.deleted) != 0 {
 		t.Fatal("rows must not be deleted while the R2 cleanup is incomplete")
 	}
-	if len(deleter.prefixes) != 7 {
+	if len(deleter.prefixes) != 8 {
 		t.Fatalf("all prefixes must be tried even on error: %v", deleter.prefixes)
 	}
 }
