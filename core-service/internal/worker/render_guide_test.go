@@ -84,9 +84,9 @@ func guidePayload() *model.RenderJobPayload {
 	p.StemMode = model.StemModeMix
 	tonic, scale := model.TonicA, model.ScaleMinor
 	p.Brief.Key = model.KeyConfig{Mode: model.KeyModeAuto, Tonic: &tonic, Scale: &scale}
-	p.Guide = &model.GuideRequest{
-		VocalGender: model.VocalGenderFemale,
-		Sections:    []model.GuideSection{{ID: "s1", Type: "verse", Lines: []string{"la si"}}},
+	p.Vocal = &model.VocalRequest{
+		Voice:    model.VoiceFemale,
+		Sections: []model.GuideSection{{ID: "s1", Type: "verse", Lines: []string{"la si"}}},
 	}
 	return p
 }
@@ -199,7 +199,7 @@ func TestGuided_HappyPath(t *testing.T) {
 		t.Errorf("analyze words/sections = %+v", a.analyzeReq)
 	}
 	g := res.Guide
-	if g == nil || g.FileKey != a.analyzeReq.AlignedKey || g.NotesKey == nil || *g.NotesKey != a.analyzeReq.NotesKey || g.OffsetMs != 40 || g.PitchShiftSemitones != 0 {
+	if g == nil || g.NotesKey == nil || *g.NotesKey != a.analyzeReq.NotesKey || g.PitchShiftSemitones != 0 {
 		t.Errorf("guide record = %+v", g)
 	}
 	if a.shiftItems != nil {
@@ -239,7 +239,7 @@ func TestGuided_AnalysisFails_StillSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateWithSuno: %v", err)
 	}
-	if res.Guide == nil || res.Guide.NotesKey != nil || !strings.HasSuffix(res.Guide.FileKey, "-ham.mp3") || res.Guide.OffsetMs != 0 {
+	if res.Guide == nil || res.Guide.NotesKey != nil {
 		t.Errorf("guide = %+v, want the raw guide without notes", res.Guide)
 	}
 }
@@ -247,7 +247,7 @@ func TestGuided_AnalysisFails_StillSucceeds(t *testing.T) {
 func TestGuided_ShiftsStemsAndKey(t *testing.T) {
 	_, a, _, w := guideSetup(t)
 	p := guidePayload()
-	p.Guide.Range = &model.VocalRange{Low: 45, High: 52}
+	p.Vocal.Range = &model.VocalRange{Low: 45, High: 52}
 	res, err := w.generateWithSuno(context.Background(), p, noProgress, claimOK)
 	if err != nil {
 		t.Fatalf("generateWithSuno: %v", err)
@@ -258,8 +258,8 @@ func TestGuided_ShiftsStemsAndKey(t *testing.T) {
 	if !strings.HasSuffix(a.shiftItems[0].OutputKey, "-km4.mp3") || !strings.HasSuffix(a.shiftItems[1].OutputKey, "-km4.mp3") {
 		t.Errorf("shift outputs = %+v", a.shiftItems)
 	}
-	if res.Stems[0].FileKey != a.shiftItems[0].OutputKey || res.Guide.FileKey != a.shiftItems[1].OutputKey {
-		t.Errorf("result keys stem %s guide %s, want the shifted ones", res.Stems[0].FileKey, res.Guide.FileKey)
+	if res.Stems[0].FileKey != a.shiftItems[0].OutputKey {
+		t.Errorf("result stem key %s, want the shifted one", res.Stems[0].FileKey)
 	}
 	if a.shiftNotes == nil || res.Guide.NotesKey == nil || *res.Guide.NotesKey != a.shiftNotes.OutputKey || !strings.HasSuffix(a.shiftNotes.OutputKey, "-notes-km4.json") {
 		t.Errorf("notes = %+v / %v", a.shiftNotes, res.Guide.NotesKey)
@@ -273,7 +273,7 @@ func TestGuided_ShiftFailureKeepsOriginals(t *testing.T) {
 	_, a, _, w := guideSetup(t)
 	a.shiftErr = errors.New("rubberband missing")
 	p := guidePayload()
-	p.Guide.Range = &model.VocalRange{Low: 45, High: 52}
+	p.Vocal.Range = &model.VocalRange{Low: 45, High: 52}
 	res, err := w.generateWithSuno(context.Background(), p, noProgress, claimOK)
 	if err != nil {
 		t.Fatalf("generateWithSuno: %v", err)
@@ -314,7 +314,7 @@ func TestGuided_NotConfiguredFailsBeforeSuno(t *testing.T) {
 func TestNoGuide_Unchanged(t *testing.T) {
 	s, a, _, w := guideSetup(t)
 	p := guidePayload()
-	p.Guide = nil
+	p.Vocal = nil
 	res, err := w.generateWithSuno(context.Background(), p, noProgress, claimOK)
 	if err != nil {
 		t.Fatalf("generateWithSuno: %v", err)

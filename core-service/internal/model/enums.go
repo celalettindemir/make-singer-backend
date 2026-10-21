@@ -58,6 +58,7 @@ const (
 	InstrumentPads       Instrument = "pads"
 	InstrumentLead       Instrument = "lead"
 	InstrumentFX         Instrument = "fx"
+	InstrumentVocal      Instrument = "vocal" // the sung vocal stem of a vocal render
 
 	// Appears only in render OUTPUT; not accepted in requests.
 	InstrumentMix  Instrument = "mix"  // the full track (mix mode)
@@ -176,10 +177,18 @@ const (
 	StemModeStems StemMode = "stems"
 )
 
-// VocalGender is the guide singer's voice.
-type VocalGender string
+// Voice is the stock singer voice of a vocal render.
+type Voice string
 
 const (
-	VocalGenderMale   VocalGender = "m"
-	VocalGenderFemale VocalGender = "f"
+	VoiceFemale Voice = "female"
+	VoiceMale   Voice = "male"
 )
+
+// SunoGender is the voice as Suno's vocalGender parameter: "f" or "m".
+func (v Voice) SunoGender() string {
+	if v == VoiceMale {
+		return "m"
+	}
+	return "f"
+}

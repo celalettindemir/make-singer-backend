@@ -15,30 +15,32 @@ type RenderStartRequest struct {
 	Arrangement     Arrangement `json:"arrangement" validate:"required"`
 	StemMode        StemMode    `json:"stemMode" validate:"omitempty,oneof=mix focus stems"`
 	FocusInstrument *Instrument `json:"focusInstrument" validate:"omitempty,oneof=drums bass piano guitar synth strings brass woodwinds percussion pads lead fx"`
-	// Guide asks for a guide singer over the instrumental (Plus/Pro, spec 9).
-	Guide *GuideRequest `json:"guide,omitempty" validate:"omitempty"`
+	// Vocal asks for a sung vocal over the instrumental (every plan).
+	Vocal *VocalRequest `json:"vocal,omitempty" validate:"omitempty"`
 }
 
-// GuideRequest is what the guided render needs: the singer's voice, the
-// lyrics in song order and, when measured, the user's comfortable range.
-type GuideRequest struct {
-	VocalGender VocalGender    `json:"vocalGender" validate:"required,oneof=m f"`
-	Sections    []GuideSection `json:"sections" validate:"required,min=1,max=32,dive"`
-	Range       *VocalRange    `json:"range,omitempty" validate:"omitempty"`
+// VocalRequest is what the vocal render needs: the stock voice, the song
+// title, the lyrics in song order and, when measured, the user's
+// comfortable range.
+type VocalRequest struct {
+	Voice    Voice          `json:"voice" validate:"required,oneof=female male"`
+	Title    string         `json:"title" validate:"max=80"`
+	Sections []GuideSection `json:"sections" validate:"required,min=1,max=32,dive"`
+	Range    *VocalRange    `json:"range,omitempty" validate:"omitempty"`
 }
 
 // MaxGuideLyricsChars caps the lyrics sent to Suno (its V6 limit is 5000).
 const MaxGuideLyricsChars = 5000
 
-// ErrInvalidGuide: the guide's lyrics cannot be sung (no line, or too long).
-var ErrInvalidGuide = errors.New("invalid guide lyrics")
+// ErrInvalidLyrics: the lyrics cannot be sung (no line, or too long).
+var ErrInvalidLyrics = errors.New("invalid lyrics")
 
 // CheckLyrics refuses lyrics that would make the paid generation fail
 // afterwards: at least one non-blank line, at most MaxGuideLyricsChars
 // characters in all.
-func (g *GuideRequest) CheckLyrics() error {
+func (v *VocalRequest) CheckLyrics() error {
 	total, lines := 0, 0
-	for _, s := range g.Sections {
+	for _, s := range v.Sections {
 		for _, l := range s.Lines {
 			if t := strings.TrimSpace(l); t != "" {
 				lines++
@@ -47,10 +49,10 @@ func (g *GuideRequest) CheckLyrics() error {
 		}
 	}
 	if lines == 0 {
-		return fmt.Errorf("%w: no line to sing", ErrInvalidGuide)
+		return fmt.Errorf("%w: no line to sing", ErrInvalidLyrics)
 	}
 	if total > MaxGuideLyricsChars {
-		return fmt.Errorf("%w: %d characters, at most %d", ErrInvalidGuide, total, MaxGuideLyricsChars)
+		return fmt.Errorf("%w: %d characters, at most %d", ErrInvalidLyrics, total, MaxGuideLyricsChars)
 	}
 	return nil
 }
@@ -176,16 +178,30 @@ type RenderResultResponse struct {
 	StemMode  StemMode     `json:"stemMode"`
 	Stems     []StemResult `json:"stems"`
 	Guide     *GuideResult `json:"guide"`
+	// LyricTimeline is where each lyric line sits in the song; null when none.
+	LyricTimeline []LyricTimelineSection `json:"lyricTimeline"`
 }
 
-// GuideResult is the guide singer of a guided render; null otherwise.
+// LyricTimelineSection is one song section's span with its lyric lines.
+type LyricTimelineSection struct {
+	SectionID string              `json:"sectionId"`
+	StartMs   int                 `json:"startMs"`
+	EndMs     int                 `json:"endMs"`
+	Lines     []LyricTimelineLine `json:"lines"`
+}
+
+// LyricTimelineLine is one lyric line's span; null times when not located.
+type LyricTimelineLine struct {
+	Index   int  `json:"index"`
+	StartMs *int `json:"startMs"`
+	EndMs   *int `json:"endMs"`
+}
+
+// GuideResult is the note strip of a vocal render (Plus); null otherwise.
 // NotesURL is null when the note strip could not be made.
 type GuideResult struct {
-	FileURL             string     `json:"fileUrl"`
-	NotesURL            *string    `json:"notesUrl"`
-	PitchShiftSemitones int        `json:"pitchShiftSemitones"`
-	OffsetMs            int        `json:"offsetMs"`
-	ExpiresAt           *time.Time `json:"expiresAt,omitempty"`
+	NotesURL            *string `json:"notesUrl"`
+	PitchShiftSemitones int     `json:"pitchShiftSemitones"`
 }
 
 // KeyResult represents the final key of the render
@@ -216,14 +232,14 @@ type RenderResultRecord struct {
 	StemMode  StemMode           `json:"stemMode"`
 	Stems     []StemResultRecord `json:"stems"`
 	Guide     *GuideRecord       `json:"guide,omitempty"`
+	// LyricTimeline mirrors the response field; nil is JSON null.
+	LyricTimeline []LyricTimelineSection `json:"lyricTimeline"`
 }
 
-// GuideRecord is the stored form of the guide: object keys, not URLs.
+// GuideRecord is the stored form of the guide: an object key, not a URL.
 type GuideRecord struct {
-	FileKey             string  `json:"fileKey"`
 	NotesKey            *string `json:"notesKey,omitempty"`
 	PitchShiftSemitones int     `json:"pitchShiftSemitones"`
-	OffsetMs            int     `json:"offsetMs"`
 }
 
 // StemResultRecord is the stored form of a single stem.

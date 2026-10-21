@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -396,37 +397,115 @@ func TestRenderService_StemsGateAppliesInShadowMode(t *testing.T) {
 	}
 }
 
-func guideRenderRequest(mode model.StemMode) *model.RenderStartRequest {
+func vocalRenderRequest(mode model.StemMode) *model.RenderStartRequest {
 	r := creditRenderRequest(mode)
-	r.Guide = &model.GuideRequest{
-		VocalGender: model.VocalGenderFemale,
-		Sections:    []model.GuideSection{{ID: "s1", Type: "verse", Lines: []string{"a b"}}},
+	r.Vocal = &model.VocalRequest{
+		Voice:    model.VoiceFemale,
+		Sections: []model.GuideSection{{ID: "s1", Type: "verse", Lines: []string{"a b"}}},
 	}
 	return r
 }
 
-func TestStartRender_GuideNeedsPlus(t *testing.T) {
-	for _, enforced := range []bool{true, false} {
-		rdb := liveRedis(t)
-		fake := &credit.FakeSpender{IsEnforced: enforced, Bal: 500}
-		// A nil asynq client would panic if the enqueue were reached.
-		s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
-		_, err := s.StartRender(context.Background(), "kullanici-a", guideRenderRequest(model.StemModeMix))
-		if !errors.Is(err, ErrPlusRequired) {
-			t.Fatalf("enforced=%v: err = %v, want ErrPlusRequired", enforced, err)
+// storedPayload reads the render payload back from the queued asynq task.
+func storedPayload(t *testing.T, jobID string) model.RenderJobPayload {
+	t.Helper()
+	insp := asynq.NewInspector(asynq.RedisClientOpt{Addr: liveRedisAddr, DB: 13})
+	t.Cleanup(func() { _ = insp.Close() })
+	tasks, err := insp.ListPendingTasks("render")
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	for _, task := range tasks {
+		var env struct {
+			JobID   string                 `json:"jobId"`
+			Payload model.RenderJobPayload `json:"payload"`
 		}
-		if len(fake.Spends) != 0 || jobKeyCount(t, rdb) != 0 {
-			t.Errorf("enforced=%v: spends %+v / jobs %d, want none", enforced, fake.Spends, jobKeyCount(t, rdb))
+		if err := json.Unmarshal(task.Payload, &env); err != nil {
+			t.Fatalf("task json: %v", err)
 		}
+		if env.JobID == jobID {
+			return env.Payload
+		}
+	}
+	t.Fatalf("no queued task for job %s", jobID)
+	return model.RenderJobPayload{}
+}
+
+func TestStartRender_Vocal_FreeUser_NoAnalysis(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: true, Bal: 500}
+	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	resp, err := s.StartRender(context.Background(), "kullanici-a", vocalRenderRequest(model.StemModeMix))
+	if err != nil {
+		t.Fatalf("StartRender: %v", err)
+	}
+	p := storedPayload(t, resp.JobID)
+	if p.Vocal == nil || p.GuideAnalysis {
+		t.Errorf("payload vocal=%v analysis=%v, want vocal set and no analysis", p.Vocal, p.GuideAnalysis)
 	}
 }
 
-func TestStartRender_StemsAndGuideNeedPro(t *testing.T) {
+func TestStartRender_Vocal_PlusUser_Analysis(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: true, Bal: 500, Plus: true}
+	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	resp, err := s.StartRender(context.Background(), "kullanici-a", vocalRenderRequest(model.StemModeMix))
+	if err != nil {
+		t.Fatalf("StartRender: %v", err)
+	}
+	if p := storedPayload(t, resp.JobID); !p.GuideAnalysis {
+		t.Error("GuideAnalysis = false, want true for a Plus user")
+	}
+}
+
+func TestStartRender_PlanReadError_NoAnalysis(t *testing.T) {
+	rdb := liveRedis(t)
+	// Shadow mode: the spend error is tolerated, and so is the plan read.
+	fake := &credit.FakeSpender{Err: errors.New("db down"), Plus: true}
+	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	resp, err := s.StartRender(context.Background(), "kullanici-a", vocalRenderRequest(model.StemModeMix))
+	if err != nil {
+		t.Fatalf("StartRender: %v", err)
+	}
+	if p := storedPayload(t, resp.JobID); p.GuideAnalysis {
+		t.Error("GuideAnalysis = true, want false when the plan cannot be read")
+	}
+}
+
+func TestStartRender_Vocal_SingleDebit(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: true, Bal: 500, Plus: true}
+	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	resp, err := s.StartRender(context.Background(), "kullanici-a", vocalRenderRequest(model.StemModeMix))
+	if err != nil {
+		t.Fatalf("StartRender: %v", err)
+	}
+	if len(fake.Spends) != 1 || fake.Spends[0].Op != credit.OpRenderMix || fake.Spends[0].ID != resp.JobID {
+		t.Errorf("spends = %+v, want one render_mix for job %s", fake.Spends, resp.JobID)
+	}
+}
+
+func TestStartRender_InvalidLyrics_NoJobNoDebit(t *testing.T) {
+	rdb := liveRedis(t)
+	fake := &credit.FakeSpender{IsEnforced: true, Bal: 500}
+	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+	req := vocalRenderRequest(model.StemModeMix)
+	req.Vocal.Sections[0].Lines = []string{"  "}
+	_, err := s.StartRender(context.Background(), "kullanici-a", req)
+	if !errors.Is(err, model.ErrInvalidLyrics) {
+		t.Fatalf("err = %v, want ErrInvalidLyrics", err)
+	}
+	if len(fake.Spends) != 0 || jobKeyCount(t, rdb) != 0 {
+		t.Errorf("spends %+v / jobs %d, want none", fake.Spends, jobKeyCount(t, rdb))
+	}
+}
+
+func TestStartRender_StemsWithVocalNeedsPro(t *testing.T) {
 	rdb := liveRedis(t)
 	fake := &credit.FakeSpender{Plus: true, Bal: 500}
 	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
-	_, err := s.StartRender(context.Background(), "kullanici-a", guideRenderRequest(model.StemModeStems))
+	_, err := s.StartRender(context.Background(), "kullanici-a", vocalRenderRequest(model.StemModeStems))
 	if !errors.Is(err, ErrPlanRequired) {
-		t.Fatalf("err = %v, want ErrPlanRequired (Pro gate first)", err)
+		t.Fatalf("err = %v, want ErrPlanRequired", err)
 	}
 }

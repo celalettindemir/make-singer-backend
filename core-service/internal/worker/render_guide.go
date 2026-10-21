@@ -28,7 +28,7 @@ func (w *RenderWorker) WithGuideAudio(a client.GuideAudio) *RenderWorker {
 // error when the guided render is not configured. Checked BEFORE the paid
 // call.
 func (w *RenderWorker) guideGenerator(payload *model.RenderJobPayload) (client.GuideGenerator, error) {
-	if payload.Guide == nil {
+	if payload.Vocal == nil {
 		return nil, nil
 	}
 	g, ok := w.music.(client.GuideGenerator)
@@ -67,8 +67,8 @@ func (w *RenderWorker) makeGuide(ctx context.Context, g client.GuideGenerator, p
 		UploadURL:   track.AudioURL,
 		Style:       buildMusicStyle(payload),
 		Title:       fmt.Sprintf("%s guide", payload.Brief.Genre),
-		Lyrics:      client.SunoLyrics(payload.Guide.Sections),
-		VocalGender: string(payload.Guide.VocalGender),
+		Lyrics:      client.SunoLyrics(payload.Vocal.Sections),
+		VocalGender: payload.Vocal.Voice.SunoGender(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("add vocals: %w", err)
@@ -134,18 +134,18 @@ func (w *RenderWorker) finishGuide(ctx context.Context, payload *model.RenderJob
 	progress(92, "Analyzing guide...")
 	alignedKey, err := guideKey(payload, raw.id, ".mp3")
 	if err != nil {
-		return &model.GuideRecord{FileKey: raw.rawKey}, 0
+		return &model.GuideRecord{}, 0
 	}
 	notesKey, err := guideKey(payload, raw.id, "-notes.json")
 	if err != nil {
-		return &model.GuideRecord{FileKey: raw.rawKey}, 0
+		return &model.GuideRecord{}, 0
 	}
 	words := make([]client.GuideWord, 0, len(raw.words))
 	for _, aw := range raw.words {
 		words = append(words, client.GuideWord{Word: aw.Word, StartS: aw.StartS, EndS: aw.EndS, Success: aw.Success})
 	}
-	sections := make([]client.GuideSectionInput, 0, len(payload.Guide.Sections))
-	for _, s := range payload.Guide.Sections {
+	sections := make([]client.GuideSectionInput, 0, len(payload.Vocal.Sections))
+	for _, s := range payload.Vocal.Sections {
 		lines := s.Lines
 		if lines == nil {
 			lines = []string{}
@@ -162,18 +162,18 @@ func (w *RenderWorker) finishGuide(ctx context.Context, payload *model.RenderJob
 		InstrumentalKey: instrumentalKey,
 		Words:           words,
 		Sections:        sections,
-		VocalGender:     string(payload.Guide.VocalGender),
+		VocalGender:     payload.Vocal.Voice.SunoGender(),
 		BPM:             float64(bpm),
 		AlignedKey:      alignedKey,
 		NotesKey:        notesKey,
 	})
 	if err != nil {
 		log.Printf("Guide %s: analysis failed, keeping the raw guide: %v", raw.id, err)
-		return &model.GuideRecord{FileKey: raw.rawKey}, 0
+		return &model.GuideRecord{}, 0
 	}
-	rec := &model.GuideRecord{FileKey: alignedKey, NotesKey: &notesKey, OffsetMs: res.OffsetMs}
+	rec := &model.GuideRecord{NotesKey: &notesKey}
 
-	n := ShiftSemitones(payload.Brief, res.RangeMidi, payload.Guide.Range)
+	n := ShiftSemitones(payload.Brief, res.RangeMidi, payload.Vocal.Range)
 	if n == 0 {
 		return rec, 0
 	}
@@ -195,7 +195,6 @@ func (w *RenderWorker) finishGuide(ctx context.Context, payload *model.RenderJob
 	for i := range stems {
 		stems[i].FileKey = items[i].OutputKey
 	}
-	rec.FileKey = items[len(items)-1].OutputKey
 	rec.NotesKey = &notes.OutputKey
 	rec.PitchShiftSemitones = n
 	return rec, n

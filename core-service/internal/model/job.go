@@ -40,7 +40,10 @@ type RenderJobPayload struct {
 	Arrangement     Arrangement   `json:"arrangement"`
 	StemMode        StemMode      `json:"stemMode"`
 	FocusInstrument *Instrument   `json:"focusInstrument,omitempty"`
-	Guide           *GuideRequest `json:"guide,omitempty"`
+	Vocal           *VocalRequest `json:"vocal,omitempty"`
+	// GuideAnalysis: the note strip and key shift are made (Plus only),
+	// decided server-side at start.
+	GuideAnalysis bool `json:"guideAnalysis,omitempty"`
 }
 
 // MasterJobPayload contains the data for a master job

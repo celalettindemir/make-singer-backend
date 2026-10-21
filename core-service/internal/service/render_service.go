@@ -25,10 +25,6 @@ const (
 // ErrPlanRequired: the stems render is for an active Pro plan only (R-CRD-16).
 var ErrPlanRequired = errors.New("the stems render needs the Pro plan")
 
-// ErrPlusRequired: the guided render is for an active Plus or Pro plan only
-// (spec 9 §3.4).
-var ErrPlusRequired = errors.New("the guided render needs the Plus plan")
-
 // RenderService handles render job management
 type RenderService struct {
 	redis       *redis.Client
@@ -114,32 +110,24 @@ func (s *RenderService) BuildResult(ctx context.Context, record *model.RenderRes
 		return nil, err
 	}
 	return &model.RenderResultResponse{
-		ID:        record.ID,
-		BPM:       record.BPM,
-		Duration:  record.Duration,
-		Key:       record.Key,
-		CreatedAt: record.CreatedAt,
-		StemMode:  record.StemMode,
-		Stems:     stems,
-		Guide:     guide,
+		ID:            record.ID,
+		BPM:           record.BPM,
+		Duration:      record.Duration,
+		Key:           record.Key,
+		CreatedAt:     record.CreatedAt,
+		StemMode:      record.StemMode,
+		Stems:         stems,
+		Guide:         guide,
+		LyricTimeline: record.LyricTimeline,
 	}, nil
 }
 
-// buildGuide signs the guide's file and notes; nil stays nil.
+// buildGuide signs the note strip; nil stays nil.
 func (s *RenderService) buildGuide(ctx context.Context, rec *model.GuideRecord) (*model.GuideResult, error) {
 	if rec == nil {
 		return nil, nil
 	}
-	fileURL, expiresAt, err := client.ResolveURL(ctx, s.r2Client, s.r2Cfg, rec.FileKey)
-	if err != nil {
-		return nil, fmt.Errorf("could not generate the guide URL: %w", err)
-	}
-	out := &model.GuideResult{
-		FileURL:             fileURL,
-		PitchShiftSemitones: rec.PitchShiftSemitones,
-		OffsetMs:            rec.OffsetMs,
-		ExpiresAt:           model.ExpiresPtr(expiresAt),
-	}
+	out := &model.GuideResult{PitchShiftSemitones: rec.PitchShiftSemitones}
 	if rec.NotesKey != nil {
 		notesURL, _, err := client.ResolveURL(ctx, s.r2Client, s.r2Cfg, *rec.NotesKey)
 		if err != nil {
@@ -169,19 +157,21 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 			return nil, ErrPlanRequired
 		}
 	}
-	if req.Guide != nil {
-		if err := req.Guide.CheckLyrics(); err != nil {
+	// Lyrics that cannot be sung are refused before any job or debit.
+	if req.Vocal != nil {
+		if err := req.Vocal.CheckLyrics(); err != nil {
 			return nil, err
 		}
 	}
-	// The guide is a Plus product right, gated like stems (shadow mode too).
-	if req.Guide != nil && s.credits != nil {
+	// The note strip and key shift are a Plus right, decided here and never
+	// a reason to refuse the render. A plan read failure means no analysis.
+	guideAnalysis := false
+	if req.Vocal != nil && s.credits != nil {
 		plus, err := s.credits.HasPlan(ctx, userID, credit.TierPlus)
 		if err != nil {
-			return nil, fmt.Errorf("could not check the plan: %w", err)
-		}
-		if !plus {
-			return nil, ErrPlusRequired
+			log.Printf("Render %s: could not check the plan, no note analysis: %v", userID, err)
+		} else {
+			guideAnalysis = plus
 		}
 	}
 
@@ -206,7 +196,8 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 		Arrangement:     req.Arrangement,
 		StemMode:        stemMode,
 		FocusInstrument: focus,
-		Guide:           req.Guide,
+		Vocal:           req.Vocal,
+		GuideAnalysis:   guideAnalysis,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
