@@ -65,6 +65,7 @@ type RenderWorker struct {
 	pollInterval    time.Duration
 	deletionChecker deletionmark.Checker // nil: no check
 	credits         credit.Spender       // nil: no credit accounting
+	guideAudio      client.GuideAudio    // nil: guided renders fail before Suno
 	isLastAttempt   func(context.Context) bool
 
 	// afterStatusCheck is a test seam called after the attempt-start status
@@ -130,7 +131,7 @@ func (w *RenderWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	switch status {
 	case model.JobStatusCanceled:
 		log.Printf("Job %s was canceled before it started; skipping", jobID)
-		w.refund(ctx, op, jobID)
+		w.refundRender(ctx, op, jobID, &payload)
 		return nil
 	case model.JobStatusSucceeded, model.JobStatusFailed:
 		// A redelivered task of a finished job (e.g. a crash after
@@ -166,7 +167,7 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, op cre
 		// (succeeded/failed) already has its outcome.
 		if claimStatus == model.JobStatusCanceled {
 			log.Printf("Job %s was canceled before the Suno call; skipping", jobID)
-			w.refund(ctx, op, jobID)
+			w.refundRender(ctx, op, jobID, payload)
 		} else {
 			log.Printf("Job %s is already %s; skipping", jobID, claimStatus)
 		}
@@ -174,14 +175,14 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, op cre
 	}
 	if err != nil {
 		log.Printf("Job %s: render failed: %v", jobID, err)
-		w.failFinal(ctx, jobID, op, "Render failed", err)
+		w.failRender(ctx, jobID, op, payload, "Render failed", err)
 		return err
 	}
 
 	if err := w.renderService.CompleteJob(ctx, jobID, result); err != nil {
 		// The Suno fee was paid; a retry would rerun the job and charge again.
 		err = fmt.Errorf("could not save the result: %w: %w", err, asynq.SkipRetry)
-		w.failFinal(ctx, jobID, op, "Failed to save result", err)
+		w.failRender(ctx, jobID, op, payload, "Failed to save result", err)
 		return err
 	}
 
@@ -191,7 +192,7 @@ func (w *RenderWorker) processWithSuno(ctx context.Context, jobID string, op cre
 		log.Printf("Job %s: could not generate the stem URL: %v", jobID, err)
 		// Same reason: the paid generation finished and a retry would charge again.
 		err = fmt.Errorf("could not generate the stem URL: %w: %w", err, asynq.SkipRetry)
-		w.failFinal(ctx, jobID, op, "Could not generate the stem URL", err)
+		w.failRender(ctx, jobID, op, payload, "Could not generate the stem URL", err)
 		return err
 	}
 	w.hub.BroadcastComplete(jobID, resp)
@@ -221,6 +222,12 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 	mode, focusName, err := stemPlan(payload)
 	if err != nil {
 		return nil, fmt.Errorf("invalid stem setting, Suno was not called: %w: %w", err, asynq.SkipRetry)
+	}
+
+	// BEFORE the paid call: a guided job needs the guide calls and audio-service.
+	guideGen, err := w.guideGenerator(payload)
+	if err != nil {
+		return nil, fmt.Errorf("guide unavailable, Suno was not called: %w: %w", err, asynq.SkipRetry)
 	}
 
 	// BEFORE the paid call: Suno is not charged for a deleted account.
@@ -279,6 +286,13 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 		duration = estimateDuration(payload)
 	}
 
+	var guide *rawGuide
+	if guideGen != nil {
+		if guide, err = w.makeGuide(ctx, guideGen, payload, track, progress); err != nil {
+			return nil, charged("guide failed", err)
+		}
+	}
+
 	var stems []client.Stem
 	switch mode {
 	case model.StemModeMix:
@@ -326,8 +340,14 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 		return nil, charged("stem upload failed", err)
 	}
 
+	result = w.generateResult(payload, mode, duration, records)
+	if guide != nil {
+		var shift int
+		result.Guide, shift = w.finishGuide(ctx, payload, guide, result.Stems, result.BPM, progress)
+		result.Key.Tonic = TransposeKey(result.Key.Tonic, shift)
+	}
 	progress(95, "Finalizing...")
-	return w.generateResult(payload, mode, duration, records), nil
+	return result, nil
 }
 
 // stemPlan resolves the payload's stem mode. An empty or unknown mode is
@@ -530,10 +550,11 @@ func (w *RenderWorker) failJob(ctx context.Context, jobID, errMsg string) {
 // intermediate failure leaves the job as it is, so a later retry that
 // succeeds is not a free render and a visible "failed" always comes with its
 // refund (6-G16).
-func (w *RenderWorker) failFinal(ctx context.Context, jobID string, op credit.Operation, errMsg string, err error) {
+// It reports whether this was the final failure.
+func (w *RenderWorker) failFinal(ctx context.Context, jobID string, op credit.Operation, errMsg string, err error) bool {
 	if !errors.Is(err, asynq.SkipRetry) && !w.lastAttempt(ctx) {
 		log.Printf("Job %s: attempt failed, will retry: %v", jobID, err)
-		return
+		return false
 	}
 	// Detached: the final failure must be written even when ctx is the
 	// reason for it (shutdown, deadline).
@@ -541,6 +562,22 @@ func (w *RenderWorker) failFinal(ctx context.Context, jobID string, op credit.Op
 	defer cancel()
 	w.failJob(fctx, jobID, errMsg)
 	w.refund(ctx, op, jobID)
+	return true
+}
+
+// failRender is failFinal plus the guide refund of a guided job.
+func (w *RenderWorker) failRender(ctx context.Context, jobID string, op credit.Operation, payload *model.RenderJobPayload, errMsg string, err error) {
+	if w.failFinal(ctx, jobID, op, errMsg, err) && payload.Guide != nil {
+		w.refund(ctx, credit.OpRenderGuide, service.GuideRef(jobID))
+	}
+}
+
+// refundRender refunds the render debit and, for a guided job, the guide's.
+func (w *RenderWorker) refundRender(ctx context.Context, op credit.Operation, jobID string, payload *model.RenderJobPayload) {
+	w.refund(ctx, op, jobID)
+	if payload.Guide != nil {
+		w.refund(ctx, credit.OpRenderGuide, service.GuideRef(jobID))
+	}
 }
 
 func (w *RenderWorker) lastAttempt(ctx context.Context) bool {

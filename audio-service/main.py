@@ -190,6 +190,9 @@ class PitchShiftRequest(BaseModel):
 
     items: list[PitchShiftItem] = Field(min_length=1, max_length=16)
     semitones: int = Field(ge=-4, le=4)
+    # The guide note strip, moved by the same semitones when given.
+    notes_key: str | None = None
+    notes_output_key: str | None = None
 
     @model_validator(mode="after")
     def _not_zero(self):
@@ -200,6 +203,7 @@ class PitchShiftRequest(BaseModel):
 
 class PitchShiftResponse(BaseModel):
     outputs: list[str]
+    notes_url: str | None = None
 
 
 class TempoRequest(BaseModel):
@@ -398,7 +402,12 @@ async def pitch_shift(request: PitchShiftRequest):
         outputs = await pitch_service.shift(
             [i.model_dump() for i in request.items], request.semitones
         )
-        return PitchShiftResponse(outputs=outputs)
+        notes_url = None
+        if request.notes_key and request.notes_output_key:
+            notes_url = await pitch_service.shift_notes(
+                request.notes_key, request.notes_output_key, request.semitones
+            )
+        return PitchShiftResponse(outputs=outputs, notes_url=notes_url)
     # Broad catch on purpose, like the other endpoints: every error is a 500.
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(e))

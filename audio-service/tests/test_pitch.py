@@ -74,3 +74,58 @@ def test_ffmpeg_failure_is_500(monkeypatch):
         json={"items": [{"input_key": "a.mp3", "output_key": "b.mp3"}], "semitones": 2},
     )
     assert resp.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_notes_are_shifted():
+    import json
+
+    doc = {
+        "version": 1,
+        "offsetMs": 40,
+        "pitchShiftSemitones": 0,
+        "rangeMidi": [60, 67],
+        "lines": [
+            {
+                "sectionId": "v",
+                "startMs": 0,
+                "endMs": 500,
+                "syllables": [
+                    {
+                        "text": "la",
+                        "notes": [{"startMs": 0, "endMs": 500, "midi": 64}],
+                        "cues": [],
+                    }
+                ],
+            }
+        ],
+    }
+
+    class NotesStorage(FakeStorage):
+        def download_key_to_file(self, key, path):
+            self.downloaded.append(key)
+            with open(path, "w") as f:
+                json.dump(doc, f)
+
+        def upload_file(self, key, path, content_type):
+            with open(path) as f:
+                self.written = json.load(f)
+            return super().upload_file(key, path, content_type)
+
+    storage = NotesStorage()
+    url = await PitchService(storage).shift_notes(
+        "g-notes.json", "g-notes-km4.json", -4
+    )
+    assert url == "https://r2.test/g-notes-km4.json"
+    assert storage.uploaded == [("g-notes-km4.json", "application/json")]
+    assert storage.written["pitchShiftSemitones"] == -4
+    assert storage.written["rangeMidi"] == [56, 63]
+    assert storage.written["lines"][0]["syllables"][0]["notes"][0]["midi"] == 60
+
+
+def test_request_accepts_notes():
+    item = [{"input_key": "a", "output_key": "b"}]
+    req = PitchShiftRequest(
+        items=item, semitones=2, notes_key="n.json", notes_output_key="n-k2.json"
+    )
+    assert req.notes_key == "n.json"
