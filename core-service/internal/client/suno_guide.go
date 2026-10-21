@@ -19,7 +19,18 @@ type GuideGenerator interface {
 	TimestampedLyrics(ctx context.Context, taskID, audioID string) ([]AlignedWord, error)
 }
 
+// VocalSeparator is what the vocal render needs from Suno on top of
+// MusicGenerator: a vocal take separated from a track or an uploaded
+// recording, and the word timings of a sung track.
+type VocalSeparator interface {
+	SeparateVocal(ctx context.Context, taskID, audioID string) (string, error)
+	SeparateVocalURL(ctx context.Context, audioURL string) (string, error)
+	WaitSeparated(ctx context.Context, separationTaskID string, interval, maxWait time.Duration) (*SeparatedVocal, error)
+	TimestampedLyrics(ctx context.Context, taskID, audioID string) ([]AlignedWord, error)
+}
+
 var _ GuideGenerator = (*SunoClient)(nil)
+var _ VocalSeparator = (*SunoClient)(nil)
 
 // guideNegativeTags keeps the guide sung: add-vocals rejects an empty value.
 const guideNegativeTags = "rap, spoken word"
@@ -78,6 +89,26 @@ func (c *SunoClient) SeparateVocal(ctx context.Context, taskID, audioID string) 
 	body := map[string]any{
 		"taskId":      taskID,
 		"audioId":     audioID,
+		"type":        "separate_vocal",
+		"callBackUrl": c.callbackURL,
+	}
+	var data struct {
+		TaskID string `json:"taskId"`
+	}
+	if err := c.post(ctx, "/api/v1/vocal-removal/generate", body, &data); err != nil {
+		return "", err
+	}
+	if data.TaskID == "" {
+		return "", fmt.Errorf("suno: no taskId in vocal separation response")
+	}
+	return data.TaskID, nil
+}
+
+// SeparateVocalURL splits an arbitrary audio URL into vocal and instrumental
+// (separate_vocal, no taskId/audioId). Poll with WaitSeparated.
+func (c *SunoClient) SeparateVocalURL(ctx context.Context, audioURL string) (string, error) {
+	body := map[string]any{
+		"audioUrl":    audioURL,
 		"type":        "separate_vocal",
 		"callBackUrl": c.callbackURL,
 	}

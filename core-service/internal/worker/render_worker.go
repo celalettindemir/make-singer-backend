@@ -325,7 +325,7 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 			return nil, charged("stem splitting failed", err)
 		}
 		progress(75, "Waiting for stem separation...")
-		stems, err = w.music.WaitStems(ctx, stemTaskID, w.pollInterval, 5*time.Minute)
+		stems, _, err = w.music.WaitStems(ctx, stemTaskID, w.pollInterval, 5*time.Minute)
 		if err != nil {
 			return nil, charged("stem splitting failed", err)
 		}

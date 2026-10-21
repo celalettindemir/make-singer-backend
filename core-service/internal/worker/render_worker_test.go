@@ -48,8 +48,8 @@ func (s *fakeSuno) SplitStems(_ context.Context, taskID, audioID string) (string
 	s.splitArgs = [2]string{taskID, audioID}
 	return "s1", s.splitErr
 }
-func (s *fakeSuno) WaitStems(context.Context, string, time.Duration, time.Duration) ([]client.Stem, error) {
-	return s.stems, s.stemWaitErr
+func (s *fakeSuno) WaitStems(context.Context, string, time.Duration, time.Duration) ([]client.Stem, string, error) {
+	return s.stems, "", s.stemWaitErr
 }
 func (s *fakeSuno) IsolateStem(_ context.Context, taskID, audioID, stemName string) (string, error) {
 	s.isolateCalls++

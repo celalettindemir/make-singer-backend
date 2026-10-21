@@ -182,7 +182,7 @@ func TestWaitStems_MapsInstrumentsSkipsVocals(t *testing.T) {
 		}})
 	})
 
-	stems, err := c.WaitStems(context.Background(), "s1", time.Millisecond, time.Second)
+	stems, _, err := c.WaitStems(context.Background(), "s1", time.Millisecond, time.Second)
 	if err != nil {
 		t.Fatalf("WaitStems: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestWaitStems_FailureFlag(t *testing.T) {
 	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
 		writeEnvelope(w, 200, map[string]any{"successFlag": "GENERATE_AUDIO_FAILED", "errorMessage": "bolunemedi"})
 	})
-	_, err := c.WaitStems(context.Background(), "s1", time.Millisecond, time.Second)
+	_, _, err := c.WaitStems(context.Background(), "s1", time.Millisecond, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "bolunemedi") {
 		t.Fatalf("expected an error, got: %v", err)
 	}
@@ -430,5 +430,118 @@ func TestTimestampedLyrics_ProviderContract(t *testing.T) {
 	want := []AlignedWord{{Word: "[Verse]\nSabah ", StartS: 27.7, EndS: 28.4, Success: true}, {Word: "oldu ", StartS: 28.5, EndS: 29.3}}
 	if len(words) != 2 || words[0] != want[0] || words[1] != want[1] {
 		t.Errorf("words = %+v, want %+v", words, want)
+	}
+}
+
+func TestGenerateMusic_VocalBody(t *testing.T) {
+	var body map[string]any
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeEnvelope(w, 200, map[string]any{"taskId": "t1"})
+	})
+	_, err := c.GenerateMusic(context.Background(), &GenerateMusicRequest{
+		Style: "pop", Title: "Sarki", Lyrics: "la la la", VocalGender: "f",
+	})
+	if err != nil {
+		t.Fatalf("GenerateMusic: %v", err)
+	}
+	want := map[string]any{"instrumental": false, "lyrics": "la la la", "vocalGender": "f", "style": "pop", "title": "Sarki"}
+	for k, v := range want {
+		if body[k] != v {
+			t.Errorf("body[%q] = %v, want %v", k, body[k], v)
+		}
+	}
+}
+
+func TestGenerateMusic_VocalBody_NoGenderWhenEmpty(t *testing.T) {
+	var body map[string]any
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeEnvelope(w, 200, map[string]any{"taskId": "t1"})
+	})
+	if _, err := c.GenerateMusic(context.Background(), &GenerateMusicRequest{Style: "pop", Title: "S", Lyrics: "la"}); err != nil {
+		t.Fatalf("GenerateMusic: %v", err)
+	}
+	if _, ok := body["vocalGender"]; ok {
+		t.Errorf("vocalGender must be absent when empty: %v", body)
+	}
+}
+
+func TestGenerateMusic_InstrumentalBody_NoLyrics(t *testing.T) {
+	var body map[string]any
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeEnvelope(w, 200, map[string]any{"taskId": "t1"})
+	})
+	_, err := c.GenerateMusic(context.Background(), &GenerateMusicRequest{
+		Style: "pop", Title: "S", Instrumental: true, Lyrics: "ignored", VocalGender: "m",
+	})
+	if err != nil {
+		t.Fatalf("GenerateMusic: %v", err)
+	}
+	if body["instrumental"] != true {
+		t.Errorf("instrumental = %v", body["instrumental"])
+	}
+	for _, k := range []string{"lyrics", "vocalGender"} {
+		if _, ok := body[k]; ok {
+			t.Errorf("body must not contain %q: %v", k, body)
+		}
+	}
+}
+
+func TestSeparateVocalURL_Body(t *testing.T) {
+	var body map[string]any
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/vocal-removal/generate" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeEnvelope(w, 200, map[string]any{"taskId": "sv2"})
+	})
+	id, err := c.SeparateVocalURL(context.Background(), "https://cdn.test/kayit.m4a")
+	if err != nil || id != "sv2" {
+		t.Fatalf("SeparateVocalURL = %q, %v", id, err)
+	}
+	want := map[string]any{"audioUrl": "https://cdn.test/kayit.m4a", "type": "separate_vocal", "callBackUrl": "https://ornek.test/geri"}
+	for k, v := range want {
+		if body[k] != v {
+			t.Errorf("body[%q] = %v, want %v", k, body[k], v)
+		}
+	}
+	for _, k := range []string{"taskId", "audioId"} {
+		if _, ok := body[k]; ok {
+			t.Errorf("body must not contain %q", k)
+		}
+	}
+}
+
+func TestWaitStems_ReturnsVocalURL(t *testing.T) {
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		writeEnvelope(w, 200, map[string]any{"successFlag": "SUCCESS", "response": map[string]any{
+			"vocalUrl": "https://cdn.test/vokal.mp3",
+			"drumsUrl": "https://cdn.test/davul.mp3",
+		}})
+	})
+	stems, vocal, err := c.WaitStems(context.Background(), "s1", time.Millisecond, time.Second)
+	if err != nil {
+		t.Fatalf("WaitStems: %v", err)
+	}
+	if vocal != "https://cdn.test/vokal.mp3" {
+		t.Errorf("vocal = %q", vocal)
+	}
+	if len(stems) != 1 || stems[0].Instrument != model.InstrumentDrums {
+		t.Errorf("stems = %+v, want only drums", stems)
+	}
+}
+
+func TestWaitStems_NoVocal_EmptyString(t *testing.T) {
+	c := testSuno(t, func(w http.ResponseWriter, r *http.Request) {
+		writeEnvelope(w, 200, map[string]any{"successFlag": "SUCCESS", "response": map[string]any{
+			"vocalUrl": nil, "drumsUrl": "https://cdn.test/davul.mp3",
+		}})
+	})
+	_, vocal, err := c.WaitStems(context.Background(), "s1", time.Millisecond, time.Second)
+	if err != nil || vocal != "" {
+		t.Fatalf("vocal = %q, err = %v", vocal, err)
 	}
 }

@@ -20,7 +20,7 @@ type MusicGenerator interface {
 	GenerateMusic(ctx context.Context, req *GenerateMusicRequest) (string, error)
 	WaitMusic(ctx context.Context, taskID string, interval, maxWait time.Duration) (*Track, error)
 	SplitStems(ctx context.Context, taskID, audioID string) (string, error)
-	WaitStems(ctx context.Context, stemTaskID string, interval, maxWait time.Duration) ([]Stem, error)
+	WaitStems(ctx context.Context, stemTaskID string, interval, maxWait time.Duration) ([]Stem, string, error)
 	IsolateStem(ctx context.Context, taskID, audioID, stemName string) (string, error)
 	WaitIsolated(ctx context.Context, stemTaskID string, interval, maxWait time.Duration) (*IsolatedStem, error)
 	IsConfigured() bool
@@ -42,6 +42,8 @@ type GenerateMusicRequest struct {
 	Style        string
 	Title        string
 	Instrumental bool
+	Lyrics       string // only sent when !Instrumental
+	VocalGender  string // "f" | "m"; only sent when !Instrumental and non-empty
 }
 
 // Track is the first track of a completed generation. ID is the audioId when
@@ -92,9 +94,8 @@ func SunoStemName(i model.Instrument) (string, bool) {
 }
 
 // stemFields maps the camelCase fields of the split_stem response to
-// Instrument. The order is the result order. There is no vocalUrl or
-// backingVocalsUrl: generation is instrumental and the mobile enum does not
-// know vocals. woodwindsUrl is skipped for the same reason: the mobile
+// Instrument. The order is the result order. vocalUrl is not an instrument:
+// WaitStems returns it separately. backingVocalsUrl is skipped. woodwindsUrl is skipped for the same reason: the mobile
 // instrument enum does not know woodwinds.
 var stemFields = []struct {
 	field      string
@@ -150,6 +151,12 @@ func (c *SunoClient) GenerateMusic(ctx context.Context, req *GenerateMusicReques
 		"callBackUrl":  c.callbackURL,
 		"style":        req.Style,
 		"title":        req.Title,
+	}
+	if !req.Instrumental {
+		body["lyrics"] = req.Lyrics
+		if req.VocalGender != "" {
+			body["vocalGender"] = req.VocalGender
+		}
 	}
 	var data struct {
 		TaskID string `json:"taskId"`
@@ -222,9 +229,10 @@ func (c *SunoClient) SplitStems(ctx context.Context, taskID, audioID string) (st
 }
 
 // WaitStems polls until the stem split is SUCCESS and returns the instrument
-// channels. Empty fields are skipped.
-func (c *SunoClient) WaitStems(ctx context.Context, stemTaskID string, interval, maxWait time.Duration) ([]Stem, error) {
+// channels and Suno's vocal channel URL ("" if absent). Empty fields are skipped.
+func (c *SunoClient) WaitStems(ctx context.Context, stemTaskID string, interval, maxWait time.Duration) ([]Stem, string, error) {
 	var result []Stem
+	var vocalURL string
 	err := c.waitFor(ctx, interval, maxWait, "stem", func() (bool, error) {
 		var data struct {
 			SuccessFlag  string                     `json:"successFlag"`
@@ -240,6 +248,9 @@ func (c *SunoClient) WaitStems(ctx context.Context, stemTaskID string, interval,
 		if data.SuccessFlag != "SUCCESS" {
 			return false, nil
 		}
+		if raw, ok := data.Response["vocalUrl"]; ok {
+			_ = json.Unmarshal(raw, &vocalURL)
+		}
 		for _, f := range stemFields {
 			var stemURL string
 			if raw, ok := data.Response[f.field]; ok {
@@ -251,7 +262,7 @@ func (c *SunoClient) WaitStems(ctx context.Context, stemTaskID string, interval,
 		}
 		return true, nil
 	})
-	return result, err
+	return result, vocalURL, err
 }
 
 // transientError is the error class waitFor tolerates (network, 5xx, malformed
