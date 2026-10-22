@@ -20,7 +20,11 @@ const (
 	targetMark       = "<- WRITE THIS SECTION"
 	emptyMark        = "(not written yet)"
 	repeatChorusRule = "This song already has a written chorus. Repeat it for this chorus, word for word or nearly so, so the hook comes back."
-	turkishGuidance  = `Write natural, spoken Turkish as a Turkish songwriter would. Avoid phrases that sound translated from English, avoid forced inverted word order, and never invent words or break vowel harmony to make a rhyme.`
+	turkishGuidance  = `Write natural, spoken Turkish in the tradition of Turkish pop and folk lyricists (Sezen Aksu, Teoman, Barış Manço, the aşık poets).
+Meter is hece ölçüsü: count syllables by vowels and keep every line of a section on the same count (7 or 8 for most songs, 11 for slow ballads).
+Rhyme the Turkish way, with kafiye and redif: a sound, suffix or word that comes back at line ends (-ken, -sın, -dı, "gibi") so the lines echo each other.
+Avoid phrases that sound translated from English, avoid forced inverted word order, and never invent words or break vowel harmony to make a rhyme.
+Avoid worn phrases such as "kalbim yanıyor", "gözyaşlarım sel oldu", "sonsuza dek", "yalnızlık içinde"; give a fresh, concrete image instead.`
 )
 
 var languageGuidance = map[model.Language]string{
@@ -51,10 +55,18 @@ func buildStreamSystemPrompt(language model.Language) string {
 }
 
 func systemPrompt(language model.Language, outputRule string) string {
-	return fmt.Sprintf(`You are a professional %s songwriter with expertise in various music genres.
-Your task is to write compelling, emotionally resonant lyrics that match the requested style and mood.
+	return fmt.Sprintf(`You are a %s lyricist who writes words to be sung, not read: a poet who is also a musician. Every line has to sit on the beat and feel good in the mouth.
+Craft rules:
+- Meter: pick one syllable count for the section and keep every line on it (at most one syllable off).
+- Rhyme: give the section a clear end-rhyme pattern (AABB, ABAB or AAxA) and keep it.
+- Show, don't tell: build one concrete scene (a place, an object, a time of day, a gesture) and let the feeling come out of it. Never name the mood or the emotion outright.
+- Flow: each line leads into the next, so the section is one continuous thought, not a list of separate statements.
+- Voice: one person talks to one "you" in everyday speech, and one story runs through the whole song.
+- Sound: repeat vowels and consonants inside lines, and end lines on syllables a singer can hold.
+- Chorus: build it on a short hook phrase (2-4 words) that could be the song's title; open or close the chorus with it and repeat it.
+- If a line could be in any song, replace it.
+Before answering, draft the section, sing it in your head against the meter, and fix every line that stumbles or breaks the rhyme. Give only the final version.
 %s
-Lines must flow when sung: keep the syllable count of neighbouring lines close, let rhymes come naturally, and keep one voice and one story across the whole song.
 %s`, langName(language), languageGuidance[language], outputRule)
 }
 
@@ -81,11 +93,11 @@ func buildStreamGeneratePrompt(req *model.LyricsGenerateRequest, language model.
 // share; ask is the sentence that sets the number of drafts and lines.
 func writeGenerateBody(b *strings.Builder, req *model.LyricsGenerateRequest, language model.Language, ask string) {
 	fmt.Fprintf(b, "Generate lyrics for a %s song's %s section.\n", req.Genre, req.SectionType)
-	fmt.Fprintf(b, "Vibes/mood: %s\n", strings.Join(req.Vibes, ", "))
+	fmt.Fprintf(b, "Vibes/mood (for you; turn them into images, do not write these words in the lyric): %s\n", strings.Join(req.Vibes, ", "))
 	fmt.Fprintf(b, "Write ALL lyrics in %s, even if the vibes are given in another language.\n", langName(language))
 	writeContext(b, req.LyricsContext, false)
 	b.WriteString("\n" + ask + `
-For a verse: move the story forward or set the scene.
+For a verse: set the scene with concrete details and move the story forward.
 For a chorus: create a memorable, singable hook that sums up the song.
 For a bridge: provide contrast or a new perspective.
 For other sections: follow conventions of that section type.
@@ -123,7 +135,7 @@ func writeRewriteBody(b *strings.Builder, req *model.LyricsRewriteRequest, langu
 Current lyrics:
 %s
 
-Keep the general meaning but improve the flow, rhyming, and emotional impact.
+Keep the meaning but rework it with the craft rules: one meter, a clear rhyme pattern, concrete images and lines that lead into each other.
 Maintain the same number of lines.
 Write ALL lyrics in %s, translating them if the current lyrics are in another language.`, req.CurrentLyrics, langName(language))
 }
