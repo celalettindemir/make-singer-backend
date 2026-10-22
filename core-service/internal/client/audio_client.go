@@ -45,6 +45,8 @@ type VocalTakeInput struct {
 	// StartMs/EndMs place the take on the song timeline; nil is omitted.
 	StartMs *int `json:"start_ms,omitempty"`
 	EndMs   *int `json:"end_ms,omitempty"`
+	// GainDb is applied to the take before it is summed; nil is omitted (0 dB).
+	GainDb *float64 `json:"gain_db,omitempty"`
 }
 
 // MasterRequest represents the request for mastering

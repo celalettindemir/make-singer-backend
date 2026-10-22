@@ -203,6 +203,10 @@ class MasterService:
                 volume_db = 20 * np.log10(max(volume, 0.001))
                 vocal = vocal + volume_db
 
+            gain_db = take.get("gain_db")
+            if gain_db:
+                vocal = vocal + gain_db
+
             takes.append(self._place_take(vocal, take))
 
         return self._sum(takes)

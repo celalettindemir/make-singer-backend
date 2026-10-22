@@ -60,6 +60,8 @@ class VocalTakeInput(BaseModel):
     # Place on the song timeline; missing start_ms means 0 (old behaviour).
     start_ms: int | None = Field(default=None, ge=0)
     end_ms: int | None = Field(default=None, ge=0)
+    # Level of the take in dB; missing means 0 dB. Same bounds as the mixer.
+    gain_db: float | None = Field(default=None, ge=-60, le=12)
 
     @model_validator(mode="after")
     def _end_after_start(self):

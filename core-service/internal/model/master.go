@@ -56,6 +56,9 @@ type VocalTake struct {
 	// already applied to the file and plays no part in placement.
 	StartMs *int `json:"startMs" validate:"omitempty,min=0"`
 	EndMs   *int `json:"endMs" validate:"omitempty,min=0"`
+	// GainDb is the take's level in dB, same bounds as MixChannel.VolumeDb.
+	// Optional: a missing value means 0 dB (old clients).
+	GainDb *float64 `json:"gainDb" validate:"omitempty,min=-60,max=12"`
 }
 
 // TimelineErrors reports takes whose endMs is not after their startMs, keyed

@@ -297,6 +297,7 @@ func (w *MasterWorker) buildVocalTakes(payload *model.MasterJobPayload) ([]clien
 			Volume:  1.0, // Default volume, could be configurable
 			StartMs: take.StartMs,
 			EndMs:   take.EndMs,
+			GainDb:  take.GainDb,
 		})
 	}
 

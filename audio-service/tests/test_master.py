@@ -182,3 +182,49 @@ def test_pydantic_end_start_dogrulamasi():
         VocalTakeInput(key="k", start_ms=100, end_ms=100)
     with pytest.raises(ValidationError):
         VocalTakeInput(key="k", start_ms=-1)
+
+
+class _SahteDepo:
+    """download_key_to_file yerine hazir bir sesi diske yazar."""
+
+    def __init__(self, ses):
+        self.ses = ses
+
+    def download_key_to_file(self, key, yol):
+        self.ses.export(yol, format="wav")
+
+
+def _tepe(ses):
+    return np.max(np.abs(ornekler(ses)))
+
+
+def test_take_gain_applied(tmp_path):
+    import asyncio
+
+    import pytest
+
+    vokal = sinus(440, saniye=1.0, genlik=0.5)
+    servis = MasterService()
+    servis.storage = _SahteDepo(vokal)
+
+    sifir = asyncio.run(servis._load_vocals(str(tmp_path), [{"key": "k"}]))
+    kisik = asyncio.run(
+        servis._load_vocals(str(tmp_path), [{"key": "k", "gain_db": -6.0}])
+    )
+
+    fark_db = 20 * np.log10(_tepe(kisik) / _tepe(sifir))
+    assert fark_db == pytest.approx(-6.0, abs=0.5)
+
+
+def test_pydantic_gain_db_sinirlari():
+    import pytest
+    from pydantic import ValidationError
+
+    from main import VocalTakeInput
+
+    assert VocalTakeInput(key="k").gain_db is None
+    assert VocalTakeInput(key="k", gain_db=-6).gain_db == -6
+    with pytest.raises(ValidationError):
+        VocalTakeInput(key="k", gain_db=13)
+    with pytest.raises(ValidationError):
+        VocalTakeInput(key="k", gain_db=-61)
