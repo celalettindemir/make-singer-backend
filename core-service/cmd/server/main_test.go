@@ -25,6 +25,7 @@ import (
 	"github.com/makeasinger/api/internal/lyricsprovider"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/social"
+	"github.com/makeasinger/api/internal/worker"
 )
 
 func TestCustomErrorHandler(t *testing.T) {
@@ -269,6 +270,57 @@ func TestRoutes_AdminHandlerBindsTheContractPaths(t *testing.T) {
 	} {
 		if !have[want] {
 			t.Errorf("route %q is not bound", want)
+		}
+	}
+}
+
+func TestScheduleEntries_IncludesJobsSweep(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Jobs.SweepInterval = time.Hour
+	cfg.Jobs.StaleSweepInterval = 5 * time.Minute
+	want := map[string]time.Duration{worker.TaskTypeJobsSweep: time.Hour, worker.TaskTypeLyricsStale: 5 * time.Minute}
+	got := 0
+	for _, e := range scheduleEntries(cfg) {
+		iv, ok := want[e.task.Type()]
+		if !ok {
+			continue
+		}
+		got++
+		if e.spec != "@every "+iv.String() {
+			t.Errorf("%s spec = %q", e.task.Type(), e.spec)
+		}
+		var queue string
+		var unique time.Duration
+		for _, o := range e.opts {
+			switch o.Type() {
+			case asynq.QueueOpt:
+				queue = o.Value().(string)
+			case asynq.UniqueOpt:
+				unique = o.Value().(time.Duration)
+			}
+		}
+		if queue != "bakim" || unique != iv-iv/10 {
+			t.Errorf("%s queue %q unique %v", e.task.Type(), queue, unique)
+		}
+	}
+	if got != 2 {
+		t.Fatalf("scheduled %d of 2 job sweeps", got)
+	}
+	cfg.Jobs = config.JobsConfig{}
+	if n := len(scheduleEntries(cfg)); n != 0 {
+		t.Fatalf("entries = %d with both disabled", n)
+	}
+}
+
+func TestAsynqQueues_Weights(t *testing.T) {
+	want := map[string]int{"render": 6, "master": 4, "kredi": 3, "sosyal": 2, "bakim": 1, "soz": 8, "bildirim": 5}
+	got := asynqQueues()
+	if len(got) != len(want) {
+		t.Fatalf("queues = %v", got)
+	}
+	for q, w := range want {
+		if got[q] != w {
+			t.Errorf("queue %s = %d, want %d", q, got[q], w)
 		}
 	}
 }

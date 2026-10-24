@@ -554,6 +554,93 @@ definitions:
           type: array
         type: array
     type: object
+  model.LyricsJobRequest:
+    properties:
+      bpm:
+        maximum: 220
+        minimum: 40
+        type: integer
+      genre:
+        allOf:
+        - $ref: '#/definitions/model.Genre'
+        enum:
+        - pop
+        - rock
+        - hiphop
+        - rnb
+        - electronic
+        - jazz
+        - country
+        - folk
+        - classical
+        - latin
+        - reggae
+        - blues
+      language:
+        allOf:
+        - $ref: '#/definitions/model.Language'
+        enum:
+        - en
+        - tr
+        - fr
+      mode:
+        enum:
+        - generate
+        - rewrite
+        type: string
+      projectId:
+        maxLength: 64
+        type: string
+      projectName:
+        maxLength: 120
+        type: string
+      sections:
+        items:
+          $ref: '#/definitions/model.LyricsJobSection'
+        maxItems: 12
+        minItems: 1
+        type: array
+      song:
+        items:
+          $ref: '#/definitions/model.LyricsSongSection'
+        maxItems: 32
+        minItems: 1
+        type: array
+      topic:
+        maxLength: 500
+        type: string
+      vibes:
+        items:
+          type: string
+        maxItems: 3
+        minItems: 1
+        type: array
+    required:
+    - genre
+    - mode
+    - projectId
+    - sections
+    - song
+    - vibes
+    type: object
+  model.LyricsJobSection:
+    properties:
+      index:
+        minimum: 0
+        type: integer
+      instructions:
+        maxLength: 500
+        type: string
+    type: object
+  model.LyricsJobStartResponse:
+    properties:
+      balance:
+        type: integer
+      jobId:
+        type: string
+      status:
+        $ref: '#/definitions/model.JobStatus'
+    type: object
   model.LyricsRewriteRequest:
     properties:
       bpm:
@@ -666,6 +753,10 @@ definitions:
         - warm
         - loud
       projectId:
+        type: string
+      projectName:
+        description: ProjectName is shown in notifications; optional.
+        maxLength: 120
         type: string
       stemUrls:
         items:
@@ -876,6 +967,10 @@ definitions:
         - lead
         - fx
       projectId:
+        type: string
+      projectName:
+        description: ProjectName is shown in notifications; optional.
+        maxLength: 120
         type: string
       stemMode:
         allOf:
@@ -1113,6 +1208,13 @@ definitions:
         type: integer
       fileUrl:
         type: string
+      gainDb:
+        description: |-
+          GainDb is the take's level in dB, same bounds as MixChannel.VolumeDb.
+          Optional: a missing value means 0 dB (old clients).
+        maximum: 12
+        minimum: -60
+        type: number
       offsetMs:
         type: integer
       sectionId:
@@ -1456,6 +1558,51 @@ paths:
       security:
       - BearerAuth: []
       summary: Generate lyrics as a stream
+      tags:
+      - Lyrics
+  /api/lyrics/jobs:
+    post:
+      consumes:
+      - application/json
+      description: The server writes the listed sections one after another and streams
+        the lines as lyrics.line events; answers at once with the job id.
+      parameters:
+      - description: Lyrics job request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.LyricsJobRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/model.LyricsJobStartResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "402":
+          description: Payment Required
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Start a lyrics job
       tags:
       - Lyrics
   /api/lyrics/rewrite:
@@ -1993,6 +2140,29 @@ paths:
       security:
       - BearerAuth: []
       summary: Get WebSocket ticket
+      tags:
+      - WebSocket
+  /api/ws/ticket/me:
+    post:
+      description: Issue a single-use, 30-second ticket for GET /ws/me?ticket=...
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.WSTicketResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get WebSocket ticket for the user job stream
       tags:
       - WebSocket
 schemes:

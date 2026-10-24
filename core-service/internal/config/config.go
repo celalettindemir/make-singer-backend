@@ -51,6 +51,7 @@ type Config struct {
 	AppStore   AppStoreConfig
 	GooglePlay GooglePlayConfig
 	Push       PushConfig
+	Jobs       JobsConfig
 }
 
 // AdminConfig is the admin panel access list. Emails are trimmed and lower
@@ -121,6 +122,16 @@ type SocialConfig struct {
 	StalePreparationAfter time.Duration
 	// StaleSweepInterval is how often the sweep runs; <= 0 disables the
 	// scheduler.
+	StaleSweepInterval time.Duration
+}
+
+// JobsConfig is the background job store configuration.
+type JobsConfig struct {
+	// SweepInterval is how often finished jobs and old events are deleted;
+	// <= 0 disables the scheduler.
+	SweepInterval time.Duration
+	// StaleSweepInterval is how often idle lyrics jobs are failed; <= 0
+	// disables the scheduler.
 	StaleSweepInterval time.Duration
 }
 
@@ -463,6 +474,8 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("sosyal.web_anahtari", "SOSYAL_WEB_ANAHTARI")
 	_ = viper.BindEnv("sosyal.stale_preparation_after", "SOCIAL_STALE_PREPARATION_AFTER")
 	_ = viper.BindEnv("sosyal.stale_sweep_interval", "SOCIAL_STALE_SWEEP_INTERVAL")
+	_ = viper.BindEnv("jobs.sweep_interval", "JOBS_SWEEP_INTERVAL")
+	_ = viper.BindEnv("jobs.stale_sweep_interval", "JOBS_STALE_SWEEP_INTERVAL")
 
 	// Defaults
 	viper.SetDefault("server.port", "8000")
@@ -501,6 +514,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("credits.expire_interval", "1h")
 	viper.SetDefault("sosyal.stale_preparation_after", "1h")
 	viper.SetDefault("sosyal.stale_sweep_interval", "15m")
+	viper.SetDefault("jobs.sweep_interval", "1h")
+	viper.SetDefault("jobs.stale_sweep_interval", "5m")
 	viper.SetDefault("auth.admin_client_id", "admin-web")
 	viper.SetDefault("auth.admin_redirect_uris", "https://makesinger.celalettindemir.dev/admin/callback,https://makesinger.celalettindemir.dev/admin")
 	viper.SetDefault("ratelimit.cloudflare_ranges", strings.Join(clientip.DefaultCloudflareRanges, ","))
@@ -727,6 +742,10 @@ func Load() (*Config, error) {
 			ServiceAccountJSON: viper.GetString("googleplay.service_account"),
 			PubSubAudience:     viper.GetString("googleplay.pubsub_audience"),
 			PubSubEmail:        viper.GetString("googleplay.pubsub_email"),
+		},
+		Jobs: JobsConfig{
+			SweepInterval:      viper.GetDuration("jobs.sweep_interval"),
+			StaleSweepInterval: viper.GetDuration("jobs.stale_sweep_interval"),
 		},
 		Push: PushConfig{
 			Enabled:             viper.GetBool("push.enabled"),

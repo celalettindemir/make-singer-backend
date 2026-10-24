@@ -454,6 +454,75 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/lyrics/jobs": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "The server writes the listed sections one after another and streams the lines as lyrics.line events; answers at once with the job id.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Lyrics"
+                ],
+                "summary": "Start a lyrics job",
+                "parameters": [
+                    {
+                        "description": "Lyrics job request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.LyricsJobRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/model.LyricsJobStartResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "Payment Required",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/lyrics/rewrite": {
             "post": {
                 "security": [
@@ -1289,6 +1358,43 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/api/ws/ticket/me": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Issue a single-use, 30-second ticket for GET /ws/me?ticket=...",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "WebSocket"
+                ],
+                "summary": "Get WebSocket ticket for the user job stream",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.WSTicketResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -2058,6 +2164,127 @@ const docTemplate = `{
                 }
             }
         },
+        "model.LyricsJobRequest": {
+            "type": "object",
+            "required": [
+                "genre",
+                "mode",
+                "projectId",
+                "sections",
+                "song",
+                "vibes"
+            ],
+            "properties": {
+                "bpm": {
+                    "type": "integer",
+                    "maximum": 220,
+                    "minimum": 40
+                },
+                "genre": {
+                    "enum": [
+                        "pop",
+                        "rock",
+                        "hiphop",
+                        "rnb",
+                        "electronic",
+                        "jazz",
+                        "country",
+                        "folk",
+                        "classical",
+                        "latin",
+                        "reggae",
+                        "blues"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Genre"
+                        }
+                    ]
+                },
+                "language": {
+                    "enum": [
+                        "en",
+                        "tr",
+                        "fr"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.Language"
+                        }
+                    ]
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": [
+                        "generate",
+                        "rewrite"
+                    ]
+                },
+                "projectId": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "projectName": {
+                    "type": "string",
+                    "maxLength": 120
+                },
+                "sections": {
+                    "type": "array",
+                    "maxItems": 12,
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/definitions/model.LyricsJobSection"
+                    }
+                },
+                "song": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/definitions/model.LyricsSongSection"
+                    }
+                },
+                "topic": {
+                    "type": "string",
+                    "maxLength": 500
+                },
+                "vibes": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "model.LyricsJobSection": {
+            "type": "object",
+            "properties": {
+                "index": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "instructions": {
+                    "type": "string",
+                    "maxLength": 500
+                }
+            }
+        },
+        "model.LyricsJobStartResponse": {
+            "type": "object",
+            "properties": {
+                "balance": {
+                    "type": "integer"
+                },
+                "jobId": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/model.JobStatus"
+                }
+            }
+        },
         "model.LyricsRewriteRequest": {
             "type": "object",
             "required": [
@@ -2226,6 +2453,11 @@ const docTemplate = `{
                 },
                 "projectId": {
                     "type": "string"
+                },
+                "projectName": {
+                    "description": "ProjectName is shown in notifications; optional.",
+                    "type": "string",
+                    "maxLength": 120
                 },
                 "stemUrls": {
                     "type": "array",
@@ -2526,6 +2758,11 @@ const docTemplate = `{
                 },
                 "projectId": {
                     "type": "string"
+                },
+                "projectName": {
+                    "description": "ProjectName is shown in notifications; optional.",
+                    "type": "string",
+                    "maxLength": 120
                 },
                 "stemMode": {
                     "enum": [
@@ -2858,6 +3095,12 @@ const docTemplate = `{
                 },
                 "fileUrl": {
                     "type": "string"
+                },
+                "gainDb": {
+                    "description": "GainDb is the take's level in dB, same bounds as MixChannel.VolumeDb.\nOptional: a missing value means 0 dB (old clients).",
+                    "type": "number",
+                    "maximum": 12,
+                    "minimum": -60
                 },
                 "offsetMs": {
                     "type": "integer"

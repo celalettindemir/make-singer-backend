@@ -61,6 +61,12 @@ type CreditCleaner interface {
 	DeleteUserData(ctx context.Context, userID string) error
 }
 
+// JobsCleaner removes the user's background jobs, their events and push
+// devices (implemented by *jobs.PostgresStore). Idempotent.
+type JobsCleaner interface {
+	DeleteOwner(ctx context.Context, userID string) error
+}
+
 type AccountService struct {
 	identity      AccountDeleter
 	prefixDeleter client.PrefixDeleter // nil: R2 not configured
@@ -68,6 +74,7 @@ type AccountService struct {
 	queue         Enqueuer
 	social        SocialCleaner // nil: no social module
 	credit        CreditCleaner // nil: no credit module
+	jobs          JobsCleaner   // nil: no jobs store
 }
 
 func NewAccountService(accountDeleter AccountDeleter, prefixDeleter client.PrefixDeleter, rdb *redis.Client, queue Enqueuer, social SocialCleaner) *AccountService {
@@ -77,6 +84,12 @@ func NewAccountService(accountDeleter AccountDeleter, prefixDeleter client.Prefi
 // WithCreditCleaner enables credit data cleanup and returns the service.
 func (s *AccountService) WithCreditCleaner(c CreditCleaner) *AccountService {
 	s.credit = c
+	return s
+}
+
+// WithJobsCleaner enables job and device cleanup and returns the service.
+func (s *AccountService) WithJobsCleaner(c JobsCleaner) *AccountService {
+	s.jobs = c
 	return s
 }
 
@@ -140,6 +153,11 @@ func (s *AccountService) Cleanup(ctx context.Context, userID string) error {
 	if s.credit != nil {
 		if err := s.credit.DeleteUserData(ctx, userID); err != nil {
 			errs = append(errs, fmt.Errorf("could not delete credit data: %w", err))
+		}
+	}
+	if s.jobs != nil {
+		if err := s.jobs.DeleteOwner(ctx, userID); err != nil {
+			errs = append(errs, fmt.Errorf("could not delete jobs and devices: %w", err))
 		}
 	}
 	return errors.Join(errs...)

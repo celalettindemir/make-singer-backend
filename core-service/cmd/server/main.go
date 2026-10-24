@@ -168,6 +168,17 @@ func main() {
 	})
 	defer asynqInspector.Close()
 
+	// A second import catches records that an old pod wrote after the first
+	// one, during a rolling deploy.
+	if _, err := asynqClient.Enqueue(asynq.NewTask(jobs.TaskTypeRedisImport, nil),
+		asynq.Queue(worker.QueueMaintenance),
+		asynq.ProcessIn(20*time.Minute),
+		asynq.Unique(19*time.Minute),
+		asynq.MaxRetry(0),
+	); err != nil && !errors.Is(err, asynq.ErrDuplicateTask) {
+		log.Printf("Warning: could not queue the delayed Redis job import: %v", err)
+	}
+
 	// A finished job queues its push; the send happens on the worker (never
 	// inline: the hook runs on the goroutine that finished the job).
 	if cfg.Push.Enabled {
@@ -298,7 +309,8 @@ func main() {
 
 	// Account deletion: the user record is kept in our own OP.
 	accountService := service.NewAccountService(identityServer, prefixDeleter, redisClient, asynqClient, socialStore).
-		WithCreditCleaner(creditStore)
+		WithCreditCleaner(creditStore).
+		WithJobsCleaner(jobStore)
 	accountHandler := handler.NewAccountHandler(accountService)
 
 	// copier: interface variable; assigning r2Client directly while it is
@@ -520,7 +532,7 @@ func main() {
 	}))
 
 	// Start Asynq worker server
-	go startWorkerServer(cfg, redisClient, jobStore, renderService, masterService, sunoClient, audioClient, storage, hub, accountService, socialWorker, creditWorker, creditService, lyricsService)
+	go startWorkerServer(cfg, redisClient, jobStore, renderService, masterService, sunoClient, audioClient, storage, hub, accountService, socialWorker, creditWorker, creditService, lyricsService, lyricsJobService)
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
@@ -566,6 +578,20 @@ func newPushWorker(cfg *config.Config, repo worker.PushRepo, spender credit.Spen
 	return worker.NewPushWorker(repo, sender, spender.Enforced, enabled)
 }
 
+// asynqQueues is the queue weight map. A lyrics job holds a slot for up to
+// minutes, renders mostly wait on Suno, hence the concurrency of 20.
+func asynqQueues() map[string]int {
+	return map[string]int{
+		"render":   6,
+		"master":   4,
+		"sosyal":   2,
+		"bakim":    1,
+		"kredi":    3,
+		"soz":      8,
+		"bildirim": 5,
+	}
+}
+
 func startWorkerServer(
 	cfg *config.Config,
 	redisClient *redis.Client,
@@ -581,6 +607,7 @@ func startWorkerServer(
 	creditWorker *worker.CreditWorker,
 	creditSpender credit.Spender,
 	lyricsGenerator service.LyricsGenerator,
+	lyricsJobs *service.LyricsJobService,
 ) {
 	asynqLogLevel := asynq.InfoLevel
 	if strings.EqualFold(cfg.Server.LogLevel, "debug") {
@@ -598,17 +625,9 @@ func startWorkerServer(
 			DB:       cfg.Redis.DB,
 		},
 		asynq.Config{
-			Concurrency: 10,
-			Queues: map[string]int{
-				"render":   6,
-				"master":   4,
-				"sosyal":   2,
-				"bakim":    1,
-				"kredi":    3,
-				"soz":      8,
-				"bildirim": 5,
-			},
-			LogLevel: asynqLogLevel,
+			Concurrency: 20,
+			Queues:      asynqQueues(),
+			LogLevel:    asynqLogLevel,
 		},
 	)
 
@@ -629,6 +648,10 @@ func startWorkerServer(
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeLyrics, worker.NewLyricsWorker(jobStore, lyricsGenerator, creditSpender).ProcessTask)
 	mux.HandleFunc(worker.TaskTypePush, newPushWorker(cfg, jobStore, creditSpender).ProcessTask)
+	jobsWorker := worker.NewJobsWorker(jobStore, lyricsJobs)
+	mux.HandleFunc(worker.TaskTypeJobsSweep, jobsWorker.Sweep)
+	mux.HandleFunc(worker.TaskTypeLyricsStale, jobsWorker.FailStaleLyrics)
+	mux.HandleFunc(jobs.TaskTypeRedisImport, jobs.NewRedisImportHandler(redisClient, jobStore))
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeMaster, masterWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeAccountCleanup, worker.NewAccountWorker(accountService).ProcessTask)
@@ -681,6 +704,16 @@ func scheduleEntries(cfg *config.Config) []scheduleEntry {
 		add(iv, social.TaskTypeSweepStale, social.QueueSocial)
 	} else {
 		log.Println("Stale sweep scheduler disabled (social stale_sweep_interval <= 0)")
+	}
+	if iv := cfg.Jobs.SweepInterval; iv > 0 {
+		add(iv, worker.TaskTypeJobsSweep, worker.QueueMaintenance)
+	} else {
+		log.Println("Jobs sweep scheduler disabled (jobs.sweep_interval <= 0)")
+	}
+	if iv := cfg.Jobs.StaleSweepInterval; iv > 0 {
+		add(iv, worker.TaskTypeLyricsStale, worker.QueueMaintenance)
+	} else {
+		log.Println("Lyrics stale sweep scheduler disabled (jobs.stale_sweep_interval <= 0)")
 	}
 	if iv := cfg.Credits.RefillInterval; iv > 0 {
 		add(iv, credit.TaskTypeRefill, credit.QueueCredit)

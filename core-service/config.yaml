@@ -34,6 +34,11 @@ sosyal:
   stale_preparation_after: 1h # SOCIAL_STALE_PREPARATION_AFTER: preparing longer than this -> failed
   stale_sweep_interval: 15m # SOCIAL_STALE_SWEEP_INTERVAL: sweep period; <= 0 disables the scheduler
 
+# Background jobs
+jobs:
+  sweep_interval: 1h # JOBS_SWEEP_INTERVAL: deletes expired jobs and old events; <= 0 disables the scheduler
+  stale_sweep_interval: 5m # JOBS_STALE_SWEEP_INTERVAL: fails idle lyrics jobs; <= 0 disables the scheduler
+
 # Credits
 credits:
   enforce: false # CREDITS_ENFORCE: false = no deduction yet
