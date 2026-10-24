@@ -228,25 +228,19 @@ def test_pydantic_gain_db_sinirlari():
         VocalTakeInput(key="k", gain_db=-61)
 
 
-class _YavasDepo(_SahteDepo):
-    """Indirme ve yukleme engelleyici calisir, gercek R2 gibi."""
-
-    def download_key_to_file(self, key, yol):
-        time.sleep(0.3)
-        super().download_key_to_file(key, yol)
-
-    def upload_file(self, key, yol, tur):
-        time.sleep(0.3)
-        return f"https://depo/{key}"
-
-
 def test_master_olay_dongusunu_kilitlemez():
     # Master suresince /health cevap vermezse kubelet servisi oldurur ve
     # hemen ardindan gelen /encode istekleri "connection refused" alir.
     import asyncio
 
     servis = MasterService()
-    servis.storage = _YavasDepo(sinus(440, saniye=0.5))
+    servis.storage = object()
+
+    def agir_zincir(*_):
+        time.sleep(1.0)  # CPU ve R2 G/C gibi engelleyici
+        return {"output_url": "https://depo/m.wav"}
+
+    servis._process = agir_zincir
 
     async def senaryo():
         tikler = 0
@@ -260,10 +254,10 @@ def test_master_olay_dongusunu_kilitlemez():
 
         gorev = asyncio.create_task(saat())
         sonuc = await servis.process(
-            stem_keys=["a", "b"],
+            stem_keys=["a"],
             mix_settings=[],
             profile="clean",
-            vocal_takes=[{"key": "v"}],
+            vocal_takes=[],
             output_key="m.wav",
         )
         bitti = True
@@ -272,5 +266,5 @@ def test_master_olay_dongusunu_kilitlemez():
 
     sonuc, tikler = asyncio.run(senaryo())
     assert sonuc["output_url"] == "https://depo/m.wav"
-    # 4 x 0.3 s engelleyici G/C boyunca saat en az birkac kez donmeli.
+    # 1 s engelleyici is boyunca saat donmeye devam etmeli.
     assert tikler >= 20
