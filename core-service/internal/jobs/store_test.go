@@ -421,3 +421,45 @@ func scenarioStale(t *testing.T, r Repo) {
 		t.Fatalf("stale = %v %v, want only the running lyrics job", ids, err)
 	}
 }
+
+func TestPostgresStore_DeviceRegistry(t *testing.T) {
+	s := NewPostgresStore(testPool(t), nil)
+	ctx := context.Background()
+	if err := s.UpsertDevice(ctx, "alice", model.Device{Token: "t1", Platform: "ios", Language: "tr", AppVersion: "1.0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertDevice(ctx, "alice", model.Device{Token: "t1", Platform: "ios", Language: "en", AppVersion: "1.1"}); err != nil {
+		t.Fatal(err)
+	}
+	ds, err := s.Devices(ctx, "alice")
+	if err != nil || len(ds) != 1 || ds[0].Language != "en" || ds[0].AppVersion != "1.1" {
+		t.Fatalf("devices = %+v, %v", ds, err)
+	}
+	// The token moves to bob.
+	if err := s.UpsertDevice(ctx, "bob", model.Device{Token: "t1", Platform: "android", Language: "fr"}); err != nil {
+		t.Fatal(err)
+	}
+	if ds, _ := s.Devices(ctx, "alice"); len(ds) != 0 {
+		t.Errorf("alice still has %+v", ds)
+	}
+	if ds, _ := s.Devices(ctx, "bob"); len(ds) != 1 || ds[0].Platform != "android" {
+		t.Errorf("bob = %+v", ds)
+	}
+	// Alice cannot delete bob's token; bob can.
+	if err := s.DeleteDevice(ctx, "alice", "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if ds, _ := s.Devices(ctx, "bob"); len(ds) != 1 {
+		t.Fatalf("other user's delete removed the row")
+	}
+	if err := s.DeleteDevice(ctx, "bob", "t1"); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.UpsertDevice(ctx, "bob", model.Device{Token: "t2", Platform: "ios", Language: "tr"})
+	if err := s.DeleteToken(ctx, "t2"); err != nil {
+		t.Fatal(err)
+	}
+	if ds, _ := s.Devices(ctx, "bob"); len(ds) != 0 {
+		t.Errorf("bob = %+v", ds)
+	}
+}

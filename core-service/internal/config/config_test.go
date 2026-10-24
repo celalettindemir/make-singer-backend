@@ -646,3 +646,24 @@ func TestConfig_RenderCostDefaults(t *testing.T) {
 		t.Fatalf("render costs = %d/%d/%d, want 23/43/63", c.RenderMix, c.RenderFocus, c.RenderStems)
 	}
 }
+
+func TestPushConfig_DefaultOffAndProjectID(t *testing.T) {
+	t.Setenv("PUSH_ENABLED", "")
+	t.Setenv("PUSH_FIREBASE_CREDENTIALS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Skipf("Load needs more env: %v", err)
+	}
+	if cfg.Push.Enabled || cfg.Push.ProjectID != "" {
+		t.Errorf("push = %+v, want off", cfg.Push)
+	}
+	t.Setenv("PUSH_ENABLED", "true")
+	t.Setenv("PUSH_FIREBASE_CREDENTIALS", `{"project_id":"demo-1"}`)
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Push.Enabled || cfg.Push.ProjectID != "demo-1" {
+		t.Errorf("push = %+v", cfg.Push)
+	}
+}

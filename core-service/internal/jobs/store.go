@@ -344,3 +344,45 @@ func (s *PostgresStore) DeleteOwner(ctx context.Context, userID string) error {
 	}
 	return tx.Commit(ctx)
 }
+
+// UpsertDevice stores a push token for userID. A token already stored for
+// another user moves to userID: the same install signed in as someone else.
+func (s *PostgresStore) UpsertDevice(ctx context.Context, userID string, d model.Device) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO uretim.cihazlar (token, sahip, platform, dil, surum, guncelleme)
+		VALUES ($1,$2,$3,$4,$5,now())
+		ON CONFLICT (token) DO UPDATE SET sahip=EXCLUDED.sahip, platform=EXCLUDED.platform,
+			dil=EXCLUDED.dil, surum=EXCLUDED.surum, guncelleme=EXCLUDED.guncelleme`,
+		d.Token, userID, d.Platform, d.Language, d.AppVersion)
+	return err
+}
+
+// DeleteDevice removes userID's token; another user's or an unknown token is a no-op.
+func (s *PostgresStore) DeleteDevice(ctx context.Context, userID, token string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM uretim.cihazlar WHERE token=$1 AND sahip=$2`, token, userID)
+	return err
+}
+
+// Devices returns the user's push tokens, newest first.
+func (s *PostgresStore) Devices(ctx context.Context, userID string) ([]model.Device, error) {
+	rows, err := s.pool.Query(ctx, `SELECT token, platform, dil, surum, guncelleme
+		FROM uretim.cihazlar WHERE sahip=$1 ORDER BY guncelleme DESC, token`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Device{}
+	for rows.Next() {
+		var d model.Device
+		if err := rows.Scan(&d.Token, &d.Platform, &d.Language, &d.AppVersion, &d.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// DeleteToken removes a token whoever owns it (FCM said it is unregistered).
+func (s *PostgresStore) DeleteToken(ctx context.Context, token string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM uretim.cihazlar WHERE token=$1`, token)
+	return err
+}

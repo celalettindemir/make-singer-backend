@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -49,6 +50,7 @@ type Config struct {
 	Credits    CreditConfig
 	AppStore   AppStoreConfig
 	GooglePlay GooglePlayConfig
+	Push       PushConfig
 }
 
 // AdminConfig is the admin panel access list. Emails are trimmed and lower
@@ -160,6 +162,18 @@ type AppStoreConfig struct {
 	KeyID         string
 	// PrivateKey is the App Store Connect API .p8 key (secret).
 	PrivateKey string
+}
+
+// PushConfig is the push notification (FCM) configuration. Push is off unless
+// Enabled and FirebaseCredentials are both set.
+type PushConfig struct {
+	Enabled bool // PUSH_ENABLED, default false
+	// FirebaseCredentials is the service-account JSON (PUSH_FIREBASE_CREDENTIALS,
+	// or the file named by PUSH_FIREBASE_CREDENTIALS_FILE).
+	FirebaseCredentials string
+	// ProjectID is the project_id of FirebaseCredentials; empty when they are
+	// missing or malformed.
+	ProjectID string
 }
 
 // GooglePlayConfig is the Google Play configuration.
@@ -338,6 +352,7 @@ func Load() (*Config, error) {
 	readSecret("SOSYAL_WEB_ANAHTARI")
 	readSecret("APPSTORE_PRIVATE_KEY")
 	readSecret("GOOGLEPLAY_SERVICE_ACCOUNT")
+	readSecret("PUSH_FIREBASE_CREDENTIALS")
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
@@ -441,6 +456,8 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("appstore.private_key", "APPSTORE_PRIVATE_KEY")
 	_ = viper.BindEnv("googleplay.package_name", "GOOGLEPLAY_PACKAGE_NAME")
 	_ = viper.BindEnv("googleplay.service_account", "GOOGLEPLAY_SERVICE_ACCOUNT")
+	_ = viper.BindEnv("push.enabled", "PUSH_ENABLED")
+	_ = viper.BindEnv("push.firebase_credentials", "PUSH_FIREBASE_CREDENTIALS")
 	_ = viper.BindEnv("googleplay.pubsub_audience", "GOOGLEPLAY_PUBSUB_AUDIENCE")
 	_ = viper.BindEnv("googleplay.pubsub_email", "GOOGLEPLAY_PUBSUB_EMAIL")
 	_ = viper.BindEnv("sosyal.web_anahtari", "SOSYAL_WEB_ANAHTARI")
@@ -470,6 +487,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("ratelimit.purchases_per_min", 20)
 	viper.SetDefault("ratelimit.webhooks_per_min", 120)
 	viper.SetDefault("credits.enforce", false)
+	viper.SetDefault("push.enabled", false)
 	viper.SetDefault("credits.plan_plus", 300)
 	viper.SetDefault("credits.plan_pro", 1000)
 	viper.SetDefault("credits.costs.render_mix", 23)
@@ -710,6 +728,11 @@ func Load() (*Config, error) {
 			PubSubAudience:     viper.GetString("googleplay.pubsub_audience"),
 			PubSubEmail:        viper.GetString("googleplay.pubsub_email"),
 		},
+		Push: PushConfig{
+			Enabled:             viper.GetBool("push.enabled"),
+			FirebaseCredentials: viper.GetString("push.firebase_credentials"),
+			ProjectID:           projectIDOf(viper.GetString("push.firebase_credentials")),
+		},
 	}
 
 	// viper.SetDefault does not apply to a present-but-empty value, and the
@@ -799,4 +822,13 @@ func buildFederationClients() []FederationClient {
 	}
 
 	return list
+}
+
+// projectIDOf returns the project_id of a service-account JSON, "" if absent.
+func projectIDOf(credentialsJSON string) string {
+	var meta struct {
+		ProjectID string `json:"project_id"`
+	}
+	_ = json.Unmarshal([]byte(credentialsJSON), &meta)
+	return meta.ProjectID
 }

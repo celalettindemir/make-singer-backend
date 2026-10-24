@@ -33,6 +33,8 @@ import (
 	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/lyricsprovider"
 	"github.com/makeasinger/api/internal/middleware"
+	"github.com/makeasinger/api/internal/model"
+	"github.com/makeasinger/api/internal/push"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/internal/social"
 	ws "github.com/makeasinger/api/internal/websocket"
@@ -165,6 +167,16 @@ func main() {
 		DB:       cfg.Redis.DB,
 	})
 	defer asynqInspector.Close()
+
+	// A finished job queues its push; the send happens on the worker (never
+	// inline: the hook runs on the goroutine that finished the job).
+	if cfg.Push.Enabled {
+		jobStore.OnFinished(func(_ context.Context, job model.Job) {
+			if err := worker.EnqueuePush(asynqClient, job.ID); err != nil {
+				log.Printf("push: could not queue the notification of job %s: %v", job.ID, err)
+			}
+		})
+	}
 
 	// Initialize validator
 	validate := validator.New()
@@ -436,6 +448,12 @@ func main() {
 	api.Post("/jobs/:id/cancel", jobsAct, jobsHandler.Cancel)
 	api.Post("/jobs/:id/retry", jobsAct, jobsHandler.Retry)
 
+	// Push token registry (R-JOB-05); one bucket for both routes.
+	devicesLimit := rateLimiter.Limit("cihaz", devicesPerMin, time.Minute)
+	devicesHandler := handler.NewDevicesHandler(jobStore, validate)
+	api.Put("/devices", devicesLimit, devicesHandler.Put)
+	api.Delete("/devices/:token", devicesLimit, devicesHandler.Delete)
+
 	// Render routes
 	render := api.Group("/render")
 	render.Post("/start", rateLimiter.RenderLimit(cfg.RateLimit.RenderPerHour), renderHandler.Start)
@@ -524,10 +542,34 @@ func main() {
 	}
 }
 
+// newPushWorker builds the push worker. The FCM sender exists only when
+// PUSH_ENABLED is true and the credentials are valid; otherwise the worker
+// drops its tasks.
+func newPushWorker(cfg *config.Config, repo worker.PushRepo, spender credit.Spender) *worker.PushWorker {
+	var sender push.Sender
+	enabled := cfg.Push.Enabled
+	switch {
+	case !enabled:
+	case cfg.Push.FirebaseCredentials == "":
+		log.Println("Push: PUSH_ENABLED is true but PUSH_FIREBASE_CREDENTIALS is empty, push is off")
+		enabled = false
+	default:
+		f, err := push.NewFCM([]byte(cfg.Push.FirebaseCredentials), nil)
+		if err != nil {
+			log.Printf("Push: credentials rejected, push is off: %v", err)
+			enabled = false
+		} else {
+			sender = f
+			log.Printf("Push: FCM enabled for project %s", cfg.Push.ProjectID)
+		}
+	}
+	return worker.NewPushWorker(repo, sender, spender.Enforced, enabled)
+}
+
 func startWorkerServer(
 	cfg *config.Config,
 	redisClient *redis.Client,
-	jobStore jobs.Repo,
+	jobStore *jobs.PostgresStore,
 	renderService *service.RenderService,
 	masterService *service.MasterService,
 	sunoClient *client.SunoClient,
@@ -558,12 +600,13 @@ func startWorkerServer(
 		asynq.Config{
 			Concurrency: 10,
 			Queues: map[string]int{
-				"render": 6,
-				"master": 4,
-				"sosyal": 2,
-				"bakim":  1,
-				"kredi":  3,
-				"soz":    8,
+				"render":   6,
+				"master":   4,
+				"sosyal":   2,
+				"bakim":    1,
+				"kredi":    3,
+				"soz":      8,
+				"bildirim": 5,
 			},
 			LogLevel: asynqLogLevel,
 		},
@@ -585,6 +628,7 @@ func startWorkerServer(
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeLyrics, worker.NewLyricsWorker(jobStore, lyricsGenerator, creditSpender).ProcessTask)
+	mux.HandleFunc(worker.TaskTypePush, newPushWorker(cfg, jobStore, creditSpender).ProcessTask)
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeMaster, masterWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeAccountCleanup, worker.NewAccountWorker(accountService).ProcessTask)
@@ -736,6 +780,7 @@ const adminPerMin = 120
 const (
 	jobsReadPerMin = 60
 	jobsActPerMin  = 30
+	devicesPerMin  = 30
 )
 
 // registerAdminRoutes binds /api/admin. Without the admin-web client secret
