@@ -174,13 +174,33 @@ func (m *MemoryStore) List(_ context.Context, userID string, since time.Time, li
 	defer m.mu.Unlock()
 	out := []model.Job{}
 	for _, j := range m.jobs {
-		if j.OwnerID == userID && !j.CreatedAt.Before(since) {
+		active := j.Status == model.JobStatusQueued || j.Status == model.JobStatusRunning
+		if j.OwnerID == userID && (active || (j.CompletedAt != nil && !j.CompletedAt.Before(since))) {
 			out = append(out, *cloneJob(j))
 		}
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].CreatedAt.After(out[b].CreatedAt) })
 	if limit >= 0 && len(out) > limit {
 		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (m *MemoryStore) StaleLyricsJobs(_ context.Context, before time.Time) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []string{}
+	for id, j := range m.jobs {
+		if j.Type != model.JobTypeLyrics || (j.Status != model.JobStatusQueued && j.Status != model.JobStatusRunning) {
+			continue
+		}
+		last := j.CreatedAt
+		if evs := m.events[id]; len(evs) > 0 {
+			last = evs[len(evs)-1].At
+		}
+		if last.Before(before) {
+			out = append(out, id)
+		}
 	}
 	return out, nil
 }

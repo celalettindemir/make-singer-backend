@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/google/uuid"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +25,9 @@ type fakeConn struct {
 	mu     sync.Mutex
 	out    [][]byte
 	wrote  chan struct{}
+
+	closeOnce    sync.Once
+	serverClosed atomic.Bool
 }
 
 func newFakeConn() *fakeConn {
@@ -49,7 +54,21 @@ func (f *fakeConn) WriteMessage(typ int, data []byte) error {
 	return nil
 }
 
-func (f *fakeConn) SetReadDeadline(time.Time) error { return nil }
+func (f *fakeConn) SetReadDeadline(time.Time) error  { return nil }
+func (f *fakeConn) SetWriteDeadline(time.Time) error { return nil }
+
+// Close records a server-side close and unblocks ReadMessage.
+func (f *fakeConn) Close() error {
+	f.closeOnce.Do(func() {
+		f.serverClosed.Store(true)
+		select {
+		case <-f.closed: // a test closed it already
+		default:
+			close(f.closed)
+		}
+	})
+	return nil
+}
 
 func (f *fakeConn) messages() [][]byte {
 	f.mu.Lock()
@@ -201,4 +220,45 @@ func TestUserStream_OtherUsersEventsNotDelivered(t *testing.T) {
 		t.Errorf("delivered job %s", f.Event.JobID)
 	}
 	close(c.closed)
+}
+
+func TestUserStream_ResumeKeepsOnlyUUIDsAndCapsAtFifty(t *testing.T) {
+	in := map[string]int64{"not-a-uuid": 1, "": 2}
+	for i := 0; i < 80; i++ {
+		in[uuid.NewString()] = int64(i)
+	}
+	out := sanitizeResume(in)
+	if len(out) != maxResumeJobs {
+		t.Fatalf("kept %d, want %d", len(out), maxResumeJobs)
+	}
+	for id := range out {
+		if _, err := uuid.Parse(id); err != nil {
+			t.Errorf("kept non-uuid key %q", id)
+		}
+	}
+}
+
+func TestUserStream_OverflowClosesTheConnection(t *testing.T) {
+	store := jobs.NewMemoryStore(nil)
+	streams := NewUserStreams(store)
+	c := newFakeConn()
+	c.in <- []byte(`{"type":"ping"}`) // ends the resume wait, goes live
+	go streams.serve(c, "u1")
+	c.waitFor(t, 1)
+	// The fake blocks after 64 unread writes, so the buffer fills up.
+	for i := int64(1); i <= 1000; i++ {
+		streams.Deliver(jobs.Event{JobID: jUUID1, OwnerID: "u1", Seq: i, Kind: jobs.KindProgress,
+			Data: json.RawMessage(`{}`), At: time.Now()})
+	}
+	go func() { // drain so the writer notices the overflow
+		for range c.wrote {
+		}
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for !c.serverClosed.Load() && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !c.serverClosed.Load() {
+		t.Fatal("server did not close an overflowed connection")
+	}
 }

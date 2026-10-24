@@ -257,7 +257,8 @@ func finishedNow(before, after model.Job) bool {
 
 func (s *PostgresStore) List(ctx context.Context, userID string, since time.Time, limit int) ([]model.Job, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+jobColumns+` FROM uretim.isler
-		WHERE sahip=$1 AND olusturma >= $2 ORDER BY olusturma DESC LIMIT $3`, userID, since, limit)
+		WHERE sahip=$1 AND (durum IN ('queued','running') OR bitis >= $2)
+		ORDER BY olusturma DESC LIMIT $3`, userID, since, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -269,6 +270,25 @@ func (s *PostgresStore) List(ctx context.Context, userID string, since time.Time
 			return nil, err
 		}
 		out = append(out, *j)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) StaleLyricsJobs(ctx context.Context, before time.Time) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT j.id FROM uretim.isler j
+		WHERE j.tur='lyrics' AND j.durum IN ('queued','running')
+		AND COALESCE((SELECT max(e.zaman) FROM uretim.is_olaylari e WHERE e.is_id=j.id), j.olusturma) < $1`, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id.String())
 	}
 	return out, rows.Err()
 }

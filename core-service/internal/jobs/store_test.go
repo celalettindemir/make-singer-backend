@@ -365,3 +365,59 @@ func TestStore_ConcurrentUpdatesKeepSeqConsecutive(t *testing.T) {
 		t.Errorf("son_seq = %d with %d events", got.LastSeq, len(evs))
 	}
 }
+
+// scenarioList: active jobs are always listed; a finished one only when it
+// finished at or after since; the limit applies.
+func scenarioList(t *testing.T, r Repo, backdate func(id string, created, completed time.Time)) {
+	active := newJob("u1", model.JobTypeRender, "p1")
+	oldDone := newJob("u1", model.JobTypeRender, "p2")
+	newDone := newJob("u1", model.JobTypeRender, "p3")
+	for _, j := range []*model.Job{active, oldDone, newDone} {
+		if err := r.Create(ctx(), j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{oldDone.ID, newDone.ID} {
+		_ = r.Update(ctx(), id, func(j *model.Job) error { j.Status = model.JobStatusSucceeded; return nil })
+	}
+	now := time.Now().UTC()
+	backdate(active.ID, now.Add(-72*time.Hour), time.Time{}) // created long ago, still running
+	backdate(oldDone.ID, now.Add(-72*time.Hour), now.Add(-48*time.Hour))
+	backdate(newDone.ID, now.Add(-time.Hour), now.Add(-time.Minute))
+	list, err := r.List(ctx(), "u1", now.Add(-24*time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, j := range list {
+		got[j.ID] = true
+	}
+	if len(list) != 2 || !got[active.ID] || !got[newDone.ID] {
+		t.Errorf("list = %d jobs %v, want the active and the recently finished job", len(list), got)
+	}
+	if one, _ := r.List(ctx(), "u1", now.Add(-24*time.Hour), 1); len(one) != 1 {
+		t.Errorf("limit 1 gave %d", len(one))
+	}
+}
+
+// scenarioStale: only queued or running lyrics jobs without activity since
+// `before` are stale.
+func scenarioStale(t *testing.T, r Repo) {
+	lyr := newJob("u1", model.JobTypeLyrics, "p1")
+	render := newJob("u1", model.JobTypeRender, "p2")
+	done := newJob("u1", model.JobTypeLyrics, "p3")
+	for _, j := range []*model.Job{lyr, render, done} {
+		if err := r.Create(ctx(), j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = r.Update(ctx(), done.ID, func(j *model.Job) error { j.Status = model.JobStatusFailed; return nil })
+	ids, err := r.StaleLyricsJobs(ctx(), time.Now().Add(-time.Minute))
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("fresh jobs: %v %v, want none", ids, err)
+	}
+	ids, err = r.StaleLyricsJobs(ctx(), time.Now().Add(time.Minute))
+	if err != nil || len(ids) != 1 || ids[0] != lyr.ID {
+		t.Fatalf("stale = %v %v, want only the running lyrics job", ids, err)
+	}
+}

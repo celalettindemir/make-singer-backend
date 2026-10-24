@@ -62,18 +62,18 @@ func (w *LyricsWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		return nil
 	}
 	if err != nil {
-		return err
+		return w.giveUp(ctx, p.JobID, err, false)
 	}
 	if isTerminalLyrics(job.Status) {
 		return nil
 	}
 	var in model.LyricsJobInput
 	if err := json.Unmarshal(job.Payload, &in); err != nil {
-		return fmt.Errorf("lyrics job %s: bad input: %v: %w", p.JobID, err, asynq.SkipRetry)
+		return w.giveUp(ctx, p.JobID, fmt.Errorf("lyrics job %s: bad input: %v: %w", p.JobID, err, asynq.SkipRetry), true)
 	}
 	res, err := model.ParseLyricsJobResult(job.Result)
 	if err != nil {
-		return fmt.Errorf("lyrics job %s: bad result: %v: %w", p.JobID, err, asynq.SkipRetry)
+		return w.giveUp(ctx, p.JobID, fmt.Errorf("lyrics job %s: bad result: %v: %w", p.JobID, err, asynq.SkipRetry), true)
 	}
 
 	err = w.repo.UpdateWith(ctx, p.JobID, func(j *model.Job, _ jobs.Emitter) error {
@@ -91,7 +91,7 @@ func (w *LyricsWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		return nil
 	}
 	if err != nil {
-		return err
+		return w.giveUp(ctx, p.JobID, err, false)
 	}
 
 	// song is the context sent to the model: the request's song with the lines
@@ -114,12 +114,15 @@ func (w *LyricsWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		case outcomeInterrupted:
 			return w.interrupted(ctx, p.JobID, err)
 		case outcomeError:
-			return err
+			return w.giveUp(ctx, p.JobID, err, false)
 		case outcomeDone:
 			song[sec.Index].Lyrics = strings.Join(lines, "\n")
 		}
 	}
-	return w.finish(ctx, p.JobID, false)
+	if err := w.finish(ctx, p.JobID, false); err != nil {
+		return w.giveUp(ctx, p.JobID, err, false)
+	}
+	return nil
 }
 
 type sectionOutcome int
@@ -302,75 +305,25 @@ func (w *LyricsWorker) interrupted(ctx context.Context, jobID string, cause erro
 	if w.canceled(jobID) {
 		return nil
 	}
-	if w.isLastAttempt(ctx) {
-		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-		defer cancel()
-		return w.finish(fctx, jobID, true)
-	}
-	return cause
+	return w.giveUp(ctx, jobID, cause, false)
 }
 
-// finish ends the job: refunds first, then the final status. With
-// failUnfinished every section that is neither done nor failed becomes failed.
-//
-// Refunds: generate only when no section is done; rewrite each failed
-// section's charge.
+// finish ends the job (see service.FinishLyricsJob).
 func (w *LyricsWorker) finish(ctx context.Context, jobID string, failUnfinished bool) error {
-	job, err := w.repo.Get(ctx, jobID)
-	if err != nil {
+	return service.FinishLyricsJob(ctx, w.repo, w.credits, jobID, failUnfinished)
+}
+
+// giveUp is the exit of every error path. Unless asynq will run the task
+// again, the job must still end: left queued or running it would hold the
+// project's single lyrics slot forever and keep its charge.
+func (w *LyricsWorker) giveUp(ctx context.Context, jobID string, err error, final bool) error {
+	if !final && !w.isLastAttempt(ctx) {
 		return err
 	}
-	if isTerminalLyrics(job.Status) {
-		return nil
-	}
-	var in model.LyricsJobInput
-	if err := json.Unmarshal(job.Payload, &in); err != nil {
-		return fmt.Errorf("lyrics job %s: bad input: %v: %w", jobID, err, asynq.SkipRetry)
-	}
-	res, err := model.ParseLyricsJobResult(job.Result)
-	if err != nil {
-		return fmt.Errorf("lyrics job %s: bad result: %v: %w", jobID, err, asynq.SkipRetry)
-	}
-	if failUnfinished {
-		for i := range res.Sections {
-			if s := &res.Sections[i]; s.Status != model.LyricsSectionDone && s.Status != model.LyricsSectionFailed {
-				s.Status, s.Lines = model.LyricsSectionFailed, []string{}
-			}
-		}
-	}
-	done := res.Count(model.LyricsSectionDone)
-	var refunds []model.LyricsCharge
-	if in.Mode == model.LyricsModeRewrite {
-		for _, c := range in.Charges {
-			if sr := res.Section(c.Section); sr != nil && sr.Status == model.LyricsSectionFailed {
-				refunds = append(refunds, c)
-			}
-		}
-	} else if done == 0 {
-		refunds = in.Charges
-	}
-	service.RefundLyricsCharges(w.credits, job.OwnerID, refunds)
-
-	err = w.repo.UpdateWith(ctx, jobID, func(j *model.Job, em jobs.Emitter) error {
-		if isTerminalLyrics(j.Status) {
-			return jobs.ErrSkipWrite
-		}
-		if failUnfinished {
-			raw, err := json.Marshal(res)
-			if err != nil {
-				return err
-			}
-			j.Result = raw
-		}
-		if done >= 1 {
-			j.Status, j.Progress, j.CurrentStep = model.JobStatusSucceeded, 100, service.LyricsStepDone
-		} else {
-			j.Status, j.Progress, j.ErrorCode = model.JobStatusFailed, res.Progress(), service.LyricsErrorCode
-		}
-		return nil
-	})
-	if errors.Is(err, jobs.ErrSkipWrite) {
-		return nil
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	if ferr := w.finish(fctx, jobID, true); ferr != nil {
+		log.Printf("lyrics job %s: could not end the job: %v", jobID, ferr)
 	}
 	return err
 }

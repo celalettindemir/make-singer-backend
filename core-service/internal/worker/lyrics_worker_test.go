@@ -304,3 +304,62 @@ func TestLyricsWorker_CancelStopsProviderQuickly(t *testing.T) {
 		t.Errorf("status = %s, want canceled kept", job.Status)
 	}
 }
+
+// flakyRepo fails the failAt-th UpdateWith call (1 = mark running, 2 = the
+// first section_started), then works again.
+type flakyRepo struct {
+	jobs.Repo
+	failAt, calls int
+}
+
+func (f *flakyRepo) UpdateWith(ctx context.Context, id string, fn func(*model.Job, jobs.Emitter) error) error {
+	f.calls++
+	if f.calls == f.failAt {
+		return errors.New("store down")
+	}
+	return f.Repo.UpdateWith(ctx, id, fn)
+}
+
+func TestLyricsWorker_StoreErrorOnLastAttemptEndsTheJob(t *testing.T) {
+	charges := []model.LyricsCharge{{Section: -1, ActionID: lyricsAction, Op: string(credit.OpLyricsGenerate)}}
+	e := newLyricsEnv(t, "generate", []int{0}, nil, charges, step{lines: []string{"a"}})
+	e.w.repo = &flakyRepo{Repo: e.repo, failAt: 2}
+	e.w.isLastAttempt = func(context.Context) bool { return true }
+	if err := e.process(t); err == nil {
+		t.Fatal("want the store error returned")
+	}
+	job, _ := e.job(t)
+	if job.Status != model.JobStatusFailed || job.ErrorCode != "AI_ERROR" {
+		t.Errorf("job = %s %q, want failed AI_ERROR (slot freed)", job.Status, job.ErrorCode)
+	}
+	if len(e.sp.ActionRefunds) != 1 {
+		t.Errorf("refunds = %+v, want the generate charge", e.sp.ActionRefunds)
+	}
+}
+
+func TestLyricsWorker_StoreErrorBeforeLastAttemptLeavesJobForRetry(t *testing.T) {
+	e := newLyricsEnv(t, "generate", []int{0}, nil, nil, step{lines: []string{"a"}})
+	e.w.repo = &flakyRepo{Repo: e.repo, failAt: 2}
+	e.w.isLastAttempt = func(context.Context) bool { return false }
+	if err := e.process(t); err == nil {
+		t.Fatal("want the store error returned so asynq retries")
+	}
+	if job, _ := e.job(t); job.Status != model.JobStatusRunning {
+		t.Errorf("status = %s, want running until the last attempt", job.Status)
+	}
+}
+
+func TestLyricsWorker_UnreadableInputEndsTheJobWithoutRetry(t *testing.T) {
+	e := newLyricsEnv(t, "generate", []int{0}, nil, nil)
+	_ = e.repo.Update(context.Background(), lyricsJobID, func(j *model.Job) error {
+		j.Payload = []byte("{broken")
+		return nil
+	})
+	err := e.process(t)
+	if !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("err = %v, want SkipRetry", err)
+	}
+	if job, _ := e.job(t); job.Status != model.JobStatusFailed {
+		t.Errorf("status = %s, want failed", job.Status)
+	}
+}

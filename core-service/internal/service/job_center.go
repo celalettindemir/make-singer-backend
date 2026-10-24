@@ -19,9 +19,6 @@ var ErrNotRetryable = errors.New("job not retryable")
 const (
 	// jobListLimit is the contract's cap on GET /api/jobs.
 	jobListLimit = 50
-	// jobListScan bounds the rows read before the active/recent filter; jobs
-	// live 30 days, so it comfortably covers one user.
-	jobListScan = 200
 	// jobEventsLimit is the contract's page size of GET /api/jobs/:id/events.
 	jobEventsLimit = 500
 	// DefaultJobListWindow is the default of the `since` query parameter.
@@ -62,21 +59,13 @@ func (c *JobCenter) WithLyrics(cancel JobCanceler, retry LyricsRetrier) *JobCent
 // List returns every non-terminal job of the user plus the jobs that finished
 // at or after since, newest first, at most 50.
 func (c *JobCenter) List(ctx context.Context, userID string, since time.Time) ([]model.JobView, error) {
-	all, err := c.repo.List(ctx, userID, time.Time{}, jobListScan)
+	all, err := c.repo.List(ctx, userID, since, jobListLimit)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]model.JobView, 0, len(all))
 	for i := range all {
-		j := &all[i]
-		finished := j.Status == model.JobStatusSucceeded || j.Status == model.JobStatusFailed || j.Status == model.JobStatusCanceled
-		if finished && (j.CompletedAt == nil || j.CompletedAt.Before(since)) {
-			continue
-		}
-		out = append(out, j.View())
-		if len(out) == jobListLimit {
-			break
-		}
+		out = append(out, all[i].View())
 	}
 	return out, nil
 }

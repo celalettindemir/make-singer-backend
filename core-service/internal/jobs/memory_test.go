@@ -58,6 +58,8 @@ func TestMemoryStore_MatchesPostgres(t *testing.T) {
 				"skip":     func(t *testing.T, e env) { scenarioSkipWrite(t, e.repo) },
 				"owner":    func(t *testing.T, e env) { scenarioOwnerOnly(t, e.repo) },
 				"lyrics":   func(t *testing.T, e env) { scenarioActiveLyrics(t, e.repo) },
+				"list":     func(t *testing.T, e env) { scenarioList(t, e.repo, e.backdate) },
+				"stale":    func(t *testing.T, e env) { scenarioStale(t, e.repo) },
 				"sweep":    func(t *testing.T, e env) { scenarioSweep(t, e.repo, e.backdate) },
 				"finished": func(t *testing.T, e env) { scenarioOnFinished(t, e.repo, e.hook) },
 			}

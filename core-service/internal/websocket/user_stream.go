@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gofiber/contrib/websocket"
+	"github.com/google/uuid"
 	"github.com/makeasinger/api/internal/jobs"
 )
 
@@ -17,6 +18,12 @@ const (
 	pingInterval = 30 * time.Second
 	replayPage   = 500
 	liveBuffer   = 256
+	// maxResumeJobs caps the jobs one resume message may name.
+	maxResumeJobs = 50
+	// maxClientMessage is the read limit of a client frame.
+	maxClientMessage = 64 * 1024
+	// writeWait is the deadline of one frame write.
+	writeWait = 10 * time.Second
 )
 
 // streamConn is the part of *websocket.Conn the stream uses.
@@ -24,6 +31,8 @@ type streamConn interface {
 	ReadMessage() (int, []byte, error)
 	WriteMessage(messageType int, data []byte) error
 	SetReadDeadline(t time.Time) error
+	SetWriteDeadline(t time.Time) error
+	Close() error
 }
 
 // UserStreams serves /ws/me: each connection receives the job events of one
@@ -81,6 +90,7 @@ func (u *UserStreams) remove(userID string, s *userSub) {
 
 // Handle runs one /ws/me connection until it closes.
 func (u *UserStreams) Handle(c *websocket.Conn, userID string) {
+	c.SetReadLimit(maxClientMessage)
 	u.serve(c, userID)
 }
 
@@ -123,6 +133,7 @@ func (u *UserStreams) serve(c streamConn, userID string) {
 	writeType := func(typ int, b []byte) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()
+		_ = c.SetWriteDeadline(time.Now().Add(writeWait))
 		return c.WriteMessage(typ, b)
 	}
 	write := func(b []byte) error { return writeType(websocket.TextMessage, b) }
@@ -137,7 +148,7 @@ func (u *UserStreams) serve(c streamConn, userID string) {
 		if json.Unmarshal(raw, &m) == nil {
 			switch m.Type {
 			case "resume":
-				u.replay(userID, m.Jobs, sent, write)
+				u.replay(userID, sanitizeResume(m.Jobs), sent, write)
 			case "ping":
 				_ = pong()
 			}
@@ -150,7 +161,7 @@ func (u *UserStreams) serve(c streamConn, userID string) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		u.live(sub, sent, write, writeType)
+		u.live(sub, c, sent, write, writeType)
 	}()
 
 	// Reader: pings until the client goes away.
@@ -169,6 +180,21 @@ func (u *UserStreams) serve(c streamConn, userID string) {
 	// Stop the live goroutine.
 	sub.once.Do(func() { close(sub.overflow) })
 	<-done
+}
+
+// sanitizeResume keeps only job ids that are UUIDs and at most maxResumeJobs
+// of them; the rest is ignored.
+func sanitizeResume(in map[string]int64) map[string]int64 {
+	out := make(map[string]int64, len(in))
+	for id, seq := range in {
+		if len(out) == maxResumeJobs {
+			break
+		}
+		if _, err := uuid.Parse(id); err == nil {
+			out[id] = seq
+		}
+	}
+	return out
 }
 
 // replay sends, per job, the stored events after the client's last seq.
@@ -200,7 +226,7 @@ func (u *UserStreams) replay(userID string, jobsSeq map[string]int64, sent map[s
 }
 
 // live drains the buffer, dropping what replay already sent, and pings.
-func (u *UserStreams) live(sub *userSub, sent map[string]int64, write func([]byte) error, writeType func(int, []byte) error) {
+func (u *UserStreams) live(sub *userSub, c streamConn, sent map[string]int64, write func([]byte) error, writeType func(int, []byte) error) {
 	ticker := time.NewTicker(pingInterval)
 	defer ticker.Stop()
 	for {
@@ -219,6 +245,8 @@ func (u *UserStreams) live(sub *userSub, sent map[string]int64, write func([]byt
 			}
 		case <-sub.overflow:
 			_ = writeType(websocket.CloseMessage, []byte{})
+			// The client must reconnect and resume; closing also ends the reader.
+			_ = c.Close()
 			return
 		}
 	}

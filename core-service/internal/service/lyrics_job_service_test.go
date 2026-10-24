@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/hibiken/asynq"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/makeasinger/api/internal/credit"
 	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
@@ -249,6 +250,9 @@ func TestLyricsJob_CancelRefundRules(t *testing.T) {
 		{"rewrite 1 done refunds the unstarted", "rewrite", []int{0, 1, 2},
 			[]model.LyricsJobSectionResult{sec(0, "done", "x"), sec(1, "pending"), sec(2, "pending")},
 			[]string{sectionActionID(lyricsAction, 1, 0), sectionActionID(lyricsAction, 2, 0)}},
+		{"rewrite failed and unstarted sections refunded, done kept", "rewrite", []int{0, 1, 2},
+			[]model.LyricsJobSectionResult{sec(0, "done", "x"), sec(1, "failed"), sec(2, "pending")},
+			[]string{sectionActionID(lyricsAction, 1, 0), sectionActionID(lyricsAction, 2, 0)}},
 		{"rewrite no lines refunds all", "rewrite", []int{0, 1},
 			[]model.LyricsJobSectionResult{sec(0, "writing"), sec(1, "pending")},
 			[]string{sectionActionID(lyricsAction, 0, 0), sectionActionID(lyricsAction, 1, 0)}},
@@ -358,5 +362,82 @@ func TestLyricsJob_RetryOnlyFailedSectionsWithin24h(t *testing.T) {
 	}
 	if len(e2.spender.Actions) != n {
 		t.Errorf("generate retry charged: %+v", e2.spender.Actions[n:])
+	}
+}
+
+func TestLyricsJob_FailStaleEndsIdleJobsWithRefundRules(t *testing.T) {
+	e := newLyricsJobEnv(t, true)
+	resp, err := e.svc.Start(context.Background(), lyricsUser, lyricsAction, lyricsJobRequest("rewrite", 0, 1, 2))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	setResult(t, e.repo, resp.JobID, model.JobStatusRunning,
+		sec(0, "done", "x"), sec(1, "writing", "half"), sec(2, "pending"))
+
+	// Fresh activity: nothing is stale.
+	if n, err := e.svc.FailStale(context.Background(), time.Now()); err != nil || n != 0 {
+		t.Fatalf("fresh: n=%d err=%v", n, err)
+	}
+	n, err := e.svc.FailStale(context.Background(), time.Now().Add(20*time.Minute))
+	if err != nil || n != 1 {
+		t.Fatalf("stale: n=%d err=%v", n, err)
+	}
+	job, _ := e.repo.Get(context.Background(), resp.JobID)
+	res, _ := model.ParseLyricsJobResult(job.Result)
+	if job.Status != model.JobStatusSucceeded || res.Sections[1].Status != "failed" || res.Sections[2].Status != "failed" {
+		t.Errorf("job = %s %+v, want succeeded with 1 and 2 failed", job.Status, res.Sections)
+	}
+	if len(e.spender.ActionRefunds) != 2 {
+		t.Errorf("refunds = %+v, want the two failed sections", e.spender.ActionRefunds)
+	}
+
+	// No section done: the job fails with AI_ERROR and generate is refunded.
+	e2 := newLyricsJobEnv(t, true)
+	r2, _ := e2.svc.Start(context.Background(), lyricsUser, lyricsAction, lyricsJobRequest("generate", 0))
+	if n, _ := e2.svc.FailStale(context.Background(), time.Now().Add(20*time.Minute)); n != 1 {
+		t.Fatalf("n = %d", n)
+	}
+	j2, _ := e2.repo.Get(context.Background(), r2.JobID)
+	if j2.Status != model.JobStatusFailed || j2.ErrorCode != "AI_ERROR" {
+		t.Errorf("job = %s %q", j2.Status, j2.ErrorCode)
+	}
+	if len(e2.spender.ActionRefunds) != 1 || e2.spender.ActionRefunds[0].ID != lyricsAction {
+		t.Errorf("refunds = %+v", e2.spender.ActionRefunds)
+	}
+}
+
+// uniqueRepo makes the next UpdateWith fail like the partial unique index.
+type uniqueRepo struct {
+	jobs.Repo
+	fail bool
+}
+
+func (u *uniqueRepo) UpdateWith(ctx context.Context, id string, fn func(*model.Job, jobs.Emitter) error) error {
+	if u.fail {
+		return &pgconn.PgError{Code: "23505", ConstraintName: "isler_sozler_aktif"}
+	}
+	return u.Repo.UpdateWith(ctx, id, fn)
+}
+
+func TestLyricsJob_RetryUniqueViolationNamesTheActiveJob(t *testing.T) {
+	e := newLyricsJobEnv(t, false)
+	first, err := e.svc.Start(context.Background(), lyricsUser, "", lyricsJobRequest("generate", 0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	setResult(t, e.repo, first.JobID, model.JobStatusSucceeded, sec(0, "done", "a"), sec(1, "failed"))
+	_ = e.repo.Update(context.Background(), first.JobID, func(j *model.Job) error {
+		now := time.Now()
+		j.CompletedAt = &now
+		return nil
+	})
+	second, err := e.svc.Start(context.Background(), lyricsUser, "", lyricsJobRequest("generate", 0))
+	if err != nil {
+		t.Fatalf("second start: %v", err)
+	}
+	e.svc.repo = &uniqueRepo{Repo: e.repo, fail: true}
+	err = e.svc.Retry(context.Background(), lyricsUser, first.JobID)
+	if !errors.Is(err, jobs.ErrActiveLyricsJob) || jobs.ActiveJobID(err) != second.JobID {
+		t.Fatalf("err = %v (%q), want ErrActiveLyricsJob naming %s", err, jobs.ActiveJobID(err), second.JobID)
 	}
 }

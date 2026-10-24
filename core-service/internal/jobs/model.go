@@ -35,6 +35,9 @@ type activeJobError struct{ jobID string }
 func (e *activeJobError) Error() string { return ErrActiveLyricsJob.Error() + " " + e.jobID }
 func (e *activeJobError) Unwrap() error { return ErrActiveLyricsJob }
 
+// ActiveError returns an ErrActiveLyricsJob error that names the active job.
+func ActiveError(jobID string) error { return &activeJobError{jobID: jobID} }
+
 // ActiveJobID returns the id of the already active job carried by an
 // ErrActiveLyricsJob error, or "" when err carries none.
 func ActiveJobID(err error) string {
@@ -82,7 +85,12 @@ type Repo interface {
 	GetOwned(ctx context.Context, userID, id string) (*model.Job, error)
 	Update(ctx context.Context, id string, fn func(*model.Job) error) error
 	UpdateWith(ctx context.Context, id string, fn func(*model.Job, Emitter) error) error
+	// List returns the user's non-terminal jobs plus the jobs that finished at
+	// or after since, newest first, at most limit.
 	List(ctx context.Context, userID string, since time.Time, limit int) ([]model.Job, error)
+	// StaleLyricsJobs returns the ids of lyrics jobs that are queued or running
+	// and have shown no activity (no event) since before.
+	StaleLyricsJobs(ctx context.Context, before time.Time) ([]string, error)
 	EventsAfter(ctx context.Context, userID, id string, afterSeq int64, limit int) ([]Event, error)
 	Sweep(ctx context.Context, now time.Time) (jobs, events int64, err error)
 	// DeleteOwner removes the user's jobs, events and devices.
