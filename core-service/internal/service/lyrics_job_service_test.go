@@ -394,6 +394,7 @@ func TestLyricsJob_FailStaleEndsIdleJobsWithRefundRules(t *testing.T) {
 	// No section done: the job fails with AI_ERROR and generate is refunded.
 	e2 := newLyricsJobEnv(t, true)
 	r2, _ := e2.svc.Start(context.Background(), lyricsUser, lyricsAction, lyricsJobRequest("generate", 0))
+	e2.svc.inspector = &fakeInspector{err: asynq.ErrTaskNotFound}
 	if n, _ := e2.svc.FailStale(context.Background(), time.Now().Add(20*time.Minute)); n != 1 {
 		t.Fatalf("n = %d", n)
 	}
@@ -439,5 +440,104 @@ func TestLyricsJob_RetryUniqueViolationNamesTheActiveJob(t *testing.T) {
 	err = e.svc.Retry(context.Background(), lyricsUser, first.JobID)
 	if !errors.Is(err, jobs.ErrActiveLyricsJob) || jobs.ActiveJobID(err) != second.JobID {
 		t.Fatalf("err = %v (%q), want ErrActiveLyricsJob naming %s", err, jobs.ActiveJobID(err), second.JobID)
+	}
+}
+
+type fakeInspector struct {
+	state asynq.TaskState
+	err   error
+	asked []string
+}
+
+func (f *fakeInspector) CancelProcessing(string) error { return nil }
+func (f *fakeInspector) GetTaskInfo(queue, id string) (*asynq.TaskInfo, error) {
+	f.asked = append(f.asked, queue+"/"+id)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &asynq.TaskInfo{State: f.state}, nil
+}
+
+func TestLyricsJob_FailStaleQueuedJobAsksTheInspector(t *testing.T) {
+	cases := []struct {
+		name     string
+		insp     *fakeInspector
+		wantFail bool
+	}{
+		{"pending waits", &fakeInspector{state: asynq.TaskStatePending}, false},
+		{"scheduled waits", &fakeInspector{state: asynq.TaskStateScheduled}, false},
+		{"retry waits", &fakeInspector{state: asynq.TaskStateRetry}, false},
+		{"active waits", &fakeInspector{state: asynq.TaskStateActive}, false},
+		{"archived fails", &fakeInspector{state: asynq.TaskStateArchived}, true},
+		{"missing fails", &fakeInspector{err: asynq.ErrTaskNotFound}, true},
+		{"other error waits", &fakeInspector{err: errors.New("redis down")}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newLyricsJobEnv(t, true)
+			resp, err := e.svc.Start(context.Background(), lyricsUser, lyricsAction, lyricsJobRequest("generate", 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			e.svc.inspector = tc.insp
+			n, err := e.svc.FailStale(context.Background(), time.Now().Add(20*time.Minute))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(tc.insp.asked) != 1 || tc.insp.asked[0] != "soz/"+resp.JobID+":0" {
+				t.Errorf("asked = %v, want the job's current task id", tc.insp.asked)
+			}
+			job, _ := e.repo.Get(context.Background(), resp.JobID)
+			failed := job.Status == model.JobStatusFailed
+			if failed != tc.wantFail || (n == 1) != tc.wantFail {
+				t.Errorf("status = %s n = %d, want failed=%v", job.Status, n, tc.wantFail)
+			}
+			if !tc.wantFail && len(e.spender.ActionRefunds) != 0 {
+				t.Errorf("refunded a waiting job: %+v", e.spender.ActionRefunds)
+			}
+		})
+	}
+}
+
+// racingRepo commits a worker change right before the finish update runs, as
+// a live worker could between a stale read and the finish.
+type racingRepo struct {
+	jobs.Repo
+	before func()
+}
+
+func (r *racingRepo) UpdateWith(ctx context.Context, id string, fn func(*model.Job, jobs.Emitter) error) error {
+	if r.before != nil {
+		b := r.before
+		r.before = nil
+		b()
+	}
+	return r.Repo.UpdateWith(ctx, id, fn)
+}
+
+func TestLyricsJob_FinishKeepsAWorkerCommitAndDoesNotRefundThatSection(t *testing.T) {
+	e := newLyricsJobEnv(t, true)
+	resp, err := e.svc.Start(context.Background(), lyricsUser, lyricsAction, lyricsJobRequest("rewrite", 0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	setResult(t, e.repo, resp.JobID, model.JobStatusRunning, sec(0, "done", "x"), sec(1, "writing", "half"))
+	racing := &racingRepo{Repo: e.repo}
+	racing.before = func() { // the worker finishes section 1 meanwhile
+		setResult(t, e.repo, resp.JobID, model.JobStatusRunning, sec(0, "done", "x"), sec(1, "done", "half", "rest"))
+	}
+	if err := FinishLyricsJob(context.Background(), racing, e.spender, resp.JobID, true); err != nil {
+		t.Fatal(err)
+	}
+	job, _ := e.repo.Get(context.Background(), resp.JobID)
+	res, _ := model.ParseLyricsJobResult(job.Result)
+	if res.Sections[1].Status != "done" || len(res.Sections[1].Lines) != 2 {
+		t.Errorf("section 1 = %+v, want the worker's commit kept", res.Sections[1])
+	}
+	if job.Status != model.JobStatusSucceeded || len(res.FailedSections()) != 0 {
+		t.Errorf("job = %s failed %v", job.Status, res.FailedSections())
+	}
+	if len(e.spender.ActionRefunds) != 0 {
+		t.Errorf("refunds = %+v, want none (both sections done)", e.spender.ActionRefunds)
 	}
 }

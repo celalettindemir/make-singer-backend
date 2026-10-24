@@ -58,12 +58,18 @@ func sectionActionID(actionID string, section, attempt int) string {
 	return uuid.NewSHA1(uuid.MustParse(actionID), []byte(fmt.Sprintf("%d:%d", section, attempt))).String()
 }
 
+// taskInspector is the part of *asynq.Inspector the service uses.
+type taskInspector interface {
+	CancelProcessing(id string) error
+	GetTaskInfo(queue, id string) (*asynq.TaskInfo, error)
+}
+
 // LyricsJobService starts, cancels and retries lyrics jobs; the asynq worker
 // does the writing.
 type LyricsJobService struct {
 	repo      jobs.Repo
 	client    *asynq.Client
-	inspector *asynq.Inspector
+	inspector taskInspector
 	gen       LyricsGenerator
 	validate  *validator.Validate
 	credits   credit.Spender
@@ -75,7 +81,11 @@ var (
 )
 
 func NewLyricsJobService(repo jobs.Repo, asynqClient *asynq.Client, inspector *asynq.Inspector, gen LyricsGenerator, v *validator.Validate) *LyricsJobService {
-	return &LyricsJobService{repo: repo, client: asynqClient, inspector: inspector, gen: gen, validate: v}
+	s := &LyricsJobService{repo: repo, client: asynqClient, gen: gen, validate: v}
+	if inspector != nil { // a nil *asynq.Inspector must not become a non-nil interface
+		s.inspector = inspector
+	}
+	return s
 }
 
 // WithCredits turns on charging; without it nothing is charged and the
@@ -438,9 +448,11 @@ func (s *LyricsJobService) activeLyricsJobID(ctx context.Context, userID, projec
 // activity before FailStale ends it.
 const lyricsStaleAfter = 15 * time.Minute
 
-// FailStale ends the lyrics jobs that have shown no activity for 15 minutes
-// (a lost task, a crashed pod after the last attempt): unfinished sections
-// become failed and the usual refund rules apply. It returns how many it ended.
+// FailStale ends the stale lyrics jobs: unfinished sections become failed and
+// the usual refund rules apply. Stale means no event for 15 minutes. A running
+// job is then ended; a queued one only when its asynq task is gone or archived
+// (a task still pending, scheduled, retrying or active is just waiting). It
+// returns how many jobs it ended.
 func (s *LyricsJobService) FailStale(ctx context.Context, now time.Time) (int, error) {
 	ids, err := s.repo.StaleLyricsJobs(ctx, now.Add(-lyricsStaleAfter))
 	if err != nil {
@@ -448,6 +460,13 @@ func (s *LyricsJobService) FailStale(ctx context.Context, now time.Time) (int, e
 	}
 	n := 0
 	for _, id := range ids {
+		job, err := s.repo.Get(ctx, id)
+		if err != nil || isTerminalStatus(job.Status) {
+			continue
+		}
+		if job.Status == model.JobStatusQueued && !s.queuedTaskLost(job) {
+			continue
+		}
 		if err := FinishLyricsJob(ctx, s.repo, s.credits, id, true); err != nil {
 			log.Printf("lyrics job %s: fail stale: %v", id, err)
 			continue
@@ -457,56 +476,71 @@ func (s *LyricsJobService) FailStale(ctx context.Context, now time.Time) (int, e
 	return n, nil
 }
 
-// FinishLyricsJob ends a lyrics job: refunds first, then the final status
-// (succeeded when a section is done, else failed AI_ERROR). With failUnfinished
-// every section that is neither done nor failed becomes failed. A job whose
-// input cannot be read is failed without refunds.
+// queuedTaskLost reports whether the asynq task of a queued job is gone or
+// archived. Without an inspector, or on any other error, the job is left alone.
+func (s *LyricsJobService) queuedTaskLost(job *model.Job) bool {
+	if s.inspector == nil {
+		return false
+	}
+	var in model.LyricsJobInput
+	if err := json.Unmarshal(job.Payload, &in); err != nil {
+		return true // nothing can run an unreadable job
+	}
+	info, err := s.inspector.GetTaskInfo(LyricsQueue, lyricsTaskID(job.ID, in.Attempt))
+	switch {
+	case errors.Is(err, asynq.ErrTaskNotFound), errors.Is(err, asynq.ErrQueueNotFound):
+		return true
+	case err != nil:
+		log.Printf("lyrics job %s: inspect task: %v", job.ID, err)
+		return false
+	}
+	return info.State == asynq.TaskStateArchived || info.State == asynq.TaskStateCompleted
+}
+
+// FinishLyricsJob ends a lyrics job: the final status (succeeded when a section
+// is done, else failed AI_ERROR) and its refunds are decided from the row as
+// the update sees it (a worker commit just before is kept), and the refunds
+// are made after the update. With failUnfinished every section that is neither
+// done nor failed becomes failed. A job whose input cannot be read is failed
+// without refunds.
 //
 // Refunds: generate only when no section is done; rewrite each failed
 // section's charge.
 func FinishLyricsJob(ctx context.Context, repo jobs.Repo, credits credit.Spender, jobID string, failUnfinished bool) error {
-	job, err := repo.Get(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	if isTerminalStatus(job.Status) {
-		return nil
-	}
-	in, res, derr := decodeLyricsJob(job)
-	if derr != nil {
-		log.Printf("lyrics job %s: ending without refunds: %v", jobID, derr)
-		in, res, failUnfinished = model.LyricsJobInput{}, &model.LyricsJobResult{Sections: []model.LyricsJobSectionResult{}}, false
-	}
-	if failUnfinished {
-		for i := range res.Sections {
-			if sr := &res.Sections[i]; sr.Status != model.LyricsSectionDone && sr.Status != model.LyricsSectionFailed {
-				sr.Status, sr.Lines = model.LyricsSectionFailed, []string{}
-			}
-		}
-	}
-	done := res.Count(model.LyricsSectionDone)
 	var refunds []model.LyricsCharge
-	if in.Mode == model.LyricsModeRewrite {
-		for _, c := range in.Charges {
-			if sr := res.Section(c.Section); sr != nil && sr.Status == model.LyricsSectionFailed {
-				refunds = append(refunds, c)
-			}
-		}
-	} else if done == 0 {
-		refunds = in.Charges
-	}
-	RefundLyricsCharges(credits, job.OwnerID, refunds)
-
-	err = repo.UpdateWith(ctx, jobID, func(j *model.Job, _ jobs.Emitter) error {
+	var owner string
+	err := repo.UpdateWith(ctx, jobID, func(j *model.Job, _ jobs.Emitter) error {
 		if isTerminalStatus(j.Status) {
 			return jobs.ErrSkipWrite
 		}
-		if failUnfinished {
+		owner, refunds = j.OwnerID, nil
+		in, res, derr := decodeLyricsJob(j)
+		fail := failUnfinished
+		if derr != nil {
+			log.Printf("lyrics job %s: ending without refunds: %v", jobID, derr)
+			in, res, fail = model.LyricsJobInput{}, &model.LyricsJobResult{Sections: []model.LyricsJobSectionResult{}}, false
+		}
+		if fail {
+			for i := range res.Sections {
+				if sr := &res.Sections[i]; sr.Status != model.LyricsSectionDone && sr.Status != model.LyricsSectionFailed {
+					sr.Status, sr.Lines = model.LyricsSectionFailed, []string{}
+				}
+			}
 			raw, err := json.Marshal(res)
 			if err != nil {
 				return err
 			}
 			j.Result = raw
+		}
+		done := res.Count(model.LyricsSectionDone)
+		if in.Mode == model.LyricsModeRewrite {
+			for _, c := range in.Charges {
+				if sr := res.Section(c.Section); sr != nil && sr.Status == model.LyricsSectionFailed {
+					refunds = append(refunds, c)
+				}
+			}
+		} else if done == 0 {
+			refunds = in.Charges
 		}
 		if done >= 1 {
 			j.Status, j.Progress, j.CurrentStep = model.JobStatusSucceeded, 100, LyricsStepDone
@@ -518,5 +552,9 @@ func FinishLyricsJob(ctx context.Context, repo jobs.Repo, credits credit.Spender
 	if errors.Is(err, jobs.ErrSkipWrite) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	RefundLyricsCharges(credits, owner, refunds)
+	return nil
 }
