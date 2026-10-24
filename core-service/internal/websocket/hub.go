@@ -1,12 +1,14 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"sync"
 	"time"
 
 	"github.com/gofiber/contrib/websocket"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
 )
 
@@ -31,6 +33,9 @@ type Hub struct {
 	// Broadcast messages to job subscribers
 	broadcast chan *BroadcastMessage
 
+	// bus fans legacy messages out across pods; nil means local only.
+	bus *jobs.RedisBus
+
 	mu sync.RWMutex
 }
 
@@ -40,9 +45,10 @@ type BroadcastMessage struct {
 	Message []byte
 }
 
-// NewHub creates a new Hub
-func NewHub() *Hub {
+// NewHub creates a new Hub. A nil bus keeps broadcasts on this instance.
+func NewHub(bus *jobs.RedisBus) *Hub {
 	return &Hub{
+		bus:        bus,
 		clients:    make(map[string]map[*Client]bool),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
@@ -50,8 +56,17 @@ func NewHub() *Hub {
 	}
 }
 
-// Run starts the hub's main loop
-func (h *Hub) Run() {
+// Run starts the hub's main loop. With a bus it also forwards legacy messages
+// published by any pod (including this one) to the local job clients until
+// ctx is canceled.
+func (h *Hub) Run(ctx context.Context) {
+	if h.bus != nil {
+		go func() {
+			_ = h.bus.RunLegacy(ctx, func(jobID string, msg []byte) {
+				h.broadcast <- &BroadcastMessage{JobID: jobID, Message: msg}
+			})
+		}()
+	}
 	for {
 		select {
 		case client := <-h.register:
@@ -104,6 +119,16 @@ func (h *Hub) Unregister(client *Client) {
 	h.unregister <- client
 }
 
+// send publishes through the bus (every pod, this one included, delivers it
+// to its local clients) or, without a bus, straight to the local clients.
+func (h *Hub) send(jobID string, data []byte) {
+	if h.bus != nil {
+		h.bus.PublishLegacy(context.Background(), jobID, data)
+		return
+	}
+	h.broadcast <- &BroadcastMessage{JobID: jobID, Message: data}
+}
+
 // BroadcastProgress sends a progress update to all job subscribers
 func (h *Hub) BroadcastProgress(jobID string, progress int, status model.JobStatus, step string) {
 	msg := model.WSProgressMessage{
@@ -120,10 +145,7 @@ func (h *Hub) BroadcastProgress(jobID string, progress int, status model.JobStat
 		return
 	}
 
-	h.broadcast <- &BroadcastMessage{
-		JobID:   jobID,
-		Message: data,
-	}
+	h.send(jobID, data)
 }
 
 // BroadcastComplete sends a completion message to all job subscribers
@@ -140,10 +162,7 @@ func (h *Hub) BroadcastComplete(jobID string, result interface{}) {
 		return
 	}
 
-	h.broadcast <- &BroadcastMessage{
-		JobID:   jobID,
-		Message: data,
-	}
+	h.send(jobID, data)
 }
 
 // BroadcastError sends an error message to all job subscribers
@@ -163,10 +182,7 @@ func (h *Hub) BroadcastError(jobID string, code, message string) {
 		return
 	}
 
-	h.broadcast <- &BroadcastMessage{
-		JobID:   jobID,
-		Message: data,
-	}
+	h.send(jobID, data)
 }
 
 // HandleConnection handles a WebSocket connection

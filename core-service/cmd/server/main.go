@@ -134,7 +134,7 @@ func main() {
 
 	// Jobs (uretim): same database, own pool, own schema and migration table.
 	// FATAL like social/credit: render and master jobs live here. The bus
-	// publisher is wired later (nil: events are stored but not fanned out).
+	// bus publishes committed events to every pod.
 	jobsPool, err := identity.Connect(ctx, cfg.Auth.DBURL)
 	if err != nil {
 		log.Fatalf("Could not connect to the jobs database: %v", err)
@@ -143,7 +143,8 @@ func main() {
 	if err := jobs.Migrate(ctx, jobsPool); err != nil {
 		log.Fatalf("Jobs migration failed: %v", err)
 	}
-	jobStore := jobs.NewPostgresStore(jobsPool, nil)
+	jobBus := jobs.NewRedisBus(redisClient)
+	jobStore := jobs.NewPostgresStore(jobsPool, jobBus)
 	// Records the previous release left in Redis (24 h TTL) move into the store.
 	if copied, refreshed, err := jobs.ImportRedisJobs(ctx, redisClient, jobStore); err != nil {
 		log.Printf("Warning: Redis job import failed after %d copied, %d refreshed: %v", copied, refreshed, err)
@@ -163,8 +164,10 @@ func main() {
 	validate := validator.New()
 
 	// Initialize WebSocket hub
-	hub := ws.NewHub()
-	go hub.Run()
+	hub := ws.NewHub(jobBus)
+	go hub.Run(ctx)
+	userStreams := ws.NewUserStreams(jobStore)
+	go func() { _ = jobBus.Run(ctx, userStreams.Deliver) }()
 
 	// Initialize external clients
 	groqClient := client.NewGroqClient(&cfg.Groq)
@@ -435,6 +438,8 @@ func main() {
 	// WebSocket ticket: obtained with an authenticated request.
 	api.Post("/ws/ticket", rateLimiter.WSTicketLimit(cfg.RateLimit.WSTicketPerMin), wsTicketHandler.Issue)
 
+	api.Post("/ws/ticket/me", rateLimiter.WSTicketLimit(cfg.RateLimit.WSTicketPerMin), wsTicketHandler.IssueUser)
+
 	// Refreshes saved file URLs (the signature expires in 1 hour).
 	api.Post("/files/sign", rateLimiter.SignLimit(cfg.RateLimit.SignPerMin), fileHandler.Sign)
 
@@ -463,6 +468,11 @@ func main() {
 	app.Get("/ws/jobs/:jobId", wsTicketHandler.Gate, websocket.New(func(c *websocket.Conn) {
 		jobID := c.Params("jobId")
 		hub.HandleConnection(c, jobID)
+	}))
+
+	app.Get("/ws/me", wsTicketHandler.GateUser, websocket.New(func(c *websocket.Conn) {
+		userID, _ := c.Locals("userId").(string)
+		userStreams.Handle(c, userID)
 	}))
 
 	// Start Asynq worker server

@@ -35,7 +35,7 @@ func TestMasterWorker_RefundsOnlyOnFinalFailure(t *testing.T) {
 	putMasterJob(t, repo, model.JobStatusQueued)
 	fake := &credit.FakeSpender{IsEnforced: true}
 	audio := &fakeAudio{err: errors.New("audio 503")}
-	w := NewMasterWorker(repo, audio, &fakeStorage{}, nil, websocket.NewHub(), testR2Cfg(), nil).WithCredits(fake)
+	w := NewMasterWorker(repo, audio, &fakeStorage{}, nil, websocket.NewHub(nil), testR2Cfg(), nil).WithCredits(fake)
 
 	// Attempt 1 of 3: no refund, the job is not failed.
 	w.isLastAttempt = func(context.Context) bool { return false }
@@ -66,7 +66,7 @@ func TestMasterWorker_SkipRetryFailsAndRefundsAtOnce(t *testing.T) {
 	repo := jobs.NewMemoryStore(nil)
 	putMasterJob(t, repo, model.JobStatusQueued)
 	fake := &credit.FakeSpender{IsEnforced: true}
-	w := NewMasterWorker(repo, &fakeAudio{}, &fakeStorage{}, nil, websocket.NewHub(), testR2Cfg(), nil).WithCredits(fake)
+	w := NewMasterWorker(repo, &fakeAudio{}, &fakeStorage{}, nil, websocket.NewHub(nil), testR2Cfg(), nil).WithCredits(fake)
 	w.isLastAttempt = func(context.Context) bool { return false }
 
 	p := masterPayload()
@@ -88,7 +88,7 @@ func TestMasterWorker_CanceledJobSkipsAudioService(t *testing.T) {
 	putMasterJob(t, repo, model.JobStatusQueued)
 	fake := &credit.FakeSpender{IsEnforced: true}
 	audio := &fakeAudio{}
-	w := NewMasterWorker(repo, audio, &fakeStorage{}, nil, websocket.NewHub(), testR2Cfg(), nil).WithCredits(fake)
+	w := NewMasterWorker(repo, audio, &fakeStorage{}, nil, websocket.NewHub(nil), testR2Cfg(), nil).WithCredits(fake)
 	w.isLastAttempt = func(context.Context) bool { return true }
 
 	// The cancel arrives while the job waits in the queue.

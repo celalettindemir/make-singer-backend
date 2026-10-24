@@ -69,3 +69,39 @@ func (h *WSTicketHandler) Gate(c *fiber.Ctx) error {
 	}
 	return c.Next()
 }
+
+// IssueUser handles POST /api/ws/ticket/me
+// @Summary      Get WebSocket ticket for the user job stream
+// @Description  Issue a single-use, 30-second ticket for GET /ws/me?ticket=...
+// @Tags         WebSocket
+// @Produce      json
+// @Success      200 {object} model.WSTicketResponse
+// @Failure      401 {object} response.ErrorResponse
+// @Failure      500 {object} response.ErrorResponse
+// @Security     BearerAuth
+// @Router       /api/ws/ticket/me [post]
+func (h *WSTicketHandler) IssueUser(c *fiber.Ctx) error {
+	userID, ok := requestOwner(c)
+	if !ok {
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
+	}
+	result, err := h.service.IssueUser(c.Context(), userID)
+	if err != nil {
+		return response.ServiceError(c, i18n.KeyTicketIssueFailed)
+	}
+	return response.OK(c, result)
+}
+
+// GateUser consumes a user ticket BEFORE the upgrade and stores the user id in
+// c.Locals("userId") for the /ws/me handler.
+func (h *WSTicketHandler) GateUser(c *fiber.Ctx) error {
+	userID, err := h.service.RedeemUser(c.Context(), c.Query("ticket"))
+	if errors.Is(err, service.ErrInvalidTicket) {
+		return response.Unauthorized(c, i18n.KeyTicketInvalid)
+	}
+	if err != nil {
+		return response.ServiceError(c, i18n.KeyTicketCheckFailed)
+	}
+	c.Locals("userId", userID)
+	return c.Next()
+}

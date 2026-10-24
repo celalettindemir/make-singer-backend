@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -103,8 +104,8 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 	}
 
 	// WebSocket hub
-	hub := websocket.NewHub()
-	go hub.Run()
+	hub := websocket.NewHub(nil)
+	go hub.Run(context.Background())
 
 	// Services
 	lyricsService := service.NewLyricsService(lyricsprovider.Fixed(groqClient))

@@ -67,7 +67,7 @@ func newCreditSetup(t *testing.T, status model.JobStatus, store client.StorageCl
 	svc := service.NewRenderService(repo, nil, store, &config.R2Config{})
 	fake := &credit.FakeSpender{IsEnforced: true}
 	suno := &fakeSuno{}
-	w := NewRenderWorker(svc, suno, store, websocket.NewHub(), nil).WithCredits(fake)
+	w := NewRenderWorker(svc, suno, store, websocket.NewHub(nil), nil).WithCredits(fake)
 	w.pollInterval = time.Millisecond
 	w.isLastAttempt = func(context.Context) bool { return false }
 	return &creditSetup{w: w, svc: svc, fake: fake, suno: suno, repo: repo}
@@ -159,7 +159,7 @@ func TestRenderWorker_SkipRetryAfterChargeRefunds(t *testing.T) {
 	svc := service.NewRenderService(repo, nil, store, &config.R2Config{})
 	fake := &credit.FakeSpender{IsEnforced: true}
 	suno := &fakeSuno{track: &client.Track{ID: "a1", AudioURL: srv.URL + "/tam.mp3", Duration: 60}}
-	w := NewRenderWorker(svc, suno, store, websocket.NewHub(), nil).WithCredits(fake)
+	w := NewRenderWorker(svc, suno, store, websocket.NewHub(nil), nil).WithCredits(fake)
 	w.pollInterval = time.Millisecond
 	w.isLastAttempt = func(context.Context) bool { return false }
 
@@ -258,7 +258,7 @@ func TestRenderWorker_CancelAfterClaimNoRefund(t *testing.T) {
 			t.Errorf("CancelRender: %v", err)
 		}
 	}}
-	w := NewRenderWorker(svc, music, &fakeStorage{}, websocket.NewHub(), nil).WithCredits(workerSpender)
+	w := NewRenderWorker(svc, music, &fakeStorage{}, websocket.NewHub(nil), nil).WithCredits(workerSpender)
 	w.isLastAttempt = func(context.Context) bool { return false }
 
 	_ = w.ProcessTask(context.Background(), renderTask(t, model.StemModeMix))

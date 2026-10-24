@@ -62,3 +62,39 @@ func TestWSTicketService_MalformedTicketRejectedWithoutRedis(t *testing.T) {
 		}
 	}
 }
+
+func TestWSTicket_UserTicketRejectedForJobRoute(t *testing.T) {
+	s := ticketService(t)
+	issued, err := s.IssueUser(context.Background(), "kullanici-a")
+	if err != nil {
+		t.Fatalf("IssueUser: %v", err)
+	}
+	if err := s.Redeem(context.Background(), issued.Ticket, testJobID); !errors.Is(err, ErrInvalidTicket) {
+		t.Errorf("a user ticket on the job route must give ErrInvalidTicket, got: %v", err)
+	}
+	// Even a job id that looks like a user binding is rejected.
+	issued, _ = s.IssueUser(context.Background(), "kullanici-a")
+	if err := s.Redeem(context.Background(), issued.Ticket, "user:kullanici-a"); !errors.Is(err, ErrInvalidTicket) {
+		t.Errorf("crafted job id must be rejected, got: %v", err)
+	}
+}
+
+func TestWSTicket_JobTicketRejectedForUserRoute(t *testing.T) {
+	s := ticketService(t)
+	issued, _ := s.Issue(context.Background(), "kullanici-a", testJobID)
+	if _, err := s.RedeemUser(context.Background(), issued.Ticket); !errors.Is(err, ErrInvalidTicket) {
+		t.Errorf("a job ticket on the user route must give ErrInvalidTicket, got: %v", err)
+	}
+}
+
+func TestWSTicket_UserTicketSingleUse(t *testing.T) {
+	s := ticketService(t)
+	issued, _ := s.IssueUser(context.Background(), "kullanici-a")
+	uid, err := s.RedeemUser(context.Background(), issued.Ticket)
+	if err != nil || uid != "kullanici-a" {
+		t.Fatalf("RedeemUser = %q, %v", uid, err)
+	}
+	if _, err := s.RedeemUser(context.Background(), issued.Ticket); !errors.Is(err, ErrInvalidTicket) {
+		t.Errorf("second use: %v", err)
+	}
+}
