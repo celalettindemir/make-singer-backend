@@ -34,6 +34,7 @@ type SunoClient struct {
 	apiKey      string
 	model       string
 	callbackURL string
+	waker       Waker // nil: interval polling only
 }
 
 // GenerateMusicRequest is the worker's generation request. customMode, model
@@ -173,7 +174,7 @@ func (c *SunoClient) GenerateMusic(ctx context.Context, req *GenerateMusicReques
 // WaitMusic polls until the generation is SUCCESS and returns the first track.
 func (c *SunoClient) WaitMusic(ctx context.Context, taskID string, interval, maxWait time.Duration) (*Track, error) {
 	var result *Track
-	err := c.waitFor(ctx, interval, maxWait, "music", func() (bool, error) {
+	err := c.waitFor(ctx, taskID, interval, maxWait, "music", func() (bool, error) {
 		var data struct {
 			Status       string `json:"status"`
 			ErrorMessage string `json:"errorMessage"`
@@ -233,7 +234,7 @@ func (c *SunoClient) SplitStems(ctx context.Context, taskID, audioID string) (st
 func (c *SunoClient) WaitStems(ctx context.Context, stemTaskID string, interval, maxWait time.Duration) ([]Stem, string, error) {
 	var result []Stem
 	var vocalURL string
-	err := c.waitFor(ctx, interval, maxWait, "stem", func() (bool, error) {
+	err := c.waitFor(ctx, stemTaskID, interval, maxWait, "stem", func() (bool, error) {
 		var data struct {
 			SuccessFlag  string                     `json:"successFlag"`
 			ErrorMessage string                     `json:"errorMessage"`
@@ -303,7 +304,7 @@ func (c *SunoClient) WaitIsolated(ctx context.Context, stemTaskID string, interv
 		Duration float64 `json:"duration"`
 	}
 	var result *IsolatedStem
-	err := c.waitFor(ctx, interval, maxWait, "separation", func() (bool, error) {
+	err := c.waitFor(ctx, stemTaskID, interval, maxWait, "separation", func() (bool, error) {
 		var data struct {
 			SuccessFlag  string `json:"successFlag"`
 			ErrorMessage string `json:"errorMessage"`
@@ -336,10 +337,23 @@ func (c *SunoClient) WaitIsolated(ctx context.Context, stemTaskID string, interv
 	return result, err
 }
 
-// waitFor calls check at interval spacing until it returns true. check's
+// WithWaker lets a Suno callback cut the poll interval short. The wait stays
+// correct without it (and if a wake never arrives): the interval still polls.
+func (c *SunoClient) WithWaker(w Waker) *SunoClient {
+	c.waker = w
+	return c
+}
+
+// waitFor calls check at interval spacing (or sooner when the waker fires) until it returns true. check's
 // transientError is swallowed up to pollErrorTolerance times in a row; other
 // errors return immediately.
-func (c *SunoClient) waitFor(ctx context.Context, interval, maxWait time.Duration, label string, check func() (bool, error)) error {
+func (c *SunoClient) waitFor(ctx context.Context, taskID string, interval, maxWait time.Duration, label string, check func() (bool, error)) error {
+	var wake <-chan struct{}
+	if c.waker != nil {
+		var unsub func()
+		wake, unsub = c.waker.Wait(ctx, taskID)
+		defer unsub()
+	}
 	deadline := time.Now().Add(maxWait)
 	consecutiveErrors := 0
 	for time.Now().Before(deadline) {
@@ -363,6 +377,7 @@ func (c *SunoClient) waitFor(ctx context.Context, interval, maxWait time.Duratio
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-wake:
 		case <-time.After(interval):
 		}
 	}

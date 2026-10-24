@@ -87,6 +87,13 @@ func NewRenderWorker(renderService *service.RenderService, music client.MusicGen
 	}
 }
 
+// WithPollInterval sets the Suno poll spacing. With the callback waker on, the
+// poll is only a safety net, so main passes a long interval.
+func (w *RenderWorker) WithPollInterval(d time.Duration) *RenderWorker {
+	w.pollInterval = d
+	return w
+}
+
 // WithCredits turns on credit accounting: the final failure of a job and a
 // job canceled before its first attempt refund the render debit. A nil
 // spender keeps the worker free of credits.

@@ -240,8 +240,13 @@ type SunoConfig struct {
 	APIKey  string
 	BaseURL string
 	Model   string
-	// CallbackURL: the provider requires it but we poll, so no endpoint exists.
+	// CallbackURL is sent to Suno as callBackUrl. With CallbackToken set it
+	// should be https://<host>/api/webhooks/suno/<CallbackToken>; the callback
+	// only wakes the waiting poll, the worker re-checks the status itself.
 	CallbackURL string
+	// CallbackToken is the secret path token of the callback route. Empty:
+	// no route, no waker, 5 s polling as before.
+	CallbackToken string
 }
 
 type AudioConfig struct {
@@ -322,6 +327,7 @@ func Load() (*Config, error) {
 	readSecret("OPENAI_API_KEY")
 	readSecret("ANTHROPIC_API_KEY")
 	readSecret("SUNO_API_KEY")
+	readSecret("SUNO_CALLBACK_TOKEN")
 	readSecret("R2_ACCOUNT_ID")
 	readSecret("R2_ACCESS_KEY_ID")
 	readSecret("R2_SECRET_ACCESS_KEY")
@@ -380,6 +386,7 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("suno.base_url", "SUNO_BASE_URL")
 	_ = viper.BindEnv("suno.model", "SUNO_MODEL")
 	_ = viper.BindEnv("suno.callback_url", "SUNO_CALLBACK_URL")
+	_ = viper.BindEnv("suno.callback_token", "SUNO_CALLBACK_TOKEN")
 	_ = viper.BindEnv("audio.service_url", "AUDIO_SERVICE_URL")
 	_ = viper.BindEnv("audio.timeout", "AUDIO_SERVICE_TIMEOUT")
 	_ = viper.BindEnv("server.api_domain", "API_DOMAIN")
@@ -634,10 +641,11 @@ func Load() (*Config, error) {
 			PresignTTL:      viper.GetDuration("r2.presign_ttl"),
 		},
 		Suno: SunoConfig{
-			APIKey:      viper.GetString("suno.api_key"),
-			BaseURL:     viper.GetString("suno.base_url"),
-			Model:       viper.GetString("suno.model"),
-			CallbackURL: viper.GetString("suno.callback_url"),
+			APIKey:        viper.GetString("suno.api_key"),
+			BaseURL:       viper.GetString("suno.base_url"),
+			Model:         viper.GetString("suno.model"),
+			CallbackURL:   viper.GetString("suno.callback_url"),
+			CallbackToken: viper.GetString("suno.callback_token"),
 		},
 		Audio: AudioConfig{
 			ServiceURL: viper.GetString("audio.service_url"),

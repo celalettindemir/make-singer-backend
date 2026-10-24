@@ -77,7 +77,7 @@ func (c *SunoClient) SeparateVocalURL(ctx context.Context, audioURL string) (str
 // WaitSeparated polls until separate_vocal is SUCCESS.
 func (c *SunoClient) WaitSeparated(ctx context.Context, separationTaskID string, interval, maxWait time.Duration) (*SeparatedVocal, error) {
 	var result *SeparatedVocal
-	err := c.waitFor(ctx, interval, maxWait, "vocal separation", func() (bool, error) {
+	err := c.waitFor(ctx, separationTaskID, interval, maxWait, "vocal separation", func() (bool, error) {
 		var data struct {
 			SuccessFlag  string `json:"successFlag"`
 			ErrorMessage string `json:"errorMessage"`

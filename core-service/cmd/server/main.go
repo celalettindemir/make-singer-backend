@@ -188,6 +188,9 @@ func main() {
 		log.Fatalf("FATAL: %v", err)
 	}
 	sunoClient := client.NewSunoClient(&cfg.Suno)
+	if cfg.Suno.CallbackToken != "" {
+		sunoClient.WithWaker(client.NewRedisWaker(redisClient))
+	}
 	audioClient := client.NewAudioClient(&cfg.Audio)
 
 	// Initialize R2 client (optional - continues if not configured)
@@ -313,6 +316,9 @@ func main() {
 		Credits:   handler.NewCreditsHandler(creditService),
 		Purchases: handler.NewPurchasesHandler(purchases, validate),
 		Webhooks:  handler.NewWebhooksHandler(purchases, appleNotifications, googlePush, asynqClient),
+	}
+	if cfg.Suno.CallbackToken != "" {
+		creditRoutes.Suno = handler.NewSunoWebhookHandler(redisClient, cfg.Suno.CallbackToken)
 	}
 
 	// The only path for /api/*: our own OP's RS256 access token. The public
@@ -568,6 +574,9 @@ func startWorkerServer(
 	// and before every R2 write.
 	deletionChecker := deletionmark.NewRedisChecker(redisClient)
 	renderWorker := worker.NewRenderWorker(renderService, sunoClient, storage, hub, deletionChecker).WithCredits(creditSpender)
+	if cfg.Suno.CallbackToken != "" {
+		renderWorker.WithPollInterval(30 * time.Second)
+	}
 	if audioClient.IsConfigured() {
 		// The vocal analysis (note strip, key shift) needs audio-service; without it it is skipped.
 		renderWorker.WithGuideAudio(audioClient)
@@ -693,6 +702,7 @@ type creditRouteHandlers struct {
 	Credits   *handler.CreditsHandler
 	Purchases *handler.PurchasesHandler
 	Webhooks  *handler.WebhooksHandler
+	Suno      *handler.SunoWebhookHandler // nil: no Suno callback route
 }
 
 // newAPIRouter registers the store webhooks and then creates the
@@ -712,6 +722,11 @@ func registerWebhookRoutes(app *fiber.App, h creditRouteHandlers, rl *middleware
 		rl.LimitIP("webhook", cfg.RateLimit.WebhooksPerMin, time.Minute, "", 0, 0))
 	webhooks.Post("/appstore", h.Webhooks.AppStore)
 	webhooks.Post("/googleplay", h.Webhooks.GooglePlay)
+	if h.Suno != nil {
+		// Wake-only callback, secret path token; its own limit bucket.
+		app.Post("/api/webhooks/suno/:token",
+			rl.LimitIP("suno-geri", cfg.RateLimit.WebhooksPerMin, time.Minute, "", 0, 0), h.Suno.Handle)
+	}
 }
 
 // adminPerMin is the per-admin request limit of /api/admin.
