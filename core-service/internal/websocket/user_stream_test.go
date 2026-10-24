@@ -208,9 +208,9 @@ func TestUserStream_OtherUsersEventsNotDelivered(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	streams.Deliver(jobs.Event{JobID: jUUID2, OwnerID: "u2", Seq: 1, Kind: jobs.KindQueued, Data: json.RawMessage(`{}`)})
 	streams.Deliver(jobs.Event{JobID: "j-mine", OwnerID: "u1", Seq: 1, Kind: jobs.KindQueued, Data: json.RawMessage(`{}`)})
-	msgs := c.waitFor(t, 1)
+	c.waitFor(t, 1)
 	time.Sleep(100 * time.Millisecond)
-	msgs = c.messages()
+	msgs := c.messages()
 	if len(msgs) != 1 || seqsOf(t, msgs)[0] != 1 {
 		t.Fatalf("messages = %s, want only u1's event", msgs)
 	}
