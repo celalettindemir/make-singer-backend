@@ -1,5 +1,7 @@
 """Mastering zinciri testleri: sentetik ses, ag ve ffmpeg yok."""
 
+import time
+
 import numpy as np
 from pydub import AudioSegment
 
@@ -199,18 +201,14 @@ def _tepe(ses):
 
 
 def test_take_gain_applied(tmp_path):
-    import asyncio
-
     import pytest
 
     vokal = sinus(440, saniye=1.0, genlik=0.5)
     servis = MasterService()
     servis.storage = _SahteDepo(vokal)
 
-    sifir = asyncio.run(servis._load_vocals(str(tmp_path), [{"key": "k"}]))
-    kisik = asyncio.run(
-        servis._load_vocals(str(tmp_path), [{"key": "k", "gain_db": -6.0}])
-    )
+    sifir = servis._load_vocals(str(tmp_path), [{"key": "k"}])
+    kisik = servis._load_vocals(str(tmp_path), [{"key": "k", "gain_db": -6.0}])
 
     fark_db = 20 * np.log10(_tepe(kisik) / _tepe(sifir))
     assert fark_db == pytest.approx(-6.0, abs=0.5)
@@ -228,3 +226,51 @@ def test_pydantic_gain_db_sinirlari():
         VocalTakeInput(key="k", gain_db=13)
     with pytest.raises(ValidationError):
         VocalTakeInput(key="k", gain_db=-61)
+
+
+class _YavasDepo(_SahteDepo):
+    """Indirme ve yukleme engelleyici calisir, gercek R2 gibi."""
+
+    def download_key_to_file(self, key, yol):
+        time.sleep(0.3)
+        super().download_key_to_file(key, yol)
+
+    def upload_file(self, key, yol, tur):
+        time.sleep(0.3)
+        return f"https://depo/{key}"
+
+
+def test_master_olay_dongusunu_kilitlemez():
+    # Master suresince /health cevap vermezse kubelet servisi oldurur ve
+    # hemen ardindan gelen /encode istekleri "connection refused" alir.
+    import asyncio
+
+    servis = MasterService()
+    servis.storage = _YavasDepo(sinus(440, saniye=0.5))
+
+    async def senaryo():
+        tikler = 0
+        bitti = False
+
+        async def saat():
+            nonlocal tikler
+            while not bitti:
+                await asyncio.sleep(0.02)
+                tikler += 1
+
+        gorev = asyncio.create_task(saat())
+        sonuc = await servis.process(
+            stem_keys=["a", "b"],
+            mix_settings=[],
+            profile="clean",
+            vocal_takes=[{"key": "v"}],
+            output_key="m.wav",
+        )
+        bitti = True
+        await gorev
+        return sonuc, tikler
+
+    sonuc, tikler = asyncio.run(senaryo())
+    assert sonuc["output_url"] == "https://depo/m.wav"
+    # 4 x 0.3 s engelleyici G/C boyunca saat en az birkac kez donmeli.
+    assert tikler >= 20

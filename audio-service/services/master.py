@@ -1,5 +1,6 @@
 """Mastering service for audio processing."""
 
+import asyncio
 import os
 import tempfile
 from typing import Any
@@ -94,6 +95,20 @@ class MasterService:
         if not self.storage:
             raise RuntimeError("Storage service not configured")
 
+        # The chain is CPU bound and storage I/O blocks: off the event loop,
+        # or /health stalls and the liveness probe restarts the service.
+        return await asyncio.to_thread(
+            self._process, stem_keys, mix_settings, profile, vocal_takes, output_key
+        )
+
+    def _process(
+        self,
+        stem_keys: list[str],
+        mix_settings: list[dict[str, Any]],
+        profile: str,
+        vocal_takes: list[dict[str, Any]],
+        output_key: str,
+    ) -> dict[str, Any]:
         if profile not in PROFILES:
             profile = "clean"
 
@@ -112,7 +127,7 @@ class MasterService:
 
             # Add vocal takes if provided
             if vocal_takes:
-                vocal_audio = await self._load_vocals(tmpdir, vocal_takes)
+                vocal_audio = self._load_vocals(tmpdir, vocal_takes)
                 if vocal_audio:
                     mixed = self._sum([mixed, vocal_audio])
 
@@ -183,7 +198,7 @@ class MasterService:
             )
         return self._sum(audible)
 
-    async def _load_vocals(
+    def _load_vocals(
         self, tmpdir: str, vocal_takes: list[dict[str, Any]]
     ) -> AudioSegment | None:
         """Load and combine vocal takes."""
