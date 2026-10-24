@@ -580,7 +580,7 @@ func (c *afterNChecker) IsDeleted(context.Context, string) (bool, error) {
 func vocalTask(t *testing.T, p *model.RenderJobPayload) *asynq.Task {
 	t.Helper()
 	pb, _ := json.Marshal(p)
-	data, _ := json.Marshal(map[string]any{"jobId": "is1", "payload": json.RawMessage(pb)})
+	data, _ := json.Marshal(map[string]any{"jobId": testJobID, "payload": json.RawMessage(pb)})
 	return asynq.NewTask(service.TaskTypeRender, data)
 }
 

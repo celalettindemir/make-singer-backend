@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"github.com/makeasinger/api/internal/jobs"
 	"testing"
 	"time"
 
@@ -24,4 +25,22 @@ func liveRedis(t *testing.T) *redis.Client {
 	_ = rdb.FlushDB(context.Background()).Err()
 	t.Cleanup(func() { _ = rdb.FlushDB(context.Background()).Err(); _ = rdb.Close() })
 	return rdb
+}
+
+// Job ids are uuids in the store.
+const (
+	testJobID       = "6f1c2a10-0000-4000-8000-000000000001"
+	testJobID2      = "6f1c2a10-0000-4000-8000-000000000002"
+	testLegacyJobID = "6f1c2a10-0000-4000-8000-0000000000ee"
+	testMasterJobID = "6f1c2a10-0000-4000-8000-0000000000a1"
+)
+
+// jobCount is the number of jobs stored for the usual test user.
+func jobCount(t *testing.T, repo jobs.Repo) int {
+	t.Helper()
+	list, err := repo.List(context.Background(), "kullanici-a", time.Time{}, 1000)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	return len(list)
 }

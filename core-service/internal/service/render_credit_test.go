@@ -11,8 +11,8 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/credit"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
-	"github.com/redis/go-redis/v9"
 )
 
 func creditRenderRequest(mode model.StemMode) *model.RenderStartRequest {
@@ -30,15 +30,6 @@ func creditAsynqClient(t *testing.T) *asynq.Client {
 	return c
 }
 
-func jobKeyCount(t *testing.T, rdb *redis.Client) int {
-	t.Helper()
-	keys, err := rdb.Keys(context.Background(), "job:*").Result()
-	if err != nil {
-		t.Fatalf("keys: %v", err)
-	}
-	return len(keys)
-}
-
 func TestStartRender_DebitsByStemModeWithJobRef(t *testing.T) {
 	cases := map[model.StemMode]credit.Operation{
 		"":                  credit.OpRenderMix,
@@ -46,9 +37,10 @@ func TestStartRender_DebitsByStemModeWithJobRef(t *testing.T) {
 		model.StemModeStems: credit.OpRenderStems,
 	}
 	for mode, want := range cases {
-		rdb := liveRedis(t)
+		liveRedis(t)
+		repo := jobs.NewMemoryStore(nil)
 		fake := &credit.FakeSpender{Bal: 138, Pro: true}
-		s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+		s := NewRenderService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
 
 		resp, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(mode))
 		if err != nil {
@@ -71,9 +63,10 @@ func TestStartRender_DebitsByStemModeWithJobRef(t *testing.T) {
 }
 
 func TestStartRender_FocusDebitsFocus(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{}
-	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
 	req := creditRenderRequest(model.StemModeFocus)
 	focus := model.InstrumentDrums
 	req.FocusInstrument = &focus
@@ -86,17 +79,18 @@ func TestStartRender_FocusDebitsFocus(t *testing.T) {
 }
 
 func TestStartRender_InsufficientNoJob(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{Insufficient: true, Required: 62, Bal: 10, Pro: true}
 	// A nil asynq client would panic if the enqueue were reached.
-	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
 
 	_, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(model.StemModeStems))
 	var insufficient *credit.InsufficientError
 	if !errors.As(err, &insufficient) || insufficient.Required != 62 || insufficient.Balance != 10 {
 		t.Fatalf("err = %v, want InsufficientError{62,10}", err)
 	}
-	if n := jobKeyCount(t, rdb); n != 0 {
+	if n := jobCount(t, repo); n != 0 {
 		t.Errorf("job records = %d, want 0", n)
 	}
 	if len(fake.Refunds) != 0 {
@@ -105,11 +99,12 @@ func TestStartRender_InsufficientNoJob(t *testing.T) {
 }
 
 func TestStartRender_EnqueueFailureRefunds(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{Pro: true}
 	closed := asynq.NewClient(asynq.RedisClientOpt{Addr: liveRedisAddr, DB: 13})
 	_ = closed.Close()
-	s := NewRenderService(rdb, closed, nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, closed, nil, testR2Cfg()).WithCredits(fake)
 
 	if _, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(model.StemModeStems)); err == nil {
 		t.Fatal("want an enqueue error")
@@ -123,57 +118,61 @@ func TestStartRender_EnqueueFailureRefunds(t *testing.T) {
 }
 
 func TestStartRender_NilSpenderUnchanged(t *testing.T) {
-	rdb := liveRedis(t)
-	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg())
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	s := NewRenderService(repo, creditAsynqClient(t), nil, testR2Cfg())
 	resp, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(""))
 	if err != nil || resp.Balance != 0 {
 		t.Fatalf("resp=%+v err=%v", resp, err)
 	}
 }
 
-func storeRenderJob(t *testing.T, rdb *redis.Client, status model.JobStatus) {
+func storeRenderJob(t *testing.T, repo jobs.Repo, status model.JobStatus) {
 	t.Helper()
-	storeJob(t, rdb, &model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: status, CreatedAt: time.Now()})
+	storeJob(t, repo, &model.Job{ID: testJobID, Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: status, CreatedAt: time.Now()})
 }
 
 func TestCancelRender_QueuedRefunds(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{}
-	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
-	storeRenderJob(t, rdb, model.JobStatusQueued)
+	s := NewRenderService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
+	storeRenderJob(t, repo, model.JobStatusQueued)
 
-	if _, err := s.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
+	if _, err := s.CancelRender(context.Background(), "kullanici-a", testJobID); err != nil {
 		t.Fatalf("CancelRender: %v", err)
 	}
-	if len(fake.Refunds) == 0 || fake.Refunds[0].ID != "is1" {
+	if len(fake.Refunds) == 0 || fake.Refunds[0].ID != testJobID {
 		t.Errorf("refunds = %+v, want the render refund for is1", fake.Refunds)
 	}
 }
 
 func TestCancelRender_RunningNoRefund(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{}
-	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
-	storeRenderJob(t, rdb, model.JobStatusRunning)
+	s := NewRenderService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
+	storeRenderJob(t, repo, model.JobStatusRunning)
 
-	if _, err := s.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
+	if _, err := s.CancelRender(context.Background(), "kullanici-a", testJobID); err != nil {
 		t.Fatalf("CancelRender: %v", err)
 	}
 	if len(fake.Refunds) != 0 {
 		t.Errorf("refunds = %+v, want none for a running job", fake.Refunds)
 	}
-	if st, _ := s.JobStatus(context.Background(), "is1"); st != model.JobStatusCanceled {
+	if st, _ := s.JobStatus(context.Background(), testJobID); st != model.JobStatusCanceled {
 		t.Errorf("status = %s, want canceled", st)
 	}
 }
 
 func TestCancelRender_RefundFailureStillCancels(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{Err: errors.New("db down")}
-	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
-	storeRenderJob(t, rdb, model.JobStatusQueued)
+	s := NewRenderService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
+	storeRenderJob(t, repo, model.JobStatusQueued)
 
-	if _, err := s.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
+	if _, err := s.CancelRender(context.Background(), "kullanici-a", testJobID); err != nil {
 		t.Fatalf("a refund failure must not fail the cancel: %v", err)
 	}
 }
@@ -191,60 +190,63 @@ func TestRenderOperation(t *testing.T) {
 }
 
 func TestUpdateJobProgress_CanceledStaysCanceled(t *testing.T) {
-	rdb := liveRedis(t)
-	s := NewRenderService(rdb, nil, nil, testR2Cfg())
-	storeRenderJob(t, rdb, model.JobStatusCanceled)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	s := NewRenderService(repo, nil, nil, testR2Cfg())
+	storeRenderJob(t, repo, model.JobStatusCanceled)
 
-	if err := s.UpdateJobProgress(context.Background(), "is1", 40, "x"); err != nil {
+	if err := s.UpdateJobProgress(context.Background(), testJobID, 40, "x"); err != nil {
 		t.Fatalf("UpdateJobProgress: %v", err)
 	}
-	job, _ := readJob(context.Background(), rdb, "is1")
+	job, _ := repo.Get(context.Background(), testJobID)
 	if job.Status != model.JobStatusCanceled || job.Progress != 0 {
 		t.Errorf("job = %s/%d, want canceled/0", job.Status, job.Progress)
 	}
 }
 
 func TestClaimRun(t *testing.T) {
-	rdb := liveRedis(t)
-	s := NewRenderService(rdb, nil, nil, testR2Cfg())
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	s := NewRenderService(repo, nil, nil, testR2Cfg())
 
-	storeRenderJob(t, rdb, model.JobStatusQueued)
-	ok, _, err := s.ClaimRun(context.Background(), "is1")
+	storeRenderJob(t, repo, model.JobStatusQueued)
+	ok, _, err := s.ClaimRun(context.Background(), testJobID)
 	if err != nil || !ok {
 		t.Fatalf("claim queued = %v, %v; want true", ok, err)
 	}
-	if st, _ := s.JobStatus(context.Background(), "is1"); st != model.JobStatusRunning {
+	if st, _ := s.JobStatus(context.Background(), testJobID); st != model.JobStatusRunning {
 		t.Errorf("status = %s, want running", st)
 	}
 
-	storeRenderJob(t, rdb, model.JobStatusCanceled)
-	ok, st, err := s.ClaimRun(context.Background(), "is1")
+	storeRenderJob(t, repo, model.JobStatusCanceled)
+	ok, st, err := s.ClaimRun(context.Background(), testJobID)
 	if err != nil || ok || st != model.JobStatusCanceled {
 		t.Fatalf("claim canceled = %v, %v; want false", ok, err)
 	}
-	if st, _ := s.JobStatus(context.Background(), "is1"); st != model.JobStatusCanceled {
+	if st, _ := s.JobStatus(context.Background(), testJobID); st != model.JobStatusCanceled {
 		t.Errorf("status = %s, want canceled", st)
 	}
 }
 
 func TestCancelThenClaim_NoRunAfterQueuedCancelRefund(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{}
-	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
-	storeRenderJob(t, rdb, model.JobStatusQueued)
-	if _, err := s.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
+	s := NewRenderService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
+	storeRenderJob(t, repo, model.JobStatusQueued)
+	if _, err := s.CancelRender(context.Background(), "kullanici-a", testJobID); err != nil {
 		t.Fatal(err)
 	}
-	if ok, _, _ := s.ClaimRun(context.Background(), "is1"); ok {
+	if ok, _, _ := s.ClaimRun(context.Background(), testJobID); ok {
 		t.Error("a canceled job was claimed")
 	}
 	// Running then cancel: no refund.
 	fake.Refunds = nil
-	storeRenderJob(t, rdb, model.JobStatusQueued)
-	if ok, _, _ := s.ClaimRun(context.Background(), "is1"); !ok {
+	storeRenderJob(t, repo, model.JobStatusQueued)
+	if ok, _, _ := s.ClaimRun(context.Background(), testJobID); !ok {
 		t.Fatal("claim failed")
 	}
-	if _, err := s.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
+	if _, err := s.CancelRender(context.Background(), "kullanici-a", testJobID); err != nil {
 		t.Fatal(err)
 	}
 	if len(fake.Refunds) != 0 {
@@ -252,10 +254,11 @@ func TestCancelThenClaim_NoRunAfterQueuedCancelRefund(t *testing.T) {
 	}
 }
 
-func TestUpdateJob_ConcurrentUpdatesLoseNothing(t *testing.T) {
-	rdb := liveRedis(t)
-	s := NewRenderService(rdb, nil, nil, testR2Cfg())
-	storeRenderJob(t, rdb, model.JobStatusRunning)
+func TestRepoUpdate_ConcurrentUpdatesLoseNothing(t *testing.T) {
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	s := NewRenderService(repo, nil, nil, testR2Cfg())
+	storeRenderJob(t, repo, model.JobStatusRunning)
 
 	const n = 10
 	var wg sync.WaitGroup
@@ -263,7 +266,7 @@ func TestUpdateJob_ConcurrentUpdatesLoseNothing(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := s.updateJob(context.Background(), "is1", func(j *model.Job) error {
+			err := s.repo.Update(context.Background(), testJobID, func(j *model.Job) error {
 				j.RetryCount++
 				return nil
 			})
@@ -273,66 +276,64 @@ func TestUpdateJob_ConcurrentUpdatesLoseNothing(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	job, _ := readJob(context.Background(), rdb, "is1")
+	job, _ := repo.Get(context.Background(), testJobID)
 	if job.RetryCount != n {
 		t.Errorf("RetryCount = %d, want %d (an update was lost)", job.RetryCount, n)
 	}
 }
 
-func TestClaimRun_ConflictWithCancelReturnsFalse(t *testing.T) {
-	rdb := liveRedis(t)
-	s := NewRenderService(rdb, nil, nil, testR2Cfg())
-	storeRenderJob(t, rdb, model.JobStatusQueued)
+// A claim and a cancel race on one queued job: the row lock lets exactly one
+// win, and the refund rule follows the winner (a claimed job keeps its charge).
+func TestClaimRun_ConcurrentCancelDecidedOnce(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		repo := jobs.NewMemoryStore(nil)
+		fake := &credit.FakeSpender{}
+		s := NewRenderService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
+		storeRenderJob(t, repo, model.JobStatusQueued)
 
-	// The first transaction attempt has read "queued"; a cancel commits
-	// before its EXEC, so EXEC fails and the retry reads "canceled".
-	fired := false
-	s.beforeExec = func() {
-		if fired {
-			return
+		var wg sync.WaitGroup
+		var claimed bool
+		var cancelErr error
+		wg.Add(2)
+		go func() { defer wg.Done(); claimed, _, _ = s.ClaimRun(context.Background(), testJobID) }()
+		go func() {
+			defer wg.Done()
+			_, cancelErr = s.CancelRender(context.Background(), "kullanici-a", testJobID)
+		}()
+		wg.Wait()
+		if cancelErr != nil {
+			t.Fatalf("CancelRender: %v", cancelErr)
 		}
-		fired = true
-		job, err := readJob(context.Background(), rdb, "is1")
-		if err != nil {
-			t.Errorf("readJob: %v", err)
-			return
+		st, _ := s.JobStatus(context.Background(), testJobID)
+		if st != model.JobStatusCanceled {
+			t.Fatalf("status = %s, want canceled", st)
 		}
-		job.Status = model.JobStatusCanceled
-		if err := writeJob(context.Background(), rdb, job); err != nil {
-			t.Errorf("writeJob: %v", err)
+		if claimed && len(fake.Refunds) != 0 {
+			t.Fatalf("a claimed job was refunded: %+v", fake.Refunds)
 		}
-	}
-
-	ok, _, err := s.ClaimRun(context.Background(), "is1")
-	if err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
-	if !fired {
-		t.Fatal("the conflict hook did not run")
-	}
-	if ok {
-		t.Error("ClaimRun returned true for a job canceled during the claim")
-	}
-	if st, _ := s.JobStatus(context.Background(), "is1"); st != model.JobStatusCanceled {
-		t.Errorf("status = %s, want canceled", st)
+		if !claimed && len(fake.Refunds) != 1 {
+			t.Fatalf("a job canceled before the claim was not refunded once: %+v", fake.Refunds)
+		}
 	}
 }
 
 func TestClaimRun_FinishedJobsNotClaimed(t *testing.T) {
-	rdb := liveRedis(t)
-	s := NewRenderService(rdb, nil, nil, testR2Cfg())
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	s := NewRenderService(repo, nil, nil, testR2Cfg())
 	for _, st := range []model.JobStatus{model.JobStatusFailed, model.JobStatusSucceeded} {
-		storeRenderJob(t, rdb, st)
-		if ok, seen, err := s.ClaimRun(context.Background(), "is1"); err != nil || ok || seen != st {
+		storeRenderJob(t, repo, st)
+		if ok, seen, err := s.ClaimRun(context.Background(), testJobID); err != nil || ok || seen != st {
 			t.Errorf("claim %s = %v, %v, %v; want false with the status", st, ok, seen, err)
 		}
 	}
 }
 
 func TestStartRender_ShadowReadFailureStillStarts(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: false, Err: errors.New("db down")}
-	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
 	resp, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(""))
 	if err != nil || resp.Balance != 0 {
 		t.Fatalf("resp=%+v err=%v, want a started job with balance 0", resp, err)
@@ -340,22 +341,24 @@ func TestStartRender_ShadowReadFailureStillStarts(t *testing.T) {
 }
 
 func TestStartRender_EnforcedSpendErrorFails(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true, Err: errors.New("db down")}
-	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
 	if _, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest("")); err == nil {
 		t.Fatal("want the spend error in enforced mode")
 	}
-	if n := jobKeyCount(t, rdb); n != 0 {
+	if n := jobCount(t, repo); n != 0 {
 		t.Errorf("job records = %d, want 0", n)
 	}
 }
 
 func TestRenderService_StemsRequiresPro(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true, Bal: 500}
 	// A nil asynq client would panic if the enqueue were reached.
-	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
 
 	_, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(model.StemModeStems))
 	if !errors.Is(err, ErrPlanRequired) {
@@ -364,12 +367,12 @@ func TestRenderService_StemsRequiresPro(t *testing.T) {
 	if len(fake.Spends) != 0 {
 		t.Errorf("spends = %+v, want none", fake.Spends)
 	}
-	if n := jobKeyCount(t, rdb); n != 0 {
+	if n := jobCount(t, repo); n != 0 {
 		t.Errorf("job records = %d, want 0", n)
 	}
 
 	// Other tiers do not need Pro.
-	s = NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	s = NewRenderService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
 	if _, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(model.StemModeMix)); err != nil {
 		t.Fatalf("mix without Pro: %v", err)
 	}
@@ -385,9 +388,10 @@ func TestRenderService_StemsRequiresPro(t *testing.T) {
 }
 
 func TestRenderService_StemsGateAppliesInShadowMode(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: false}
-	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
 
 	_, err := s.StartRender(context.Background(), "kullanici-a", creditRenderRequest(model.StemModeStems))
 	if !errors.Is(err, ErrPlanRequired) {
@@ -433,9 +437,10 @@ func storedPayload(t *testing.T, jobID string) model.RenderJobPayload {
 }
 
 func TestStartRender_Vocal_FreeUser_NoAnalysis(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true, Bal: 500}
-	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
 	resp, err := s.StartRender(context.Background(), "kullanici-a", vocalRenderRequest(model.StemModeMix))
 	if err != nil {
 		t.Fatalf("StartRender: %v", err)
@@ -447,9 +452,10 @@ func TestStartRender_Vocal_FreeUser_NoAnalysis(t *testing.T) {
 }
 
 func TestStartRender_Vocal_PlusUser_Analysis(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true, Bal: 500, Plus: true}
-	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
 	resp, err := s.StartRender(context.Background(), "kullanici-a", vocalRenderRequest(model.StemModeMix))
 	if err != nil {
 		t.Fatalf("StartRender: %v", err)
@@ -460,10 +466,11 @@ func TestStartRender_Vocal_PlusUser_Analysis(t *testing.T) {
 }
 
 func TestStartRender_PlanReadError_NoAnalysis(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	// Shadow mode: the spend error is tolerated, and so is the plan read.
 	fake := &credit.FakeSpender{Err: errors.New("db down"), Plus: true}
-	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
 	resp, err := s.StartRender(context.Background(), "kullanici-a", vocalRenderRequest(model.StemModeMix))
 	if err != nil {
 		t.Fatalf("StartRender: %v", err)
@@ -474,9 +481,10 @@ func TestStartRender_PlanReadError_NoAnalysis(t *testing.T) {
 }
 
 func TestStartRender_Vocal_SingleDebit(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true, Bal: 500, Plus: true}
-	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
 	resp, err := s.StartRender(context.Background(), "kullanici-a", vocalRenderRequest(model.StemModeMix))
 	if err != nil {
 		t.Fatalf("StartRender: %v", err)
@@ -487,24 +495,26 @@ func TestStartRender_Vocal_SingleDebit(t *testing.T) {
 }
 
 func TestStartRender_InvalidLyrics_NoJobNoDebit(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true, Bal: 500}
-	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
 	req := vocalRenderRequest(model.StemModeMix)
 	req.Vocal.Sections[0].Lines = []string{"  "}
 	_, err := s.StartRender(context.Background(), "kullanici-a", req)
 	if !errors.Is(err, model.ErrInvalidLyrics) {
 		t.Fatalf("err = %v, want ErrInvalidLyrics", err)
 	}
-	if len(fake.Spends) != 0 || jobKeyCount(t, rdb) != 0 {
-		t.Errorf("spends %+v / jobs %d, want none", fake.Spends, jobKeyCount(t, rdb))
+	if len(fake.Spends) != 0 || jobCount(t, repo) != 0 {
+		t.Errorf("spends %+v / jobs %d, want none", fake.Spends, jobCount(t, repo))
 	}
 }
 
 func TestStartRender_StemsWithVocalNeedsPro(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{Plus: true, Bal: 500}
-	s := NewRenderService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
 	_, err := s.StartRender(context.Background(), "kullanici-a", vocalRenderRequest(model.StemModeStems))
 	if !errors.Is(err, ErrPlanRequired) {
 		t.Fatalf("err = %v, want ErrPlanRequired", err)
@@ -512,9 +522,10 @@ func TestStartRender_StemsWithVocalNeedsPro(t *testing.T) {
 }
 
 func TestStartRender_Vocal_TitleTrimmed(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true, Bal: 500}
-	s := NewRenderService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	s := NewRenderService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
 	long := strings.Repeat("a", 80)
 	for in, want := range map[string]string{"  My Song  ": "My Song", "   ": "", "  " + long + "  ": long} {
 		req := vocalRenderRequest(model.StemModeMix)
@@ -526,5 +537,30 @@ func TestStartRender_Vocal_TitleTrimmed(t *testing.T) {
 		if got := storedPayload(t, resp.JobID).Vocal.Title; got != want {
 			t.Errorf("title %q stored as %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestRenderService_StartStoresProjectNameAndPayload(t *testing.T) {
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	s := NewRenderService(repo, creditAsynqClient(t), nil, testR2Cfg())
+	req := creditRenderRequest("")
+	req.ProjectID = "6f1c2a10-0000-4000-8000-0000000000b1"
+	req.ProjectName = "Gece Şarkısı"
+
+	resp, err := s.StartRender(context.Background(), "kullanici-a", req)
+	if err != nil {
+		t.Fatalf("StartRender: %v", err)
+	}
+	job, err := repo.Get(context.Background(), resp.JobID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if job.ProjectID != req.ProjectID || job.ProjectName != "Gece Şarkısı" {
+		t.Errorf("project = %q %q", job.ProjectID, job.ProjectName)
+	}
+	var p model.RenderJobPayload
+	if err := json.Unmarshal(job.Payload, &p); err != nil || p.OwnerID != "kullanici-a" || p.ProjectID != req.ProjectID {
+		t.Errorf("stored payload = %s (%v)", job.Payload, err)
 	}
 }

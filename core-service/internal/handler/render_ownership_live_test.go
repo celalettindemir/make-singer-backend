@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +10,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/makeasinger/api/internal/config"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 )
@@ -27,12 +27,12 @@ func asUser(userID string) fiber.Handler {
 
 func renderApp(t *testing.T, userID string) *fiber.App {
 	t.Helper()
-	rdb := liveRedis(t)
-	raw, _ := json.Marshal(model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued, CreatedAt: time.Now()})
-	if err := rdb.Set(context.Background(), "job:is1", raw, time.Hour).Err(); err != nil {
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	if err := repo.Create(context.Background(), &model.Job{ID: "6f1c2a10-0000-4000-8000-000000000001", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued, CreatedAt: time.Now()}); err != nil {
 		t.Fatalf("could not write the job: %v", err)
 	}
-	h := NewRenderHandler(service.NewRenderService(rdb, nil, nil, &config.R2Config{}), validator.New())
+	h := NewRenderHandler(service.NewRenderService(repo, nil, nil, &config.R2Config{}), validator.New())
 	app := fiber.New()
 	app.Get("/status/:jobId", asUser(userID), h.Status)
 	app.Post("/cancel/:jobId", asUser(userID), h.Cancel)
@@ -42,8 +42,8 @@ func renderApp(t *testing.T, userID string) *fiber.App {
 func TestRenderHandler_OtherUsersJob404(t *testing.T) {
 	app := renderApp(t, "kullanici-b")
 	for _, req := range []*http.Request{
-		httptest.NewRequest(http.MethodGet, "/status/is1", nil),
-		httptest.NewRequest(http.MethodPost, "/cancel/is1", nil),
+		httptest.NewRequest(http.MethodGet, "/status/6f1c2a10-0000-4000-8000-000000000001", nil),
+		httptest.NewRequest(http.MethodPost, "/cancel/6f1c2a10-0000-4000-8000-000000000001", nil),
 	} {
 		resp, err := app.Test(req)
 		if err != nil {
@@ -57,7 +57,7 @@ func TestRenderHandler_OtherUsersJob404(t *testing.T) {
 
 func TestRenderHandler_OwnerReads(t *testing.T) {
 	app := renderApp(t, "kullanici-a")
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/status/is1", nil))
+	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/status/6f1c2a10-0000-4000-8000-000000000001", nil))
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestRenderHandler_OwnerReads(t *testing.T) {
 
 func TestRenderHandler_Unauthenticated401(t *testing.T) {
 	app := renderApp(t, "")
-	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/status/is1", nil))
+	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/status/6f1c2a10-0000-4000-8000-000000000001", nil))
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}

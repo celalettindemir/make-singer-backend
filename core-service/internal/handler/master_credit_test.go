@@ -12,14 +12,16 @@ import (
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/credit"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/service"
 )
 
 func TestMasterHandler_InsufficientIs402(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true, Insufficient: true, Required: 3, Bal: 1, Debt: 70}
 	cfg := &config.R2Config{AccountID: "hesap123", PublicBucket: "pub", PrivateBucket: "priv", PublicURL: "https://cdn.example.com"}
-	svc := service.NewMasterService(rdb, nil, nil, cfg).WithCredits(fake)
+	svc := service.NewMasterService(repo, nil, nil, cfg).WithCredits(fake)
 	h := NewMasterHandler(svc, validator.New())
 	app := fiber.New()
 	app.Post("/final", asUser("kullanici-a"), h.Final)
@@ -54,10 +56,11 @@ func TestMasterHandler_InsufficientIs402(t *testing.T) {
 }
 
 func TestMasterHandler_GuidesKeyNeedsPlusIs403(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true}
 	cfg := &config.R2Config{AccountID: "hesap123", PublicBucket: "pub", PrivateBucket: "priv", PublicURL: "https://cdn.example.com"}
-	svc := service.NewMasterService(rdb, nil, nil, cfg).WithCredits(fake)
+	svc := service.NewMasterService(repo, nil, nil, cfg).WithCredits(fake)
 	h := NewMasterHandler(svc, validator.New())
 	app := fiber.New()
 	app.Post("/final", asUser("kullanici-a"), h.Final)

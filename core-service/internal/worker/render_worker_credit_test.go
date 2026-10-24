@@ -12,36 +12,29 @@ import (
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/credit"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/internal/websocket"
-	"github.com/redis/go-redis/v9"
 )
 
-func creditRedis(t *testing.T) *redis.Client {
-	t.Helper()
-	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379", DB: 11})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		t.Skip("no local Redis, skipping")
-	}
-	_ = rdb.FlushDB(context.Background()).Err()
-	t.Cleanup(func() { _ = rdb.FlushDB(context.Background()).Err(); _ = rdb.Close() })
-	return rdb
-}
+// Job ids are uuids in the store.
+const (
+	testJobID       = "6f1c2a10-0000-4000-8000-000000000001"
+	testMasterJobID = "6f1c2a10-0000-4000-8000-0000000000a1"
+)
 
-func putJob(t *testing.T, rdb *redis.Client, status model.JobStatus) {
+func putJob(t *testing.T, repo jobs.Repo, status model.JobStatus) {
 	t.Helper()
-	raw, _ := json.Marshal(model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: status, CreatedAt: time.Now()})
-	if err := rdb.Set(context.Background(), "job:is1", raw, time.Hour).Err(); err != nil {
+	job := &model.Job{ID: testJobID, Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: status, CreatedAt: time.Now()}
+	if err := repo.Create(context.Background(), job); err != nil {
 		t.Fatalf("could not write the job: %v", err)
 	}
 }
 
 func jobStatus(t *testing.T, svc *service.RenderService) model.JobStatus {
 	t.Helper()
-	st, err := svc.JobStatus(context.Background(), "is1")
+	st, err := svc.JobStatus(context.Background(), testJobID)
 	if err != nil {
 		t.Fatalf("JobStatus: %v", err)
 	}
@@ -53,7 +46,7 @@ func renderTask(t *testing.T, mode model.StemMode) *asynq.Task {
 	p := testPayload()
 	p.StemMode = mode
 	pb, _ := json.Marshal(p)
-	data, _ := json.Marshal(map[string]any{"jobId": "is1", "payload": json.RawMessage(pb)})
+	data, _ := json.Marshal(map[string]any{"jobId": testJobID, "payload": json.RawMessage(pb)})
 	return asynq.NewTask(service.TaskTypeRender, data)
 }
 
@@ -62,22 +55,22 @@ type creditSetup struct {
 	svc  *service.RenderService
 	fake *credit.FakeSpender
 	suno *fakeSuno
-	rdb  *redis.Client
+	repo jobs.Repo
 }
 
 // newCreditSetup builds a worker on a live Redis job in the given status.
 // The attempt is not the last one unless the test says so.
 func newCreditSetup(t *testing.T, status model.JobStatus, store client.StorageClient) *creditSetup {
 	t.Helper()
-	rdb := creditRedis(t)
-	putJob(t, rdb, status)
-	svc := service.NewRenderService(rdb, nil, store, &config.R2Config{})
+	repo := jobs.NewMemoryStore(nil)
+	putJob(t, repo, status)
+	svc := service.NewRenderService(repo, nil, store, &config.R2Config{})
 	fake := &credit.FakeSpender{IsEnforced: true}
 	suno := &fakeSuno{}
 	w := NewRenderWorker(svc, suno, store, websocket.NewHub(), nil).WithCredits(fake)
 	w.pollInterval = time.Millisecond
 	w.isLastAttempt = func(context.Context) bool { return false }
-	return &creditSetup{w: w, svc: svc, fake: fake, suno: suno, rdb: rdb}
+	return &creditSetup{w: w, svc: svc, fake: fake, suno: suno, repo: repo}
 }
 
 func TestRenderWorker_CanceledJobSkipsSunoAndRefunds(t *testing.T) {
@@ -89,7 +82,7 @@ func TestRenderWorker_CanceledJobSkipsSunoAndRefunds(t *testing.T) {
 	if s.suno.generateCalls != 0 {
 		t.Errorf("GenerateMusic was called %d times for a canceled job", s.suno.generateCalls)
 	}
-	if len(renderRefunds(s.fake)) != 1 || renderRefunds(s.fake)[0].ID != "is1" || renderRefunds(s.fake)[0].Op != credit.OpRenderStems {
+	if len(renderRefunds(s.fake)) != 1 || renderRefunds(s.fake)[0].ID != testJobID || renderRefunds(s.fake)[0].Op != credit.OpRenderStems {
 		t.Errorf("refunds = %+v, want one render_stems for is1", renderRefunds(s.fake))
 	}
 	if st := jobStatus(t, s.svc); st != model.JobStatusCanceled {
@@ -124,7 +117,7 @@ func TestRenderWorker_LastAttemptFailsAndRefunds(t *testing.T) {
 	if st := jobStatus(t, s.svc); st != model.JobStatusFailed {
 		t.Errorf("status = %s, want failed", st)
 	}
-	if len(renderRefunds(s.fake)) != 1 || renderRefunds(s.fake)[0].ID != "is1" || renderRefunds(s.fake)[0].Op != credit.OpRenderFocus {
+	if len(renderRefunds(s.fake)) != 1 || renderRefunds(s.fake)[0].ID != testJobID || renderRefunds(s.fake)[0].Op != credit.OpRenderFocus {
 		t.Errorf("refunds = %+v, want one render_focus for is1", renderRefunds(s.fake))
 	}
 }
@@ -150,20 +143,20 @@ func TestRenderWorker_SkipRetryBeforeChargeFailsAndRefundsEarly(t *testing.T) {
 // CompleteJob fails after the paid generation.
 type deleteJobOnUpload struct {
 	fakeStorage
-	rdb *redis.Client
+	repo jobs.Repo
 }
 
 func (d *deleteJobOnUpload) Upload(ctx context.Context, key string, body io.Reader, ct string) (string, time.Time, error) {
-	_ = d.rdb.Del(context.Background(), "job:is1").Err()
+	_ = d.repo.DeleteOwner(context.Background(), "kullanici-a")
 	return d.fakeStorage.Upload(ctx, key, body, ct)
 }
 
 func TestRenderWorker_SkipRetryAfterChargeRefunds(t *testing.T) {
 	srv := audioServer(t)
-	rdb := creditRedis(t)
-	putJob(t, rdb, model.JobStatusQueued)
-	store := &deleteJobOnUpload{rdb: rdb}
-	svc := service.NewRenderService(rdb, nil, store, &config.R2Config{})
+	repo := jobs.NewMemoryStore(nil)
+	putJob(t, repo, model.JobStatusQueued)
+	store := &deleteJobOnUpload{repo: repo}
+	svc := service.NewRenderService(repo, nil, store, &config.R2Config{})
 	fake := &credit.FakeSpender{IsEnforced: true}
 	suno := &fakeSuno{track: &client.Track{ID: "a1", AudioURL: srv.URL + "/tam.mp3", Duration: 60}}
 	w := NewRenderWorker(svc, suno, store, websocket.NewHub(), nil).WithCredits(fake)
@@ -177,7 +170,7 @@ func TestRenderWorker_SkipRetryAfterChargeRefunds(t *testing.T) {
 	if suno.generateCalls != 1 {
 		t.Fatalf("generateCalls = %d, want 1", suno.generateCalls)
 	}
-	if got := renderRefunds(fake); len(got) != 1 || got[0].ID != "is1" || got[0].Op != credit.OpRenderMix {
+	if got := renderRefunds(fake); len(got) != 1 || got[0].ID != testJobID || got[0].Op != credit.OpRenderMix {
 		t.Errorf("refunds = %+v, want one render_mix for is1", fake.Refunds)
 	}
 }
@@ -218,7 +211,7 @@ func TestRenderWorker_CancelBeforeClaimSkipsSunoAndRefundsOnce(t *testing.T) {
 	s := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
 	s.svc.WithCredits(s.fake) // the cancel's own refund is observed too
 	s.w.deletionChecker = cancelBeforeClaim{cancel: func() {
-		if _, err := s.svc.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
+		if _, err := s.svc.CancelRender(context.Background(), "kullanici-a", testJobID); err != nil {
 			t.Errorf("CancelRender: %v", err)
 		}
 	}}
@@ -233,7 +226,7 @@ func TestRenderWorker_CancelBeforeClaimSkipsSunoAndRefundsOnce(t *testing.T) {
 	// keys both on the jobId, so they are one refund row.
 	// The cancel and the worker each refund the render (and try the absent
 	// guide debit); the ledger keys the render refunds on the jobId.
-	if got := renderRefunds(s.fake); len(got) != 2 || got[0].ID != "is1" || got[1].ID != "is1" {
+	if got := renderRefunds(s.fake); len(got) != 2 || got[0].ID != testJobID || got[1].ID != testJobID {
 		t.Errorf("refunds = %+v, want two render calls for is1", got)
 	}
 	if st := jobStatus(t, s.svc); st != model.JobStatusCanceled {
@@ -254,14 +247,14 @@ func (c cancelOnGenerate) GenerateMusic(ctx context.Context, r *client.GenerateM
 }
 
 func TestRenderWorker_CancelAfterClaimNoRefund(t *testing.T) {
-	rdb := creditRedis(t)
-	putJob(t, rdb, model.JobStatusQueued)
+	repo := jobs.NewMemoryStore(nil)
+	putJob(t, repo, model.JobStatusQueued)
 	cancelSpender := &credit.FakeSpender{IsEnforced: true}
-	svc := service.NewRenderService(rdb, nil, &fakeStorage{}, &config.R2Config{}).WithCredits(cancelSpender)
+	svc := service.NewRenderService(repo, nil, &fakeStorage{}, &config.R2Config{}).WithCredits(cancelSpender)
 	workerSpender := &credit.FakeSpender{IsEnforced: true}
 	suno := &fakeSuno{generateErr: errors.New("suno 503")}
 	music := cancelOnGenerate{fakeSuno: suno, cancel: func() {
-		if _, err := svc.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
+		if _, err := svc.CancelRender(context.Background(), "kullanici-a", testJobID); err != nil {
 			t.Errorf("CancelRender: %v", err)
 		}
 	}}
@@ -283,7 +276,7 @@ func TestRenderWorker_CancelAfterClaimNoRefund(t *testing.T) {
 
 func TestRenderWorker_InvalidPayloadFailsAndRefunds(t *testing.T) {
 	s := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
-	data, _ := json.Marshal(map[string]any{"jobId": "is1", "payload": []int{1}})
+	data, _ := json.Marshal(map[string]any{"jobId": testJobID, "payload": []int{1}})
 
 	err := s.w.ProcessTask(context.Background(), asynq.NewTask(service.TaskTypeRender, data))
 	if !errors.Is(err, asynq.SkipRetry) {
@@ -292,7 +285,7 @@ func TestRenderWorker_InvalidPayloadFailsAndRefunds(t *testing.T) {
 	if st := jobStatus(t, s.svc); st != model.JobStatusFailed {
 		t.Errorf("status = %s, want failed", st)
 	}
-	if len(renderRefunds(s.fake)) != 1 || renderRefunds(s.fake)[0].ID != "is1" {
+	if len(renderRefunds(s.fake)) != 1 || renderRefunds(s.fake)[0].ID != testJobID {
 		t.Errorf("refunds = %+v, want one for is1", renderRefunds(s.fake))
 	}
 }
@@ -319,7 +312,7 @@ func TestRenderWorker_MockCanceledBeforeClaimRefunds(t *testing.T) {
 	s := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
 	s.w.music = nil // mock path
 	s.w.afterStatusCheck = func() {
-		if _, err := s.svc.CancelRender(context.Background(), "kullanici-a", "is1"); err != nil {
+		if _, err := s.svc.CancelRender(context.Background(), "kullanici-a", testJobID); err != nil {
 			t.Errorf("CancelRender: %v", err)
 		}
 	}
@@ -327,7 +320,7 @@ func TestRenderWorker_MockCanceledBeforeClaimRefunds(t *testing.T) {
 	if err := s.w.ProcessTask(context.Background(), renderTask(t, model.StemModeMix)); err != nil {
 		t.Fatalf("ProcessTask: %v", err)
 	}
-	if len(renderRefunds(s.fake)) != 1 || renderRefunds(s.fake)[0].ID != "is1" {
+	if len(renderRefunds(s.fake)) != 1 || renderRefunds(s.fake)[0].ID != testJobID {
 		t.Errorf("refunds = %+v, want one for is1", renderRefunds(s.fake))
 	}
 	if st := jobStatus(t, s.svc); st != model.JobStatusCanceled {
@@ -363,7 +356,7 @@ func TestRenderWorker_RedeliveredFinishedJobNoRefundNoSuno(t *testing.T) {
 func TestRenderWorker_FinishedBeforeClaimNoRefund(t *testing.T) {
 	s := newCreditSetup(t, model.JobStatusQueued, &fakeStorage{})
 	s.w.deletionChecker = cancelBeforeClaim{cancel: func() {
-		if err := s.svc.CompleteJob(context.Background(), "is1", map[string]string{}); err != nil {
+		if err := s.svc.CompleteJob(context.Background(), testJobID, map[string]string{}); err != nil {
 			t.Errorf("CompleteJob: %v", err)
 		}
 	}}
@@ -395,7 +388,7 @@ func TestVocal_StemsWithoutVocal_FailsAndRefunds(t *testing.T) {
 	if st := jobStatus(t, cs.svc); st != model.JobStatusFailed {
 		t.Errorf("status = %s, want failed", st)
 	}
-	if got := renderRefunds(cs.fake); len(got) != 1 || got[0].Op != credit.OpRenderStems || got[0].ID != "is1" {
+	if got := renderRefunds(cs.fake); len(got) != 1 || got[0].Op != credit.OpRenderStems || got[0].ID != testJobID {
 		t.Errorf("refunds = %+v, want one render_stems for is1", got)
 	}
 }

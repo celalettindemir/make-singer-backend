@@ -4,13 +4,12 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/deletionmark"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
-	"github.com/redis/go-redis/v9"
 )
 
 // fakeAudio counts Master calls. The real audio service writes the output
@@ -37,16 +36,15 @@ func (s *fakeAudio) CreateZip(context.Context, *client.ZipRequest) (*client.ZipR
 }
 func (s *fakeAudio) HealthCheck(context.Context) error { return nil }
 
-// masterTestWorker: the job record's Redis is unreachable; getJob returns an
-// error and status updates are silently skipped (the hub is never touched).
+// masterTestWorker: the job store holds no job; status updates are silently
+// skipped (the hub is never touched).
 func masterTestWorker(audio *fakeAudio, h *fakeChecker) *MasterWorker {
-	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 50 * time.Millisecond})
 	// To avoid the typed-nil trap, a nil pointer is not assigned to the interface.
 	var d deletionmark.Checker
 	if h != nil {
 		d = h
 	}
-	return NewMasterWorker(rdb, audio, &fakeStorage{}, nil, nil, testR2Cfg(), d)
+	return NewMasterWorker(jobs.NewMemoryStore(nil), audio, &fakeStorage{}, nil, nil, testR2Cfg(), d)
 }
 
 func masterPayload() *model.MasterJobPayload {

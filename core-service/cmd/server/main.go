@@ -30,6 +30,7 @@ import (
 	"github.com/makeasinger/api/internal/handler"
 	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/identity"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/lyricsprovider"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/service"
@@ -129,6 +130,25 @@ func main() {
 	creditService := credit.NewService(creditStore, creditSettings(cfg))
 	if !cfg.Credits.Enforce {
 		log.Println("Credits: shadow mode (CREDITS_ENFORCE=false), spends are metered but never refused")
+	}
+
+	// Jobs (uretim): same database, own pool, own schema and migration table.
+	// FATAL like social/credit: render and master jobs live here. The bus
+	// publisher is wired later (nil: events are stored but not fanned out).
+	jobsPool, err := identity.Connect(ctx, cfg.Auth.DBURL)
+	if err != nil {
+		log.Fatalf("Could not connect to the jobs database: %v", err)
+	}
+	defer jobsPool.Close()
+	if err := jobs.Migrate(ctx, jobsPool); err != nil {
+		log.Fatalf("Jobs migration failed: %v", err)
+	}
+	jobStore := jobs.NewPostgresStore(jobsPool, nil)
+	// Records the previous release left in Redis (24 h TTL) move into the store.
+	if copied, refreshed, err := jobs.ImportRedisJobs(ctx, redisClient, jobStore); err != nil {
+		log.Printf("Warning: Redis job import failed after %d copied, %d refreshed: %v", copied, refreshed, err)
+	} else {
+		log.Printf("Redis job import: %d copied, %d refreshed", copied, refreshed)
 	}
 
 	// Initialize Asynq client
@@ -238,12 +258,12 @@ func main() {
 
 	// Initialize services
 	lyricsService := service.NewLyricsService(lyricsSelector)
-	renderService := service.NewRenderService(redisClient, asynqClient, storage, &cfg.R2).WithCredits(creditService)
-	masterService := service.NewMasterService(redisClient, asynqClient, storage, &cfg.R2).WithCredits(creditService)
+	renderService := service.NewRenderService(jobStore, asynqClient, storage, &cfg.R2).WithCredits(creditService)
+	masterService := service.NewMasterService(jobStore, asynqClient, storage, &cfg.R2).WithCredits(creditService)
 	exportService := service.NewExportService(storage, audioClient, &cfg.R2)
 	uploadService := service.NewUploadService(storage, &cfg.R2)
 	fileService := service.NewFileService(storage, &cfg.R2)
-	wsTicketService := service.NewWSTicketService(redisClient)
+	wsTicketService := service.NewWSTicketService(redisClient, jobStore)
 
 	// prefixDeleter: interface variable; assigning r2Client directly while
 	// it is nil sets the typed-nil trap (see storage).
@@ -446,7 +466,7 @@ func main() {
 	}))
 
 	// Start Asynq worker server
-	go startWorkerServer(cfg, redisClient, renderService, masterService, sunoClient, audioClient, storage, hub, accountService, socialWorker, creditWorker, creditService)
+	go startWorkerServer(cfg, redisClient, jobStore, renderService, masterService, sunoClient, audioClient, storage, hub, accountService, socialWorker, creditWorker, creditService)
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
@@ -471,6 +491,7 @@ func main() {
 func startWorkerServer(
 	cfg *config.Config,
 	redisClient *redis.Client,
+	jobStore jobs.Repo,
 	renderService *service.RenderService,
 	masterService *service.MasterService,
 	sunoClient *client.SunoClient,
@@ -519,7 +540,7 @@ func startWorkerServer(
 		// The vocal analysis (note strip, key shift) needs audio-service; without it it is skipped.
 		renderWorker.WithGuideAudio(audioClient)
 	}
-	masterWorker := worker.NewMasterWorker(redisClient, audioClient, storage, masterService, hub, &cfg.R2, deletionChecker).WithCredits(creditSpender)
+	masterWorker := worker.NewMasterWorker(jobStore, audioClient, storage, masterService, hub, &cfg.R2, deletionChecker).WithCredits(creditSpender)
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)

@@ -42,6 +42,8 @@ type MasterFinalRequest struct {
 	StemURLs    []string      `json:"stemUrls" validate:"required,min=1,dive,url"`
 	MixSnapshot MixSnapshot   `json:"mixSnapshot" validate:"required"`
 	VocalTakes  []VocalTake   `json:"vocalTakes" validate:"omitempty,dive"`
+	// ProjectName is shown in notifications; optional.
+	ProjectName string `json:"projectName,omitempty" validate:"max=120"`
 }
 
 // VocalTake represents a vocal take for mastering

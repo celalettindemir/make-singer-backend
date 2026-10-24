@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/redis/go-redis/v9"
 )
@@ -30,10 +31,11 @@ var ticketPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 // lives 30 seconds and is single-use, so it can safely sit in the query string.
 type WSTicketService struct {
 	redis *redis.Client
+	repo  jobs.Repo
 }
 
-func NewWSTicketService(rdb *redis.Client) *WSTicketService {
-	return &WSTicketService{redis: rdb}
+func NewWSTicketService(rdb *redis.Client, repo jobs.Repo) *WSTicketService {
+	return &WSTicketService{redis: rdb, repo: repo}
 }
 
 func ticketKey(ticket string) string { return "wsbilet:" + ticket }
@@ -41,7 +43,7 @@ func ticketKey(ticket string) string { return "wsbilet:" + ticket }
 // Issue gives the job's owner a ticket. Ownership is checked here; the ticket
 // is bound to that job.
 func (s *WSTicketService) Issue(ctx context.Context, userID, jobID string) (*model.WSTicketResponse, error) {
-	if _, err := readOwnedJob(ctx, s.redis, userID, jobID); err != nil {
+	if _, err := s.repo.GetOwned(ctx, userID, jobID); err != nil {
 		return nil, err
 	}
 	raw := make([]byte, 32)

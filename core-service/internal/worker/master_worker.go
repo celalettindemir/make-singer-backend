@@ -15,15 +15,15 @@ import (
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/credit"
 	"github.com/makeasinger/api/internal/deletionmark"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/internal/websocket"
-	"github.com/redis/go-redis/v9"
 )
 
 // MasterWorker processes mastering jobs
 type MasterWorker struct {
-	redis           *redis.Client
+	repo            jobs.Repo
 	audioClient     client.AudioProcessor
 	r2Client        client.StorageClient
 	masterService   *service.MasterService
@@ -35,9 +35,9 @@ type MasterWorker struct {
 }
 
 // NewMasterWorker creates a new master worker
-func NewMasterWorker(redisClient *redis.Client, audioClient client.AudioProcessor, r2Client client.StorageClient, masterService *service.MasterService, hub *websocket.Hub, r2Cfg *config.R2Config, deletionChecker deletionmark.Checker) *MasterWorker {
+func NewMasterWorker(repo jobs.Repo, audioClient client.AudioProcessor, r2Client client.StorageClient, masterService *service.MasterService, hub *websocket.Hub, r2Cfg *config.R2Config, deletionChecker deletionmark.Checker) *MasterWorker {
 	return &MasterWorker{
-		redis:           redisClient,
+		repo:            repo,
 		audioClient:     audioClient,
 		r2Client:        r2Client,
 		masterService:   masterService,
@@ -139,6 +139,13 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 		err = fmt.Errorf("master was not written: %w", err)
 		w.failFinal(ctx, jobID, "Could not check the account status", err)
 		return err
+	}
+
+	// A cancel that arrived while the job waited must not reach the audio
+	// service: the job is already canceled (and refunded if it was queued).
+	if w.isCanceled(ctx, jobID) {
+		log.Printf("Master job %s was canceled, skipping the audio service", jobID)
+		return nil
 	}
 
 	masterReq := &client.MasterRequest{
@@ -304,41 +311,57 @@ func (w *MasterWorker) buildVocalTakes(payload *model.MasterJobPayload) ([]clien
 	return takes, nil
 }
 
-func (w *MasterWorker) updateJobStatus(ctx context.Context, jobID string, status model.JobStatus, progress int, step string) {
-	job, err := w.getJob(ctx, jobID)
+// errCanceled stops a write to a canceled job (a canceled job stays canceled).
+var errCanceled = jobs.ErrSkipWrite
+
+func (w *MasterWorker) isCanceled(ctx context.Context, jobID string) bool {
+	job, err := w.repo.Get(ctx, jobID)
+	return err == nil && job.Status == model.JobStatusCanceled
+}
+
+// update applies fn to the job unless it is canceled; failures are logged.
+// It reports whether the record was written.
+func (w *MasterWorker) update(ctx context.Context, jobID string, fn func(*model.Job)) bool {
+	err := w.repo.Update(ctx, jobID, func(job *model.Job) error {
+		if job.Status == model.JobStatusCanceled {
+			return errCanceled
+		}
+		fn(job)
+		return nil
+	})
 	if err != nil {
-		log.Printf("Failed to get job: %v", err)
+		if !errors.Is(err, errCanceled) {
+			log.Printf("Failed to update job %s: %v", jobID, err)
+		}
+		return false
+	}
+	return true
+}
+
+func (w *MasterWorker) updateJobStatus(ctx context.Context, jobID string, status model.JobStatus, progress int, step string) {
+	if !w.update(ctx, jobID, func(job *model.Job) {
+		job.Status = status
+		job.Progress = progress
+		job.CurrentStep = step
+		if status == model.JobStatusRunning && job.StartedAt == nil {
+			now := time.Now()
+			job.StartedAt = &now
+		}
+	}) {
 		return
 	}
-
-	job.Status = status
-	job.Progress = progress
-	job.CurrentStep = step
-
-	if status == model.JobStatusRunning && job.StartedAt == nil {
-		now := time.Now()
-		job.StartedAt = &now
-	}
-
-	w.saveJob(ctx, job)
 	w.hub.BroadcastProgress(jobID, progress, status, step)
 }
 
 func (w *MasterWorker) completeJob(ctx context.Context, jobID string, result *model.MasterResultRecord) {
-	job, err := w.getJob(ctx, jobID)
-	if err != nil {
-		log.Printf("Failed to get job: %v", err)
-		return
-	}
-
 	resultBytes, _ := json.Marshal(result)
-	job.Status = model.JobStatusSucceeded
-	job.Progress = 100
-	job.Result = resultBytes
-	now := time.Now()
-	job.CompletedAt = &now
-
-	w.saveJob(ctx, job)
+	w.update(ctx, jobID, func(job *model.Job) {
+		job.Status = model.JobStatusSucceeded
+		job.Progress = 100
+		job.Result = resultBytes
+		now := time.Now()
+		job.CompletedAt = &now
+	})
 }
 
 // failFinal ends a failed attempt. Only the job's FINAL failure (SkipRetry,
@@ -358,6 +381,10 @@ func (w *MasterWorker) failFinal(ctx context.Context, jobID, errMsg string, err 
 	// reason for it (shutdown, deadline).
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
+	// A canceled job stays canceled; a running cancel keeps its charge.
+	if w.isCanceled(fctx, jobID) {
+		return
+	}
 	w.failJob(fctx, jobID, errMsg)
 	w.refund(fctx, jobID)
 }
@@ -374,42 +401,16 @@ func (w *MasterWorker) refund(ctx context.Context, jobID string) {
 }
 
 func (w *MasterWorker) failJob(ctx context.Context, jobID, errMsg string) {
-	job, err := w.getJob(ctx, jobID)
-	if err != nil {
-		log.Printf("Failed to get job: %v", err)
+	if !w.update(ctx, jobID, func(job *model.Job) {
+		job.Status = model.JobStatusFailed
+		job.Error = &errMsg
+		job.ErrorCode = "MASTER_FAILED"
+		now := time.Now()
+		job.CompletedAt = &now
+	}) {
 		return
 	}
-
-	job.Status = model.JobStatusFailed
-	job.Error = &errMsg
-	now := time.Now()
-	job.CompletedAt = &now
-
-	w.saveJob(ctx, job)
 	w.hub.BroadcastError(jobID, "MASTER_FAILED", errMsg)
-}
-
-func (w *MasterWorker) getJob(ctx context.Context, jobID string) (*model.Job, error) {
-	data, err := w.redis.Get(ctx, fmt.Sprintf("job:%s", jobID)).Bytes()
-	if err != nil {
-		return nil, err
-	}
-
-	var job model.Job
-	if err := json.Unmarshal(data, &job); err != nil {
-		return nil, err
-	}
-
-	return &job, nil
-}
-
-func (w *MasterWorker) saveJob(ctx context.Context, job *model.Job) {
-	data, err := json.Marshal(job)
-	if err != nil {
-		log.Printf("Failed to marshal job: %v", err)
-		return
-	}
-	w.redis.Set(ctx, fmt.Sprintf("job:%s", job.ID), data, 24*time.Hour)
 }
 
 // generateMockRecord builds the record stored on the mock/dev path. Like

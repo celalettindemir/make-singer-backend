@@ -9,39 +9,41 @@ import (
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/client"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
-	"github.com/redis/go-redis/v9"
 )
 
-func storeJob(t *testing.T, rdb *redis.Client, job *model.Job) {
+func storeJob(t *testing.T, repo jobs.Repo, job *model.Job) {
 	t.Helper()
-	if err := writeJob(context.Background(), rdb, job); err != nil {
+	if err := repo.Create(context.Background(), job); err != nil {
 		t.Fatalf("writeJob: %v", err)
 	}
 }
 
 func TestRenderService_OtherUsersJobNotFound(t *testing.T) {
-	rdb := liveRedis(t)
-	s := NewRenderService(rdb, nil, nil, testR2Cfg())
-	storeJob(t, rdb, &model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued})
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	s := NewRenderService(repo, nil, nil, testR2Cfg())
+	storeJob(t, repo, &model.Job{ID: testJobID, Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued})
 
-	if _, err := s.GetStatus(context.Background(), "kullanici-b", "is1"); !errors.Is(err, ErrJobNotFound) {
+	if _, err := s.GetStatus(context.Background(), "kullanici-b", testJobID); !errors.Is(err, ErrJobNotFound) {
 		t.Errorf("want ErrJobNotFound for another user, got: %v", err)
 	}
-	if _, err := s.GetStatus(context.Background(), "kullanici-a", "is1"); err != nil {
+	if _, err := s.GetStatus(context.Background(), "kullanici-a", testJobID); err != nil {
 		t.Errorf("the owner could not read their own job: %v", err)
 	}
 }
 
 func TestRenderService_OtherUserCannotCancel(t *testing.T) {
-	rdb := liveRedis(t)
-	s := NewRenderService(rdb, nil, nil, testR2Cfg())
-	storeJob(t, rdb, &model.Job{ID: "is1", Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued})
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	s := NewRenderService(repo, nil, nil, testR2Cfg())
+	storeJob(t, repo, &model.Job{ID: testJobID, Type: model.JobTypeRender, OwnerID: "kullanici-a", Status: model.JobStatusQueued})
 
-	if _, err := s.CancelRender(context.Background(), "kullanici-b", "is1"); !errors.Is(err, ErrJobNotFound) {
+	if _, err := s.CancelRender(context.Background(), "kullanici-b", testJobID); !errors.Is(err, ErrJobNotFound) {
 		t.Fatalf("want ErrJobNotFound for another user, got: %v", err)
 	}
-	job, err := readJob(context.Background(), rdb, "is1")
+	job, err := repo.Get(context.Background(), testJobID)
 	if err != nil {
 		t.Fatalf("readJob: %v", err)
 	}
@@ -51,39 +53,42 @@ func TestRenderService_OtherUserCannotCancel(t *testing.T) {
 }
 
 func TestRenderService_OtherUsersResultNotFound(t *testing.T) {
-	rdb := liveRedis(t)
-	s := NewRenderService(rdb, nil, &fakeStorage{}, testR2Cfg())
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	s := NewRenderService(repo, nil, &fakeStorage{}, testR2Cfg())
 	result, _ := json.Marshal(model.RenderResultRecord{ID: "r1", Stems: []model.StemResultRecord{{ID: "s1", FileKey: "stems/kullanici-a/p1/s1.mp3"}}})
-	storeJob(t, rdb, &model.Job{ID: "is1", OwnerID: "kullanici-a", Status: model.JobStatusSucceeded, Result: result})
+	storeJob(t, repo, &model.Job{ID: testJobID, OwnerID: "kullanici-a", Status: model.JobStatusSucceeded, Result: result})
 
-	if _, err := s.GetResult(context.Background(), "kullanici-b", "is1"); !errors.Is(err, ErrJobNotFound) {
+	if _, err := s.GetResult(context.Background(), "kullanici-b", testJobID); !errors.Is(err, ErrJobNotFound) {
 		t.Errorf("want ErrJobNotFound, got: %v", err)
 	}
 }
 
 func TestRenderService_OwnerlessRecordHiddenFromAll(t *testing.T) {
-	rdb := liveRedis(t)
-	s := NewRenderService(rdb, nil, nil, testR2Cfg())
-	storeJob(t, rdb, &model.Job{ID: "eski", Status: model.JobStatusQueued})
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	s := NewRenderService(repo, nil, nil, testR2Cfg())
+	storeJob(t, repo, &model.Job{ID: testLegacyJobID, Status: model.JobStatusQueued})
 
-	if _, err := s.GetStatus(context.Background(), "kullanici-a", "eski"); !errors.Is(err, ErrJobNotFound) {
+	if _, err := s.GetStatus(context.Background(), "kullanici-a", testLegacyJobID); !errors.Is(err, ErrJobNotFound) {
 		t.Errorf("want ErrJobNotFound for a record without OwnerID, got: %v", err)
 	}
 }
 
 func TestMasterService_OtherUsersJobNotFound(t *testing.T) {
-	rdb := liveRedis(t)
-	s := NewMasterService(rdb, nil, &fakeStorage{}, testR2Cfg())
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	s := NewMasterService(repo, nil, &fakeStorage{}, testR2Cfg())
 	result, _ := json.Marshal(model.MasterResultRecord{FileKey: "masters/kullanici-a/p1/m1.wav"})
-	storeJob(t, rdb, &model.Job{ID: "m1", Type: model.JobTypeMaster, OwnerID: "kullanici-a", Status: model.JobStatusSucceeded, Result: result})
+	storeJob(t, repo, &model.Job{ID: testMasterJobID, Type: model.JobTypeMaster, OwnerID: "kullanici-a", Status: model.JobStatusSucceeded, Result: result})
 
-	if _, err := s.GetStatus(context.Background(), "kullanici-b", "m1"); !errors.Is(err, ErrJobNotFound) {
+	if _, err := s.GetStatus(context.Background(), "kullanici-b", testMasterJobID); !errors.Is(err, ErrJobNotFound) {
 		t.Errorf("status: want ErrJobNotFound, got: %v", err)
 	}
-	if _, err := s.GetResult(context.Background(), "kullanici-b", "m1"); !errors.Is(err, ErrJobNotFound) {
+	if _, err := s.GetResult(context.Background(), "kullanici-b", testMasterJobID); !errors.Is(err, ErrJobNotFound) {
 		t.Errorf("result: want ErrJobNotFound, got: %v", err)
 	}
-	if _, err := s.GetResult(context.Background(), "kullanici-a", "m1"); err != nil {
+	if _, err := s.GetResult(context.Background(), "kullanici-a", testMasterJobID); err != nil {
 		t.Errorf("the owner could not read the result: %v", err)
 	}
 }
@@ -109,16 +114,17 @@ func pendingTaskPayload(t *testing.T, queue string, target any) {
 }
 
 func TestRenderService_StartRenderWritesOwner(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: liveRedisAddr, DB: 13})
 	defer ac.Close()
-	s := NewRenderService(rdb, ac, nil, testR2Cfg())
+	s := NewRenderService(repo, ac, nil, testR2Cfg())
 
 	resp, err := s.StartRender(context.Background(), "kullanici-a", &model.RenderStartRequest{ProjectID: uuid.New().String()})
 	if err != nil {
 		t.Fatalf("StartRender: %v", err)
 	}
-	job, err := readJob(context.Background(), rdb, resp.JobID)
+	job, err := repo.Get(context.Background(), resp.JobID)
 	if err != nil {
 		t.Fatalf("readJob: %v", err)
 	}
@@ -133,11 +139,12 @@ func TestRenderService_StartRenderWritesOwner(t *testing.T) {
 }
 
 func TestMasterService_StartFinalWritesOwner(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: liveRedisAddr, DB: 13})
 	defer ac.Close()
 	cfg := testR2Cfg()
-	s := NewMasterService(rdb, ac, nil, cfg)
+	s := NewMasterService(repo, ac, nil, cfg)
 
 	req := &model.MasterFinalRequest{
 		ProjectID: uuid.New().String(),
@@ -147,7 +154,7 @@ func TestMasterService_StartFinalWritesOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartFinal: %v", err)
 	}
-	job, err := readJob(context.Background(), rdb, resp.JobID)
+	job, err := repo.Get(context.Background(), resp.JobID)
 	if err != nil {
 		t.Fatalf("readJob: %v", err)
 	}
@@ -162,10 +169,11 @@ func TestMasterService_StartFinalWritesOwner(t *testing.T) {
 }
 
 func TestRenderService_StartRenderWritesStemMode(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: liveRedisAddr, DB: 13})
 	defer ac.Close()
-	s := NewRenderService(rdb, ac, nil, testR2Cfg())
+	s := NewRenderService(repo, ac, nil, testR2Cfg())
 
 	drums := model.InstrumentDrums
 	req := &model.RenderStartRequest{
@@ -185,10 +193,11 @@ func TestRenderService_StartRenderWritesStemMode(t *testing.T) {
 }
 
 func TestRenderService_StartRenderDefaultsToMix(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	ac := asynq.NewClient(asynq.RedisClientOpt{Addr: liveRedisAddr, DB: 13})
 	defer ac.Close()
-	s := NewRenderService(rdb, ac, nil, testR2Cfg())
+	s := NewRenderService(repo, ac, nil, testR2Cfg())
 
 	req := &model.RenderStartRequest{ProjectID: uuid.New().String()}
 	if _, err := s.StartRender(context.Background(), "kullanici-a", req); err != nil {

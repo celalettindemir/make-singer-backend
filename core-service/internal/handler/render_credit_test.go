@@ -13,6 +13,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/credit"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/service"
 )
 
@@ -23,9 +24,10 @@ const validRenderBody = `{
 }`
 
 func TestRenderHandler_Insufficient402(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{Insufficient: true, Required: 62, Bal: 10, Debt: 70, Pro: true}
-	svc := service.NewRenderService(rdb, nil, nil, &config.R2Config{}).WithCredits(fake)
+	svc := service.NewRenderService(repo, nil, nil, &config.R2Config{}).WithCredits(fake)
 	h := NewRenderHandler(svc, validator.New())
 	app := fiber.New()
 	app.Post("/start", asUser("kullanici-a"), h.Start)
@@ -54,11 +56,12 @@ func TestRenderHandler_Insufficient402(t *testing.T) {
 }
 
 func TestRenderHandler_ShadowReadFailure202(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	aq := asynq.NewClient(asynq.RedisClientOpt{Addr: "localhost:6379", DB: 12})
 	t.Cleanup(func() { _ = aq.Close() })
 	fake := &credit.FakeSpender{IsEnforced: false, Err: errors.New("db down")}
-	svc := service.NewRenderService(rdb, aq, nil, &config.R2Config{}).WithCredits(fake)
+	svc := service.NewRenderService(repo, aq, nil, &config.R2Config{}).WithCredits(fake)
 	h := NewRenderHandler(svc, validator.New())
 	app := fiber.New()
 	app.Post("/start", asUser("kullanici-a"), h.Start)
@@ -81,9 +84,10 @@ func TestRenderHandler_ShadowReadFailure202(t *testing.T) {
 }
 
 func TestRenderHandler_PlanRequiredIs403(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{}
-	svc := service.NewRenderService(rdb, nil, nil, &config.R2Config{}).WithCredits(fake)
+	svc := service.NewRenderService(repo, nil, nil, &config.R2Config{}).WithCredits(fake)
 	h := NewRenderHandler(svc, validator.New())
 	app := fiber.New()
 	app.Post("/start", asUser("kullanici-a"), h.Start)
@@ -116,9 +120,10 @@ func TestRenderHandler_PlanRequiredIs403(t *testing.T) {
 }
 
 func TestStartRender_InvalidLyrics_400_NoDebit(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{Plus: true}
-	svc := service.NewRenderService(rdb, nil, nil, &config.R2Config{}).WithCredits(fake)
+	svc := service.NewRenderService(repo, nil, nil, &config.R2Config{}).WithCredits(fake)
 	h := NewRenderHandler(svc, validator.New())
 	app := fiber.New()
 	app.Post("/start", asUser("kullanici-a"), h.Start)

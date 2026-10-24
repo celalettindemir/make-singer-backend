@@ -10,6 +10,7 @@ import (
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/credit"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
 )
 
@@ -53,9 +54,10 @@ func masterFinalRequest(t *testing.T, user string) *model.MasterFinalRequest {
 }
 
 func TestMasterService_FinalDebitsBeforeSave(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true, Bal: 81}
-	s := NewMasterService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	s := NewMasterService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
 
 	resp, err := s.StartFinal(context.Background(), "kullanici-a", masterFinalRequest(t, "kullanici-a"))
 	if err != nil {
@@ -76,22 +78,23 @@ func TestMasterService_FinalDebitsBeforeSave(t *testing.T) {
 	}
 
 	// Insufficient: no job record, no enqueue (nil asynq client would panic).
-	n := jobKeyCount(t, rdb)
+	n := jobCount(t, repo)
 	fake2 := &credit.FakeSpender{IsEnforced: true, Insufficient: true, Required: 3, Bal: 1}
-	s = NewMasterService(rdb, nil, nil, testR2Cfg()).WithCredits(fake2)
+	s = NewMasterService(repo, nil, nil, testR2Cfg()).WithCredits(fake2)
 	_, err = s.StartFinal(context.Background(), "kullanici-a", masterFinalRequest(t, "kullanici-a"))
 	var insufficient *credit.InsufficientError
 	if !errors.As(err, &insufficient) || insufficient.Required != 3 || insufficient.Balance != 1 {
 		t.Fatalf("err = %v, want InsufficientError{3,1}", err)
 	}
-	if after := jobKeyCount(t, rdb); after != n {
+	if after := jobCount(t, repo); after != n {
 		t.Errorf("job records = %d, want %d", after, n)
 	}
 }
 
 func TestMasterService_NoCreditsBalanceIsZero(t *testing.T) {
-	rdb := liveRedis(t)
-	s := NewMasterService(rdb, creditAsynqClient(t), nil, testR2Cfg())
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	s := NewMasterService(repo, creditAsynqClient(t), nil, testR2Cfg())
 	resp, err := s.StartFinal(context.Background(), "kullanici-a", masterFinalRequest(t, "kullanici-a"))
 	if err != nil || resp.Balance != 0 {
 		t.Fatalf("resp=%+v err=%v, want zero balance", resp, err)
@@ -99,11 +102,12 @@ func TestMasterService_NoCreditsBalanceIsZero(t *testing.T) {
 }
 
 func TestMasterService_RefundsWhenEnqueueFails(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true}
 	closed := asynq.NewClient(asynq.RedisClientOpt{Addr: liveRedisAddr, DB: 13})
 	_ = closed.Close()
-	s := NewMasterService(rdb, closed, nil, testR2Cfg()).WithCredits(fake)
+	s := NewMasterService(repo, closed, nil, testR2Cfg()).WithCredits(fake)
 
 	if _, err := s.StartFinal(context.Background(), "kullanici-a", masterFinalRequest(t, "kullanici-a")); err == nil {
 		t.Fatal("want an enqueue error")
@@ -126,26 +130,28 @@ func masterKeyURL(t *testing.T, kind, user, file string) string {
 }
 
 func TestMaster_GuidesKeyAsStem_NeedsPlus(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	for _, enforced := range []bool{true, false} {
 		fake := &credit.FakeSpender{IsEnforced: enforced}
-		s := NewMasterService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+		s := NewMasterService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
 		req := masterFinalRequest(t, "kullanici-a")
 		req.StemURLs = append(req.StemURLs, masterKeyURL(t, "guides", "kullanici-a", "ai.mp3"))
-		n := jobKeyCount(t, rdb)
+		n := jobCount(t, repo)
 		if _, err := s.StartFinal(context.Background(), "kullanici-a", req); !errors.Is(err, ErrPlusRequired) {
 			t.Fatalf("enforced=%v err = %v, want ErrPlusRequired", enforced, err)
 		}
-		if len(fake.Spends) != 0 || jobKeyCount(t, rdb) != n {
+		if len(fake.Spends) != 0 || jobCount(t, repo) != n {
 			t.Errorf("enforced=%v: spends=%v, job records changed", enforced, fake.Spends)
 		}
 	}
 }
 
 func TestMaster_GuidesKeyAsTake_NeedsPlus(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true}
-	s := NewMasterService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+	s := NewMasterService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
 	req := masterFinalRequest(t, "kullanici-a")
 	req.VocalTakes = []model.VocalTake{{SectionID: "s1", TakeID: "t1", FileURL: masterKeyURL(t, "guides", "kullanici-a", "ai.mp3")}}
 	if _, err := s.StartFinal(context.Background(), "kullanici-a", req); !errors.Is(err, ErrPlusRequired) {
@@ -157,9 +163,10 @@ func TestMaster_GuidesKeyAsTake_NeedsPlus(t *testing.T) {
 }
 
 func TestMaster_PlanReadError_NoSpend(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true, Err: errors.New("db down")}
-	s := NewMasterService(rdb, nil, nil, testR2Cfg()).WithCredits(fake)
+	s := NewMasterService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
 	req := masterFinalRequest(t, "kullanici-a")
 	req.StemURLs = append(req.StemURLs, masterKeyURL(t, "guides", "kullanici-a", "ai.mp3"))
 	err := func() error { _, err := s.StartFinal(context.Background(), "kullanici-a", req); return err }()
@@ -172,9 +179,10 @@ func TestMaster_PlanReadError_NoSpend(t *testing.T) {
 }
 
 func TestMaster_GuidesKey_PlusUser_OK(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true, Plus: true}
-	s := NewMasterService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	s := NewMasterService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
 	req := masterFinalRequest(t, "kullanici-a")
 	req.StemURLs = append(req.StemURLs, masterKeyURL(t, "guides", "kullanici-a", "ai.mp3"))
 	if _, err := s.StartFinal(context.Background(), "kullanici-a", req); err != nil {
@@ -186,9 +194,10 @@ func TestMaster_GuidesKey_PlusUser_OK(t *testing.T) {
 }
 
 func TestMaster_OwnTakes_NoPlan(t *testing.T) {
-	rdb := liveRedis(t)
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
 	fake := &credit.FakeSpender{IsEnforced: true}
-	s := NewMasterService(rdb, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	s := NewMasterService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
 	req := masterFinalRequest(t, "kullanici-a")
 	req.VocalTakes = []model.VocalTake{{SectionID: "s1", TakeID: "t1", FileURL: masterKeyURL(t, "vocals", "kullanici-a", "t.wav")}}
 	if _, err := s.StartFinal(context.Background(), "kullanici-a", req); err != nil {
@@ -216,5 +225,69 @@ func TestUsesAppVocal(t *testing.T) {
 	}
 	if !usesAppVocal([]string{"stems/u/p/a.mp3", "guides/u/p/ai.mp3"}) {
 		t.Error("guides key must count")
+	}
+}
+
+func storeMasterJob(t *testing.T, repo jobs.Repo, status model.JobStatus) {
+	t.Helper()
+	storeJob(t, repo, &model.Job{ID: testMasterJobID, Type: model.JobTypeMaster, OwnerID: "kullanici-a", Status: status, CreatedAt: time.Now()})
+}
+
+func TestMasterService_CancelQueuedRefunds(t *testing.T) {
+	repo := jobs.NewMemoryStore(nil)
+	fake := &credit.FakeSpender{}
+	s := NewMasterService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
+	storeMasterJob(t, repo, model.JobStatusQueued)
+
+	if err := s.Cancel(context.Background(), "kullanici-a", testMasterJobID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if len(fake.Refunds) != 1 || fake.Refunds[0].Op != credit.OpMaster || fake.Refunds[0].ID != testMasterJobID {
+		t.Errorf("refunds = %+v, want one master refund for the job", fake.Refunds)
+	}
+	job, _ := repo.Get(context.Background(), testMasterJobID)
+	if job.Status != model.JobStatusCanceled || job.CompletedAt == nil {
+		t.Errorf("job = %s completedAt=%v, want canceled with a finish time", job.Status, job.CompletedAt)
+	}
+	evs, _ := repo.EventsAfter(context.Background(), "kullanici-a", testMasterJobID, 0, 10)
+	if len(evs) == 0 || evs[len(evs)-1].Kind != jobs.KindCanceled {
+		t.Errorf("events = %+v, want a trailing job.canceled", evs)
+	}
+}
+
+func TestMasterService_CancelRunningKeepsCharge(t *testing.T) {
+	repo := jobs.NewMemoryStore(nil)
+	fake := &credit.FakeSpender{}
+	s := NewMasterService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
+	storeMasterJob(t, repo, model.JobStatusRunning)
+
+	if err := s.Cancel(context.Background(), "kullanici-a", testMasterJobID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if len(fake.Refunds) != 0 {
+		t.Errorf("refunds = %+v, want none for a running job", fake.Refunds)
+	}
+	if job, _ := repo.Get(context.Background(), testMasterJobID); job.Status != model.JobStatusCanceled {
+		t.Errorf("status = %s, want canceled", job.Status)
+	}
+}
+
+func TestMasterService_CancelRejections(t *testing.T) {
+	repo := jobs.NewMemoryStore(nil)
+	fake := &credit.FakeSpender{}
+	s := NewMasterService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
+	storeMasterJob(t, repo, model.JobStatusSucceeded)
+
+	if err := s.Cancel(context.Background(), "kullanici-a", testMasterJobID); !errors.Is(err, ErrJobAlreadyCompleted) {
+		t.Errorf("finished job: err = %v, want ErrJobAlreadyCompleted", err)
+	}
+	if err := s.Cancel(context.Background(), "kullanici-b", testMasterJobID); !errors.Is(err, ErrJobNotFound) {
+		t.Errorf("other user: err = %v, want ErrJobNotFound", err)
+	}
+	if err := s.Cancel(context.Background(), "kullanici-a", testJobID); !errors.Is(err, ErrJobNotFound) {
+		t.Errorf("unknown job: err = %v, want ErrJobNotFound", err)
+	}
+	if len(fake.Refunds) != 0 {
+		t.Errorf("refunds = %+v, want none", fake.Refunds)
 	}
 }

@@ -14,8 +14,8 @@ import (
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/credit"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
-	"github.com/redis/go-redis/v9"
 )
 
 // ErrPlusRequired: mastering with the app's AI vocal is for an active Plus (or
@@ -52,16 +52,16 @@ func (s *MasterService) requirePlusForAppVocal(ctx context.Context, userID strin
 
 // MasterService handles mastering operations
 type MasterService struct {
-	redis       *redis.Client
+	repo        jobs.Repo
 	asynqClient *asynq.Client
 	r2Client    client.StorageClient
 	r2Cfg       *config.R2Config
 	credits     credit.Spender // nil: no credit accounting
 }
 
-func NewMasterService(redisClient *redis.Client, asynqClient *asynq.Client, r2Client client.StorageClient, r2Cfg *config.R2Config) *MasterService {
+func NewMasterService(repo jobs.Repo, asynqClient *asynq.Client, r2Client client.StorageClient, r2Cfg *config.R2Config) *MasterService {
 	return &MasterService{
-		redis:       redisClient,
+		repo:        repo,
 		asynqClient: asynqClient,
 		r2Client:    r2Client,
 		r2Cfg:       r2Cfg,
@@ -157,6 +157,9 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 		Status:    model.JobStatusQueued,
 		Progress:  0,
 		CreatedAt: now,
+
+		ProjectID:   req.ProjectID,
+		ProjectName: req.ProjectName,
 	}
 
 	// Create payload
@@ -194,8 +197,8 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 		balance = b
 	}
 
-	// Save job to Redis
-	if err := s.saveJob(ctx, job); err != nil {
+	// Save the job
+	if err := s.repo.Create(ctx, job); err != nil {
 		s.refundJob(ctx, jobID)
 		return nil, fmt.Errorf("failed to save job: %w", err)
 	}
@@ -228,7 +231,7 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 
 // GetStatus returns the current status of a master job
 func (s *MasterService) GetStatus(ctx context.Context, userID, jobID string) (*model.MasterStatusResponse, error) {
-	job, err := readOwnedJob(ctx, s.redis, userID, jobID)
+	job, err := s.repo.GetOwned(ctx, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +246,7 @@ func (s *MasterService) GetStatus(ctx context.Context, userID, jobID string) (*m
 
 // GetResult returns the result of a completed master job
 func (s *MasterService) GetResult(ctx context.Context, userID, jobID string) (*model.MasterResultResponse, error) {
-	job, err := readOwnedJob(ctx, s.redis, userID, jobID)
+	job, err := s.repo.GetOwned(ctx, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -276,10 +279,31 @@ func (s *MasterService) BuildResult(ctx context.Context, stored []byte) (*model.
 	return record.Response(fileURL, expiresAt), nil
 }
 
-// Helper methods
-
-func (s *MasterService) saveJob(ctx context.Context, job *model.Job) error {
-	return writeJob(ctx, s.redis, job)
+// Cancel cancels a master job with the rules of RenderService.CancelRender:
+// the status check and the write are one transaction, only a job that never
+// left the queue is refunded, and a finished job is ErrJobAlreadyCompleted.
+func (s *MasterService) Cancel(ctx context.Context, userID, jobID string) error {
+	wasQueued := false
+	err := s.repo.Update(ctx, jobID, func(job *model.Job) error {
+		if !job.IsOwnedBy(userID) || job.Type != model.JobTypeMaster {
+			return ErrJobNotFound
+		}
+		if job.Status == model.JobStatusSucceeded || job.Status == model.JobStatusFailed {
+			return ErrJobAlreadyCompleted
+		}
+		wasQueued = job.Status == model.JobStatusQueued
+		job.Status = model.JobStatusCanceled
+		now := time.Now()
+		job.CompletedAt = &now
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if wasQueued {
+		s.refundJob(ctx, jobID)
+	}
+	return nil
 }
 
 func newMasterTask(jobID string, payload []byte) (*asynq.Task, error) {

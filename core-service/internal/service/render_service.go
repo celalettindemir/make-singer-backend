@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/makeasinger/api/internal/jobs"
 	"log"
 	"strings"
 	"time"
@@ -15,9 +14,22 @@ import (
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/credit"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
-	"github.com/redis/go-redis/v9"
 )
+
+// ErrJobNotFound: the job does not exist OR does not belong to the requesting
+// user. The two cases are deliberately not told apart; a 403 would confirm
+// that the job exists.
+var ErrJobNotFound = jobs.ErrJobNotFound
+
+// ErrJobNotCompleted is returned when a result is requested before the job
+// has succeeded. Handlers answer it with 400.
+var ErrJobNotCompleted = jobs.ErrJobNotCompleted
+
+// ErrJobAlreadyCompleted is returned when a finished job is canceled.
+// Handlers answer it with 400.
+var ErrJobAlreadyCompleted = jobs.ErrJobAlreadyCompleted
 
 const (
 	TaskTypeRender = "render:process"
@@ -29,20 +41,16 @@ var ErrPlanRequired = errors.New("the stems render needs the Pro plan")
 
 // RenderService handles render job management
 type RenderService struct {
-	redis       *redis.Client
+	repo        jobs.Repo
 	asynqClient *asynq.Client
 	r2Client    client.StorageClient
 	r2Cfg       *config.R2Config
 	credits     credit.Spender // nil: no credit accounting
-
-	// beforeExec is a test seam: called after updateJob read the record and
-	// before the transaction executes, to force a WATCH conflict.
-	beforeExec func()
 }
 
-func NewRenderService(redisClient *redis.Client, asynqClient *asynq.Client, r2Client client.StorageClient, r2Cfg *config.R2Config) *RenderService {
+func NewRenderService(repo jobs.Repo, asynqClient *asynq.Client, r2Client client.StorageClient, r2Cfg *config.R2Config) *RenderService {
 	return &RenderService{
-		redis:       redisClient,
+		repo:        repo,
 		asynqClient: asynqClient,
 		r2Client:    r2Client,
 		r2Cfg:       r2Cfg,
@@ -189,6 +197,9 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 		Status:    model.JobStatusQueued,
 		Progress:  0,
 		CreatedAt: now,
+
+		ProjectID:   req.ProjectID,
+		ProjectName: req.ProjectName,
 	}
 
 	// Create payload
@@ -228,8 +239,8 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 		}
 	}
 
-	// Save job to Redis
-	if err := s.saveJob(ctx, job); err != nil {
+	// Save the job
+	if err := s.repo.Create(ctx, job); err != nil {
 		s.refundJob(ctx, op, jobID)
 		return nil, fmt.Errorf("failed to save job: %w", err)
 	}
@@ -264,7 +275,7 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 // JobStatus returns a job's current status without an owner check (called by
 // the worker).
 func (s *RenderService) JobStatus(ctx context.Context, jobID string) (model.JobStatus, error) {
-	job, err := s.getJob(ctx, jobID)
+	job, err := s.repo.Get(ctx, jobID)
 	if err != nil {
 		return "", err
 	}
@@ -273,7 +284,7 @@ func (s *RenderService) JobStatus(ctx context.Context, jobID string) (model.JobS
 
 // GetStatus returns the current status of a render job
 func (s *RenderService) GetStatus(ctx context.Context, userID, jobID string) (*model.RenderStatusResponse, error) {
-	job, err := readOwnedJob(ctx, s.redis, userID, jobID)
+	job, err := s.repo.GetOwned(ctx, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +304,7 @@ func (s *RenderService) GetStatus(ctx context.Context, userID, jobID string) (*m
 
 // GetResult returns the result of a completed render job
 func (s *RenderService) GetResult(ctx context.Context, userID, jobID string) (*model.RenderResultResponse, error) {
-	job, err := readOwnedJob(ctx, s.redis, userID, jobID)
+	job, err := s.repo.GetOwned(ctx, userID, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +328,7 @@ func (s *RenderService) CancelRender(ctx context.Context, userID, jobID string) 
 	// Only a job that never left the queue is refunded: no Suno call was
 	// made. A running job keeps its charge (6-G2).
 	wasQueued := false
-	err := s.updateJob(ctx, jobID, func(job *model.Job) error {
+	err := s.repo.Update(ctx, jobID, func(job *model.Job) error {
 		if !job.IsOwnedBy(userID) {
 			return ErrJobNotFound
 		}
@@ -350,9 +361,9 @@ func (s *RenderService) CancelRender(ctx context.Context, userID, jobID string) 
 // UpdateJobProgress updates job progress (called by worker). A canceled job
 // stays canceled.
 func (s *RenderService) UpdateJobProgress(ctx context.Context, jobID string, progress int, step string) error {
-	err := s.updateJob(ctx, jobID, func(job *model.Job) error {
+	err := s.repo.Update(ctx, jobID, func(job *model.Job) error {
 		if job.Status == model.JobStatusCanceled {
-			return errSkipWrite
+			return jobs.ErrSkipWrite
 		}
 		job.Progress = progress
 		job.CurrentStep = step
@@ -361,7 +372,7 @@ func (s *RenderService) UpdateJobProgress(ctx context.Context, jobID string, pro
 		}
 		return nil
 	})
-	if errors.Is(err, errSkipWrite) {
+	if errors.Is(err, jobs.ErrSkipWrite) {
 		return nil
 	}
 	return err
@@ -372,20 +383,20 @@ func (s *RenderService) UpdateJobProgress(ctx context.Context, jobID string, pro
 // makes a later cancel a running-cancel (no refund). Both outcomes are decided
 // in one transaction against CancelRender.
 func (s *RenderService) ClaimRun(ctx context.Context, jobID string) (claimed bool, status model.JobStatus, err error) {
-	err = s.updateJob(ctx, jobID, func(job *model.Job) error {
-		// The callback re-runs on a WATCH conflict: decide from scratch each
-		// time, so a stale true from an earlier read cannot survive.
+	err = s.repo.Update(ctx, jobID, func(job *model.Job) error {
+		// Decide from scratch on every run, so a stale true from an earlier
+		// attempt cannot survive.
 		claimed, status = false, job.Status
 		switch job.Status {
 		case model.JobStatusCanceled, model.JobStatusFailed, model.JobStatusSucceeded:
-			return errSkipWrite
+			return jobs.ErrSkipWrite
 		case model.JobStatusQueued:
 			markRunning(job)
 		}
 		claimed = true
 		return nil
 	})
-	if err != nil && !errors.Is(err, errSkipWrite) {
+	if err != nil && !errors.Is(err, jobs.ErrSkipWrite) {
 		return false, "", err
 	}
 	return claimed, status, nil
@@ -403,7 +414,7 @@ func (s *RenderService) CompleteJob(ctx context.Context, jobID string, result in
 	if err != nil {
 		return err
 	}
-	return s.updateJob(ctx, jobID, func(job *model.Job) error {
+	return s.repo.Update(ctx, jobID, func(job *model.Job) error {
 		job.Status = model.JobStatusSucceeded
 		job.Progress = 100
 		job.Result = resultBytes
@@ -415,70 +426,14 @@ func (s *RenderService) CompleteJob(ctx context.Context, jobID string, result in
 
 // FailJob marks job as failed (called by worker)
 func (s *RenderService) FailJob(ctx context.Context, jobID string, errMsg string) error {
-	return s.updateJob(ctx, jobID, func(job *model.Job) error {
+	return s.repo.Update(ctx, jobID, func(job *model.Job) error {
 		job.Status = model.JobStatusFailed
 		job.Error = &errMsg
+		job.ErrorCode = "RENDER_FAILED"
 		now := time.Now()
 		job.CompletedAt = &now
 		return nil
 	})
-}
-
-// errSkipWrite: updateJob callbacks return it to leave the record untouched;
-// updateJob returns it to the caller, which treats it as success.
-var errSkipWrite = jobs.ErrSkipWrite
-
-const updateJobAttempts = 20
-
-// updateJob read-modify-writes a job under WATCH, so concurrent updates (the
-// worker and a cancel) cannot overwrite each other. fn runs again on every
-// conflict and must be free of side effects.
-func (s *RenderService) updateJob(ctx context.Context, jobID string, fn func(*model.Job) error) error {
-	key := jobKey(jobID)
-	for i := 0; i < updateJobAttempts; i++ {
-		err := s.redis.Watch(ctx, func(tx *redis.Tx) error {
-			data, err := tx.Get(ctx, key).Bytes()
-			if err != nil {
-				if errors.Is(err, redis.Nil) {
-					return ErrJobNotFound
-				}
-				return err
-			}
-			var job model.Job
-			if err := json.Unmarshal(data, &job); err != nil {
-				return err
-			}
-			if err := fn(&job); err != nil {
-				return err
-			}
-			out, err := json.Marshal(&job)
-			if err != nil {
-				return err
-			}
-			if s.beforeExec != nil {
-				s.beforeExec()
-			}
-			_, err = tx.TxPipelined(ctx, func(p redis.Pipeliner) error {
-				return p.Set(ctx, key, out, jobTTL).Err()
-			})
-			return err
-		}, key)
-		if errors.Is(err, redis.TxFailedErr) {
-			continue
-		}
-		return err
-	}
-	return redis.TxFailedErr
-}
-
-// Helper methods
-
-func (s *RenderService) saveJob(ctx context.Context, job *model.Job) error {
-	return writeJob(ctx, s.redis, job)
-}
-
-func (s *RenderService) getJob(ctx context.Context, jobID string) (*model.Job, error) {
-	return readJob(ctx, s.redis, jobID)
 }
 
 func newRenderTask(jobID string, payload []byte) (*asynq.Task, error) {

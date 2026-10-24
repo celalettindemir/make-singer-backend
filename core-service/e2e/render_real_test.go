@@ -20,6 +20,7 @@ import (
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/handler"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/lyricsprovider"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/model"
@@ -107,8 +108,8 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 
 	// Services
 	lyricsService := service.NewLyricsService(lyricsprovider.Fixed(groqClient))
-	renderService := service.NewRenderService(redisClient, asynqClient, nil, &cfg.R2)
-	masterService := service.NewMasterService(redisClient, asynqClient, nil, &cfg.R2)
+	renderService := service.NewRenderService(jobs.NewMemoryStore(nil), asynqClient, nil, &cfg.R2)
+	masterService := service.NewMasterService(jobs.NewMemoryStore(nil), asynqClient, nil, &cfg.R2)
 	exportService := service.NewExportService(nil, nil, &config.R2Config{})
 	uploadService := service.NewUploadService(nil, &config.R2Config{})
 

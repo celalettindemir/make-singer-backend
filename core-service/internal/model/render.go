@@ -17,6 +17,8 @@ type RenderStartRequest struct {
 	FocusInstrument *Instrument `json:"focusInstrument" validate:"omitempty,oneof=drums bass piano guitar synth strings brass woodwinds percussion pads lead fx"`
 	// Vocal asks for a sung vocal over the instrumental (every plan).
 	Vocal *VocalRequest `json:"vocal,omitempty" validate:"omitempty"`
+	// ProjectName is shown in notifications; optional.
+	ProjectName string `json:"projectName,omitempty" validate:"max=120"`
 }
 
 // VocalRequest is what the vocal render needs: the stock voice, the song

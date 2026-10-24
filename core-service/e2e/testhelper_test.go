@@ -19,6 +19,7 @@ import (
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/config"
 	"github.com/makeasinger/api/internal/handler"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/lyricsprovider"
 	"github.com/makeasinger/api/internal/middleware"
 	"github.com/makeasinger/api/internal/service"
@@ -92,8 +93,8 @@ func setupApp(t *testing.T) *testApp {
 
 	// Services
 	lyricsService := service.NewLyricsService(lyricsprovider.Fixed(groqClient))
-	renderService := service.NewRenderService(redisClient, asynqClient, nil, e2eR2Cfg())
-	masterService := service.NewMasterService(redisClient, asynqClient, nil, e2eR2Cfg())
+	renderService := service.NewRenderService(jobs.NewMemoryStore(nil), asynqClient, nil, e2eR2Cfg())
+	masterService := service.NewMasterService(jobs.NewMemoryStore(nil), asynqClient, nil, e2eR2Cfg())
 	exportService := service.NewExportService(nil, nil, e2eR2Cfg()) // nil triggers mock fallbacks
 	uploadService := service.NewUploadService(nil, e2eR2Cfg())
 

@@ -8,10 +8,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 )
@@ -21,11 +21,11 @@ const ticketJobID = "0b6f3c1e-8a52-4d0e-9a51-6d3f8f2b7c11"
 func ticketApp(t *testing.T, userID string) *fiber.App {
 	t.Helper()
 	rdb := liveRedis(t)
-	raw, _ := json.Marshal(model.Job{ID: ticketJobID, OwnerID: "kullanici-a", Status: model.JobStatusRunning})
-	if err := rdb.Set(context.Background(), "job:"+ticketJobID, raw, time.Hour).Err(); err != nil {
+	repo := jobs.NewMemoryStore(nil)
+	if err := repo.Create(context.Background(), &model.Job{ID: ticketJobID, OwnerID: "kullanici-a", Status: model.JobStatusRunning}); err != nil {
 		t.Fatalf("could not write the job: %v", err)
 	}
-	h := NewWSTicketHandler(service.NewWSTicketService(rdb), validator.New())
+	h := NewWSTicketHandler(service.NewWSTicketService(rdb, repo), validator.New())
 	app := fiber.New()
 	app.Post("/api/ws/ticket", asUser(userID), h.Issue)
 	// In the real route websocket.New follows Gate; here the decision of Gate
