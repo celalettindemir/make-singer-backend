@@ -320,3 +320,48 @@ func TestStore_DeleteOwnerRemovesJobsEventsDevices(t *testing.T) {
 		t.Errorf("remaining jobs=%d events=%d devices=%d, want 1 each", jobsN, evN, devN)
 	}
 }
+
+func TestStore_ConcurrentUpdatesKeepSeqConsecutive(t *testing.T) {
+	pool := testPool(t)
+	s := NewPostgresStore(pool, nil)
+	ctx := context.Background()
+	job := &model.Job{ID: uuid.NewString(), Type: model.JobTypeRender, OwnerID: "u1", Status: model.JobStatusRunning}
+	if err := s.Create(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	const n = 24
+	var wg sync.WaitGroup
+	for i := 1; i <= n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			var err error
+			if i%2 == 0 {
+				err = s.Update(ctx, job.ID, func(j *model.Job) error { j.Progress = i; j.CurrentStep = "s"; return nil })
+			} else {
+				err = s.UpdateWith(ctx, job.ID, func(j *model.Job, em Emitter) error {
+					em.Emit(KindLine, map[string]any{"section": 0, "text": "x"})
+					return nil
+				})
+			}
+			if err != nil {
+				t.Errorf("update %d: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	evs, err := s.EventsAfter(ctx, "u1", job.ID, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, e := range evs {
+		if e.Seq != int64(i+1) {
+			t.Fatalf("event %d has seq %d, want %d (gap or duplicate)", i, e.Seq, i+1)
+		}
+	}
+	got, _ := s.Get(ctx, job.ID)
+	if got.LastSeq != int64(len(evs)) || len(evs) < n/2+1 {
+		t.Errorf("son_seq = %d with %d events", got.LastSeq, len(evs))
+	}
+}

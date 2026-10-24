@@ -85,3 +85,40 @@ func TestImportRedisJobs_CopiesAndRefreshesNonTerminal(t *testing.T) {
 		t.Errorf("terminal B was overwritten: %+v", gb)
 	}
 }
+
+func TestImportRedisJobs_StaleRedisNeverRegressesRow(t *testing.T) {
+	pool := testPool(t)
+	rdb := busRedis(t)
+	ctx := context.Background()
+	_ = rdb.FlushDB(ctx).Err()
+	t.Cleanup(func() { _ = rdb.FlushDB(context.Background()).Err() })
+	repo := NewPostgresStore(pool, nil)
+
+	j := model.Job{ID: uuid.NewString(), Type: model.JobTypeRender, OwnerID: "u1", Status: model.JobStatusRunning,
+		Progress: 90, CurrentStep: "new", CreatedAt: time.Now().UTC()}
+	if err := repo.Create(ctx, &j); err != nil {
+		t.Fatal(err)
+	}
+	stale := j
+	stale.Progress, stale.CurrentStep = 40, "old"
+	raw, _ := json.Marshal(stale)
+	if err := rdb.Set(ctx, "job:"+j.ID, raw, time.Hour).Err(); err != nil {
+		t.Fatal(err)
+	}
+	// Even a queued copy must not pull a running row back.
+	for _, st := range []model.JobStatus{model.JobStatusRunning, model.JobStatusQueued} {
+		stale.Status = st
+		raw, _ = json.Marshal(stale)
+		_ = rdb.Set(ctx, "job:"+j.ID, raw, time.Hour).Err()
+		if _, refreshed, err := ImportRedisJobs(ctx, rdb, repo); err != nil || refreshed != 0 {
+			t.Fatalf("import with %s copy: refreshed=%d err=%v", st, refreshed, err)
+		}
+	}
+	got, _ := repo.Get(ctx, j.ID)
+	if got.Progress != 90 || got.Status != model.JobStatusRunning || got.CurrentStep != "new" {
+		t.Errorf("row regressed: %+v", got)
+	}
+	if evs, _ := repo.EventsAfter(ctx, "u1", j.ID, 1, 10); len(evs) != 0 {
+		t.Errorf("unexpected events: %+v", evs)
+	}
+}

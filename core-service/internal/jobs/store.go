@@ -144,6 +144,9 @@ func insertEvents(ctx context.Context, tx pgx.Tx, id uuid.UUID, owner string, la
 		}
 		events = append(events, Event{JobID: id.String(), OwnerID: owner, Seq: last, Kind: d.Kind, Data: data, At: now})
 	}
+	if len(ds) == 0 {
+		return events, nil
+	}
 	if _, err := tx.Exec(ctx, `UPDATE uretim.isler SET son_seq=$2 WHERE id=$1`, id, last); err != nil {
 		return nil, err
 	}

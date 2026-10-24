@@ -97,7 +97,7 @@ func importOne(ctx context.Context, rdb *redis.Client, repo *PostgresStore, key 
 	wrote := false
 	err = repo.Update(ctx, src.ID, func(j *model.Job) error {
 		wrote = false
-		if isTerminal(j.Status) || sameProgress(j, &src) {
+		if !redisAhead(j, &src) {
 			return ErrSkipWrite
 		}
 		j.Status = src.Status
@@ -122,6 +122,26 @@ func importOne(ctx context.Context, rdb *redis.Client, repo *PostgresStore, key 
 		refreshed = 1
 	}
 	return 0, refreshed, nil
+}
+
+// redisAhead: the Redis copy replaces the row only when it is strictly ahead.
+// New pods no longer write job:* keys, so a row a new worker advanced must
+// never be moved back by a stale record.
+func redisAhead(pg, rd *model.Job) bool {
+	if isTerminal(pg.Status) || sameProgress(pg, rd) {
+		return false
+	}
+	if isTerminal(rd.Status) {
+		return true
+	}
+	return statusRank(rd.Status) >= statusRank(pg.Status) && rd.Progress >= pg.Progress
+}
+
+func statusRank(s model.JobStatus) int {
+	if s == model.JobStatusRunning {
+		return 1
+	}
+	return 0
 }
 
 func sameProgress(a, b *model.Job) bool {

@@ -319,23 +319,26 @@ func (w *MasterWorker) isCanceled(ctx context.Context, jobID string) bool {
 	return err == nil && job.Status == model.JobStatusCanceled
 }
 
-// update applies fn to the job unless it is canceled; failures are logged.
-// It reports whether the record was written.
-func (w *MasterWorker) update(ctx context.Context, jobID string, fn func(*model.Job)) bool {
-	err := w.repo.Update(ctx, jobID, func(job *model.Job) error {
+// tryUpdate applies fn to the job unless it is canceled; it returns
+// errCanceled for a canceled job and any other store error as is.
+func (w *MasterWorker) tryUpdate(ctx context.Context, jobID string, fn func(*model.Job)) error {
+	return w.repo.Update(ctx, jobID, func(job *model.Job) error {
 		if job.Status == model.JobStatusCanceled {
 			return errCanceled
 		}
 		fn(job)
 		return nil
 	})
-	if err != nil {
-		if !errors.Is(err, errCanceled) {
-			log.Printf("Failed to update job %s: %v", jobID, err)
-		}
-		return false
+}
+
+// update is tryUpdate with failures logged; it reports whether the record
+// was written.
+func (w *MasterWorker) update(ctx context.Context, jobID string, fn func(*model.Job)) bool {
+	err := w.tryUpdate(ctx, jobID, fn)
+	if err != nil && !errors.Is(err, errCanceled) {
+		log.Printf("Failed to update job %s: %v", jobID, err)
 	}
-	return true
+	return err == nil
 }
 
 func (w *MasterWorker) updateJobStatus(ctx context.Context, jobID string, status model.JobStatus, progress int, step string) {
@@ -382,10 +385,9 @@ func (w *MasterWorker) failFinal(ctx context.Context, jobID, errMsg string, err 
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	// A canceled job stays canceled; a running cancel keeps its charge.
-	if w.isCanceled(fctx, jobID) {
+	if !w.failJob(fctx, jobID, errMsg) {
 		return
 	}
-	w.failJob(fctx, jobID, errMsg)
 	w.refund(fctx, jobID)
 }
 
@@ -400,17 +402,26 @@ func (w *MasterWorker) refund(ctx context.Context, jobID string) {
 	}
 }
 
-func (w *MasterWorker) failJob(ctx context.Context, jobID, errMsg string) {
-	if !w.update(ctx, jobID, func(job *model.Job) {
+// failJob writes the failed status. It returns false only when the job is
+// canceled (nothing is written and no refund is due); a missing job or a
+// store error still returns true so the debit is reversed.
+func (w *MasterWorker) failJob(ctx context.Context, jobID, errMsg string) bool {
+	err := w.tryUpdate(ctx, jobID, func(job *model.Job) {
 		job.Status = model.JobStatusFailed
 		job.Error = &errMsg
 		job.ErrorCode = "MASTER_FAILED"
 		now := time.Now()
 		job.CompletedAt = &now
-	}) {
-		return
+	})
+	if errors.Is(err, errCanceled) {
+		return false
+	}
+	if err != nil {
+		log.Printf("Failed to mark job %s failed: %v", jobID, err)
+		return true
 	}
 	w.hub.BroadcastError(jobID, "MASTER_FAILED", errMsg)
+	return true
 }
 
 // generateMockRecord builds the record stored on the mock/dev path. Like
