@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/makeasinger/api/internal/jobs"
 	"log"
 	"strings"
 	"time"
@@ -425,7 +426,7 @@ func (s *RenderService) FailJob(ctx context.Context, jobID string, errMsg string
 
 // errSkipWrite: updateJob callbacks return it to leave the record untouched;
 // updateJob returns it to the caller, which treats it as success.
-var errSkipWrite = errors.New("skip job write")
+var errSkipWrite = jobs.ErrSkipWrite
 
 const updateJobAttempts = 20
 

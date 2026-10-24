@@ -11,12 +11,19 @@ type Job struct {
 	Progress    int        `json:"progress"`
 	CurrentStep string     `json:"currentStep,omitempty"`
 	Error       *string    `json:"error,omitempty"`
-	Payload     []byte     `json:"-"`                // Stored as JSON
+	Payload     []byte     `json:"-"`                // Stored as JSON (column girdi)
 	Result      []byte     `json:"result,omitempty"` // Stored as JSON
 	CreatedAt   time.Time  `json:"createdAt"`
 	StartedAt   *time.Time `json:"startedAt,omitempty"`
 	CompletedAt *time.Time `json:"completedAt,omitempty"`
 	RetryCount  int        `json:"retryCount"`
+
+	// Fields of the durable store (uretim.isler); legacy responses are built
+	// field by field, so none of them is serialized.
+	ProjectID   string `json:"-"`
+	ProjectName string `json:"-"`
+	ErrorCode   string `json:"-"`
+	LastSeq     int64  `json:"-"`
 }
 
 // IsOwnedBy: a job belongs only to the user who started it. A record without
@@ -30,6 +37,7 @@ func (j *Job) IsOwnedBy(userID string) bool {
 const (
 	JobTypeRender = "render"
 	JobTypeMaster = "master"
+	JobTypeLyrics = "lyrics"
 )
 
 // RenderJobPayload contains the data for a render job

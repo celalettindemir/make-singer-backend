@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/redis/go-redis/v9"
 )
@@ -14,15 +15,15 @@ import (
 // ErrJobNotFound: the job does not exist OR does not belong to the requesting
 // user. The two cases are deliberately not told apart; a 403 would confirm
 // that the job exists.
-var ErrJobNotFound = errors.New("job not found")
+var ErrJobNotFound = jobs.ErrJobNotFound
 
 // ErrJobNotCompleted is returned when a result is requested before the job
 // has succeeded. Handlers answer it with 400.
-var ErrJobNotCompleted = errors.New("job not completed")
+var ErrJobNotCompleted = jobs.ErrJobNotCompleted
 
 // ErrJobAlreadyCompleted is returned when a finished job is canceled.
 // Handlers answer it with 400.
-var ErrJobAlreadyCompleted = errors.New("job already completed")
+var ErrJobAlreadyCompleted = jobs.ErrJobAlreadyCompleted
 
 const jobTTL = 24 * time.Hour
 
