@@ -31,6 +31,8 @@ func (h *SunoWebhookHandler) Handle(c *fiber.Ctx) error {
 	if h.token == "" || subtle.ConstantTimeCompare([]byte(c.Params("token")), []byte(h.token)) != 1 {
 		return c.SendStatus(fiber.StatusNotFound)
 	}
+	// Fiber has no per-route body limit; the app-wide BodyLimit has already
+	// buffered the body, so this check only bounds JSON parsing.
 	body := c.Body()
 	if len(body) <= sunoWebhookMaxBody {
 		var req struct {

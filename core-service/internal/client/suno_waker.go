@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"log"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -29,6 +30,7 @@ func (w *redisWaker) Wait(ctx context.Context, taskID string) (<-chan struct{}, 
 	// still applies.
 	if _, err := sub.Receive(ctx); err != nil {
 		_ = sub.Close()
+		log.Printf("[Suno waker] subscribe failed for task %s, falling back to interval polling: %v", taskID, err)
 		return out, func() {}
 	}
 	done := make(chan struct{})

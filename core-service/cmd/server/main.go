@@ -213,6 +213,9 @@ func main() {
 	sunoClient := client.NewSunoClient(&cfg.Suno)
 	if cfg.Suno.CallbackToken != "" {
 		sunoClient.WithWaker(client.NewRedisWaker(redisClient))
+		if !strings.Contains(cfg.Suno.CallbackURL, cfg.Suno.CallbackToken) {
+			log.Println("WARNING: SUNO_CALLBACK_TOKEN is set but Suno.CallbackURL does not contain it; Suno callbacks will 404 and polling falls back to the interval")
+		}
 	}
 	audioClient := client.NewAudioClient(&cfg.Audio)
 
@@ -368,8 +371,14 @@ func main() {
 		logFormat = "[${time}] ${status} - ${latency} ${method} ${path} ${queryParams}\n"
 		log.Println("Debug logging enabled (request headers and bodies are not logged)")
 	}
+	logFormat = strings.ReplaceAll(logFormat, "${path}", "${maskedPath}")
 	app.Use(logger.New(logger.Config{
 		Format: logFormat,
+		CustomTags: map[string]logger.LogFunc{
+			"maskedPath": func(output logger.Buffer, c *fiber.Ctx, _ *logger.Data, _ string) (int, error) {
+				return output.WriteString(maskSecretPath(c.Path()))
+			},
+		},
 	}))
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: "*",
@@ -791,6 +800,25 @@ func newAPIRouter(app *fiber.App, h creditRouteHandlers, rl *middleware.RateLimi
 	return app.Group("/api", authChain...)
 }
 
+// secretPathPrefixes are route prefixes whose next segment is a secret (the
+// Suno callback token, a device push token).
+var secretPathPrefixes = []string{"/api/webhooks/suno/", "/api/devices/"}
+
+// maskSecretPath replaces the secret segment of a request path with ***, so
+// the access log never persists the Suno callback token or a device token.
+func maskSecretPath(path string) string {
+	for _, p := range secretPathPrefixes {
+		if strings.HasPrefix(path, p) {
+			rest := path[len(p):]
+			if i := strings.IndexByte(rest, '/'); i >= 0 {
+				return p + "***" + rest[i:]
+			}
+			return p + "***"
+		}
+	}
+	return path
+}
+
 // registerWebhookRoutes binds the store webhooks. It must run before the
 // authenticated /api group is created: Fiber matches in registration order,
 // and a store POST carries no Bearer token.
@@ -800,7 +828,9 @@ func registerWebhookRoutes(app *fiber.App, h creditRouteHandlers, rl *middleware
 	webhooks.Post("/appstore", h.Webhooks.AppStore)
 	webhooks.Post("/googleplay", h.Webhooks.GooglePlay)
 	if h.Suno != nil {
-		// Wake-only callback, secret path token; its own limit bucket.
+		// Wake-only callback, secret path token. Both limits apply: the
+		// /api/webhooks group limiter (the route falls under that prefix) and
+		// the dedicated suno-geri bucket.
 		app.Post("/api/webhooks/suno/:token",
 			rl.LimitIP("suno-geri", cfg.RateLimit.WebhooksPerMin, time.Minute, "", 0, 0), h.Suno.Handle)
 	}

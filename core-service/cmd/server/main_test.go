@@ -129,6 +129,51 @@ func TestRoutes_WebhookReachableWithoutBearer(t *testing.T) {
 	}
 }
 
+func TestRoutes_SunoWebhookReachableWithoutBearer(t *testing.T) {
+	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379", DB: 14})
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		t.Skipf("redis unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = rdb.Close() })
+	cfg := &config.Config{RateLimit: config.RateLimitConfig{WebhooksPerMin: 1000}}
+	h := creditRouteHandlers{
+		Webhooks: handler.NewWebhooksHandler(nil, rejectingAppleVerifier{}, nil, nil),
+		Suno:     handler.NewSunoWebhookHandler(rdb, "tok"),
+	}
+	app := fiber.New()
+	newAPIRouter(app, h, middleware.NewRateLimiter(rdb, nil), cfg, func(c *fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusUnauthorized)
+	})
+	for path, want := range map[string]int{
+		"/api/webhooks/suno/tok":   http.StatusOK,
+		"/api/webhooks/suno/wrong": http.StatusNotFound,
+	} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"data":{"task_id":"t1"}}`))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := app.Test(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != want {
+			t.Errorf("POST %s = %d, want %d (never 401 from the auth group)", path, resp.StatusCode, want)
+		}
+	}
+}
+
+func TestMaskSecretPath(t *testing.T) {
+	for in, want := range map[string]string{
+		"/api/webhooks/suno/abc123": "/api/webhooks/suno/***",
+		"/api/devices/tok-1":        "/api/devices/***",
+		"/api/devices/tok-1/":       "/api/devices/***/",
+		"/api/devices":              "/api/devices",
+		"/api/jobs/42":              "/api/jobs/42",
+	} {
+		if got := maskSecretPath(in); got != want {
+			t.Errorf("maskSecretPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestRoutes_GoogleWebhookUnconfiguredIs503(t *testing.T) {
 	app := creditTestApp(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/googleplay", strings.NewReader(`{}`))
