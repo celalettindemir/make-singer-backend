@@ -34,6 +34,8 @@ var (
 	KeyJobNotFound         = Key{"job_not_found"}
 	KeyJobNotCompleted     = Key{"job_not_completed"}
 	KeyJobAlreadyCompleted = Key{"job_already_completed"}
+	KeyJobActive           = Key{"job_active"}
+	KeyJobNotRetryable     = Key{"job_not_retryable"}
 	KeyStemSettingsInvalid = Key{"stem_settings_invalid"}
 	KeyGuideLyricsInvalid  = Key{"guide_lyrics_invalid"}
 	KeyFileNotFound        = Key{"file_not_found"}
@@ -151,6 +153,8 @@ var catalog = map[Key]texts{
 	KeyJobNotFound:         {"İş bulunamadı.", "Job not found."},
 	KeyJobNotCompleted:     {"İş henüz tamamlanmadı.", "The job has not completed yet."},
 	KeyJobAlreadyCompleted: {"İş zaten tamamlandı.", "The job has already completed."},
+	KeyJobActive:           {"Bu proje için zaten çalışan bir söz işi var.", "A lyrics job is already running for this project."},
+	KeyJobNotRetryable:     {"Bu iş yeniden denenemez.", "This job cannot be retried."},
 	KeyStemSettingsInvalid: {"Geçersiz stem ayarları: mod, odak enstrümanı ve enstrüman listesini kontrol edin.", "Invalid stem settings: check mode, focusInstrument and instrument list."},
 	KeyGuideLyricsInvalid:  {"Örnek şarkıcı için söz yok ya da sözler çok uzun (en çok 5000 karakter).", "The guide singer has no lyrics, or the lyrics are too long (at most 5000 characters)."},
 	KeyFileNotFound:        {"Dosya bulunamadı.", "File not found."},

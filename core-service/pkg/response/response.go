@@ -23,6 +23,8 @@ const (
 	CodeAdminRequired        = "ADMIN_REQUIRED"
 	CodeCampaignNotActive    = "CAMPAIGN_NOT_ACTIVE"
 	CodeBalanceTooLow        = "BALANCE_TOO_LOW"
+	CodeJobActive            = "JOB_ACTIVE"
+	CodeJobNotRetryable      = "JOB_NOT_RETRYABLE"
 )
 
 type ErrorResponse struct {
@@ -138,4 +140,16 @@ func CampaignNotActive(c *fiber.Ctx) error {
 func BalanceTooLow(c *fiber.Ctx, balance int) error {
 	return Error(c, fiber.StatusConflict, CodeBalanceTooLow, i18n.KeyBalanceTooLow,
 		map[string]int{"balance": balance})
+}
+
+// JobActive writes the 409 answer for a project that already has a queued or
+// running lyrics job; details.jobId names it.
+func JobActive(c *fiber.Ctx, jobID string) error {
+	return Error(c, fiber.StatusConflict, CodeJobActive, i18n.KeyJobActive,
+		map[string]string{"jobId": jobID})
+}
+
+// JobNotRetryable writes the 400 answer for a job that cannot be retried.
+func JobNotRetryable(c *fiber.Ctx) error {
+	return Error(c, fiber.StatusBadRequest, CodeJobNotRetryable, i18n.KeyJobNotRetryable, map[string]string{})
 }

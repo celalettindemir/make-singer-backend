@@ -295,6 +295,8 @@ func main() {
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate).WithCredits(creditService)
 	renderHandler := handler.NewRenderHandler(renderService, validate)
 	masterHandler := handler.NewMasterHandler(masterService, validate)
+	// Task 7 adds WithLyrics; until then a lyrics job answers cancel and retry with 404.
+	jobsHandler := handler.NewJobsHandler(service.NewJobCenter(jobStore, renderService, masterService), validate)
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
 	fileHandler := handler.NewFileHandler(fileService, validate)
@@ -409,6 +411,15 @@ func main() {
 	lyrics.Post("/rewrite", lyricsHandler.Rewrite)
 	lyrics.Post("/generate/stream", lyricsHandler.GenerateStream)
 	lyrics.Post("/rewrite/stream", lyricsHandler.RewriteStream)
+
+	// Jobs of every type (spec 11): catch-up, detail, replay, cancel, retry.
+	jobsRead := rateLimiter.Limit("is-oku", jobsReadPerMin, time.Minute)
+	jobsAct := rateLimiter.Limit("is-islem", jobsActPerMin, time.Minute)
+	api.Get("/jobs", jobsRead, jobsHandler.List)
+	api.Get("/jobs/:id", jobsRead, jobsHandler.Detail)
+	api.Get("/jobs/:id/events", jobsRead, jobsHandler.Events)
+	api.Post("/jobs/:id/cancel", jobsAct, jobsHandler.Cancel)
+	api.Post("/jobs/:id/retry", jobsAct, jobsHandler.Retry)
 
 	// Render routes
 	render := api.Group("/render")
@@ -693,6 +704,12 @@ func registerWebhookRoutes(app *fiber.App, h creditRouteHandlers, rl *middleware
 
 // adminPerMin is the per-admin request limit of /api/admin.
 const adminPerMin = 120
+
+// Per-user limits of the jobs endpoints (contract: 60 reads, 30 actions per minute).
+const (
+	jobsReadPerMin = 60
+	jobsActPerMin  = 30
+)
 
 // registerAdminRoutes binds /api/admin. Without the admin-web client secret
 // the panel is off and every /api/admin path answers 404. The chain is
