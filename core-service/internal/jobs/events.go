@@ -16,7 +16,16 @@ func DeriveEvents(before, after model.Job) []Derived {
 	if after.Status != before.Status && isTerminal(after.Status) {
 		switch after.Status {
 		case model.JobStatusSucceeded:
-			return []Derived{{Kind: KindSucceeded, Data: map[string]any{}}}
+			data := map[string]any{}
+			if after.Type == model.JobTypeLyrics {
+				// A lyrics job names the sections that could not be written.
+				failed := []int{}
+				if res, err := model.ParseLyricsJobResult(after.Result); err == nil {
+					failed = res.FailedSections()
+				}
+				data["failedSections"] = failed
+			}
+			return []Derived{{Kind: KindSucceeded, Data: data}}
 		case model.JobStatusFailed:
 			return []Derived{{Kind: KindFailed, Data: map[string]any{"code": after.ErrorCode}}}
 		default:

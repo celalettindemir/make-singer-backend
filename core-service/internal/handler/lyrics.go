@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/makeasinger/api/internal/credit"
 	"github.com/makeasinger/api/internal/i18n"
+	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/pkg/response"
@@ -25,6 +26,7 @@ type LyricsHandler struct {
 	service   service.LyricsGenerator
 	validator *validator.Validate
 	credits   credit.Spender
+	jobs      *service.LyricsJobService
 	// heartbeat is the pause before a stream sends ": ping"; 0 means 15 s.
 	heartbeat time.Duration
 }
@@ -33,6 +35,12 @@ type LyricsHandler struct {
 // charges nothing and reports balance 0.
 func (h *LyricsHandler) WithCredits(s credit.Spender) *LyricsHandler {
 	h.credits = s
+	return h
+}
+
+// WithJobs turns on POST /api/lyrics/jobs.
+func (h *LyricsHandler) WithJobs(s *service.LyricsJobService) *LyricsHandler {
+	h.jobs = s
 	return h
 }
 
@@ -242,4 +250,54 @@ func formatValidationErrors(err error) interface{} {
 		return errors
 	}
 	return nil
+}
+
+// StartJob handles POST /api/lyrics/jobs
+// @Summary      Start a lyrics job
+// @Description  The server writes the listed sections one after another and streams the lines as lyrics.line events; answers at once with the job id.
+// @Tags         Lyrics
+// @Accept       json
+// @Produce      json
+// @Param        request body model.LyricsJobRequest true "Lyrics job request"
+// @Success      202 {object} model.LyricsJobStartResponse
+// @Failure      400 {object} response.ErrorResponse
+// @Failure      401 {object} response.ErrorResponse
+// @Failure      402 {object} response.ErrorResponse
+// @Failure      409 {object} response.ErrorResponse
+// @Failure      429 {object} response.ErrorResponse
+// @Security     BearerAuth
+// @Router       /api/lyrics/jobs [post]
+func (h *LyricsHandler) StartJob(c *fiber.Ctx) error {
+	userID, ok := requestOwner(c)
+	if !ok {
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
+	}
+	var req model.LyricsJobRequest
+	if err := c.BodyParser(&req); err != nil {
+		return response.ValidationError(c, i18n.KeyInvalidBody, nil)
+	}
+	resp, err := h.jobs.Start(c.Context(), userID, c.Get(actionIDHeader), &req)
+	if err != nil {
+		return lyricsJobError(c, err)
+	}
+	return response.Accepted(c, resp)
+}
+
+// lyricsJobError maps a start, retry or cancel error to its answer.
+func lyricsJobError(c *fiber.Ctx, err error) error {
+	var invalid *service.LyricsJobInvalidError
+	var insufficient *credit.InsufficientError
+	switch {
+	case errors.As(err, &invalid):
+		return response.ValidationError(c, i18n.KeyValidationFailed, invalid.Details)
+	case errors.Is(err, service.ErrActionIDRequired):
+		return response.ValidationError(c, i18n.KeyActionIDRequired, map[string]string{actionIDHeader: "required"})
+	case errors.As(err, &insufficient):
+		return response.InsufficientCredits(c, insufficient.Required, insufficient.Balance, insufficient.Debt)
+	case errors.Is(err, credit.ErrActionExpired):
+		return response.ValidationError(c, i18n.KeyActionExpired, map[string]string{actionIDHeader: "action_expired"})
+	case errors.Is(err, jobs.ErrActiveLyricsJob):
+		return response.JobActive(c, jobs.ActiveJobID(err))
+	}
+	return internalError(c, err)
 }

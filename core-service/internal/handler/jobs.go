@@ -46,7 +46,8 @@ func jobError(c *fiber.Ctx, err error) error {
 	case errors.Is(err, service.ErrNotRetryable):
 		return response.JobNotRetryable(c)
 	}
-	return internalError(c, err)
+	// A retried rewrite is charged again: 402, action_expired and 409 as at start.
+	return lyricsJobError(c, err)
 }
 
 // List handles GET /api/jobs.

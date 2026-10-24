@@ -159,6 +159,12 @@ func main() {
 		DB:       cfg.Redis.DB,
 	})
 	defer asynqClient.Close()
+	asynqInspector := asynq.NewInspector(asynq.RedisClientOpt{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	defer asynqInspector.Close()
 
 	// Initialize validator
 	validate := validator.New()
@@ -295,8 +301,10 @@ func main() {
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate).WithCredits(creditService)
 	renderHandler := handler.NewRenderHandler(renderService, validate)
 	masterHandler := handler.NewMasterHandler(masterService, validate)
-	// Task 7 adds WithLyrics; until then a lyrics job answers cancel and retry with 404.
-	jobsHandler := handler.NewJobsHandler(service.NewJobCenter(jobStore, renderService, masterService), validate)
+	lyricsJobService := service.NewLyricsJobService(jobStore, asynqClient, asynqInspector, lyricsService, validate).WithCredits(creditService)
+	lyricsHandler.WithJobs(lyricsJobService)
+	jobsHandler := handler.NewJobsHandler(
+		service.NewJobCenter(jobStore, renderService, masterService).WithLyrics(lyricsJobService, lyricsJobService), validate)
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
 	fileHandler := handler.NewFileHandler(fileService, validate)
@@ -411,6 +419,7 @@ func main() {
 	lyrics.Post("/rewrite", lyricsHandler.Rewrite)
 	lyrics.Post("/generate/stream", lyricsHandler.GenerateStream)
 	lyrics.Post("/rewrite/stream", lyricsHandler.RewriteStream)
+	lyrics.Post("/jobs", lyricsHandler.StartJob)
 
 	// Jobs of every type (spec 11): catch-up, detail, replay, cancel, retry.
 	jobsRead := rateLimiter.Limit("is-oku", jobsReadPerMin, time.Minute)
@@ -487,7 +496,7 @@ func main() {
 	}))
 
 	// Start Asynq worker server
-	go startWorkerServer(cfg, redisClient, jobStore, renderService, masterService, sunoClient, audioClient, storage, hub, accountService, socialWorker, creditWorker, creditService)
+	go startWorkerServer(cfg, redisClient, jobStore, renderService, masterService, sunoClient, audioClient, storage, hub, accountService, socialWorker, creditWorker, creditService, lyricsService)
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
@@ -523,6 +532,7 @@ func startWorkerServer(
 	socialWorker *worker.SocialWorker,
 	creditWorker *worker.CreditWorker,
 	creditSpender credit.Spender,
+	lyricsGenerator service.LyricsGenerator,
 ) {
 	asynqLogLevel := asynq.InfoLevel
 	if strings.EqualFold(cfg.Server.LogLevel, "debug") {
@@ -547,6 +557,7 @@ func startWorkerServer(
 				"sosyal": 2,
 				"bakim":  1,
 				"kredi":  3,
+				"soz":    8,
 			},
 			LogLevel: asynqLogLevel,
 		},
@@ -564,6 +575,7 @@ func startWorkerServer(
 	masterWorker := worker.NewMasterWorker(jobStore, audioClient, storage, masterService, hub, &cfg.R2, deletionChecker).WithCredits(creditSpender)
 
 	mux := asynq.NewServeMux()
+	mux.HandleFunc(service.TaskTypeLyrics, worker.NewLyricsWorker(jobStore, lyricsGenerator, creditSpender).ProcessTask)
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeMaster, masterWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeAccountCleanup, worker.NewAccountWorker(accountService).ProcessTask)
