@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -145,6 +146,8 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 	if err := s.requirePlusForAppVocal(ctx, userID, keys); err != nil {
 		return nil, err
 	}
+
+	logMasterTakes(userID, req)
 
 	jobID := uuid.New().String()
 	now := time.Now()
@@ -316,4 +319,19 @@ func newMasterTask(jobID string, payload []byte) (*asynq.Task, error) {
 		return nil, err
 	}
 	return asynq.NewTask(TaskTypeMaster, data), nil
+}
+
+// logMasterTakes records which takes a final master was requested with
+// (R-VOC-17). The file URL is signed and therefore not logged.
+func logMasterTakes(userID string, req *model.MasterFinalRequest) {
+	ms := func(p *int) string {
+		if p == nil {
+			return "-"
+		}
+		return strconv.Itoa(*p)
+	}
+	for _, t := range req.VocalTakes {
+		log.Printf("master take: user=%s project=%s section=%s take=%s startMs=%s endMs=%s",
+			userID, req.ProjectID, t.SectionID, t.TakeID, ms(t.StartMs), ms(t.EndMs))
+	}
 }

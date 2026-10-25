@@ -14,3 +14,10 @@ type UploadVocalResponse struct {
 	// this URL and later show a broken link.
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
+
+// MicInfo describes the input that recorded a take (R-VOC-17). Both fields are
+// already validated/cleaned by the handler; empty means "not sent".
+type MicInfo struct {
+	Kind string
+	Name string
+}

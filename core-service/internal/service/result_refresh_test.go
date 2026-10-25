@@ -169,7 +169,7 @@ func TestUploadService_SignsOnce(t *testing.T) {
 	storage := &fakeStorage{}
 	s := NewUploadService(storage, &config.R2Config{})
 
-	resp, err := s.UploadVocal(context.Background(), "kullanici-a", "p1", "s1", "take1", nil, 0)
+	resp, err := s.UploadVocal(context.Background(), "kullanici-a", "p1", "s1", "take1", nil, 0, model.MicInfo{})
 	if err != nil {
 		t.Fatalf("UploadVocal: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestUploadService_MockURLResolvesWithKeyFromURL(t *testing.T) {
 	}
 	s := NewUploadService(nil, r2Cfg)
 
-	resp, err := s.UploadVocal(context.Background(), "kullanici-a", "p1", "s1", "take1", nil, 0)
+	resp, err := s.UploadVocal(context.Background(), "kullanici-a", "p1", "s1", "take1", nil, 0, model.MicInfo{})
 	if err != nil {
 		t.Fatalf("UploadVocal: %v", err)
 	}

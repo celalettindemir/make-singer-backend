@@ -2,11 +2,14 @@ package handler
 
 import (
 	"errors"
+	"strings"
+	"unicode"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/i18n"
+	"github.com/makeasinger/api/internal/model"
 	"github.com/makeasinger/api/internal/service"
 	"github.com/makeasinger/api/pkg/response"
 )
@@ -50,6 +53,8 @@ func NewUploadHandler(svc *service.UploadService, v *validator.Validate) *Upload
 // @Param        projectId formData string true "Project ID"
 // @Param        sectionId formData string true "Section ID"
 // @Param        takeName  formData string false "Take name"
+// @Param        micKind   formData string false "Input that recorded the take (built_in, headset, bluetooth, usb, other); unknown values are stored as other" Enums(built_in, headset, bluetooth, usb, other)
+// @Param        micName   formData string false "System name of that input; trimmed, control characters removed, cut to 64 characters"
 // @Param        file      formData file   true "Audio file (WAV, MP3, M4A, AAC; max 50MB)"
 // @Success      201 {object} model.UploadVocalResponse
 // @Failure      400 {object} response.ErrorResponse
@@ -76,6 +81,12 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 	}
 
 	takeName := c.FormValue("takeName")
+
+	// Optional mic fields (R-VOC-17): never a reason to reject the request.
+	mic := model.MicInfo{
+		Kind: normalizeMicKind(c.FormValue("micKind")),
+		Name: cleanMicName(c.FormValue("micName")),
+	}
 
 	// Get file
 	file, err := c.FormFile("file")
@@ -107,7 +118,7 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 	defer f.Close()
 
 	// Upload
-	result, err := h.service.UploadVocal(c.Context(), userID, projectID, sectionID, takeName, f, file.Size)
+	result, err := h.service.UploadVocal(c.Context(), userID, projectID, sectionID, takeName, f, file.Size, mic)
 	if err != nil {
 		if errors.Is(err, client.ErrInvalidSegment) {
 			return response.ValidationError(c, i18n.KeyUploadIDsInvalid, nil)
@@ -116,6 +127,38 @@ func (h *UploadHandler) Vocal(c *fiber.Ctx) error {
 	}
 
 	return response.Created(c, result)
+}
+
+var micKinds = map[string]bool{"built_in": true, "headset": true, "bluetooth": true, "usb": true, "other": true}
+
+// maxMicNameRunes is the cap on micName, counted in characters, not bytes.
+const maxMicNameRunes = 64
+
+// normalizeMicKind: empty stays empty (not stored), unknown becomes "other".
+func normalizeMicKind(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if micKinds[v] {
+		return v
+	}
+	return "other"
+}
+
+// cleanMicName trims spaces, drops control characters and cuts to 64 runes.
+func cleanMicName(v string) string {
+	v = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, v)
+	v = strings.TrimSpace(v)
+	if r := []rune(v); len(r) > maxMicNameRunes {
+		v = strings.TrimSpace(string(r[:maxMicNameRunes]))
+	}
+	return v
 }
 
 // DeleteVocal handles DELETE /api/upload/vocal/:takeId

@@ -29,6 +29,13 @@ type StorageClient interface {
 	URLFor(ctx context.Context, key string) (string, time.Time, error)
 }
 
+// MetadataUploader is an optional StorageClient capability: Upload plus S3
+// user metadata (stored as x-amz-meta-<key>). Callers type-assert for it so
+// storage fakes that do not care about metadata need no change.
+type MetadataUploader interface {
+	UploadWithMetadata(ctx context.Context, key string, body io.Reader, contentType string, metadata map[string]string) (string, time.Time, error)
+}
+
 // R2Client implements StorageClient for Cloudflare R2
 type R2Client struct {
 	s3Client  *s3.Client
@@ -80,11 +87,20 @@ func NewR2Client(cfg *config.R2Config) (*R2Client, error) {
 // Upload uploads a file to R2 and returns its URL and expiry (public keys:
 // CDN address with zero time, private keys: presigned URL with expiry).
 func (c *R2Client) Upload(ctx context.Context, key string, body io.Reader, contentType string) (string, time.Time, error) {
+	return c.UploadWithMetadata(ctx, key, body, contentType, nil)
+}
+
+// UploadWithMetadata is Upload plus object user metadata (nil/empty: none).
+// Values must be ASCII-safe; the caller encodes them.
+func (c *R2Client) UploadWithMetadata(ctx context.Context, key string, body io.Reader, contentType string, metadata map[string]string) (string, time.Time, error) {
 	input := &s3.PutObjectInput{
 		Bucket:      aws.String(BucketFor(key, c.cfg)),
 		Key:         aws.String(key),
 		Body:        body,
 		ContentType: aws.String(contentType),
+	}
+	if len(metadata) > 0 {
+		input.Metadata = metadata
 	}
 
 	if _, err := c.s3Client.PutObject(ctx, input); err != nil {

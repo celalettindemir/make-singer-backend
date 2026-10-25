@@ -33,7 +33,7 @@ func TestUploadService_KeyHasUserPrefix(t *testing.T) {
 	storage := &fakeStorage{}
 	s := NewUploadService(storage, testR2Cfg())
 
-	resp, err := s.UploadVocal(context.Background(), "kullanici-a", "p1", "s1", "take1", nil, 0)
+	resp, err := s.UploadVocal(context.Background(), "kullanici-a", "p1", "s1", "take1", nil, 0, model.MicInfo{})
 	if err != nil {
 		t.Fatalf("UploadVocal: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestUploadService_InvalidSegmentNotUploaded(t *testing.T) {
 	storage := &fakeStorage{}
 	s := NewUploadService(storage, testR2Cfg())
 
-	_, err := s.UploadVocal(context.Background(), "kullanici-a", "../kullanici-b", "s1", "take1", nil, 0)
+	_, err := s.UploadVocal(context.Background(), "kullanici-a", "../kullanici-b", "s1", "take1", nil, 0, model.MicInfo{})
 	if !errors.Is(err, client.ErrInvalidSegment) {
 		t.Fatalf("want ErrInvalidSegment, got: %v", err)
 	}

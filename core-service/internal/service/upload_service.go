@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,7 +16,7 @@ import (
 
 // FileUploader defines the interface for file upload operations
 type FileUploader interface {
-	UploadVocal(ctx context.Context, userID, projectID, sectionID, takeName string, file io.Reader, fileSize int64) (*model.UploadVocalResponse, error)
+	UploadVocal(ctx context.Context, userID, projectID, sectionID, takeName string, file io.Reader, fileSize int64, mic model.MicInfo) (*model.UploadVocalResponse, error)
 	DeleteVocal(ctx context.Context, userID, projectID, sectionID, takeID string) error
 }
 
@@ -33,7 +35,7 @@ func NewUploadService(storage client.StorageClient, r2Cfg *config.R2Config) *Upl
 }
 
 // UploadVocal uploads a vocal recording to R2 storage
-func (s *UploadService) UploadVocal(ctx context.Context, userID, projectID, sectionID, takeName string, file io.Reader, fileSize int64) (*model.UploadVocalResponse, error) {
+func (s *UploadService) UploadVocal(ctx context.Context, userID, projectID, sectionID, takeName string, file io.Reader, fileSize int64, mic model.MicInfo) (*model.UploadVocalResponse, error) {
 	takeID := uuid.New().String()
 
 	// The key is prefixed with the user; client ids go through segment
@@ -45,15 +47,27 @@ func (s *UploadService) UploadVocal(ctx context.Context, userID, projectID, sect
 
 	// Use mock response if client is not configured
 	if s.r2Client == nil {
+		logVocalUpload(userID, projectID, sectionID, takeID, fileSize, mic)
 		return s.uploadMock(takeID, key)
 	}
 
 	// Upload to R2. Upload also returns the URL; calling URLFor separately
 	// would have meant a second (wasted) signing.
-	fileURL, expiresAt, err := s.r2Client.Upload(ctx, key, file, "audio/wav")
+	var fileURL string
+	var expiresAt time.Time
+	if meta := micMetadata(mic); len(meta) > 0 {
+		if mu, ok := s.r2Client.(client.MetadataUploader); ok {
+			fileURL, expiresAt, err = mu.UploadWithMetadata(ctx, key, file, "audio/wav", meta)
+		} else {
+			fileURL, expiresAt, err = s.r2Client.Upload(ctx, key, file, "audio/wav")
+		}
+	} else {
+		fileURL, expiresAt, err = s.r2Client.Upload(ctx, key, file, "audio/wav")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("could not upload the vocal: %w", err)
 	}
+	logVocalUpload(userID, projectID, sectionID, takeID, fileSize, mic)
 
 	return &model.UploadVocalResponse{
 		ID:         takeID,
@@ -103,4 +117,26 @@ func (s *UploadService) uploadMock(takeID, key string) (*model.UploadVocalRespon
 		Channels:   1,
 		CreatedAt:  time.Now(),
 	}, nil
+}
+
+// micMetadata builds the R2 object user metadata of R-VOC-17: `mic-kind` as is
+// (a validated enum value) and `mic-name` percent-encoded with
+// url.PathEscape (UTF-8 bytes as %XX, spaces as %20), so it stays ASCII-safe
+// for the x-amz-meta header. Only present values are included.
+func micMetadata(mic model.MicInfo) map[string]string {
+	meta := map[string]string{}
+	if mic.Kind != "" {
+		meta["mic-kind"] = mic.Kind
+	}
+	if mic.Name != "" {
+		meta["mic-name"] = url.PathEscape(mic.Name)
+	}
+	return meta
+}
+
+// logVocalUpload writes one line per successful vocal upload. The file URL is
+// deliberately absent: it is signed.
+func logVocalUpload(userID, projectID, sectionID, takeID string, size int64, mic model.MicInfo) {
+	log.Printf("vocal upload: user=%s project=%s section=%s take=%s size=%d micKind=%q micName=%q",
+		userID, projectID, sectionID, takeID, size, mic.Kind, mic.Name)
 }
