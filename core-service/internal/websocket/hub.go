@@ -36,6 +36,9 @@ type Hub struct {
 	// bus fans legacy messages out across pods; nil means local only.
 	bus *jobs.RedisBus
 
+	// snapshotSource gives a new connection the job's current state; nil sends nothing.
+	snapshotSource SnapshotSource
+
 	mu sync.RWMutex
 }
 
@@ -195,6 +198,12 @@ func (h *Hub) HandleConnection(c *websocket.Conn, jobID string) {
 
 	h.Register(client)
 	defer h.Unregister(client)
+
+	// Read after registering: a change made meanwhile is broadcast too, and a
+	// repeated terminal message is harmless (clients stop at the first one).
+	if data := h.snapshot(context.Background(), jobID); data != nil {
+		client.Send <- data
+	}
 
 	// Start writer goroutine
 	go func() {

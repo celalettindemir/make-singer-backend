@@ -193,7 +193,7 @@ func main() {
 	validate := validator.New()
 
 	// Initialize WebSocket hub
-	hub := ws.NewHub(jobBus)
+	hub := ws.NewHub(jobBus).WithSnapshot(jobStore.Get)
 	go hub.Run(ctx)
 	userStreams := ws.NewUserStreams(jobStore)
 	go func() { _ = jobBus.Run(ctx, userStreams.Deliver) }()
