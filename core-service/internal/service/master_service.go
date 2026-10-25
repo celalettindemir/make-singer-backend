@@ -147,8 +147,6 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 		return nil, err
 	}
 
-	logMasterTakes(userID, req)
-
 	jobID := uuid.New().String()
 	now := time.Now()
 
@@ -223,6 +221,9 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 		s.refundJob(ctx, jobID)
 		return nil, fmt.Errorf("failed to enqueue task: %w", err)
 	}
+
+	// Only an accepted request (job saved and enqueued) is logged.
+	logMasterTakes(userID, jobID, req)
 
 	return &model.MasterFinalResponse{
 		JobID:             jobID,
@@ -323,7 +324,7 @@ func newMasterTask(jobID string, payload []byte) (*asynq.Task, error) {
 
 // logMasterTakes records which takes a final master was requested with
 // (R-VOC-17). The file URL is signed and therefore not logged.
-func logMasterTakes(userID string, req *model.MasterFinalRequest) {
+func logMasterTakes(userID, jobID string, req *model.MasterFinalRequest) {
 	ms := func(p *int) string {
 		if p == nil {
 			return "-"
@@ -331,7 +332,7 @@ func logMasterTakes(userID string, req *model.MasterFinalRequest) {
 		return strconv.Itoa(*p)
 	}
 	for _, t := range req.VocalTakes {
-		log.Printf("master take: user=%s project=%s section=%s take=%s startMs=%s endMs=%s",
-			userID, req.ProjectID, t.SectionID, t.TakeID, ms(t.StartMs), ms(t.EndMs))
+		log.Printf("master take: job=%s user=%s project=%s section=%s take=%s startMs=%s endMs=%s",
+			jobID, userID, req.ProjectID, t.SectionID, t.TakeID, ms(t.StartMs), ms(t.EndMs))
 	}
 }
