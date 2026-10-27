@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-playground/validator/v10"
@@ -29,7 +30,9 @@ func NewJobsHandler(center *service.JobCenter, v *validator.Validate) *JobsHandl
 
 // jobID reads the :id path parameter; a value that is not a UUID is 400.
 func jobID(c *fiber.Ctx) (string, bool) {
-	id := c.Params("id")
+	// Params aliases fasthttp's buffer, which the next request reuses; the
+	// job center may keep the id, so it gets its own copy.
+	id := strings.Clone(c.Params("id"))
 	if _, err := uuid.Parse(id); err != nil {
 		return "", false
 	}

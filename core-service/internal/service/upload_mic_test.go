@@ -19,7 +19,7 @@ type metaStorage struct {
 func (m *metaStorage) UploadWithMetadata(ctx context.Context, key string, body io.Reader, contentType string, meta map[string]string) (string, time.Time, error) {
 	m.withMeta++
 	m.meta = meta
-	return m.fakeStorage.Upload(ctx, key, body, contentType)
+	return m.Upload(ctx, key, body, contentType)
 }
 
 func TestUploadService_MicMetadata(t *testing.T) {
