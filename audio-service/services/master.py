@@ -10,7 +10,6 @@ from typing import Any
 
 import numpy as np
 from pydub import AudioSegment
-from pydub.effects import compress_dynamic_range
 from scipy import signal
 
 from . import vocal_chain
@@ -57,6 +56,7 @@ HEADROOM_PEAK = 0.98
 TAKE_FADE_MS = 30
 
 _INT32_FULL_SCALE = 2**31 - 1
+_CONVERT_ROWS = 1 << 20
 
 OUTPUT_RATE = 48000
 USER_TAKE_PREFIX = "vocals/"
@@ -65,30 +65,97 @@ _LOG_BANDS_HZ = (250, 500, 1000, 2000, 3000, 5000, 8000, 12000)
 _LOG_BAND_NAMES = ("250", "500", "1k", "2k", "3k", "5k", "8k", "12k")
 
 
-def _to_float(audio: AudioSegment) -> np.ndarray:
-    """Samples as float64 in [-1, 1], shaped (frames, channels)."""
-    samples = np.array(audio.get_array_of_samples(), dtype=np.float64)
-    samples /= float(2 ** (8 * audio.sample_width - 1))
+def _to_float(audio: AudioSegment, dtype=np.float64) -> np.ndarray:
+    """Samples as floats in [-1, 1], shaped (frames, channels)."""
+    samples = np.array(audio.get_array_of_samples(), dtype=dtype)
+    samples /= dtype(2 ** (8 * audio.sample_width - 1))
     return samples.reshape(-1, audio.channels)
 
 
 def _to_float32(audio: AudioSegment) -> np.ndarray:
-    """Like _to_float but float32, for long signals where float64 doubles memory."""
-    samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
-    samples /= np.float32(2 ** (8 * audio.sample_width - 1))
-    return samples.reshape(-1, audio.channels)
+    """float32 version for long signals, where float64 doubles the memory."""
+    return _to_float(audio, np.float32)
 
 
 def _from_float(samples: np.ndarray, frame_rate: int) -> AudioSegment:
     """32-bit segment from float samples shaped (frames, channels)."""
-    clipped = np.clip(samples, -1.0, 1.0)
-    data = np.round(clipped * _INT32_FULL_SCALE).astype("<i4")
+    data = np.empty(samples.shape, dtype="<i4")
+    for a in range(0, len(samples), _CONVERT_ROWS):  # blocks keep the temporaries small
+        block = np.clip(samples[a : a + _CONVERT_ROWS], -1.0, 1.0).astype(np.float64)
+        data[a : a + _CONVERT_ROWS] = np.round(block * _INT32_FULL_SCALE)
     return AudioSegment(
         data.tobytes(),
         frame_rate=frame_rate,
         sample_width=4,
         channels=samples.shape[1],
     )
+
+
+def compress_dynamic_range(
+    seg: AudioSegment,
+    threshold: float = -20.0,
+    ratio: float = 4.0,
+    attack: float = 5.0,
+    release: float = 50.0,
+) -> AudioSegment:
+    """pydub's compress_dynamic_range with the same math, in numpy.
+
+    pydub keeps one bytes object per frame and loops over them in Python: it
+    needs about 1.5 GB for a 4-minute song. Here the window RMS comes from a
+    cumulative sum, only the attenuation recursion runs frame by frame, and the
+    gain is applied in blocks.
+    """
+    x = np.frombuffer(seg.raw_data, dtype=f"<i{seg.sample_width}")
+    ch = seg.channels
+    frames = len(x) // ch
+    x = x[: frames * ch].reshape(frames, ch)
+    thresh_rms = float(seg.max_possible_amplitude) * 10 ** (threshold / 20)
+    look = int(seg.frame_count(ms=attack))
+    attack_frames = seg.frame_count(ms=attack)
+    release_frames = seg.frame_count(ms=release)
+
+    # Energy of the look-back window [i - look, i); empty (RMS 0) for i < look.
+    csum = np.zeros(frames + 1)
+    for a in range(0, frames, _CONVERT_ROWS):
+        block = x[a : a + _CONVERT_ROWS].astype(np.float64)
+        csum[a + 1 : a + 1 + len(block)] = (block**2).sum(axis=1)
+    np.cumsum(csum, out=csum)
+    rms = np.zeros(frames)
+    if look > 0 and frames > look:
+        rms[look:] = np.sqrt((csum[look:frames] - csum[: frames - look]) / (look * ch))
+    del csum
+    over = rms > thresh_rms
+    with np.errstate(divide="ignore", invalid="ignore"):
+        db_over = np.where(over, 20 * np.log10(rms / thresh_rms), 0.0)
+    max_att = (1 - 1.0 / ratio) * np.maximum(db_over, 0)
+    del db_over
+
+    atten = np.zeros(frames, dtype=np.float32)
+    current = 0.0
+    for a in range(0, frames, _CONVERT_ROWS):
+        b = min(a + _CONVERT_ROWS, frames)
+        hot = over[a:b].tolist()
+        top = max_att[a:b].tolist()
+        out = [0.0] * (b - a)
+        for k in range(b - a):
+            m = top[k]
+            if hot[k] and current <= m:
+                current = min(current + m / attack_frames, m)
+            else:
+                current = max(current - m / release_frames, 0.0)
+            out[k] = current
+        atten[a:b] = out
+    del rms, over, max_att
+
+    gain = np.power(10.0, -atten.astype(np.float64) / 20)
+    del atten
+    result = np.empty(x.shape, dtype=x.dtype)
+    full = float(2 ** (8 * seg.sample_width - 1))
+    for a in range(0, frames, _CONVERT_ROWS):
+        block = x[a : a + _CONVERT_ROWS] * gain[a : a + _CONVERT_ROWS, None]
+        np.clip(block, -full, full - 1, out=block)
+        result[a : a + _CONVERT_ROWS] = block  # truncates toward zero like audioop
+    return seg._spawn(data=result.tobytes())
 
 
 class MasterService:
@@ -155,6 +222,7 @@ class MasterService:
 
             # Apply mix settings and combine
             mixed = self._mix_stems(stems, mix_settings)
+            del stems
 
             # Takes the app itself sang (guides/) are summed raw; only the
             # user's own recordings go through the vocal chain.
@@ -173,8 +241,10 @@ class MasterService:
             vocal_info: dict[str, float] = {}
             if user_takes:
                 started = time.process_time()
+                holder = [mixed]
+                del mixed
                 mixed, vocal_info = self._apply_vocal_chain(
-                    tmpdir, mixed, user_takes, guide_key
+                    tmpdir, holder, user_takes, guide_key
                 )
                 chain_s = time.process_time() - started
 
@@ -182,8 +252,9 @@ class MasterService:
             mastered = self._apply_mastering(mixed, profile_settings)
 
             # Real loudness and peak, measured on what gets written (48 kHz).
-            x = _to_float(mastered).T.astype(np.float32)
+            x = _to_float32(mastered).T
             rate = mastered.frame_rate
+            del mastered, mixed
             if rate != OUTPUT_RATE:
                 g = math.gcd(OUTPUT_RATE, rate)
                 x = signal.resample_poly(x, OUTPUT_RATE // g, rate // g, axis=1)
@@ -227,14 +298,15 @@ class MasterService:
     def _apply_vocal_chain(
         self,
         tmpdir: str,
-        mixed: AudioSegment,
+        mixed_holder: list[AudioSegment],
         user_takes: list[dict[str, Any]],
         guide_key: str | None,
     ) -> tuple[AudioSegment, dict[str, float]]:
         """Run the user's takes through the C chain and mix them into the song."""
         rate = vocal_chain.RATE
+        # The caller hands the song over in a list so it can be freed here.
         inst = np.ascontiguousarray(
-            _to_float32(mixed.set_frame_rate(rate).set_channels(2)).T
+            _to_float32(mixed_holder.pop().set_frame_rate(rate).set_channels(2)).T
         )
 
         takes = []
@@ -252,7 +324,7 @@ class MasterService:
             [signal.resample_poly(x, ALIGN_RATE // 100, rate // 100) for _, x in takes]
         ).astype(np.float32)
         kind, ref_ltas = choose_reference(joined, guide16, guide44)
-        del joined
+        del joined, guide16, guide44
 
         timeline = inst.shape[1]
         placed = []
@@ -277,7 +349,8 @@ class MasterService:
         track = np.zeros(timeline, dtype=np.float32)
         for start, seg in placed:
             track[start : start + len(seg)] += seg
-        del placed, takes
+        del placed, takes, x, seg
+        take16 = None
 
         out = vocal_chain.process_vocal(track, rate, ref_ltas)
         curve = [float(np.interp(hz, BANDS_HZ, out.curve_db)) for hz in _LOG_BANDS_HZ]
@@ -287,7 +360,9 @@ class MasterService:
             "/".join(_LOG_BAND_NAMES),
             "/".join(f"{c:.1f}" for c in curve),
         )
-        mix, info = mix_vocal(out, inst, rate)
+        del track
+        mix, info = mix_vocal(out, inst, rate, inplace=True)
+        del out, inst
         return _from_float(mix.T, rate), info
 
     def _load_guide(
@@ -419,13 +494,18 @@ class MasterService:
         """
         frame_rate = max(s.frame_rate for s in segments)
         channels = max(s.channels for s in segments)
-        arrays = [
-            _to_float(s.set_frame_rate(frame_rate).set_channels(channels))
-            for s in segments
+        # One segment at a time, float32: a 4-minute song is 90 MB per copy.
+        converted = [
+            s.set_frame_rate(frame_rate).set_channels(channels) for s in segments
         ]
-        total = np.zeros((max(len(a) for a in arrays), channels))
-        for array in arrays:
+        total = np.zeros(
+            (max(int(c.frame_count()) for c in converted), channels), np.float32
+        )
+        for i in range(len(converted)):
+            array = _to_float32(converted[i])
+            converted[i] = None
             total[: len(array)] += array
+            del array
 
         peak = np.max(np.abs(total)) if total.size else 0.0
         if peak > HEADROOM_PEAK:
@@ -446,11 +526,11 @@ class MasterService:
         if all(gain_db == 0 for gain_db, _ in shelves):
             return audio
 
-        dry = _to_float(audio)
+        dry = _to_float32(audio)
         wet = dry.copy()
         for gain_db, band_filter in shelves:
             if gain_db != 0:
-                band = _to_float(band_filter(audio))[: len(dry)]
+                band = _to_float32(band_filter(audio))[: len(dry)]
                 wet[: len(band)] += (10 ** (gain_db / 20) - 1) * band
 
         peak = np.max(np.abs(wet)) if wet.size else 0.0

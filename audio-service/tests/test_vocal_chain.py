@@ -211,3 +211,24 @@ def test_finalize_sessiz_giris_degismez():
     assert np.array_equal(out, x)
     assert lufs == -70.0
     assert peak_db == float("-inf")
+
+
+def test_lufs_pyloudnorm_ile_ayni_sonucu_verir():
+    """Blok blok olcum, tum diziyi suzen pyloudnorm ile ayni deger."""
+    rng = np.random.default_rng(3)
+    t = np.arange(48000 * 6) / 48000
+    sol = 0.2 * np.sin(2 * np.pi * 220 * t) * (1 + np.sin(2 * np.pi * 0.7 * t))
+    x = np.stack([sol, 0.5 * sol + 0.01 * rng.standard_normal(len(t))]).astype(
+        np.float32
+    )
+    beklenen = pyloudnorm.Meter(48000).integrated_loudness(x.T)
+    assert vocal_chain._lufs(x, 48000) == pytest.approx(beklenen, abs=0.01)
+
+    maske = np.abs(x[0]) > 0.1
+    beklenen = pyloudnorm.Meter(48000).integrated_loudness(x[:, maske].T)
+    assert vocal_chain._lufs(x, 48000, maske) == pytest.approx(beklenen, abs=0.01)
+
+
+def test_lufs_bir_bloktan_kisa_sinyalde_eksi_sonsuz():
+    x = np.zeros((2, 1000), dtype=np.float32)
+    assert vocal_chain._lufs(x, 48000) == float("-inf")

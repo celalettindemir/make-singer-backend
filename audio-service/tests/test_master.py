@@ -492,3 +492,33 @@ def test_farkli_ornekleme_hizlari_ayni_zaman_cizelgesi(tmp_path):
     esik = 0.05 * np.max(np.abs(ses))
     ilk = np.argmax(np.abs(ses) > esik) / 48000
     assert ilk == pytest.approx(1.0, abs=0.01)
+
+
+@pytest.mark.parametrize("esik,oran", [(-20, 2.0), (-15, 4.0)])
+def test_kompresor_pydub_ile_ayni_sonucu_verir(esik, oran):
+    """Bellek dostu kompresor, pydub'un kare kare dongusuyle ayni sesi uretir."""
+    from pydub.effects import compress_dynamic_range as pydub_kompresor
+
+    from services.master import compress_dynamic_range
+
+    zarf = np.concatenate(
+        [np.full(9000, 0.05), np.full(12000, 0.8), np.full(9000, 0.1)]
+    )
+    t = np.arange(len(zarf)) / ORNEK_HIZI
+    dalga = zarf * np.sin(2 * np.pi * 300 * t)
+    ses = AudioSegment(
+        np.round(np.repeat(dalga, 2) * 32767).astype("<i2").tobytes(),
+        frame_rate=ORNEK_HIZI,
+        sample_width=2,
+        channels=2,
+    )
+
+    beklenen = np.array(
+        pydub_kompresor(ses, esik, oran).get_array_of_samples(), dtype=np.int64
+    )
+    sonuc = np.array(
+        compress_dynamic_range(ses, esik, oran).get_array_of_samples(), dtype=np.int64
+    )
+
+    assert len(sonuc) == len(beklenen)
+    assert np.abs(sonuc - beklenen).max() <= 2

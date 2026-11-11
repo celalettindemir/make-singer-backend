@@ -60,11 +60,12 @@ _SILENT_DB = -120.0
 _CHUNK = 256  # frames per FFT batch, keeps memory bounded
 
 
-def movavg(x: np.ndarray, w: int) -> np.ndarray:
+def movavg(x: np.ndarray, w: int, dtype=np.float64) -> np.ndarray:
     """Centered moving average in O(N) via a cumulative sum; same length as x.
 
-    Edges average over the part of the window that exists, divided by w. Built
-    from slices of the cumulative sum, so no index arrays are allocated.
+    Edges average over the part of the window that exists, divided by w. The
+    cumulative sum stays float64; the result is written block by block into
+    `dtype`, so a float32 result costs half of float64.
     """
     n = len(x)
     c = np.empty(n + 1)
@@ -72,13 +73,16 @@ def movavg(x: np.ndarray, w: int) -> np.ndarray:
     np.cumsum(x, dtype=np.float64, out=c[1:])
     h = w // 2
     hi = w - h  # window reaches hi samples ahead
-    out = np.empty(n)
     m = max(0, min(n, n - hi + 1))  # k + hi <= n
-    out[:m] = c[hi : hi + m]
-    out[m:] = c[n]
-    if h < n:
-        out[h:] -= c[: n - h]
-    out /= max(w, 1)
+    scale = 1.0 / max(w, 1)
+    out = np.empty(n, dtype=dtype)
+    for a in range(0, n, _FX_CHUNK):
+        b = min(a + _FX_CHUNK, n)
+        ahead = np.where(
+            np.arange(a, b) < m, c[np.minimum(np.arange(a, b) + hi, n)], c[n]
+        )
+        behind = c[np.maximum(np.arange(a, b) - h, 0)]
+        out[a:b] = (ahead - behind) * scale
     return out
 
 
@@ -86,7 +90,7 @@ def active_mask(x: np.ndarray, rate: int) -> np.ndarray:
     """True where the signal is 'sung': loud samples dominate a 400 ms window."""
     loud = np.abs(x) > 10 ** (ACTIVE_FLOOR_DBFS / 20)
     win = max(1, int(ACTIVE_WIN_S * rate))
-    return movavg(loud.astype(np.float64), win) > ACTIVE_FRACTION
+    return movavg(loud, win, np.float32) > ACTIVE_FRACTION
 
 
 def _frames(x: np.ndarray, start: int, stop: int, window: np.ndarray) -> np.ndarray:
@@ -169,8 +173,8 @@ def apply_curve(x: np.ndarray, rate: int, curve_db: np.ndarray) -> np.ndarray:
     gain_db[-1] = np.interp(np.log(grid[-1]), np.log(BANDS_HZ), curve_db)
     taps = signal.firwin2(FIR_TAPS, grid / (rate / 2), 10 ** (gain_db / 20))
     # Overlap-add keeps the FFT blocks small on a 4-minute song.
-    return signal.oaconvolve(np.asarray(x, dtype=np.float32), taps, "same").astype(
-        np.float32
+    return signal.oaconvolve(
+        np.asarray(x, dtype=np.float32), taps.astype(np.float32), "same"
     )
 
 
@@ -192,41 +196,15 @@ class VocalOut:
     curve_db: np.ndarray  # (27,) match EQ curve that was applied
 
 
-def process_vocal(voc: np.ndarray, rate: int, ref_ltas: np.ndarray) -> VocalOut:
-    """Input level, gate, match EQ, compressors, exciter, de-esser, reverb + slap."""
-    x = np.asarray(voc, dtype=np.float32).reshape(-1)
-    act = active_mask(x, rate)
-    if act.any():
-        rms = np.sqrt(np.mean(x[act].astype(np.float64) ** 2))
-        if rms > 0:
-            x = (x * (10 ** (INPUT_RMS_DBFS / 20) / rms)).astype(np.float32)
-    g = gate(x, rate)
+_FX_CHUNK = 1 << 20  # samples per streamed reverb/slap block
 
-    if act.any():
-        curve = match_curve_db(ltas_db(g, rate), ref_ltas)
-        v = apply_curve(g, rate, curve)
-    else:
-        curve = np.zeros(len(BANDS_HZ))
-        v = g
-    v = Pedalboard([Compressor(**COMP_1), Compressor(**COMP_2)])(v, rate)
 
-    # Exciter: new upper harmonics where the phone mic captured none.
-    h = _hpf2(v, rate, EXCITER_SPLIT_HZ)
-    drive = EXCITER_DRIVE_PEAK / (np.abs(h).max() + 1e-9)
-    sat = np.tanh(h * drive) / drive
-    sat = _hpf2(sat, rate, EXCITER_HPF_HZ)
-    sat = sat * (
-        np.sqrt(np.mean(v**2) / (np.mean(sat**2) + 1e-12)) * 10 ** (EXCITER_DB / 20)
-    )
-    v = (v + sat).astype(np.float32)
+def _room(dry: np.ndarray, rate: int) -> np.ndarray:
+    """Dry mono -> (2, N) with reverb and slap added, streamed in blocks.
 
-    # De-esser: compress only the band above 6 kHz.
-    hi = _hpf2(v, rate, DEESS_HZ)
-    lo = v - hi
-    hi = Pedalboard([Compressor(**DEESS)])(hi, rate)
-    dry = np.asarray(lo + hi, dtype=np.float32).reshape(-1)
-
-    st = np.stack([dry, dry])
+    Pedalboard keeps its state between calls with reset=False, so the blocks
+    join seamlessly while only one block of effect output exists at a time.
+    """
     verb = Pedalboard(
         [
             HighpassFilter(250),
@@ -235,22 +213,74 @@ def process_vocal(voc: np.ndarray, rate: int, ref_ltas: np.ndarray) -> VocalOut:
                 room_size=0.42, damping=0.55, wet_level=1.0, dry_level=0.0, width=1.0
             ),
         ]
-    )(st, rate)
+    )
     slap = Pedalboard(
         [
             HighpassFilter(300),
             LowpassFilter(5000),
             Delay(delay_seconds=SLAP_DELAY_S, feedback=0.12, mix=1.0),
         ]
-    )(st, rate)
-    verb *= 10 ** (REVERB_DB / 20)
-    slap *= 10 ** (SLAP_DB / 20)
-    verb += slap
-    del slap
-    verb += st
-    return VocalOut(
-        verb.astype(np.float32, copy=False), dry, np.asarray(curve, dtype=np.float64)
     )
+    verb_gain = np.float32(10 ** (REVERB_DB / 20))
+    slap_gain = np.float32(10 ** (SLAP_DB / 20))
+    out = np.empty((2, len(dry)), dtype=np.float32)
+    for a in range(0, len(dry), _FX_CHUNK):
+        block = np.stack([dry[a : a + _FX_CHUNK]] * 2)
+        wet = verb(block, rate, reset=False)
+        wet *= verb_gain
+        echo = slap(block, rate, reset=False)
+        echo *= slap_gain
+        wet += echo
+        wet += block
+        out[:, a : a + _FX_CHUNK] = wet
+    return out
+
+
+def process_vocal(voc: np.ndarray, rate: int, ref_ltas: np.ndarray) -> VocalOut:
+    """Input level, gate, match EQ, compressors, exciter, de-esser, reverb + slap."""
+    x = np.asarray(voc, dtype=np.float32).reshape(-1)
+    act = active_mask(x, rate)
+    sung = bool(act.any())
+    if sung:
+        rms = np.sqrt(np.mean(x[act].astype(np.float64) ** 2))
+        if rms > 0:
+            x = (x * (10 ** (INPUT_RMS_DBFS / 20) / rms)).astype(np.float32)
+    del act
+    g = gate(x, rate)
+    del x
+
+    if sung:
+        curve = match_curve_db(ltas_db(g, rate), ref_ltas)
+        v = apply_curve(g, rate, curve)
+    else:
+        curve = np.zeros(len(BANDS_HZ))
+        v = g
+    del g
+    v = Pedalboard([Compressor(**COMP_1), Compressor(**COMP_2)])(v, rate)
+
+    # Exciter: new upper harmonics where the phone mic captured none.
+    h = _hpf2(v, rate, EXCITER_SPLIT_HZ)
+    drive = EXCITER_DRIVE_PEAK / (np.abs(h).max() + 1e-9)
+    h *= np.float32(drive)
+    np.tanh(h, out=h)
+    h /= np.float32(drive)
+    sat = _hpf2(h, rate, EXCITER_HPF_HZ)
+    del h
+    sat *= np.float32(
+        np.sqrt(np.mean(v**2) / (np.mean(sat**2) + 1e-12)) * 10 ** (EXCITER_DB / 20)
+    )
+    v += sat
+    del sat
+
+    # De-esser: compress only the band above 6 kHz.
+    hi = _hpf2(v, rate, DEESS_HZ)
+    v -= hi
+    hi = Pedalboard([Compressor(**DEESS)])(hi, rate)
+    v += hi
+    del hi
+    dry = np.asarray(v, dtype=np.float32).reshape(-1)
+
+    return VocalOut(_room(dry, rate), dry, np.asarray(curve, dtype=np.float64))
 
 
 def _pad(x: np.ndarray, n: int) -> np.ndarray:
@@ -260,49 +290,108 @@ def _pad(x: np.ndarray, n: int) -> np.ndarray:
     return np.pad(x, [(0, 0)] * (x.ndim - 1) + [(0, extra)])
 
 
-def _lufs(x2: np.ndarray, rate: int) -> float:
-    try:
-        v = float(pyloudnorm.Meter(rate).integrated_loudness(x2.T))
-    except ValueError:  # shorter than one gating block
-        return float("-inf")
-    return v if np.isfinite(v) else float("-inf")
+_LUFS_CHUNK = 1 << 20
+
+
+def _lufs(x2: np.ndarray, rate: int, mask: np.ndarray | None = None) -> float:
+    """BS.1770 integrated loudness of a (2, N) signal, optionally only where mask.
+
+    Same K-weighting filters and gating as pyloudnorm.Meter.integrated_loudness,
+    but the filter runs in blocks with carried state and only the cumulative
+    energy at the gating-block edges is kept, so no full-length copy of the
+    signal is made. With a mask the result equals measuring x2[:, mask].
+    """
+    meter = pyloudnorm.Meter(rate)
+    stages = list(meter._filters.values())
+    n = int(mask.sum()) if mask is not None else x2.shape[1]
+    block = meter.block_size
+    if n < block * rate:
+        return float("-inf")  # shorter than one gating block
+    step = 0.25
+    n_blocks = int(np.round((n / rate - block) / (block * step)) + 1)
+    j = np.arange(n_blocks)
+    lo = (block * (j * step) * rate).astype(np.int64)
+    hi = np.minimum((block * (j * step + 1) * rate).astype(np.int64), n)
+    edges = np.unique(np.concatenate([lo, hi]))
+    energy = np.zeros((2, len(edges)))
+    for ch in range(2):
+        zi = [signal.lfilter_zi(st.b, st.a) * 0.0 for st in stages]
+        done = 0
+        base = 0.0
+        for a in range(0, x2.shape[1], _LUFS_CHUNK):
+            piece = x2[ch, a : a + _LUFS_CHUNK]
+            if mask is not None:
+                piece = piece[mask[a : a + _LUFS_CHUNK]]
+            if not len(piece):
+                continue
+            y = piece.astype(np.float64)
+            for k, st in enumerate(stages):
+                y, zi[k] = signal.lfilter(st.b, st.a, y, zi=zi[k])
+                y *= st.passband_gain
+            csum = np.cumsum(y * y)
+            first = np.searchsorted(edges, done + 1)
+            last = np.searchsorted(edges, done + len(y), side="right")
+            energy[ch, first:last] = base + csum[edges[first:last] - done - 1]
+            base += csum[-1]
+            done += len(y)
+    z = (
+        energy[:, np.searchsorted(edges, hi)] - energy[:, np.searchsorted(edges, lo)]
+    ) / (block * rate)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        loud = -0.691 + 10.0 * np.log10(z.sum(axis=0))
+        gated = loud >= -70.0
+        avg = z[:, gated].mean(axis=1) if gated.any() else np.full(2, np.nan)
+        rel = -0.691 + 10.0 * np.log10(avg.sum()) - 10.0
+        keep = (loud > rel) & (loud > -70.0)
+        avg = z[:, keep].mean(axis=1) if keep.any() else np.full(2, np.nan)
+        value = -0.691 + 10.0 * np.log10(np.nan_to_num(avg).sum())
+    return float(value) if np.isfinite(value) else float("-inf")
 
 
 def mix_vocal(
-    vocal: VocalOut, inst: np.ndarray, rate: int
+    vocal: VocalOut, inst: np.ndarray, rate: int, inplace: bool = False
 ) -> tuple[np.ndarray, dict[str, float]]:
-    """Carve the instrumental, set the vocal 2 LU ahead, duck under the voice."""
+    """Carve the instrumental, set the vocal 2 LU ahead, duck under the voice.
+
+    With inplace=True the carved and ducked instrumental is built in `inst`'s own
+    buffer when no padding is needed (saves one full-length copy).
+    """
     n = max(vocal.stereo.shape[1], inst.shape[1])
     voc = _pad(vocal.stereo, n)
     dry = _pad(vocal.dry, n)
     bell = Pedalboard([PeakFilter(*INST_BELL)])
-    ins = bell(np.asarray(inst, dtype=np.float32), rate)
-    ins = _pad(ins, n)
+    if inplace and inst.dtype == np.float32 and inst.shape[1] == n:
+        ins = inst
+        for a in range(0, n, _FX_CHUNK):
+            ins[:, a : a + _FX_CHUNK] = bell(
+                np.ascontiguousarray(ins[:, a : a + _FX_CHUNK]), rate, reset=False
+            )
+    else:
+        ins = _pad(bell(np.asarray(inst, dtype=np.float32), rate), n)
 
     act = active_mask(dry, rate)
-    if act.sum() > rate:
-        lv, li = _lufs(voc[:, act], rate), _lufs(ins[:, act], rate)
-    else:
-        lv, li = _lufs(voc, rate), _lufs(ins, rate)
+    mask = act if act.sum() > rate else None
+    lv, li = _lufs(voc, rate, mask), _lufs(ins, rate, mask)
     if np.isfinite(lv) and np.isfinite(li):
         gain_db = li + FRONT_LU - lv
     else:
         gain_db = 0.0
-    voc = voc * np.float32(10 ** (gain_db / 20))
+    gain = np.float32(10 ** (gain_db / 20))
 
     if act.any():
-        env = movavg(np.abs(dry), int(DUCK_ENV_S * rate))
-        env = np.clip(env / (np.percentile(env[act], DUCK_PERCENTILE) + 1e-9), 0, 1)
+        env = movavg(np.abs(dry), int(DUCK_ENV_S * rate), np.float32)
+        env /= np.float32(np.percentile(env[act], DUCK_PERCENTILE) + 1e-9)
+        np.clip(env, 0, 1, out=env)
     else:
-        env = np.zeros(n)
-    duck = 10 ** (-DUCK_MAX_DB * env / 20)
-    del env
-    ins *= duck
-    del duck
-    ins += voc
-    mix = ins
+        env = np.zeros(n, dtype=np.float32)
+    del act, mask
+    env *= np.float32(-DUCK_MAX_DB / 20)
+    duck = np.power(np.float32(10.0), env, out=env)  # env is reused for the gain curve
+    for a in range(0, n, _LUFS_CHUNK):
+        ins[:, a : a + _LUFS_CHUNK] *= duck[a : a + _LUFS_CHUNK]
+        ins[:, a : a + _LUFS_CHUNK] += voc[:, a : a + _LUFS_CHUNK] * gain
     info = {"vocal_lufs": lv, "inst_lufs": li, "vocal_gain_db": float(gain_db)}
-    return mix, info
+    return ins, info
 
 
 LOUDNESS_TOLERANCE_LU = 0.3
@@ -348,11 +437,14 @@ def finalize_loudness(
             break
         if abs(lufs - target_lufs) <= LOUDNESS_TOLERANCE_LU:
             break
-        gained = out * np.float32(10 ** ((target_lufs - lufs) / 20))
-        out = limiter(gained * pre_gain, rate) * np.float32(ceiling)
+        gained = out * (np.float32(10 ** ((target_lufs - lufs) / 20)) * pre_gain)
+        del out
+        out = limiter(gained, rate)
+        del gained
+        out *= np.float32(ceiling)
         peak = float(np.max(np.abs(out)))
         if peak > ceiling:
-            out = out * np.float32(ceiling / peak)
+            out *= np.float32(ceiling / peak)
         lufs = _lufs(out, rate)
     peak = float(np.max(np.abs(out)))
     if peak > ceiling:
