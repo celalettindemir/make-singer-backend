@@ -1,7 +1,6 @@
 import numpy as np
 
-from services.guide import _onset_envelope
-from services.take_align import find_shift_ms, place_take
+from services.take_align import find_shift_ms, onset_envelope, place_take
 from services.vocal_chain import RATE
 
 R16 = 16000
@@ -20,7 +19,7 @@ def _song(seed: int, seconds: int) -> np.ndarray:
 
 
 GUIDE = _song(7, 20)
-ENV = _onset_envelope(GUIDE, R16)
+ENV = onset_envelope(GUIDE, R16)
 S0 = 5 * R16
 
 

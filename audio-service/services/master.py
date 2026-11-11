@@ -14,9 +14,8 @@ from pydub.effects import compress_dynamic_range
 from scipy import signal
 
 from . import vocal_chain
-from .guide import _onset_envelope
 from .storage import StorageService
-from .take_align import ALIGN_RATE, find_shift_ms, place_take
+from .take_align import ALIGN_RATE, find_shift_ms, onset_envelope, place_take
 from .vocal_chain import BANDS_HZ, finalize_loudness, mix_vocal
 from .vocal_ref import choose_reference
 
@@ -70,6 +69,13 @@ def _to_float(audio: AudioSegment) -> np.ndarray:
     """Samples as float64 in [-1, 1], shaped (frames, channels)."""
     samples = np.array(audio.get_array_of_samples(), dtype=np.float64)
     samples /= float(2 ** (8 * audio.sample_width - 1))
+    return samples.reshape(-1, audio.channels)
+
+
+def _to_float32(audio: AudioSegment) -> np.ndarray:
+    """Like _to_float but float32, for long signals where float64 doubles memory."""
+    samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
+    samples /= np.float32(2 ** (8 * audio.sample_width - 1))
     return samples.reshape(-1, audio.channels)
 
 
@@ -227,8 +233,8 @@ class MasterService:
     ) -> tuple[AudioSegment, dict[str, float]]:
         """Run the user's takes through the C chain and mix them into the song."""
         rate = vocal_chain.RATE
-        inst = _to_float(mixed.set_frame_rate(rate).set_channels(2)).T.astype(
-            np.float32
+        inst = np.ascontiguousarray(
+            _to_float32(mixed.set_frame_rate(rate).set_channels(2)).T
         )
 
         takes = []
@@ -238,7 +244,7 @@ class MasterService:
             voc = AudioSegment.from_file(path)
             voc = self._apply_take_gain(voc, take)
             mono = voc.set_channels(1).set_frame_rate(rate)
-            takes.append((take, _to_float(mono)[:, 0].astype(np.float32)))
+            takes.append((take, _to_float32(mono)[:, 0].copy()))
 
         guide44, guide16, guide_env = self._load_guide(tmpdir, guide_key)
 
@@ -294,11 +300,9 @@ class MasterService:
             path = os.path.join(tmpdir, "guide.wav")
             self.storage.download_key_to_file(guide_key, path)
             seg = AudioSegment.from_file(path).set_channels(1)
-            guide44 = _to_float(seg.set_frame_rate(vocal_chain.RATE))[:, 0].astype(
-                np.float32
-            )
-            guide16 = _to_float(seg.set_frame_rate(ALIGN_RATE))[:, 0].astype(np.float32)
-            return guide44, guide16, _onset_envelope(guide16, ALIGN_RATE)
+            guide44 = _to_float32(seg.set_frame_rate(vocal_chain.RATE))[:, 0].copy()
+            guide16 = _to_float32(seg.set_frame_rate(ALIGN_RATE))[:, 0].copy()
+            return guide44, guide16, onset_envelope(guide16, ALIGN_RATE)
         except Exception as exc:  # noqa: BLE001 - any failure means "no guide"
             logger.warning("vocal chain: guide %s unusable: %s", guide_key, exc)
             return None, None, None

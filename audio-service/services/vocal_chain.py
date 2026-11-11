@@ -61,14 +61,25 @@ _CHUNK = 256  # frames per FFT batch, keeps memory bounded
 
 
 def movavg(x: np.ndarray, w: int) -> np.ndarray:
-    """Centered moving average in O(N) via a cumulative sum; same length as x."""
+    """Centered moving average in O(N) via a cumulative sum; same length as x.
+
+    Edges average over the part of the window that exists, divided by w. Built
+    from slices of the cumulative sum, so no index arrays are allocated.
+    """
     n = len(x)
-    c = np.concatenate([[0.0], np.cumsum(x, dtype=np.float64)])
+    c = np.empty(n + 1)
+    c[0] = 0.0
+    np.cumsum(x, dtype=np.float64, out=c[1:])
     h = w // 2
-    idx = np.arange(n)
-    i = np.clip(idx - h, 0, n)
-    j = np.clip(idx + w - h, 0, n)
-    return (c[j] - c[i]) / max(w, 1)
+    hi = w - h  # window reaches hi samples ahead
+    out = np.empty(n)
+    m = max(0, min(n, n - hi + 1))  # k + hi <= n
+    out[:m] = c[hi : hi + m]
+    out[m:] = c[n]
+    if h < n:
+        out[h:] -= c[: n - h]
+    out /= max(w, 1)
+    return out
 
 
 def active_mask(x: np.ndarray, rate: int) -> np.ndarray:
@@ -101,7 +112,7 @@ def ltas_db(x: np.ndarray, rate: int) -> np.ndarray:
     8192-sample Hann frames at half hop; frames above the 60th RMS percentile
     are kept and their power spectra are summed frame by frame.
     """
-    x = np.asarray(x, dtype=np.float64)
+    x = np.asarray(x)
     if len(x) < _FRAME:
         x = np.pad(x, (0, _FRAME - len(x)))
     n_frames = (len(x) - _FRAME) // _HOP + 1
@@ -157,7 +168,8 @@ def apply_curve(x: np.ndarray, rate: int, curve_db: np.ndarray) -> np.ndarray:
     gain_db[0] = curve_db[0]
     gain_db[-1] = np.interp(np.log(grid[-1]), np.log(BANDS_HZ), curve_db)
     taps = signal.firwin2(FIR_TAPS, grid / (rate / 2), 10 ** (gain_db / 20))
-    return signal.fftconvolve(np.asarray(x, dtype=np.float64), taps, "same").astype(
+    # Overlap-add keeps the FFT blocks small on a 4-minute song.
+    return signal.oaconvolve(np.asarray(x, dtype=np.float32), taps, "same").astype(
         np.float32
     )
 
@@ -231,8 +243,14 @@ def process_vocal(voc: np.ndarray, rate: int, ref_ltas: np.ndarray) -> VocalOut:
             Delay(delay_seconds=SLAP_DELAY_S, feedback=0.12, mix=1.0),
         ]
     )(st, rate)
-    stereo = st + verb * 10 ** (REVERB_DB / 20) + slap * 10 ** (SLAP_DB / 20)
-    return VocalOut(stereo.astype(np.float32), dry, np.asarray(curve, dtype=np.float64))
+    verb *= 10 ** (REVERB_DB / 20)
+    slap *= 10 ** (SLAP_DB / 20)
+    verb += slap
+    del slap
+    verb += st
+    return VocalOut(
+        verb.astype(np.float32, copy=False), dry, np.asarray(curve, dtype=np.float64)
+    )
 
 
 def _pad(x: np.ndarray, n: int) -> np.ndarray:
@@ -270,7 +288,7 @@ def mix_vocal(
         gain_db = li + FRONT_LU - lv
     else:
         gain_db = 0.0
-    voc = voc * 10 ** (gain_db / 20)
+    voc = voc * np.float32(10 ** (gain_db / 20))
 
     if act.any():
         env = movavg(np.abs(dry), int(DUCK_ENV_S * rate))
@@ -278,7 +296,11 @@ def mix_vocal(
     else:
         env = np.zeros(n)
     duck = 10 ** (-DUCK_MAX_DB * env / 20)
-    mix = (ins * duck + voc).astype(np.float32)
+    del env
+    ins *= duck
+    del duck
+    ins += voc
+    mix = ins
     info = {"vocal_lufs": lv, "inst_lufs": li, "vocal_gain_db": float(gain_db)}
     return mix, info
 
