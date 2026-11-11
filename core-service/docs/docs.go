@@ -1192,6 +1192,25 @@ const docTemplate = `{
                         "in": "formData"
                     },
                     {
+                        "enum": [
+                            "built_in",
+                            "headset",
+                            "bluetooth",
+                            "usb",
+                            "other"
+                        ],
+                        "type": "string",
+                        "description": "Input that recorded the take (built_in, headset, bluetooth, usb, other); unknown values are stored as other",
+                        "name": "micKind",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "string",
+                        "description": "System name of that input; trimmed, control characters removed, cut to 64 characters",
+                        "name": "micName",
+                        "in": "formData"
+                    },
+                    {
                         "type": "file",
                         "description": "Audio file (WAV, MP3, M4A, AAC; max 50MB)",
                         "name": "file",
@@ -1889,23 +1908,6 @@ const docTemplate = `{
                 "InstrumentRest": "the track with the chosen instrument removed (focus mode)",
                 "InstrumentVocal": "the sung vocal stem of a vocal render"
             },
-            "x-enum-descriptions": [
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "the sung vocal stem of a vocal render",
-                "the full track (mix mode)",
-                "the track with the chosen instrument removed (focus mode)"
-            ],
             "x-enum-varnames": [
                 "InstrumentDrums",
                 "InstrumentBass",
@@ -2436,6 +2438,10 @@ const docTemplate = `{
                 "stemUrls"
             ],
             "properties": {
+                "guideUrl": {
+                    "description": "GuideURL is the vocal stem of the latest render, only as the tone\nreference and alignment target (spec 12 section 3.3). Never mixed, no\nPlus gate.",
+                    "type": "string"
+                },
                 "mixSnapshot": {
                     "$ref": "#/definitions/model.MixSnapshot"
                 },

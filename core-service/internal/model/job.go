@@ -62,4 +62,5 @@ type MasterJobPayload struct {
 	StemURLs    []string      `json:"stemUrls"`
 	MixSnapshot MixSnapshot   `json:"mixSnapshot"`
 	VocalTakes  []VocalTake   `json:"vocalTakes,omitempty"`
+	GuideURL    string        `json:"guideUrl,omitempty"`
 }

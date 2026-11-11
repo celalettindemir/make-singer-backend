@@ -153,6 +153,7 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 		MixSettings: mixSettings,
 		Profile:     string(payload.Profile),
 		VocalTakes:  vocalTakes,
+		GuideKey:    w.guideKey(jobID, payload),
 		OutputKey:   outputKey,
 	}
 
@@ -309,6 +310,21 @@ func (w *MasterWorker) buildVocalTakes(payload *model.MasterJobPayload) ([]clien
 	}
 
 	return takes, nil
+}
+
+// guideKey resolves the payload's guide URL to an owned key. The guide only
+// refines the master, so an unresolvable URL is logged and omitted instead of
+// failing the job.
+func (w *MasterWorker) guideKey(jobID string, payload *model.MasterJobPayload) string {
+	if payload.GuideURL == "" {
+		return ""
+	}
+	k, err := client.ResolveOwnedKey(payload.GuideURL, payload.OwnerID, w.r2Cfg)
+	if err != nil {
+		log.Printf("Job %s: guide URL not resolved, mastering without a guide: %v", jobID, err)
+		return ""
+	}
+	return k
 }
 
 // errCanceled stops a write to a canceled job (a canceled job stays canceled).

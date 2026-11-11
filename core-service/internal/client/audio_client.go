@@ -55,6 +55,7 @@ type MasterRequest struct {
 	MixSettings []MixChannel     `json:"mix_settings"`
 	Profile     string           `json:"profile"`
 	VocalTakes  []VocalTakeInput `json:"vocal_takes,omitempty"`
+	GuideKey    string           `json:"guide_key,omitempty"`
 	OutputKey   string           `json:"output_key"`
 }
 

@@ -143,6 +143,13 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 		}
 		keys = append(keys, k)
 	}
+	// The guide is only an alignment/tone reference and is never mixed, so its
+	// key stays out of keys and out of the Plus check.
+	if req.GuideURL != "" {
+		if _, err := client.ResolveOwnedKey(req.GuideURL, userID, s.r2Cfg); err != nil {
+			return nil, fmt.Errorf("guide URL: %w", err)
+		}
+	}
 	if err := s.requirePlusForAppVocal(ctx, userID, keys); err != nil {
 		return nil, err
 	}
@@ -171,6 +178,7 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 		StemURLs:    req.StemURLs,
 		MixSnapshot: req.MixSnapshot,
 		VocalTakes:  req.VocalTakes,
+		GuideURL:    req.GuideURL,
 	}
 
 	payloadBytes, err := json.Marshal(payload)

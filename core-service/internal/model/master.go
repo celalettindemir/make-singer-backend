@@ -42,6 +42,10 @@ type MasterFinalRequest struct {
 	StemURLs    []string      `json:"stemUrls" validate:"required,min=1,dive,url"`
 	MixSnapshot MixSnapshot   `json:"mixSnapshot" validate:"required"`
 	VocalTakes  []VocalTake   `json:"vocalTakes" validate:"omitempty,dive"`
+	// GuideURL is the vocal stem of the latest render, only as the tone
+	// reference and alignment target (spec 12 section 3.3). Never mixed, no
+	// Plus gate.
+	GuideURL string `json:"guideUrl,omitempty" validate:"omitempty,url"`
 	// ProjectName is shown in notifications; optional.
 	ProjectName string `json:"projectName,omitempty" validate:"max=120"`
 }

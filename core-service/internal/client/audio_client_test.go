@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -111,5 +112,22 @@ func TestVocalTakeInput_TimelineJSON(t *testing.T) {
 	}
 	if _, present := out["end_ms"]; present {
 		t.Errorf("end_ms must be omitted when nil: %s", b)
+	}
+}
+
+func TestMasterRequest_GuideKeyOmittedWhenEmpty(t *testing.T) {
+	b, err := json.Marshal(MasterRequest{})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(b), "guide_key") {
+		t.Errorf("empty request = %s, want no guide_key", b)
+	}
+	b, err = json.Marshal(MasterRequest{GuideKey: "g"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"guide_key":"g"`) {
+		t.Errorf("request = %s, want guide_key g", b)
 	}
 }

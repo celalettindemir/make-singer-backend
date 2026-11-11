@@ -57,3 +57,28 @@ func TestMaster_TakeGainPassedThrough(t *testing.T) {
 		t.Errorf("take 1 gain = %v, want nil (0 dB)", *takes[1].GainDb)
 	}
 }
+
+func TestMasterWorker_GuideKeyResolved(t *testing.T) {
+	cfg := testR2Cfg()
+	w := &MasterWorker{r2Cfg: cfg}
+	key := "guides/kullanici-a/p1/vocal.mp3"
+	payload := &model.MasterJobPayload{OwnerID: "kullanici-a", GuideURL: client.UnsignedURL(key, cfg)}
+	if got := w.guideKey("job-1", payload); got != key {
+		t.Errorf("guideKey = %q, want %q", got, key)
+	}
+	if got := w.guideKey("job-1", &model.MasterJobPayload{OwnerID: "kullanici-a"}); got != "" {
+		t.Errorf("empty URL guideKey = %q, want empty", got)
+	}
+}
+
+func TestMasterWorker_GuideKeyUnresolvable_Omitted(t *testing.T) {
+	cfg := testR2Cfg()
+	w := &MasterWorker{r2Cfg: cfg}
+	payload := &model.MasterJobPayload{
+		OwnerID:  "kullanici-a",
+		GuideURL: client.UnsignedURL("guides/kullanici-b/p1/vocal.mp3", cfg),
+	}
+	if got := w.guideKey("job-1", payload); got != "" {
+		t.Errorf("guideKey = %q, want empty for a foreign key", got)
+	}
+}

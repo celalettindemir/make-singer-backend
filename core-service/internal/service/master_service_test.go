@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -289,5 +290,56 @@ func TestMasterService_CancelRejections(t *testing.T) {
 	}
 	if len(fake.Refunds) != 0 {
 		t.Errorf("refunds = %+v, want none", fake.Refunds)
+	}
+}
+
+func TestStartFinal_GuideURL_ForeignKeyRejected(t *testing.T) {
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	s := NewMasterService(repo, nil, nil, testR2Cfg())
+	req := masterFinalRequest(t, "kullanici-a")
+	req.GuideURL = masterKeyURL(t, "guides", "kullanici-b", "v.mp3")
+	n := jobCount(t, repo)
+	_, err := s.StartFinal(context.Background(), "kullanici-a", req)
+	if !errors.Is(err, client.ErrKeyNotOwned) {
+		t.Fatalf("err = %v, want ErrKeyNotOwned", err)
+	}
+	if jobCount(t, repo) != n {
+		t.Error("job record created for a rejected guide")
+	}
+}
+
+func startFinalWithGuide(t *testing.T) (*model.MasterFinalResponse, jobs.Repo, *model.MasterFinalRequest) {
+	t.Helper()
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	fake := &credit.FakeSpender{IsEnforced: true}
+	s := NewMasterService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	req := masterFinalRequest(t, "kullanici-a")
+	req.VocalTakes = []model.VocalTake{{SectionID: "s1", TakeID: "t1", FileURL: masterKeyURL(t, "vocals", "kullanici-a", "t.wav")}}
+	req.GuideURL = masterKeyURL(t, "guides", "kullanici-a", "v.mp3")
+	resp, err := s.StartFinal(context.Background(), "kullanici-a", req)
+	if err != nil {
+		t.Fatalf("StartFinal: %v", err)
+	}
+	return resp, repo, req
+}
+
+func TestStartFinal_GuideURL_DoesNotNeedPlus(t *testing.T) {
+	startFinalWithGuide(t)
+}
+
+func TestStartFinal_GuideURL_CopiedToPayload(t *testing.T) {
+	resp, repo, req := startFinalWithGuide(t)
+	job, err := repo.Get(context.Background(), resp.JobID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	var payload model.MasterJobPayload
+	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if payload.GuideURL != req.GuideURL {
+		t.Errorf("payload GuideURL = %q, want %q", payload.GuideURL, req.GuideURL)
 	}
 }
