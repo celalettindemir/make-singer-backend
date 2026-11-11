@@ -1908,6 +1908,23 @@ const docTemplate = `{
                 "InstrumentRest": "the track with the chosen instrument removed (focus mode)",
                 "InstrumentVocal": "the sung vocal stem of a vocal render"
             },
+            "x-enum-descriptions": [
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "the sung vocal stem of a vocal render",
+                "the full track (mix mode)",
+                "the track with the chosen instrument removed (focus mode)"
+            ],
             "x-enum-varnames": [
                 "InstrumentDrums",
                 "InstrumentBass",
