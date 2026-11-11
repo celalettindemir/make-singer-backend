@@ -3,7 +3,20 @@
 Pure numpy/scipy DSP, no storage or network. Signals are mono float arrays at RATE.
 """
 
+from dataclasses import dataclass
+
 import numpy as np
+import pyloudnorm
+from pedalboard import (
+    Compressor,
+    Delay,
+    HighpassFilter,
+    LowpassFilter,
+    NoiseGate,
+    PeakFilter,
+    Pedalboard,
+    Reverb,
+)
 from scipy import signal
 
 RATE = 44100
@@ -19,6 +32,26 @@ REF_BAND = (500, 1500)
 APPLY_BAND = (150, 12000)
 CLAMP_DB = (-10, 12)
 FIR_TAPS = 4097
+
+INPUT_RMS_DBFS = -18
+HPF_HZ = 110
+GATE = {"threshold_db": -32, "ratio": 6, "attack_ms": 2, "release_ms": 150}
+COMP_1 = {"threshold_db": -22, "ratio": 4, "attack_ms": 4, "release_ms": 70}
+COMP_2 = {"threshold_db": -14, "ratio": 2.5, "attack_ms": 15, "release_ms": 150}
+DEESS_HZ = 6000
+DEESS = {"threshold_db": -32, "ratio": 6, "attack_ms": 1, "release_ms": 40}
+EXCITER_SPLIT_HZ = 2500
+EXCITER_DRIVE_PEAK = 4.0
+EXCITER_HPF_HZ = 4500
+EXCITER_DB = -17
+REVERB_DB = -13
+SLAP_DB = -19
+SLAP_DELAY_S = 0.115
+FRONT_LU = 2.0
+INST_BELL = (2500, -2.5, 0.8)
+DUCK_MAX_DB = 1.5
+DUCK_ENV_S = 0.05
+DUCK_PERCENTILE = 60
 
 _FRAME = 8192
 _HOP = _FRAME // 2
@@ -126,3 +159,124 @@ def apply_curve(x: np.ndarray, rate: int, curve_db: np.ndarray) -> np.ndarray:
     return signal.fftconvolve(np.asarray(x, dtype=np.float64), taps, "same").astype(
         np.float32
     )
+
+
+def _hpf2(x: np.ndarray, rate: int, hz: float) -> np.ndarray:
+    board = Pedalboard([HighpassFilter(hz), HighpassFilter(hz)])
+    return board(np.asarray(x, dtype=np.float32), rate)
+
+
+def gate(x: np.ndarray, rate: int) -> np.ndarray:
+    """High-pass at 110 Hz (twice), then a noise gate that closes the gaps."""
+    y = _hpf2(x, rate, HPF_HZ)
+    return Pedalboard([NoiseGate(**GATE)])(y, rate)
+
+
+@dataclass
+class VocalOut:
+    stereo: np.ndarray  # (2, N) float32, with reverb and slap
+    dry: np.ndarray  # (N,) processed mono before the room
+    curve_db: np.ndarray  # (27,) match EQ curve that was applied
+
+
+def process_vocal(voc: np.ndarray, rate: int, ref_ltas: np.ndarray) -> VocalOut:
+    """Input level, gate, match EQ, compressors, exciter, de-esser, reverb + slap."""
+    x = np.asarray(voc, dtype=np.float32).reshape(-1)
+    act = active_mask(x, rate)
+    if act.any():
+        rms = np.sqrt(np.mean(x[act].astype(np.float64) ** 2))
+        if rms > 0:
+            x = (x * (10 ** (INPUT_RMS_DBFS / 20) / rms)).astype(np.float32)
+    g = gate(x, rate)
+
+    if act.any():
+        curve = match_curve_db(ltas_db(g, rate), ref_ltas)
+        v = apply_curve(g, rate, curve)
+    else:
+        curve = np.zeros(len(BANDS_HZ))
+        v = g
+    v = Pedalboard([Compressor(**COMP_1), Compressor(**COMP_2)])(v, rate)
+
+    # Exciter: new upper harmonics where the phone mic captured none.
+    h = _hpf2(v, rate, EXCITER_SPLIT_HZ)
+    drive = EXCITER_DRIVE_PEAK / (np.abs(h).max() + 1e-9)
+    sat = np.tanh(h * drive) / drive
+    sat = _hpf2(sat, rate, EXCITER_HPF_HZ)
+    sat = sat * (
+        np.sqrt(np.mean(v**2) / (np.mean(sat**2) + 1e-12)) * 10 ** (EXCITER_DB / 20)
+    )
+    v = (v + sat).astype(np.float32)
+
+    # De-esser: compress only the band above 6 kHz.
+    hi = _hpf2(v, rate, DEESS_HZ)
+    lo = v - hi
+    hi = Pedalboard([Compressor(**DEESS)])(hi, rate)
+    dry = np.asarray(lo + hi, dtype=np.float32).reshape(-1)
+
+    st = np.stack([dry, dry])
+    verb = Pedalboard(
+        [
+            HighpassFilter(250),
+            LowpassFilter(7000),
+            Reverb(
+                room_size=0.42, damping=0.55, wet_level=1.0, dry_level=0.0, width=1.0
+            ),
+        ]
+    )(st, rate)
+    slap = Pedalboard(
+        [
+            HighpassFilter(300),
+            LowpassFilter(5000),
+            Delay(delay_seconds=SLAP_DELAY_S, feedback=0.12, mix=1.0),
+        ]
+    )(st, rate)
+    stereo = st + verb * 10 ** (REVERB_DB / 20) + slap * 10 ** (SLAP_DB / 20)
+    return VocalOut(stereo.astype(np.float32), dry, np.asarray(curve, dtype=np.float64))
+
+
+def _pad(x: np.ndarray, n: int) -> np.ndarray:
+    extra = n - x.shape[-1]
+    if extra <= 0:
+        return x
+    return np.pad(x, [(0, 0)] * (x.ndim - 1) + [(0, extra)])
+
+
+def _lufs(x2: np.ndarray, rate: int) -> float:
+    try:
+        v = float(pyloudnorm.Meter(rate).integrated_loudness(x2.T))
+    except ValueError:  # shorter than one gating block
+        return float("-inf")
+    return v if np.isfinite(v) else float("-inf")
+
+
+def mix_vocal(
+    vocal: VocalOut, inst: np.ndarray, rate: int
+) -> tuple[np.ndarray, dict[str, float]]:
+    """Carve the instrumental, set the vocal 2 LU ahead, duck under the voice."""
+    n = max(vocal.stereo.shape[1], inst.shape[1])
+    voc = _pad(vocal.stereo, n)
+    dry = _pad(vocal.dry, n)
+    bell = Pedalboard([PeakFilter(*INST_BELL)])
+    ins = bell(np.asarray(inst, dtype=np.float32), rate)
+    ins = _pad(ins, n)
+
+    act = active_mask(dry, rate)
+    if act.sum() > rate:
+        lv, li = _lufs(voc[:, act], rate), _lufs(ins[:, act], rate)
+    else:
+        lv, li = _lufs(voc, rate), _lufs(ins, rate)
+    if np.isfinite(lv) and np.isfinite(li):
+        gain_db = li + FRONT_LU - lv
+    else:
+        gain_db = 0.0
+    voc = voc * 10 ** (gain_db / 20)
+
+    if act.any():
+        env = movavg(np.abs(dry), int(DUCK_ENV_S * rate))
+        env = np.clip(env / (np.percentile(env[act], DUCK_PERCENTILE) + 1e-9), 0, 1)
+    else:
+        env = np.zeros(n)
+    duck = 10 ** (-DUCK_MAX_DB * env / 20)
+    mix = (ins * duck + voc).astype(np.float32)
+    info = {"vocal_lufs": lv, "inst_lufs": li, "vocal_gain_db": float(gain_db)}
+    return mix, info
