@@ -395,7 +395,7 @@ def mix_vocal(
 
 
 LOUDNESS_TOLERANCE_LU = 0.3
-LOUDNESS_ROUNDS = 4
+LOUDNESS_ROUNDS = 6
 SILENT_LUFS = -70.0
 
 
@@ -415,41 +415,70 @@ def _limiter_makeup_db(threshold_db: float, rate: int) -> float:
 def finalize_loudness(
     x: np.ndarray, rate: int, target_lufs: float, ceiling_db: float
 ) -> tuple[np.ndarray, float, float]:
-    """Bring a (2, N) mix to target_lufs with a true peak limit at ceiling_db.
+    """Bring a (2, N) mix to target_lufs with a sample peak limit at ceiling_db.
 
-    Each round measures BS.1770 loudness, applies the missing gain, limits, and
-    scales down linearly if the limiter's output still exceeds the ceiling.
+    The input is kept. Each round limits ``x * g_total * pre`` once, so the
+    limiter never works on its own output, measures BS.1770 loudness on the
+    result and updates g_total from the error (proportional first, then a
+    secant step). A round ends the loop only when the loudness is within
+    LOUDNESS_TOLERANCE_LU of the target and the peak is at or under the ceiling.
     Returns (out, lufs, peak_db); silent input comes back unchanged.
     """
-    out = np.asarray(x, dtype=np.float32)
-    if not out.size or float(np.max(np.abs(out))) == 0.0:
-        return out, SILENT_LUFS, float("-inf")
+    x = np.asarray(x, dtype=np.float32)
+    if not x.size or float(np.max(np.abs(x))) == 0.0:
+        return x, SILENT_LUFS, float("-inf")
     ceiling = 10 ** (ceiling_db / 20)
+    lufs0 = _lufs(x, rate)
+    if not np.isfinite(lufs0):
+        peak = float(np.max(np.abs(x)))
+        return x, SILENT_LUFS, float(20 * np.log10(peak))
+    if (
+        abs(lufs0 - target_lufs) <= LOUDNESS_TOLERANCE_LU
+        and float(np.max(np.abs(x))) <= ceiling
+    ):
+        return x, lufs0, float(20 * np.log10(np.max(np.abs(x))))
+
     limiter = Pedalboard([Limiter(threshold_db=ceiling_db, release_ms=100)])
     # The limiter lifts its output by makeup_db and caps it near 0 dBFS. Feed it
     # pre_db less, so it starts limiting at the ceiling, then scale the capped
     # output (0 dBFS) down to the ceiling: unlimited material keeps its level.
     makeup_db = _limiter_makeup_db(ceiling_db, rate)
-    pre_gain = np.float32(10 ** (-(ceiling_db + makeup_db) / 20))
-    lufs = _lufs(out, rate)
-    for _ in range(LOUDNESS_ROUNDS):
-        if not np.isfinite(lufs):
-            break
-        if abs(lufs - target_lufs) <= LOUDNESS_TOLERANCE_LU:
-            break
-        gained = out * (np.float32(10 ** ((target_lufs - lufs) / 20)) * pre_gain)
-        del out
+    pre_db = -(ceiling_db + makeup_db)
+
+    def render(g_db: float) -> tuple[np.ndarray, float, float]:
+        gained = x * np.float32(10 ** ((g_db + pre_db) / 20))
         out = limiter(gained, rate)
         del gained
         out *= np.float32(ceiling)
         peak = float(np.max(np.abs(out)))
-        if peak > ceiling:
+        if peak > ceiling:  # the limiter's internal clip can still pass the ceiling
             out *= np.float32(ceiling / peak)
-        lufs = _lufs(out, rate)
-    peak = float(np.max(np.abs(out)))
-    if peak > ceiling:
-        out = out * np.float32(ceiling / peak)
-        peak = float(np.max(np.abs(out)))
-        lufs = _lufs(out, rate)
+            peak = ceiling
+        return out, _lufs(out, rate), peak
+
+    g_db = target_lufs - lufs0
+    prev: tuple[float, float] | None = None  # (g_db, lufs) of the last round
+    best: tuple[float, float] | None = None  # (abs error, g_db)
+    out, lufs, peak = None, lufs0, 0.0
+    for _ in range(LOUDNESS_ROUNDS):
+        out, lufs, peak = render(g_db)
+        err = target_lufs - lufs
+        if best is None or abs(err) < best[0]:
+            best = (abs(err), g_db)
+        if abs(err) <= LOUDNESS_TOLERANCE_LU and peak <= ceiling:
+            break
+        slope = 1.0
+        if prev is not None and abs(g_db - prev[0]) > 1e-6:
+            slope = (lufs - prev[1]) / (g_db - prev[0])
+            slope = float(np.clip(slope, 0.1, 1.5))
+        prev = (g_db, lufs)
+        g_db += err / slope
+        del out
+        out = None
+    else:
+        if best is not None and best[1] != prev[0]:
+            out, lufs, peak = render(best[1])
+    if out is None:
+        out, lufs, peak = render(best[1])
     peak_db = 20 * np.log10(peak) if peak > 0 else float("-inf")
     return out, (lufs if np.isfinite(lufs) else SILENT_LUFS), float(peak_db)

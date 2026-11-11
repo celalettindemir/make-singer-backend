@@ -123,8 +123,10 @@ def test_kapi_aralari_indirir_tonu_korur():
     gaps = ((t % 1.0) >= 0.6) & ((t % 1.0) < 0.95) & (t > 1)
     mid = ((t % 1.0) >= 0.15) & ((t % 1.0) < 0.4) & (t > 1)
     assert rms_db(out[gaps]) <= rms_db(x[gaps]) - 20
-    # The spec's 2x HPF 110 Hz alone costs 0.526 dB at 440 Hz, so the brief's 0.5 is out of reach.
-    assert abs(rms_db(out[mid]) - rms_db(x[mid])) <= 0.6
+    # The spec's 2x HPF 110 Hz alone costs 0.526 dB at 440 Hz (spec 6: 0.6 dB
+    # against the input), so the gate itself is pinned against the HPF-only output.
+    hpf_only = vocal_chain._hpf2(x, RATE, vocal_chain.HPF_HZ)
+    assert abs(rms_db(out[mid]) - rms_db(hpf_only[mid])) <= 0.1
 
 
 def test_hava_8khz_ustune_enerji_ekler():
@@ -232,3 +234,42 @@ def test_lufs_pyloudnorm_ile_ayni_sonucu_verir():
 def test_lufs_bir_bloktan_kisa_sinyalde_eksi_sonsuz():
     x = np.zeros((2, 1000), dtype=np.float32)
     assert vocal_chain._lufs(x, 48000) == float("-inf")
+
+
+def _perkusif(saniye=6, hiz=48000):
+    """Kick + gurultu: hizli geciciler, 4 turda yakinsamayan sinyal."""
+    rng = np.random.default_rng(5)
+    n = int(saniye * hiz)
+    x = rng.standard_normal(n) * 0.02
+    t = np.arange(int(0.12 * hiz)) / hiz
+    kick = np.sin(2 * np.pi * (140 * np.exp(-t * 18) + 45) * t) * np.exp(-t * 22)
+    for a in range(0, n - len(kick), hiz // 2):
+        x[a : a + len(kick)] += 0.9 * kick
+    return np.stack([x, x * 0.9]).astype(np.float32)
+
+
+@pytest.mark.parametrize("hedef,tavan", [(-14, -1.0), (-12, -0.5), (-10, -0.3)])
+def test_finalize_hedef_icindeyken_tavani_asan_tek_ornek_hedefi_kacirmaz(hedef, tavan):
+    """Hedefin +0.25 LU ustunde, tek ornek tavanin ustunde: son olcek hedefi kaydirmamali."""
+    x = _gurultu(6, 0.02)
+    x *= np.float32(10 ** ((hedef + 0.25 - vocal_chain._lufs(x, 48000)) / 20))
+    x[0, 1000] = 10 ** (-0.09 / 20)  # one sample at -0.09 dBFS
+    out, lufs, peak_db = vocal_chain.finalize_loudness(x, 48000, hedef, tavan)
+    assert abs(lufs - hedef) <= 0.5
+    assert abs(vocal_chain._lufs(out, 48000) - lufs) < 1e-3
+    assert peak_db <= tavan + 1e-4
+
+
+@pytest.mark.parametrize("hedef,tavan", [(-14, -1.0), (-12, -0.5), (-10, -0.3)])
+def test_finalize_perkusif_sinyalde_hedefin_yarim_lu_icinde(hedef, tavan):
+    out, lufs, peak_db = vocal_chain.finalize_loudness(_perkusif(), 48000, hedef, tavan)
+    assert abs(lufs - hedef) <= 0.5
+    assert abs(vocal_chain._lufs(out, 48000) - lufs) < 1e-3
+    assert peak_db <= tavan + 1e-4
+
+
+def test_finalize_girisi_degistirmez():
+    x = _perkusif()
+    kopya = x.copy()
+    vocal_chain.finalize_loudness(x, 48000, -10, -0.3)
+    assert np.array_equal(x, kopya)

@@ -31,9 +31,15 @@ def test_rehber_7_yarim_tondan_uzaksa_yerlesik():
 
 
 def test_rehber_yoksa_kadin_egrisi():
-    t220, _ = _pair(220)
-    kind, ref = choose_reference(t220, None, None)
+    t260, _ = _pair(260)
+    kind, ref = choose_reference(t260, None, None)
     assert kind == "builtin-female" and ref.shape == (27,)
+
+
+def test_rehber_yoksa_erkek_sesi_187_hz_erkek_egrisi():
+    # A male user's sung median measured 187 Hz; the threshold is 220 Hz (A3).
+    t187, _ = _pair(187)
+    assert choose_reference(t187, None, None)[0] == "builtin-male"
 
 
 def test_sessiz_take_erkek_egrisi():

@@ -7,7 +7,8 @@ from services.vocal_chain import RATE, ltas_db
 from services.vocal_curves import BUILTIN_LTAS
 
 MAX_GUIDE_DISTANCE_ST = 7.0
-MALE_BELOW_HZ = 165.0
+# A3. A male user's sung median measured 187 Hz; the lowest female guide is 260 Hz.
+MALE_BELOW_HZ = 220.0
 
 
 def median_midi(x16: np.ndarray) -> float | None:

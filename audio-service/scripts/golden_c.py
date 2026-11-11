@@ -1,11 +1,13 @@
 """Golden comparison and bench for the server vocal chain ("C").
 
-usage: python scripts/golden_c.py SPIKE_V3_DIR OUT_DIR [--bench]
+usage: python scripts/golden_c.py SPIKE_V3_DIR OUT_DIR [--bench | --builtin]
 
 Reads the spike recordings by path (they never enter the repo), checks take
 alignment and the band balance against the C2 spike render, writes the
 end-to-end listening file OUT_DIR/C3-sunucu-gercek.mp3, or with --bench times
-the whole job on a 240 s tiled song.
+the whole job on a 240 s tiled song. With --builtin the job runs without a
+guide (what production does until the apps send guideUrl): no alignment, the
+built-in curve, and OUT_DIR/C4-sunucu-yerlesik-egri.mp3 is written.
 """
 
 import argparse
@@ -27,7 +29,7 @@ from scipy import signal
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services import vocal_chain
-from services.master import MasterService, _to_float
+from services.master import MasterService, _resample, _to_float
 from services.take_align import ALIGN_RATE, find_shift_ms, onset_envelope, place_take
 from services.vocal_ref import choose_reference
 
@@ -39,6 +41,7 @@ GUIDE = "song/guide.mp3"
 STEM = "song/stem.mp3"
 C2 = "out/alternatifler/sadece-vokal/C2-sunucu-surumu-vokal.wav"
 OUT_NAME = "C3-sunucu-gercek.mp3"
+OUT_NAME_BUILTIN = "C4-sunucu-yerlesik-egri.mp3"
 BANDS = [
     (100, 300),
     (300, 1000),
@@ -56,8 +59,8 @@ CHAIN_MAX_S, RSS_MAX_MB = 20.0, 700
 
 
 def mono(path: str, rate: int) -> np.ndarray:
-    seg = AudioSegment.from_file(path).set_channels(1).set_frame_rate(rate)
-    return _to_float(seg)[:, 0].astype(np.float32)
+    seg = AudioSegment.from_file(path).set_channels(1)
+    return _resample(_to_float(seg, np.float32)[:, 0], seg.frame_rate, rate)
 
 
 def band_db(x: np.ndarray, rate: int) -> np.ndarray:
@@ -204,7 +207,7 @@ def chain_extra_mb(lines: list[str]) -> float:
     return float("nan")
 
 
-def golden(spike: str, out_dir: str) -> bool:
+def golden(spike: str, out_dir: str, builtin: bool = False) -> bool:
     rate = vocal_chain.RATE
     p = lambda rel: os.path.join(spike, rel)
     guide16 = mono(p(GUIDE), ALIGN_RATE)
@@ -215,8 +218,14 @@ def golden(spike: str, out_dir: str) -> bool:
     takes = [(mono(p(rel), rate), ms) for rel, ms in TAKES]
     ok = True
     shifts = []
-    print("alignment")
+    if builtin:  # no guide: production behaviour, no alignment
+        shifts = [0] * len(takes)
+        guide16 = guide44 = None
+    else:
+        print("alignment")
     for (rel, ms), (x, _) in zip(TAKES, takes):
+        if builtin:
+            break
         x16 = signal.resample_poly(x, ALIGN_RATE // 100, rate // 100)
         shift, corr = find_shift_ms(x16, guide_env, ms)
         shifts.append(shift)
@@ -232,7 +241,7 @@ def golden(spike: str, out_dir: str) -> bool:
     ).astype(np.float32)
     kind, ref = choose_reference(joined, guide16, guide44)
     print(f"ref={kind}")
-    ok &= kind == "guide"
+    ok &= kind == ("builtin-male" if builtin else "guide")
 
     timeline = inst_len
     placed = []
@@ -257,17 +266,16 @@ def golden(spike: str, out_dir: str) -> bool:
 
     # End to end listening file.
     files = {"stems/stem.mp3": p(STEM), "guides/guide.mp3": p(GUIDE)}
+    guide_key = None if builtin else "guides/guide.mp3"
     vtakes = []
     for rel, ms in TAKES:
         key = "vocals/" + os.path.basename(rel)
         files[key] = p(rel)
         vtakes.append({"key": key, "start_ms": ms})
     with tempfile.TemporaryDirectory() as tmp:
-        result, lines, _ = run_process(
-            files, vtakes, "stems/stem.mp3", "guides/guide.mp3", tmp
-        )
+        result, lines, _ = run_process(files, vtakes, "stems/stem.mp3", guide_key, tmp)
         wav = os.path.join(tmp, "out.wav")
-        mp3 = os.path.join(out_dir, OUT_NAME)
+        mp3 = os.path.join(out_dir, OUT_NAME_BUILTIN if builtin else OUT_NAME)
         subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error", "-i", wav, "-b:a", "320k", mp3],
             check=True,
@@ -340,11 +348,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("spike_dir")
     ap.add_argument("out_dir")
-    ap.add_argument("--bench", action="store_true")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--bench", action="store_true")
+    mode.add_argument("--builtin", action="store_true")
     a = ap.parse_args()
     spike = os.path.expanduser(a.spike_dir)
     out_dir = os.path.expanduser(a.out_dir)
-    ok = bench(spike, out_dir) if a.bench else golden(spike, out_dir)
+    ok = bench(spike, out_dir) if a.bench else golden(spike, out_dir, builtin=a.builtin)
     return 0 if ok else 1
 
 

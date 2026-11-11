@@ -6,7 +6,7 @@ import time
 import numpy as np
 from pydub import AudioSegment
 
-from services.master import PROFILES, MasterService
+from services.master import PROFILES, MasterService, _to_float
 
 ORNEK_HIZI = 48000
 
@@ -418,7 +418,8 @@ def test_ai_take_zincirden_gecmez(tmp_path, monkeypatch):
     # Uygulama vokali (330 Hz, 4 s sonrasi) zincire giren izde olmamali.
     iz = cagrilar[0]
     n4 = 44100 * 4
-    assert np.max(np.abs(iz[n4 + 4410 :])) < 1e-6 if len(iz) > n4 + 4410 else True
+    assert len(iz) > n4 + 4410
+    assert np.max(np.abs(iz[n4 + 4410 :])) < 1e-6
 
 
 def test_rehber_yoksa_yerlesik_egri_ve_kayma_sifir(tmp_path, caplog):
@@ -522,3 +523,130 @@ def test_kompresor_pydub_ile_ayni_sonucu_verir(esik, oran):
 
     assert len(sonuc) == len(beklenen)
     assert np.abs(sonuc - beklenen).max() <= 2
+
+
+def _tam_olcek_stem(saniye=8, hiz=44100):
+    t = np.arange(int(saniye * hiz)) / hiz
+    x = 0.5 * pembe_gurultu(saniye, hiz) + 0.5 * np.sin(2 * np.pi * 110 * t)
+    return dizi_ses(x / np.max(np.abs(x)), hiz, kanal=2)
+
+
+def test_tam_olcek_enstrumantal_ve_take_zincirde_kirpilmaz(tmp_path):
+    servis, _ = servis_kur(tmp_path, vocals__kul=dizi_ses(sarki_gibi_vokal(6), 44100))
+    stem = _tam_olcek_stem()
+    take = {"key": "vocals/kul", "start_ms": 500}
+
+    zincirli, _ = servis._apply_vocal_chain(str(tmp_path), [stem], [take], None)
+
+    x = _to_float(zincirli)
+    tam = np.sum(np.abs(x) >= 0.999)
+    assert tam == 0
+    assert np.max(np.abs(x)) <= master_modulu.HEADROOM_PEAK + 1e-3
+
+
+def _format(yol):
+    import wave
+
+    with wave.open(yol, "rb") as w:
+        return w.getsampwidth(), w.getframerate(), w.getnchannels()
+
+
+def test_cikis_16_bit_48_khz_stereo_takesiz(tmp_path):
+    servis, depo = servis_kur(tmp_path)
+    servis._process(["stems/a.wav"], [{}], "warm", [], "out/master.wav", None)
+    assert _format(depo.yuklenen["out/master.wav"]) == (2, 48000, 2)
+
+
+def test_cikis_16_bit_48_khz_stereo_take_ile(tmp_path):
+    servis, depo = servis_kur(
+        tmp_path, vocals__kul=dizi_ses(sarki_gibi_vokal(4), 44100)
+    )
+    calistir(servis, [{"key": "vocals/kul"}], profil="loud")
+    assert _format(depo.yuklenen["out/master.wav"]) == (2, 48000, 2)
+
+
+def test_48_khz_stem_15_khz_ton_kullanici_take_yolunda_korunur(tmp_path):
+    hiz = 48000
+    t = np.arange(hiz * 6) / hiz
+    ton = 0.03 * np.sin(2 * np.pi * 15000 * t)
+    stem = dizi_ses(ton, hiz, kanal=2)
+    # Take is 1 s long at 4.5 s, so 1 s to 4 s is instrumental only.
+    servis, _ = servis_kur(
+        tmp_path, stem=stem, vocals__kul=dizi_ses(sarki_gibi_vokal(1), 44100)
+    )
+    take = {"key": "vocals/kul", "start_ms": 4500}
+
+    sonuc, _ = servis._apply_vocal_chain(str(tmp_path), [stem], [take], None)
+
+    assert sonuc.frame_rate == 44100
+    x = _to_float(sonuc)[:, 0][44100 : 44100 * 4]
+    spek = np.abs(np.fft.rfft(x * np.hanning(len(x))))
+    f = np.fft.rfftfreq(len(x), 1 / 44100)
+    tepe = spek[np.abs(f - 15000) < 20].max()
+    beklenen = 0.03 * np.sum(np.hanning(len(x))) / 2
+    assert 20 * np.log10(tepe / beklenen) == pytest.approx(0, abs=0.5)
+    sahte = spek[np.abs(f - 15000) > 300].max()
+    assert 20 * np.log10(sahte / tepe) < -60
+
+
+def test_kompresor_pydub_ile_ayni_sonucu_verir_sesli_baslangic_32_bit():
+    from pydub.effects import compress_dynamic_range as pydub_kompresor
+
+    from services.master import compress_dynamic_range
+
+    n = 12000
+    t = np.arange(n) / ORNEK_HIZI
+    zarf = np.where(t < 0.12, 0.9, 0.05)  # loud from the very first frame
+    dalga = zarf * np.sin(2 * np.pi * 300 * t)
+    ses = AudioSegment(
+        np.round(np.repeat(dalga, 2) * (2**31 - 1)).astype("<i4").tobytes(),
+        frame_rate=ORNEK_HIZI,
+        sample_width=4,
+        channels=2,
+    )
+
+    beklenen = np.array(
+        pydub_kompresor(ses, -20, 4.0).get_array_of_samples(), dtype=np.int64
+    )
+    sonuc = np.array(
+        compress_dynamic_range(ses, -20, 4.0).get_array_of_samples(), dtype=np.int64
+    )
+
+    assert len(sonuc) == len(beklenen)
+    assert np.abs(sonuc - beklenen).max() <= 64  # int32 LSB, incl. the first 10 ms
+
+
+def test_ayni_anda_iki_master_birbirini_bekler():
+    import asyncio
+    import threading
+
+    servis = MasterService()
+    servis.storage = object()
+    ayni_anda = 0
+    en_cok = 0
+    kilit = threading.Lock()
+
+    def zincir(*_):
+        nonlocal ayni_anda, en_cok
+        with kilit:
+            ayni_anda += 1
+            en_cok = max(en_cok, ayni_anda)
+        time.sleep(0.2)
+        with kilit:
+            ayni_anda -= 1
+        return {"output_url": "u"}
+
+    servis._process = zincir
+
+    async def senaryo():
+        istek = {
+            "stem_keys": ["a"],
+            "mix_settings": [],
+            "profile": "clean",
+            "vocal_takes": [],
+            "output_key": "m.wav",
+        }
+        await asyncio.gather(servis.process(**istek), servis.process(**istek))
+
+    asyncio.run(senaryo())
+    assert en_cok == 1

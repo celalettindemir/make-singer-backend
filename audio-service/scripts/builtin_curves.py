@@ -3,7 +3,7 @@
 Usage: python scripts/builtin_curves.py OUT.py FILE[:m|f] ...
 
 An explicit :m / :f label wins; an unlabelled file falls back to the pitch
-median (< 165 Hz is male). Each file's LTAS is shifted so its 500-1500 Hz
+median (< 220 Hz is male). Each file's LTAS is shifted so its 500-1500 Hz
 median is 0, then the files of one gender are averaged and re-centred.
 """
 
@@ -21,7 +21,7 @@ from services.guide import track_pitch
 from services.vocal_chain import BANDS_HZ, RATE, ltas_db
 
 POINTS_HZ = (250, 500, 1000, 2000, 3000, 5000, 8000, 12000)
-MALE_BELOW_HZ = 165.0
+MALE_BELOW_HZ = 220.0
 CENTER = (BANDS_HZ >= 500) & (BANDS_HZ <= 1500)
 
 
