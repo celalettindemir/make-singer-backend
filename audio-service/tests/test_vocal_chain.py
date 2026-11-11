@@ -4,8 +4,10 @@ import time
 
 import numpy as np
 import pyloudnorm
+import pytest
 from pedalboard import LowpassFilter, Pedalboard
 
+from services import vocal_chain
 from services.vocal_chain import (
     BANDS_HZ,
     RATE,
@@ -172,3 +174,40 @@ def test_ayni_girdi_ayni_cikti():
     a = process_vocal(voc, RATE, ref)
     b = process_vocal(voc, RATE, ref)
     assert np.array_equal(a.stereo, b.stereo)
+
+
+# --- finalize_loudness -------------------------------------------------------
+
+
+def _gurultu(saniye, genlik, hiz=48000, tohum=0):
+    rng = np.random.default_rng(tohum)
+    return (rng.standard_normal((2, int(saniye * hiz))) * genlik).astype(np.float32)
+
+
+@pytest.mark.parametrize("hedef,tavan", [(-14, -1.0), (-12, -0.5), (-10, -0.3)])
+def test_finalize_hedefe_ulasir_tepe_tavani_asmaz(hedef, tavan):
+    ince = _gurultu(5, 0.02)
+    tepeli = ince.copy()
+    tepeli[:, ::4800] *= 40
+    for x in (ince, tepeli):
+        out, lufs, peak_db = vocal_chain.finalize_loudness(x, 48000, hedef, tavan)
+        assert lufs == pytest.approx(hedef, abs=0.3)
+        olculen = 20 * np.log10(np.max(np.abs(out)))
+        assert olculen <= tavan + 1e-4
+        assert peak_db == pytest.approx(olculen, abs=1e-3)
+
+
+def test_finalize_limiter_makyaj_kazanci_tavani_astirmaz():
+    # Cok yuksek giris: limiter cikisi tavandan yuksek olsa bile olceklenir.
+    x = np.clip(_gurultu(3, 0.5), -1, 1)
+    out, _, peak_db = vocal_chain.finalize_loudness(x, 48000, -10, -0.3)
+    assert np.max(np.abs(out)) <= 10 ** (-0.3 / 20) + 1e-6
+    assert peak_db <= -0.3 + 1e-4
+
+
+def test_finalize_sessiz_giris_degismez():
+    x = np.zeros((2, 4800), dtype=np.float32)
+    out, lufs, peak_db = vocal_chain.finalize_loudness(x, 48000, -14, -1.0)
+    assert np.array_equal(out, x)
+    assert lufs == -70.0
+    assert peak_db == float("-inf")

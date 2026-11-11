@@ -1,5 +1,6 @@
 """Mastering zinciri testleri: sentetik ses, ag ve ffmpeg yok."""
 
+import re
 import time
 
 import numpy as np
@@ -268,3 +269,226 @@ def test_master_olay_dongusunu_kilitlemez():
     assert sonuc["output_url"] == "https://depo/m.wav"
     # 1 s engelleyici is boyunca saat donmeye devam etmeli.
     assert tikler >= 20
+
+
+# --- C vocal chain in the final master -------------------------------------
+
+import logging
+import shutil
+
+import pytest
+
+from services import master as master_modulu
+from services import vocal_chain
+
+
+class SahteDepo:
+    """Anahtarlari tmp_path altindaki WAV dosyalarina esler."""
+
+    def __init__(self, tmp_path):
+        self.kok = tmp_path / "depo"
+        self.kok.mkdir()
+        self.yuklenen = {}
+
+    def ekle(self, anahtar, ses):
+        yol = self.kok / anahtar.replace("/", "_")
+        ses.export(str(yol), format="wav")
+        self.__dict__.setdefault("harita", {})[anahtar] = yol
+
+    def download_key_to_file(self, anahtar, yol):
+        harita = self.__dict__.get("harita", {})
+        if anahtar not in harita:
+            raise FileNotFoundError(anahtar)
+        shutil.copy(harita[anahtar], yol)
+
+    def upload_file(self, anahtar, yol, content_type):
+        kopya = self.kok / ("yuklenen_" + anahtar.replace("/", "_"))
+        shutil.copy(yol, kopya)
+        self.yuklenen[anahtar] = str(kopya)
+        return yol
+
+
+def dizi_ses(x, hiz, kanal=1):
+    """float (N,) -> 16 bit AudioSegment."""
+    tam = np.round(np.clip(x, -1, 1) * 32767).astype(np.int16)
+    karisik = np.repeat(tam[:, None], kanal, axis=1).reshape(-1)
+    return AudioSegment(
+        karisik.tobytes(), frame_rate=hiz, sample_width=2, channels=kanal
+    )
+
+
+def pembe_gurultu(saniye, hiz=44100, tohum=1):
+    rng = np.random.default_rng(tohum)
+    n = int(saniye * hiz)
+    spec = np.fft.rfft(rng.standard_normal(n))
+    f = np.maximum(np.arange(len(spec)), 1)
+    x = np.fft.irfft(spec / np.sqrt(f), n)
+    return x / np.max(np.abs(x))
+
+
+def sarki_stem(saniye=20, hiz=44100):
+    t = np.arange(int(saniye * hiz)) / hiz
+    x = 0.25 * pembe_gurultu(saniye, hiz) + 0.25 * np.sin(2 * np.pi * 110 * t)
+    return dizi_ses(x, hiz, kanal=2)
+
+
+def sarki_gibi_vokal(saniye, hiz=44100, tohum=3):
+    """Duzensiz araliklarla gelen harmonikli notalar: belirgin vurus zarfi."""
+    rng = np.random.default_rng(tohum)
+    n = int(saniye * hiz)
+    x = np.zeros(n)
+    t0 = 0.2
+    while t0 < saniye - 0.5:
+        uzun = rng.uniform(0.15, 0.5)
+        f0 = 220.0
+        i0, i1 = int(t0 * hiz), int((t0 + uzun) * hiz)
+        t = np.arange(i1 - i0) / hiz
+        nota = sum(np.sin(2 * np.pi * f0 * k * t) / k for k in range(1, 8))
+        zarf = np.minimum(1, t / 0.01) * np.exp(-3 * t)
+        x[i0:i1] += 0.3 * nota * zarf
+        t0 += uzun + rng.uniform(0.1, 0.5)
+    return x
+
+
+def servis_kur(tmp_path, stem=None, **eklenecek):
+    depo = SahteDepo(tmp_path)
+    depo.ekle("stems/a.wav", stem if stem is not None else sarki_stem())
+    for anahtar, ses in eklenecek.items():
+        depo.ekle(anahtar.replace("__", "/"), ses)
+    return MasterService(depo), depo
+
+
+def calistir(servis, takes=(), profil="clean", guide_key=None, sure_stem=None):
+    return servis._process(
+        ["stems/a.wav"], [{}], profil, list(takes), "out/master.wav", guide_key
+    )
+
+
+def oku(depo):
+    return AudioSegment.from_file(depo.yuklenen["out/master.wav"])
+
+
+@pytest.mark.parametrize("profil", ["clean", "warm", "loud"])
+def test_her_profilde_lufs_hedefte_tepe_esikte(tmp_path, profil):
+    servis, depo = servis_kur(tmp_path)
+
+    sonuc = calistir(servis, profil=profil)
+
+    ayar = PROFILES[profil]
+    assert sonuc["lufs"] == pytest.approx(ayar["target_lufs"], abs=0.5)
+    cikti = oku(depo)
+    assert cikti.frame_rate == 48000
+    tepe_db = 20 * np.log10(np.max(np.abs(ornekler(cikti))))
+    assert tepe_db <= ayar["limiter_threshold"] + 0.01
+    assert sonuc["peak_db"] <= ayar["limiter_threshold"] + 0.01
+
+
+def test_kullanici_take_yoksa_zincir_calismaz(tmp_path, monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("zincir calismamali")
+
+    monkeypatch.setattr(vocal_chain, "process_vocal", boom)
+    servis, _ = servis_kur(tmp_path, guides__app=dizi_ses(sarki_gibi_vokal(5), 44100))
+
+    sonuc = calistir(servis, [{"key": "guides/app"}])
+
+    assert sonuc["duration"] > 0
+
+
+def test_ai_take_zincirden_gecmez(tmp_path, monkeypatch):
+    cagrilar = []
+    gercek = vocal_chain.process_vocal
+
+    def izle(voc, rate, ref):
+        cagrilar.append(np.asarray(voc).copy())
+        return gercek(voc, rate, ref)
+
+    monkeypatch.setattr(vocal_chain, "process_vocal", izle)
+    uygulama = np.zeros(44100 * 6)
+    uygulama[44100 * 4 :] = 0.5 * np.sin(2 * np.pi * 330 * np.arange(44100 * 2) / 44100)
+    servis, _ = servis_kur(
+        tmp_path,
+        guides__app=dizi_ses(uygulama, 44100),
+        vocals__kul=dizi_ses(sarki_gibi_vokal(4), 44100),
+    )
+
+    calistir(servis, [{"key": "guides/app"}, {"key": "vocals/kul"}])
+
+    assert len(cagrilar) == 1
+    # Uygulama vokali (330 Hz, 4 s sonrasi) zincire giren izde olmamali.
+    iz = cagrilar[0]
+    n4 = 44100 * 4
+    assert np.max(np.abs(iz[n4 + 4410 :])) < 1e-6 if len(iz) > n4 + 4410 else True
+
+
+def test_rehber_yoksa_yerlesik_egri_ve_kayma_sifir(tmp_path, caplog):
+    servis, _ = servis_kur(tmp_path, vocals__kul=dizi_ses(sarki_gibi_vokal(4), 44100))
+
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        calistir(servis, [{"key": "vocals/kul"}])
+
+    metin = caplog.text
+    assert "vocal chain: ref=builtin-" in metin
+    assert "shift_ms=0" in metin
+    assert "vocal chain: vocal_lufs=" in metin
+
+
+def test_rehber_indirilemezse_yerlesik_egri(tmp_path, caplog):
+    servis, _ = servis_kur(tmp_path, vocals__kul=dizi_ses(sarki_gibi_vokal(4), 44100))
+
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        sonuc = calistir(servis, [{"key": "vocals/kul"}], guide_key="guides/yok")
+
+    assert sonuc["duration"] > 0
+    assert "ref=builtin-" in caplog.text
+    assert "guide guides/yok unusable" in caplog.text
+
+
+def test_rehberle_kayma_uygulanir(tmp_path, caplog, monkeypatch):
+    rehber = sarki_gibi_vokal(12)
+    baslangic_ms = 2000
+    parca = rehber[88200 : 88200 + 44100 * 5]
+    gecikmis = np.concatenate([np.zeros(int(0.340 * 44100)), parca])
+    ltas = vocal_chain.ltas_db(rehber, 44100)
+    monkeypatch.setattr(master_modulu, "choose_reference", lambda *_a: ("guide", ltas))
+    servis, _ = servis_kur(
+        tmp_path,
+        guides__rehber=dizi_ses(rehber, 44100),
+        vocals__kul=dizi_ses(gecikmis, 44100),
+    )
+
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        calistir(
+            servis,
+            [{"key": "vocals/kul", "start_ms": baslangic_ms}],
+            guide_key="guides/rehber",
+        )
+
+    bulunan = re.search(r"shift_ms=(-?\d+)", caplog.text)
+    assert bulunan, caplog.text
+    assert int(bulunan.group(1)) == pytest.approx(-340, abs=20)
+
+
+def test_take_sarki_sonunu_asarsa_kirpilmaz(tmp_path):
+    servis, _ = servis_kur(
+        tmp_path,
+        stem=sarki_stem(10),
+        vocals__kul=dizi_ses(sarki_gibi_vokal(3), 44100),
+    )
+
+    sonuc = calistir(servis, [{"key": "vocals/kul", "start_ms": 9000}])
+
+    assert sonuc["duration"] == pytest.approx(12.0, abs=0.05)
+
+
+def test_farkli_ornekleme_hizlari_ayni_zaman_cizelgesi(tmp_path):
+    sessiz = dizi_ses(np.zeros(22050 * 4), 22050, kanal=2)
+    nota = 0.5 * np.sin(2 * np.pi * 440 * np.arange(48000 * 2) / 48000)
+    servis, depo = servis_kur(tmp_path, stem=sessiz, vocals__kul=dizi_ses(nota, 48000))
+
+    calistir(servis, [{"key": "vocals/kul", "start_ms": 1000}])
+
+    ses = ornekler(oku(depo))[::2]
+    esik = 0.05 * np.max(np.abs(ses))
+    ilk = np.argmax(np.abs(ses) > esik) / 48000
+    assert ilk == pytest.approx(1.0, abs=0.01)

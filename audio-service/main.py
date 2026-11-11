@@ -82,6 +82,7 @@ class MasterRequest(BaseModel):
     profile: str = "clean"  # clean, warm, loud
     vocal_takes: list[VocalTakeInput] = []
     output_key: str
+    guide_key: str | None = None
 
 
 class MasterResponse(BaseModel):
@@ -292,6 +293,7 @@ async def master_audio(request: MasterRequest):
             profile=request.profile,
             vocal_takes=[v.model_dump() for v in request.vocal_takes],
             output_key=request.output_key,
+            guide_key=request.guide_key,
         )
         return MasterResponse(**result)
     # Genis yakalama BILINCLI: FastAPI ucunda son siginak, her hata 500

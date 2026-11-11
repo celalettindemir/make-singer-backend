@@ -11,6 +11,7 @@ from pedalboard import (
     Compressor,
     Delay,
     HighpassFilter,
+    Limiter,
     LowpassFilter,
     NoiseGate,
     PeakFilter,
@@ -280,3 +281,61 @@ def mix_vocal(
     mix = (ins * duck + voc).astype(np.float32)
     info = {"vocal_lufs": lv, "inst_lufs": li, "vocal_gain_db": float(gain_db)}
     return mix, info
+
+
+LOUDNESS_TOLERANCE_LU = 0.3
+LOUDNESS_ROUNDS = 4
+SILENT_LUFS = -70.0
+
+
+def _limiter_makeup_db(threshold_db: float, rate: int) -> float:
+    """Level pedalboard's Limiter adds to material it does not limit (makeup gain).
+
+    The JUCE limiter lifts its output by about (3.75 - threshold) dB and caps it
+    at 0 dBFS; measured on quiet noise so the caller can take it back out.
+    """
+    probe = (np.random.default_rng(0).standard_normal((2, rate)) * 1e-3).astype(
+        np.float32
+    )
+    board = Pedalboard([Limiter(threshold_db=threshold_db, release_ms=100)])
+    return float(20 * np.log10(np.std(board(probe, rate)) / np.std(probe)))
+
+
+def finalize_loudness(
+    x: np.ndarray, rate: int, target_lufs: float, ceiling_db: float
+) -> tuple[np.ndarray, float, float]:
+    """Bring a (2, N) mix to target_lufs with a true peak limit at ceiling_db.
+
+    Each round measures BS.1770 loudness, applies the missing gain, limits, and
+    scales down linearly if the limiter's output still exceeds the ceiling.
+    Returns (out, lufs, peak_db); silent input comes back unchanged.
+    """
+    out = np.asarray(x, dtype=np.float32)
+    if not out.size or float(np.max(np.abs(out))) == 0.0:
+        return out, SILENT_LUFS, float("-inf")
+    ceiling = 10 ** (ceiling_db / 20)
+    limiter = Pedalboard([Limiter(threshold_db=ceiling_db, release_ms=100)])
+    # The limiter lifts its output by makeup_db and caps it near 0 dBFS. Feed it
+    # pre_db less, so it starts limiting at the ceiling, then scale the capped
+    # output (0 dBFS) down to the ceiling: unlimited material keeps its level.
+    makeup_db = _limiter_makeup_db(ceiling_db, rate)
+    pre_gain = np.float32(10 ** (-(ceiling_db + makeup_db) / 20))
+    lufs = _lufs(out, rate)
+    for _ in range(LOUDNESS_ROUNDS):
+        if not np.isfinite(lufs):
+            break
+        if abs(lufs - target_lufs) <= LOUDNESS_TOLERANCE_LU:
+            break
+        gained = out * np.float32(10 ** ((target_lufs - lufs) / 20))
+        out = limiter(gained * pre_gain, rate) * np.float32(ceiling)
+        peak = float(np.max(np.abs(out)))
+        if peak > ceiling:
+            out = out * np.float32(ceiling / peak)
+        lufs = _lufs(out, rate)
+    peak = float(np.max(np.abs(out)))
+    if peak > ceiling:
+        out = out * np.float32(ceiling / peak)
+        peak = float(np.max(np.abs(out)))
+        lufs = _lufs(out, rate)
+    peak_db = 20 * np.log10(peak) if peak > 0 else float("-inf")
+    return out, (lufs if np.isfinite(lufs) else SILENT_LUFS), float(peak_db)

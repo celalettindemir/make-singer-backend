@@ -1,15 +1,26 @@
 """Mastering service for audio processing."""
 
 import asyncio
+import logging
+import math
 import os
 import tempfile
+import time
 from typing import Any
 
 import numpy as np
 from pydub import AudioSegment
-from pydub.effects import compress_dynamic_range, normalize
+from pydub.effects import compress_dynamic_range
+from scipy import signal
 
+from . import vocal_chain
+from .guide import _onset_envelope
 from .storage import StorageService
+from .take_align import ALIGN_RATE, find_shift_ms, place_take
+from .vocal_chain import BANDS_HZ, finalize_loudness, mix_vocal
+from .vocal_ref import choose_reference
+
+logger = logging.getLogger("uvicorn.error")
 
 # Mastering profiles define EQ and compression settings
 PROFILES = {
@@ -48,6 +59,12 @@ TAKE_FADE_MS = 30
 
 _INT32_FULL_SCALE = 2**31 - 1
 
+OUTPUT_RATE = 48000
+USER_TAKE_PREFIX = "vocals/"
+# Third-octave bands whose match-EQ gain is logged (Hz).
+_LOG_BANDS_HZ = (250, 500, 1000, 2000, 3000, 5000, 8000, 12000)
+_LOG_BAND_NAMES = ("250", "500", "1k", "2k", "3k", "5k", "8k", "12k")
+
 
 def _to_float(audio: AudioSegment) -> np.ndarray:
     """Samples as float64 in [-1, 1], shaped (frames, channels)."""
@@ -81,6 +98,7 @@ class MasterService:
         profile: str,
         vocal_takes: list[dict[str, Any]],
         output_key: str,
+        guide_key: str | None = None,
     ) -> dict[str, Any]:
         """
         Process stems through the mastering chain.
@@ -98,7 +116,13 @@ class MasterService:
         # The chain is CPU bound and storage I/O blocks: off the event loop,
         # or /health stalls and the liveness probe restarts the service.
         return await asyncio.to_thread(
-            self._process, stem_keys, mix_settings, profile, vocal_takes, output_key
+            self._process,
+            stem_keys,
+            mix_settings,
+            profile,
+            vocal_takes,
+            output_key,
+            guide_key,
         )
 
     def _process(
@@ -108,6 +132,7 @@ class MasterService:
         profile: str,
         vocal_takes: list[dict[str, Any]],
         output_key: str,
+        guide_key: str | None = None,
     ) -> dict[str, Any]:
         if profile not in PROFILES:
             profile = "clean"
@@ -125,23 +150,60 @@ class MasterService:
             # Apply mix settings and combine
             mixed = self._mix_stems(stems, mix_settings)
 
-            # Add vocal takes if provided
-            if vocal_takes:
-                vocal_audio = self._load_vocals(tmpdir, vocal_takes)
+            # Takes the app itself sang (guides/) are summed raw; only the
+            # user's own recordings go through the vocal chain.
+            user_takes = [
+                t for t in vocal_takes if t["key"].startswith(USER_TAKE_PREFIX)
+            ]
+            raw_takes = [
+                t for t in vocal_takes if not t["key"].startswith(USER_TAKE_PREFIX)
+            ]
+            if raw_takes:
+                vocal_audio = self._load_vocals(tmpdir, raw_takes)
                 if vocal_audio:
                     mixed = self._sum([mixed, vocal_audio])
 
-            # Apply mastering chain
+            chain_s = None
+            vocal_info: dict[str, float] = {}
+            if user_takes:
+                started = time.process_time()
+                mixed, vocal_info = self._apply_vocal_chain(
+                    tmpdir, mixed, user_takes, guide_key
+                )
+                chain_s = time.process_time() - started
+
+            # Apply profile EQ and compression
             mastered = self._apply_mastering(mixed, profile_settings)
 
-            # Calculate metrics
-            peak_db = mastered.max_dBFS
-            lufs = self._calculate_lufs(mastered)
-            duration = len(mastered) / 1000.0  # Convert to seconds
+            # Real loudness and peak, measured on what gets written (48 kHz).
+            x = _to_float(mastered).T.astype(np.float32)
+            rate = mastered.frame_rate
+            if rate != OUTPUT_RATE:
+                g = math.gcd(OUTPUT_RATE, rate)
+                x = signal.resample_poly(x, OUTPUT_RATE // g, rate // g, axis=1)
+            x, lufs, peak_db = finalize_loudness(
+                np.asarray(x, dtype=np.float32),
+                OUTPUT_RATE,
+                profile_settings["target_lufs"],
+                profile_settings["limiter_threshold"],
+            )
+            duration = x.shape[1] / OUTPUT_RATE
+            mastered = _from_float(x.T, OUTPUT_RATE)
+
+            if user_takes:
+                logger.info(
+                    "vocal chain: vocal_lufs=%.1f inst_lufs=%.1f final_lufs=%.1f "
+                    "peak_db=%.2f chain_s=%.1f",
+                    vocal_info.get("vocal_lufs", float("nan")),
+                    vocal_info.get("inst_lufs", float("nan")),
+                    lufs,
+                    peak_db,
+                    chain_s,
+                )
 
             # Export and upload
             output_path = os.path.join(tmpdir, "master.wav")
-            mastered.export(output_path, format="wav", parameters=["-ar", "48000"])
+            mastered.export(output_path, format="wav")
 
             output_url = output_path
             if self.storage:
@@ -155,6 +217,101 @@ class MasterService:
                 "peak_db": peak_db,
                 "lufs": lufs,
             }
+
+    def _apply_vocal_chain(
+        self,
+        tmpdir: str,
+        mixed: AudioSegment,
+        user_takes: list[dict[str, Any]],
+        guide_key: str | None,
+    ) -> tuple[AudioSegment, dict[str, float]]:
+        """Run the user's takes through the C chain and mix them into the song."""
+        rate = vocal_chain.RATE
+        inst = _to_float(mixed.set_frame_rate(rate).set_channels(2)).T.astype(
+            np.float32
+        )
+
+        takes = []
+        for i, take in enumerate(user_takes):
+            path = os.path.join(tmpdir, f"user_take_{i}.wav")
+            self.storage.download_key_to_file(take["key"], path)
+            voc = AudioSegment.from_file(path)
+            voc = self._apply_take_gain(voc, take)
+            mono = voc.set_channels(1).set_frame_rate(rate)
+            takes.append((take, _to_float(mono)[:, 0].astype(np.float32)))
+
+        guide44, guide16, guide_env = self._load_guide(tmpdir, guide_key)
+
+        joined = np.concatenate(
+            [signal.resample_poly(x, ALIGN_RATE // 100, rate // 100) for _, x in takes]
+        ).astype(np.float32)
+        kind, ref_ltas = choose_reference(joined, guide16, guide44)
+        del joined
+
+        timeline = inst.shape[1]
+        placed = []
+        for take, x in takes:
+            start_ms = take.get("start_ms") or 0
+            end_ms = take.get("end_ms")
+            shift_ms, corr = 0, 0.0
+            if kind == "guide":
+                take16 = signal.resample_poly(x, ALIGN_RATE // 100, rate // 100)
+                shift_ms, corr = find_shift_ms(take16, guide_env, start_ms)
+            logger.info(
+                "vocal chain: take=%s start_ms=%d shift_ms=%d corr=%.2f",
+                take["key"],
+                start_ms,
+                shift_ms,
+                corr,
+            )
+            start, seg = place_take(x, rate, start_ms, end_ms, shift_ms)
+            placed.append((start, seg))
+            timeline = max(timeline, start + len(seg))
+
+        track = np.zeros(timeline, dtype=np.float32)
+        for start, seg in placed:
+            track[start : start + len(seg)] += seg
+        del placed, takes
+
+        out = vocal_chain.process_vocal(track, rate, ref_ltas)
+        curve = [float(np.interp(hz, BANDS_HZ, out.curve_db)) for hz in _LOG_BANDS_HZ]
+        logger.info(
+            "vocal chain: ref=%s curve@%s=%s",
+            kind,
+            "/".join(_LOG_BAND_NAMES),
+            "/".join(f"{c:.1f}" for c in curve),
+        )
+        mix, info = mix_vocal(out, inst, rate)
+        return _from_float(mix.T, rate), info
+
+    def _load_guide(
+        self, tmpdir: str, guide_key: str | None
+    ) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+        """Guide vocal at 44.1 kHz and 16 kHz plus its onset envelope, or Nones."""
+        if not guide_key:
+            return None, None, None
+        try:
+            path = os.path.join(tmpdir, "guide.wav")
+            self.storage.download_key_to_file(guide_key, path)
+            seg = AudioSegment.from_file(path).set_channels(1)
+            guide44 = _to_float(seg.set_frame_rate(vocal_chain.RATE))[:, 0].astype(
+                np.float32
+            )
+            guide16 = _to_float(seg.set_frame_rate(ALIGN_RATE))[:, 0].astype(np.float32)
+            return guide44, guide16, _onset_envelope(guide16, ALIGN_RATE)
+        except Exception as exc:  # noqa: BLE001 - any failure means "no guide"
+            logger.warning("vocal chain: guide %s unusable: %s", guide_key, exc)
+            return None, None, None
+
+    @staticmethod
+    def _apply_take_gain(vocal: AudioSegment, take: dict[str, Any]) -> AudioSegment:
+        volume = take.get("volume", 1.0)
+        if volume != 1.0:
+            vocal = vocal + 20 * np.log10(max(volume, 0.001))
+        gain_db = take.get("gain_db")
+        if gain_db:
+            vocal = vocal + gain_db
+        return vocal
 
     def _mix_stems(
         self, stems: list[AudioSegment], mix_settings: list[dict[str, Any]]
@@ -308,37 +465,4 @@ class MasterService:
         ratio = settings.get("compression_ratio", 2.0)
         audio = compress_dynamic_range(audio, threshold=threshold, ratio=ratio)
 
-        # Normalize to target level
-        audio = normalize(audio)
-
-        # Apply limiter (simple peak limiting via normalize)
-        limiter_threshold = settings.get("limiter_threshold", -1.0)
-        if audio.max_dBFS > limiter_threshold:
-            audio = audio - (audio.max_dBFS - limiter_threshold)
-
         return audio
-
-    def _calculate_lufs(self, audio: AudioSegment) -> float:
-        """
-        Calculate integrated LUFS (simplified).
-
-        Note: This is a simplified calculation. For accurate LUFS,
-        use a dedicated library like pyloudnorm.
-        """
-        # Get samples as numpy array
-        samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
-
-        # Normalize to -1 to 1 range
-        max_val = 2 ** (audio.sample_width * 8 - 1)
-        samples = samples / max_val
-
-        # Calculate RMS
-        rms = np.sqrt(np.mean(samples**2))
-
-        # Convert to LUFS (approximate)
-        if rms > 0:
-            lufs = 20 * np.log10(rms) - 0.691
-        else:
-            lufs = -70
-
-        return round(lufs, 1)
