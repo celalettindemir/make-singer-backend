@@ -296,7 +296,7 @@ func main() {
 
 	// Initialize services
 	lyricsService := service.NewLyricsService(lyricsSelector)
-	renderService := service.NewRenderService(jobStore, asynqClient, storage, &cfg.R2).WithCredits(creditService)
+	renderService := service.NewRenderService(jobStore, asynqClient, storage, &cfg.R2).WithCredits(creditService).WithVocalRanges(jobStore)
 	masterService := service.NewMasterService(jobStore, asynqClient, storage, &cfg.R2).WithCredits(creditService)
 	exportService := service.NewExportService(storage, audioClient, &cfg.R2)
 	uploadService := service.NewUploadService(storage, &cfg.R2)
@@ -474,6 +474,10 @@ func main() {
 	devicesHandler := handler.NewDevicesHandler(jobStore, validate)
 	api.Put("/devices", devicesLimit, devicesHandler.Put)
 	api.Delete("/devices/:token", devicesLimit, devicesHandler.Delete)
+	vocalRangeLimit := rateLimiter.Limit("ses-araligi", 30, time.Minute)
+	vocalRangeHandler := handler.NewVocalRangeHandler(jobStore, validate)
+	api.Get("/profile/vocal-range", vocalRangeLimit, vocalRangeHandler.Get)
+	api.Put("/profile/vocal-range", vocalRangeLimit, vocalRangeHandler.Put)
 
 	// Render routes
 	render := api.Group("/render")

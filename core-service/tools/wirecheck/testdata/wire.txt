@@ -38,6 +38,7 @@ ROUTE	GET /movements
 ROUTE	GET /oneriler
 ROUTE	GET /profil/ben
 ROUTE	GET /profil/kullanici-adi/uygun
+ROUTE	GET /profile/vocal-range
 ROUTE	GET /profiller/:ad
 ROUTE	GET /profiller/:ad/yayinlar
 ROUTE	GET /result/:jobId
@@ -102,6 +103,7 @@ ROUTE	POST /yayinlar/:id/yorumlar
 ROUTE	PUT /devices
 ROUTE	PUT /lyrics-provider
 ROUTE	PUT /profil/ben
+ROUTE	PUT /profile/vocal-range
 ROUTE	PUT /profiller/:ad/takip
 ROUTE	PUT /yayinlar/:id/begeni
 ROUTE	USE /api/admin
@@ -949,6 +951,8 @@ STR	"/preview"
 STR	"/profil/ben"
 STR	"/profil/ben"
 STR	"/profil/kullanici-adi/uygun"
+STR	"/profile/vocal-range"
+STR	"/profile/vocal-range"
 STR	"/profiller/:ad"
 STR	"/profiller/:ad/takip"
 STR	"/profiller/:ad/takip"
@@ -3100,6 +3104,7 @@ STR	"server.port"
 STR	"server.port"
 STR	"server.port"
 STR	"services"
+STR	"ses-araligi"
 STR	"session binding does not match the request"
 STR	"session binding not found"
 STR	"set lyrics provider"
@@ -4022,6 +4027,7 @@ TAG	json:"quality" validate:"omitempty,oneof=128 192 256 320"
 TAG	json:"quality,omitempty"
 TAG	json:"quota"
 TAG	json:"quota"
+TAG	json:"range"
 TAG	json:"range,omitempty" validate:"omitempty"
 TAG	json:"range_midi"
 TAG	json:"reasoning_effort,omitempty"

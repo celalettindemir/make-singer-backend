@@ -909,6 +909,86 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/profile/vocal-range": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the caller's stored vocal range, or null when none was saved.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Profile"
+                ],
+                "summary": "Get the stored vocal range",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handler.vocalRangeBody"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Stores the caller's vocal range, replacing any earlier one.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Profile"
+                ],
+                "summary": "Save the vocal range",
+                "parameters": [
+                    {
+                        "description": "Vocal range",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/model.VocalRangeRecord"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handler.vocalRangeBody"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/render/cancel/{jobId}": {
             "post": {
                 "security": [
@@ -1417,6 +1497,14 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "handler.vocalRangeBody": {
+            "type": "object",
+            "properties": {
+                "range": {
+                    "$ref": "#/definitions/model.VocalRangeRecord"
+                }
+            }
+        },
         "model.Arrangement": {
             "type": "object",
             "required": [
@@ -2046,6 +2134,20 @@ const docTemplate = `{
                 "LanguageFR"
             ]
         },
+        "model.LyricCue": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "type": "integer"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "syllableIndex": {
+                    "type": "integer"
+                }
+            }
+        },
         "model.LyricTimelineLine": {
             "type": "object",
             "properties": {
@@ -2171,6 +2273,19 @@ const docTemplate = `{
             "properties": {
                 "balance": {
                     "type": "integer"
+                },
+                "cues": {
+                    "description": "Cues parallels Drafts: draft, line, cue. Empty list for a line without cues.",
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.LyricCue"
+                            }
+                        }
+                    }
                 },
                 "drafts": {
                     "type": "array",
@@ -2404,6 +2519,16 @@ const docTemplate = `{
             "properties": {
                 "balance": {
                     "type": "integer"
+                },
+                "cues": {
+                    "description": "Cues parallels Lines. Empty list for a line without cues.",
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/definitions/model.LyricCue"
+                        }
+                    }
                 },
                 "lines": {
                     "type": "array",
@@ -3066,6 +3191,40 @@ const docTemplate = `{
                     "type": "integer",
                     "maximum": 96,
                     "minimum": 24
+                }
+            }
+        },
+        "model.VocalRangeRecord": {
+            "type": "object",
+            "required": [
+                "measuredAt",
+                "source"
+            ],
+            "properties": {
+                "comfortCenter": {
+                    "type": "integer",
+                    "maximum": 96,
+                    "minimum": 24
+                },
+                "high": {
+                    "type": "integer",
+                    "maximum": 96,
+                    "minimum": 24
+                },
+                "low": {
+                    "type": "integer",
+                    "maximum": 96,
+                    "minimum": 24
+                },
+                "measuredAt": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string",
+                    "enum": [
+                        "measured",
+                        "assumed"
+                    ]
                 }
             }
         },
