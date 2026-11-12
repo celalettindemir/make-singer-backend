@@ -121,17 +121,29 @@ func humTokenKind(key string, pure map[string]bool) int {
 	return kindWord
 }
 
-// humEdgeRun is how many leading filler tokens of kinds to drop: a run of two
-// or more filler-ish tokens, or a single strong one.
-func humEdgeRun(kinds []int) int {
-	k := 0
-	for k < len(kinds) && kinds[k] != kindWord {
-		k++
+// humEdgeRun is how many leading tokens to drop as filler: strong fillers
+// (hmm, ımm, nanana) and runs of the SAME word-like syllable ("na na",
+// "la la la"). Two different syllables ("ya da", "ta da") are words and stay.
+func humEdgeRun(keys []string, kinds []int) int {
+	i := 0
+	for i < len(kinds) {
+		if kinds[i] == kindStrong {
+			i++
+			continue
+		}
+		if kinds[i] != kindWordLike {
+			break
+		}
+		j := i
+		for j < len(kinds) && kinds[j] == kindWordLike && keys[j] == keys[i] {
+			j++
+		}
+		if j-i < 2 {
+			break
+		}
+		i = j
 	}
-	if k >= 2 || (k == 1 && kinds[0] == kindStrong) {
-		return k
-	}
-	return 0
+	return i
 }
 
 // splitHumSentences breaks free text at . ! ? … ; and line ends; commas stay.
@@ -167,16 +179,18 @@ func HumLines(t *client.Transcription, lang model.Language) []string {
 				continue
 			}
 			words := strings.Fields(text)
+			keys := make([]string, len(words))
 			kinds := make([]int, len(words))
 			for i, w := range words {
-				kinds[i] = humTokenKind(humWordKey(w), fillers)
+				keys[i] = humWordKey(w)
+				kinds[i] = humTokenKind(keys[i], fillers)
 			}
-			start := humEdgeRun(kinds)
-			rev := make([]int, 0, len(kinds)-start)
-			for i := len(kinds) - 1; i >= start; i-- {
-				rev = append(rev, kinds[i])
+			start := humEdgeRun(keys, kinds)
+			rk, rkinds := make([]string, 0, len(keys)), make([]int, 0, len(keys))
+			for i := len(keys) - 1; i >= start; i-- {
+				rk, rkinds = append(rk, keys[i]), append(rkinds, kinds[i])
 			}
-			end := len(words) - humEdgeRun(rev)
+			end := len(words) - humEdgeRun(rk, rkinds)
 			if start >= end {
 				continue
 			}
