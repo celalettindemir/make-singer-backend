@@ -24,7 +24,9 @@ var (
 		model.LanguageEN: {"um", "uhm", "huh"},
 		model.LanguageFR: {"euh", "heu"},
 	}
-	humSyllables = []string{"na", "la", "da", "ta", "pa", "ba", "du", "dum", "ya", "yam", "pam", "nan", "lan"}
+	// Syllables that are real words when doubled ("baba", "papa") need three
+	// repeats before they count as filler.
+	humWordSyllables = map[string]bool{"ba": true, "pa": true}
 )
 
 // humFillerSet is the filler list for lang; an unknown or empty language
@@ -32,17 +34,17 @@ var (
 func humFillerSet(lang model.Language) map[string]bool {
 	set := make(map[string]bool)
 	for _, w := range humFillersCommon {
-		set[foldTR(w)] = true
+		set[humLower(w)] = true
 	}
 	if extra, ok := humFillersByLang[lang]; ok {
 		for _, w := range extra {
-			set[foldTR(w)] = true
+			set[humLower(w)] = true
 		}
 		return set
 	}
 	for _, extra := range humFillersByLang {
 		for _, w := range extra {
-			set[foldTR(w)] = true
+			set[humLower(w)] = true
 		}
 	}
 	return set
@@ -56,7 +58,13 @@ func humWordKey(word string) string {
 			b.WriteRune(r)
 		}
 	}
-	return foldTR(b.String())
+	return humLower(b.String())
+}
+
+// humLower lowercases with Turkish dotted/dotless I rules but, unlike foldTR,
+// keeps ı distinct from i so "ım" is filler and the word "im" is not.
+func humLower(s string) string {
+	return strings.ToLower(strings.NewReplacer("I", "ı", "İ", "i").Replace(s))
 }
 
 func repeatsUnit(word, unit string) bool {
@@ -70,17 +78,21 @@ func isHumFiller(key string, fillers map[string]bool) bool {
 	if key == "" || fillers[key] {
 		return true
 	}
-	for _, syl := range humSyllables {
-		if repeatsUnit(key, syl) {
-			return true
+	for syl := range fillers {
+		if len(key) < len(syl)*2 || !repeatsUnit(key, syl) {
+			continue
 		}
+		if humWordSyllables[syl] && len(key) < len(syl)*3 {
+			continue
+		}
+		return true
 	}
 	runes := []rune(key)
 	if len(runes) >= 2 && repeatsUnit(key, string(runes[0])) {
 		return true
 	}
-	// hmm, ımm (folded to imm), mm
-	rest := strings.TrimLeft(key, "hi")
+	// hmm, ımm, mm (not "im")
+	rest := strings.TrimLeft(key, "hı")
 	if len(key)-len(rest) <= 1 && rest != "" && strings.Trim(rest, "m") == "" {
 		return true
 	}

@@ -33,6 +33,13 @@ func TestHumLines(t *testing.T) {
 		{"ortadaki da kalır", "sen de gel o da gelsin", nil, "tr", []string{"sen de gel o da gelsin"}},
 		{"segmentler metne üstün", "yok sayılır", []string{" Oy şeftaşım ", "Sarı sarı"}, "tr", []string{"Oy şeftaşım", "Sarı sarı"}},
 		{"boş", "", nil, "tr", nil},
+		{"baba kalır", "baba seni sevdim", nil, "tr", []string{"baba seni sevdim"}},
+		{"papa kalır", "papa seni sevdim", nil, "tr", []string{"papa seni sevdim"}},
+		{"dede kalır", "dede seni sevdim", nil, "tr", []string{"dede seni sevdim"}},
+		{"im kelimesi kalır", "im seni sevdim", nil, "tr", []string{"im seni sevdim"}},
+		{"ımm atılır", "ımm seni sevdim", nil, "tr", []string{"seni sevdim"}},
+		{"nanana atılır", "nanana seni sevdim", nil, "tr", []string{"seni sevdim"}},
+		{"lalala atılır", "lalala seni sevdim", nil, "tr", []string{"seni sevdim"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
