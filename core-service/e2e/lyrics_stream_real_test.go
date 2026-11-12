@@ -48,7 +48,8 @@ func TestRealLyricsStream_PerProvider(t *testing.T) {
 			start := time.Now()
 			var first time.Duration
 			var lines []string
-			n, err := svc.GenerateStream(ctx, &req, func(line string) error {
+			n, err := svc.GenerateStream(ctx, &req, func(l model.LyricLine) error {
+				line := l.Text
 				if first == 0 {
 					first = time.Since(start)
 				}

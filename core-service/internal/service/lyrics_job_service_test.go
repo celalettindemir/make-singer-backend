@@ -30,10 +30,10 @@ func (g *jobGen) Rewrite(context.Context, *model.LyricsRewriteRequest) (*model.L
 	return nil, errors.New("unused")
 }
 func (g *jobGen) IsMock() bool { return g.mock }
-func (g *jobGen) GenerateStream(context.Context, *model.LyricsGenerateRequest, func(string) error) (int, error) {
+func (g *jobGen) GenerateStream(context.Context, *model.LyricsGenerateRequest, func(model.LyricLine) error) (int, error) {
 	return 0, errors.New("unused")
 }
-func (g *jobGen) RewriteStream(context.Context, *model.LyricsRewriteRequest, func(string) error) (int, error) {
+func (g *jobGen) RewriteStream(context.Context, *model.LyricsRewriteRequest, func(model.LyricLine) error) (int, error) {
 	return 0, errors.New("unused")
 }
 
@@ -539,5 +539,32 @@ func TestLyricsJob_FinishKeepsAWorkerCommitAndDoesNotRefundThatSection(t *testin
 	}
 	if len(e.spender.ActionRefunds) != 0 {
 		t.Errorf("refunds = %+v, want none (both sections done)", e.spender.ActionRefunds)
+	}
+}
+
+func TestLyricsJobService_RetryResetsCues(t *testing.T) {
+	e := newLyricsJobEnv(t, true)
+	resp, err := e.svc.Start(context.Background(), lyricsUser, lyricsAction, lyricsJobRequest("rewrite", 0, 1))
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	id := resp.JobID
+	setResult(t, e.repo, id, model.JobStatusSucceeded, sec(0, "done", "a"), sec(1, "failed"))
+	_ = e.repo.Update(context.Background(), id, func(j *model.Job) error {
+		res, _ := model.ParseLyricsJobResult(j.Result)
+		res.Sections[1].Lines = []string{"half"}
+		res.Sections[1].Cues = [][]model.LyricCue{{{SyllableIndex: 0, Kind: model.CueHold, At: 1}}}
+		j.Result, _ = json.Marshal(res)
+		now := time.Now().Add(-time.Hour)
+		j.CompletedAt = &now
+		return nil
+	})
+	if err := e.svc.Retry(context.Background(), lyricsUser, id); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	job, _ := jobInput(t, e.repo, id)
+	res, _ := model.ParseLyricsJobResult(job.Result)
+	if len(res.Sections[1].Lines) != 0 || len(res.Sections[1].Cues) != 0 {
+		t.Errorf("section 1 = %+v, want lines and cues reset", res.Sections[1])
 	}
 }

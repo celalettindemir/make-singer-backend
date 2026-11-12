@@ -48,7 +48,7 @@ func (h *LyricsHandler) GenerateStream(c *fiber.Ctx) error {
 	if act == nil {
 		return err
 	}
-	return h.stream(c, "generate", act, func(ctx context.Context, onLine func(string) error) (int, error) {
+	return h.stream(c, "generate", act, func(ctx context.Context, onLine func(model.LyricLine) error) (int, error) {
 		return h.service.GenerateStream(ctx, &req, onLine)
 	})
 }
@@ -83,7 +83,7 @@ func (h *LyricsHandler) RewriteStream(c *fiber.Ctx) error {
 	if act == nil {
 		return err
 	}
-	return h.stream(c, "rewrite", act, func(ctx context.Context, onLine func(string) error) (int, error) {
+	return h.stream(c, "rewrite", act, func(ctx context.Context, onLine func(model.LyricLine) error) (int, error) {
 		return h.service.RewriteStream(ctx, &req, onLine)
 	})
 }
@@ -95,7 +95,7 @@ type streamResult struct {
 
 // stream answers with an SSE body. Everything the writer needs is copied
 // from c first: fasthttp runs the writer after the handler returned.
-func (h *LyricsHandler) stream(c *fiber.Ctx, op string, act *lyricsAction, run func(ctx context.Context, onLine func(string) error) (int, error)) error {
+func (h *LyricsHandler) stream(c *fiber.Ctx, op string, act *lyricsAction, run func(ctx context.Context, onLine func(model.LyricLine) error) (int, error)) error {
 	heartbeat := h.heartbeat
 	if heartbeat <= 0 {
 		heartbeat = defaultHeartbeat
@@ -143,7 +143,7 @@ func (h *LyricsHandler) stream(c *fiber.Ctx, op string, act *lyricsAction, run f
 			return
 		}
 
-		lines := make(chan string)
+		lines := make(chan model.LyricLine)
 		done := make(chan streamResult, 1)
 		go func() {
 			var res streamResult
@@ -154,7 +154,7 @@ func (h *LyricsHandler) stream(c *fiber.Ctx, op string, act *lyricsAction, run f
 				}
 				done <- res
 			}()
-			n, err := run(ctx, func(l string) error {
+			n, err := run(ctx, func(l model.LyricLine) error {
 				select {
 				case lines <- l:
 					return nil
@@ -170,7 +170,7 @@ func (h *LyricsHandler) stream(c *fiber.Ctx, op string, act *lyricsAction, run f
 		for {
 			select {
 			case l := <-lines:
-				if !event("line", map[string]string{"text": l}) {
+				if !event("line", l) {
 					gone()
 					return
 				}

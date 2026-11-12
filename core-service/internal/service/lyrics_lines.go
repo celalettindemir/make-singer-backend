@@ -4,6 +4,8 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+
+	"github.com/makeasinger/api/internal/model"
 )
 
 // maxStreamLines is how many lyric lines one stream may emit.
@@ -26,13 +28,14 @@ var (
 
 // lineSplitter turns arbitrary text chunks into whole cleaned lyric lines.
 type lineSplitter struct {
-	emit  func(line string) error
+	lang  model.Language
+	emit  func(line model.LyricLine) error
 	buf   strings.Builder
 	count int
 }
 
-func newLineSplitter(emit func(line string) error) *lineSplitter {
-	return &lineSplitter{emit: emit}
+func newLineSplitter(lang model.Language, emit func(line model.LyricLine) error) *lineSplitter {
+	return &lineSplitter{lang: lang, emit: emit}
 }
 
 // Write buffers chunk and emits every complete line. After the maxStreamLines-th
@@ -75,7 +78,11 @@ func (s *lineSplitter) line(raw string) error {
 	if !ok {
 		return nil
 	}
-	if err := s.emit(text); err != nil {
+	line, ok := parseCueLine(text, s.lang)
+	if !ok {
+		return nil
+	}
+	if err := s.emit(line); err != nil {
 		return err
 	}
 	s.count++

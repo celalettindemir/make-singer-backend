@@ -6,18 +6,20 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/makeasinger/api/internal/model"
 )
 
-func collect(lines *[]string) func(string) error {
-	return func(l string) error {
-		*lines = append(*lines, l)
+func collect(lines *[]string) func(model.LyricLine) error {
+	return func(l model.LyricLine) error {
+		*lines = append(*lines, l.Text)
 		return nil
 	}
 }
 
 func TestLineSplitter_JoinsChunks(t *testing.T) {
 	var got []string
-	s := newLineSplitter(collect(&got))
+	s := newLineSplitter(model.LanguageTR, collect(&got))
 	for _, c := range []string{"Gece boy", "unca\nŞehir ışık", "ları\n"} {
 		if err := s.Write(c); err != nil {
 			t.Fatal(err)
@@ -31,7 +33,7 @@ func TestLineSplitter_JoinsChunks(t *testing.T) {
 
 func TestLineSplitter_CloseEmitsTail(t *testing.T) {
 	var got []string
-	s := newLineSplitter(collect(&got))
+	s := newLineSplitter(model.LanguageTR, collect(&got))
 	if err := s.Write("a\nb"); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +47,7 @@ func TestLineSplitter_CloseEmitsTail(t *testing.T) {
 
 func TestLineSplitter_StopsAt16(t *testing.T) {
 	var got []string
-	s := newLineSplitter(collect(&got))
+	s := newLineSplitter(model.LanguageTR, collect(&got))
 	err := s.Write(strings.Repeat("x\n", 20))
 	if !errors.Is(err, errLineLimit) {
 		t.Fatalf("err = %v, want errLineLimit", err)
@@ -59,7 +61,7 @@ func TestLineSplitter_StopsAt16(t *testing.T) {
 }
 
 func TestLineSplitter_PropagatesEmitError(t *testing.T) {
-	s := newLineSplitter(func(string) error { return io.ErrClosedPipe })
+	s := newLineSplitter(model.LanguageTR, func(model.LyricLine) error { return io.ErrClosedPipe })
 	if err := s.Write("a\n"); err != io.ErrClosedPipe {
 		t.Fatalf("err = %v", err)
 	}
@@ -100,5 +102,16 @@ func TestCleanLine(t *testing.T) {
 		if got != c.want || ok != c.ok {
 			t.Errorf("cleanLine(%q) = %q, %v; want %q, %v", c.in, got, ok, c.want, c.ok)
 		}
+	}
+}
+
+func TestLineSplitter_MarkOnlyLineNotCounted(t *testing.T) {
+	var got []model.LyricLine
+	s := newLineSplitter(model.LanguageTR, func(l model.LyricLine) error { got = append(got, l); return nil })
+	if err := s.Write("Gece boyunca şehir ışıkları~\n|\nSen yanımdayken\n"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Count() != 2 || len(got) != 2 || got[0].Text != "Gece boyunca şehir ışıkları" || len(got[0].Cues) != 1 {
+		t.Fatal(got)
 	}
 }

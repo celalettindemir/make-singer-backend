@@ -33,6 +33,16 @@ var languageGuidance = map[model.Language]string{
 	model.LanguageFR: `Écris un français naturel et chantable. Évite les tournures traduites de l'anglais et les rimes forcées.`,
 }
 
+// singabilityGuidance is the beginner-singer brief per language (spec 9 §3.3).
+var singabilityGuidance = map[model.Language]string{
+	model.LanguageTR: `Write for a beginner singer: short syllables, lines short enough to sing in one breath, a chorus that is easy to repeat. End held lines on open vowels a singer can stretch (a, e, ı, i). Put the highest, most emotional moment in the chorus.`,
+	model.LanguageEN: `Write for a beginner singer: short syllables, lines short enough to sing in one breath, a chorus that is easy to repeat. End held lines on open vowels a singer can stretch (ah, oh, ay, ee). Put the highest, most emotional moment in the chorus.`,
+	model.LanguageFR: `Écris pour un chanteur débutant : syllabes courtes, vers assez courts pour un seul souffle, refrain facile à reprendre. Termine les vers tenus sur des voyelles ouvertes (a, é, o, ou). Place le moment le plus haut et le plus fort dans le refrain.`,
+}
+
+// cueMarkRule teaches the model the three singing marks; parseCueLine strips them.
+const cueMarkRule = `Singing marks (the app removes them and shows them to the singer as hints): put "~" right after a word whose last syllable is held long (at most one per line, on an open vowel); put "^" right before the word where the melody should rise (once or twice per section, at the emotional peak, usually in the chorus); put " | " between two words where the singer breathes inside a long line (a line end is already a breath). Never use these three characters anywhere else.`
+
 func langName(language model.Language) string {
 	switch language {
 	case model.LanguageTR:
@@ -67,7 +77,9 @@ Craft rules:
 - If a line could be in any song, replace it.
 Before answering, draft the section, sing it in your head against the meter, and fix every line that stumbles or breaks the rhyme. Give only the final version.
 %s
-%s`, langName(language), languageGuidance[language], outputRule)
+%s
+%s
+%s`, langName(language), languageGuidance[language], singabilityGuidance[language], cueMarkRule, outputRule)
 }
 
 func buildGeneratePrompt(req *model.LyricsGenerateRequest, language model.Language) string {
@@ -75,7 +87,7 @@ func buildGeneratePrompt(req *model.LyricsGenerateRequest, language model.Langua
 	var b strings.Builder
 	writeGenerateBody(&b, req, language, "Create 2 different draft versions. Each draft should have "+lineRange(minLines, maxLines)+" that fit the section type.")
 	fmt.Fprintf(&b, `
-Output a single JSON object with exactly one key, "drafts". Its value is an array of exactly 2 drafts; each draft is an array of %d-%d plain strings (one string per lyric line). Use only plain strings: no nested objects, no extra keys, no line numbers. Escape any double quote inside a line as \" or avoid it.
+Output a single JSON object with exactly one key, "drafts". Its value is an array of exactly 2 drafts; each draft is an array of %d-%d plain strings (one string per lyric line). Use only plain strings: no nested objects, no extra keys, no line numbers. Lines may carry the singing marks from the system prompt. Escape any double quote inside a line as \" or avoid it.
 Example shape: {"drafts": [["line1","line2","line3","line4"], ["line1","line2","line3","line4"]]}`, minLines, maxLines)
 	return b.String()
 }
@@ -112,7 +124,7 @@ func buildRewritePrompt(req *model.LyricsRewriteRequest, language model.Language
 	writeRewriteBody(&b, req, language)
 	b.WriteString(`
 
-Output as JSON: {"lines": ["line1","line2","line3","line4"]}`)
+Output as JSON: {"lines": ["line1","line2","line3","line4"]}. Lines may carry the singing marks from the system prompt.`)
 	return b.String()
 }
 

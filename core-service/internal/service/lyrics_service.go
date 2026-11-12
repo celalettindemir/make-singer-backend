@@ -23,9 +23,9 @@ type LyricsGenerator interface {
 	// GenerateStream writes one draft line by line to onLine and returns how
 	// many lines it emitted. An onLine error stops the provider call and is
 	// returned.
-	GenerateStream(ctx context.Context, req *model.LyricsGenerateRequest, onLine func(string) error) (int, error)
+	GenerateStream(ctx context.Context, req *model.LyricsGenerateRequest, onLine func(model.LyricLine) error) (int, error)
 	// RewriteStream is GenerateStream for a rewrite.
-	RewriteStream(ctx context.Context, req *model.LyricsRewriteRequest, onLine func(string) error) (int, error)
+	RewriteStream(ctx context.Context, req *model.LyricsRewriteRequest, onLine func(model.LyricLine) error) (int, error)
 }
 
 // streamTimeout is the deadline of one provider stream.
@@ -78,9 +78,7 @@ func (s *LyricsService) Generate(ctx context.Context, req *model.LyricsGenerateR
 		return nil, fmt.Errorf("failed to parse AI response (%s): %w", name, err)
 	}
 
-	return &model.LyricsGenerateResponse{
-		Drafts: drafts,
-	}, nil
+	return splitDrafts(drafts, language), nil
 }
 
 // Rewrite rewrites existing lyrics based on the given parameters
@@ -106,14 +104,42 @@ func (s *LyricsService) Rewrite(ctx context.Context, req *model.LyricsRewriteReq
 		return nil, fmt.Errorf("failed to parse AI response (%s): %w", name, err)
 	}
 
-	return &model.LyricsRewriteResponse{
-		Lines: lines,
-	}, nil
+	return splitRewrite(lines, language), nil
+}
+
+// splitCues strips the singing marks from raw model lines. Lines with no text
+// left are dropped; Lines and Cues stay the same length.
+func splitCues(raw []string, language model.Language) ([]string, [][]model.LyricCue) {
+	lines, cues := []string{}, [][]model.LyricCue{}
+	for _, r := range raw {
+		l, ok := parseCueLine(r, language)
+		if !ok {
+			continue
+		}
+		lines = append(lines, l.Text)
+		cues = append(cues, l.Cues)
+	}
+	return lines, cues
+}
+
+func splitDrafts(raw [][]string, language model.Language) *model.LyricsGenerateResponse {
+	res := &model.LyricsGenerateResponse{Drafts: make([][]string, 0, len(raw)), Cues: make([][][]model.LyricCue, 0, len(raw))}
+	for _, d := range raw {
+		lines, cues := splitCues(d, language)
+		res.Drafts = append(res.Drafts, lines)
+		res.Cues = append(res.Cues, cues)
+	}
+	return res
+}
+
+func splitRewrite(raw []string, language model.Language) *model.LyricsRewriteResponse {
+	lines, cues := splitCues(raw, language)
+	return &model.LyricsRewriteResponse{Lines: lines, Cues: cues}
 }
 
 // GenerateStream streams one draft. Without a provider it streams the first
 // mock draft.
-func (s *LyricsService) GenerateStream(ctx context.Context, req *model.LyricsGenerateRequest, onLine func(string) error) (int, error) {
+func (s *LyricsService) GenerateStream(ctx context.Context, req *model.LyricsGenerateRequest, onLine func(model.LyricLine) error) (int, error) {
 	language := req.Language
 	if language == "" {
 		language = model.LanguageEN
@@ -121,14 +147,14 @@ func (s *LyricsService) GenerateStream(ctx context.Context, req *model.LyricsGen
 	name, c := s.source.Active(ctx)
 	if c == nil || !c.IsConfigured() {
 		mock, _ := s.generateMock(req)
-		return s.streamMock(ctx, mock.Drafts[0], onLine)
+		return s.streamMock(ctx, mockLines(mock.Drafts[0], mock.Cues[0]), onLine)
 	}
 	temperature, _ := c.Temperatures()
-	return streamChat(ctx, name, c, buildStreamSystemPrompt(language), buildStreamGeneratePrompt(req, language), temperature, onLine)
+	return streamChat(ctx, name, c, buildStreamSystemPrompt(language), buildStreamGeneratePrompt(req, language), temperature, language, onLine)
 }
 
 // RewriteStream streams the rewritten lines.
-func (s *LyricsService) RewriteStream(ctx context.Context, req *model.LyricsRewriteRequest, onLine func(string) error) (int, error) {
+func (s *LyricsService) RewriteStream(ctx context.Context, req *model.LyricsRewriteRequest, onLine func(model.LyricLine) error) (int, error) {
 	language := req.Language
 	if language == "" {
 		language = model.LanguageEN
@@ -136,18 +162,18 @@ func (s *LyricsService) RewriteStream(ctx context.Context, req *model.LyricsRewr
 	name, c := s.source.Active(ctx)
 	if c == nil || !c.IsConfigured() {
 		mock, _ := s.rewriteMock(req)
-		return s.streamMock(ctx, mock.Lines, onLine)
+		return s.streamMock(ctx, mockLines(mock.Lines, mock.Cues), onLine)
 	}
 	_, temperature := c.Temperatures()
-	return streamChat(ctx, name, c, buildStreamSystemPrompt(language), buildStreamRewritePrompt(req, language), temperature, onLine)
+	return streamChat(ctx, name, c, buildStreamSystemPrompt(language), buildStreamRewritePrompt(req, language), temperature, language, onLine)
 }
 
 // streamChat runs one provider stream under streamTimeout and returns the
 // number of lines emitted. Hitting the line limit is a normal end.
-func streamChat(ctx context.Context, name lyricsprovider.Name, c client.ChatClient, system, user string, temperature float64, onLine func(string) error) (int, error) {
+func streamChat(ctx context.Context, name lyricsprovider.Name, c client.ChatClient, system, user string, temperature float64, language model.Language, onLine func(model.LyricLine) error) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, streamTimeout)
 	defer cancel()
-	split := newLineSplitter(onLine)
+	split := newLineSplitter(language, onLine)
 	err := c.ChatStream(ctx, system, user, temperature, split.Write)
 	if err == nil {
 		err = split.Close()
@@ -161,7 +187,7 @@ func streamChat(ctx context.Context, name lyricsprovider.Name, c client.ChatClie
 	return split.Count(), nil
 }
 
-func (s *LyricsService) streamMock(ctx context.Context, lines []string, onLine func(string) error) (int, error) {
+func (s *LyricsService) streamMock(ctx context.Context, lines []model.LyricLine, onLine func(model.LyricLine) error) (int, error) {
 	for i, l := range lines {
 		select {
 		case <-ctx.Done():
@@ -224,13 +250,29 @@ func extractJSON(s string) string {
 	return s
 }
 
-// Mock implementations for development/testing
+func mockLines(lines []string, cues [][]model.LyricCue) []model.LyricLine {
+	out := make([]model.LyricLine, len(lines))
+	for i, l := range lines {
+		out[i] = model.LyricLine{Text: l, Cues: cues[i]}
+	}
+	return out
+}
+
+func mockLanguage(l model.Language) model.Language {
+	if l == "" {
+		return model.LanguageEN
+	}
+	return l
+}
+
+// Mock implementations for development/testing. The raw lines carry singing
+// marks so the preview shows cues.
 func (s *LyricsService) generateMock(req *model.LyricsGenerateRequest) (*model.LyricsGenerateResponse, error) {
 	drafts := [][]string{
 		{
 			"Walking through the city lights",
-			"Feeling like we own the night",
-			"Nothing's gonna bring us down",
+			"Feeling like we own the night~",
+			"^Nothing's gonna bring us down",
 			"We're the kings without a crown",
 		},
 		{
@@ -241,20 +283,16 @@ func (s *LyricsService) generateMock(req *model.LyricsGenerateRequest) (*model.L
 		},
 	}
 
-	return &model.LyricsGenerateResponse{
-		Drafts: drafts,
-	}, nil
+	return splitDrafts(drafts, mockLanguage(req.Language)), nil
 }
 
 func (s *LyricsService) rewriteMock(req *model.LyricsRewriteRequest) (*model.LyricsRewriteResponse, error) {
 	lines := []string{
 		"Wandering through the silent night",
-		"Memories fading from my sight",
+		"Memories fading | from my sight~",
 		"Tears falling like the rain",
 		"Searching for what will remain",
 	}
 
-	return &model.LyricsRewriteResponse{
-		Lines: lines,
-	}, nil
+	return splitRewrite(lines, mockLanguage(req.Language)), nil
 }

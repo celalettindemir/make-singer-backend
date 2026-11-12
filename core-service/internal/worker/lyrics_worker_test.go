@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +27,8 @@ const (
 // blocking step waits for the context instead.
 type step struct {
 	lines []string
+	// cued lines are emitted after lines, with their cues.
+	cued  []model.LyricLine
 	err   error
 	block bool
 }
@@ -48,14 +52,19 @@ func (f *lyricsFake) next() step {
 	return f.steps[i]
 }
 
-func (f *lyricsFake) run(ctx context.Context, onLine func(string) error) (int, error) {
+func (f *lyricsFake) run(ctx context.Context, onLine func(model.LyricLine) error) (int, error) {
 	st := f.next()
 	if st.block {
 		<-ctx.Done()
 		return 0, ctx.Err()
 	}
 	n := 0
+	all := make([]model.LyricLine, 0, len(st.lines)+len(st.cued))
 	for _, l := range st.lines {
+		all = append(all, model.LyricLine{Text: l, Cues: []model.LyricCue{}})
+	}
+	all = append(all, st.cued...)
+	for _, l := range all {
 		if err := onLine(l); err != nil {
 			return n, err
 		}
@@ -71,13 +80,13 @@ func (f *lyricsFake) Rewrite(context.Context, *model.LyricsRewriteRequest) (*mod
 	return nil, errors.New("unused")
 }
 func (f *lyricsFake) IsMock() bool { return false }
-func (f *lyricsFake) GenerateStream(ctx context.Context, r *model.LyricsGenerateRequest, onLine func(string) error) (int, error) {
+func (f *lyricsFake) GenerateStream(ctx context.Context, r *model.LyricsGenerateRequest, onLine func(model.LyricLine) error) (int, error) {
 	f.mu.Lock()
 	f.genReqs = append(f.genReqs, r)
 	f.mu.Unlock()
 	return f.run(ctx, onLine)
 }
-func (f *lyricsFake) RewriteStream(ctx context.Context, r *model.LyricsRewriteRequest, onLine func(string) error) (int, error) {
+func (f *lyricsFake) RewriteStream(ctx context.Context, r *model.LyricsRewriteRequest, onLine func(model.LyricLine) error) (int, error) {
 	f.mu.Lock()
 	f.rewReqs = append(f.rewReqs, r)
 	f.mu.Unlock()
@@ -361,5 +370,39 @@ func TestLyricsWorker_UnreadableInputEndsTheJobWithoutRetry(t *testing.T) {
 	}
 	if job, _ := e.job(t); job.Status != model.JobStatusFailed {
 		t.Errorf("status = %s, want failed", job.Status)
+	}
+}
+
+func TestLyricsWorker_StoresCuesWithLines(t *testing.T) {
+	hold := []model.LyricCue{{SyllableIndex: 10, Kind: model.CueHold, At: 26}}
+	e := newLyricsEnv(t, "generate", []int{0}, nil, nil, step{cued: []model.LyricLine{
+		{Text: "Gece boyunca şehir ışıkları", Cues: hold},
+		{Text: "Sen yanımdayken", Cues: []model.LyricCue{}},
+	}})
+	if err := e.process(t); err != nil {
+		t.Fatalf("ProcessTask: %v", err)
+	}
+	_, res := e.job(t)
+	sr := res.Sections[0]
+	if len(sr.Lines) != 2 || len(sr.Cues) != 2 || !reflect.DeepEqual(sr.Cues[0], hold) || len(sr.Cues[1]) != 0 {
+		t.Fatalf("section = %+v", sr)
+	}
+	evs, _ := e.repo.EventsAfter(context.Background(), lyricsOwner, lyricsJobID, 0, 1000)
+	var lineData []string
+	for _, ev := range evs {
+		if ev.Kind == jobs.KindLine {
+			lineData = append(lineData, string(ev.Data))
+		}
+	}
+	if len(lineData) != 2 || !strings.Contains(lineData[0], `"cues":[{"syllableIndex":10,"kind":"hold","at":26}]`) || !strings.Contains(lineData[1], `"cues":[]`) {
+		t.Errorf("line events = %v", lineData)
+	}
+}
+
+func TestLyricsWorker_PadsMissingCuesBeforeAppend(t *testing.T) {
+	sr := model.LyricsJobSectionResult{Lines: []string{"eski satır"}} // written before cues existed
+	sr.AppendLine(model.LyricLine{Text: "yeni", Cues: []model.LyricCue{{SyllableIndex: 1, Kind: model.CueHold, At: 3}}})
+	if len(sr.Lines) != 2 || len(sr.Cues) != 2 || len(sr.Cues[0]) != 0 || sr.Cues[1][0].Kind != model.CueHold {
+		t.Fatal(sr.Cues)
 	}
 }
