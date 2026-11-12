@@ -32,6 +32,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install ffmpeg
+        # Hum tests (tests/test_hum.py) decode and encode with the same
+        # ffmpeg/ffprobe the Docker image ships.
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
