@@ -273,3 +273,21 @@ def test_finalize_girisi_degistirmez():
     kopya = x.copy()
     vocal_chain.finalize_loudness(x, 48000, -10, -0.3)
     assert np.array_equal(x, kopya)
+
+
+@pytest.mark.parametrize("denge", [-3.0, 3.0])
+def test_denge_vokali_dengesi_kadar_one_alir(denge):
+    voc, inst = make_voc(), make_inst()
+    out = process_vocal(voc, RATE, ltas_db(voc, RATE))
+    _, info = mix_vocal(out, inst, RATE, balance_db=denge)
+    act = active_mask(out.dry, RATE)
+    v = out.stereo * 10 ** (info["vocal_gain_db"] / 20)
+    assert abs(lufs(v[:, act]) - lufs(inst[:, act]) - (2.0 + denge)) <= 0.3
+
+
+def test_denge_sifirken_eski_sonuc():
+    voc, inst = make_voc(), make_inst()
+    out = process_vocal(voc, RATE, ltas_db(voc, RATE))
+    a, _ = mix_vocal(out, inst.copy(), RATE)
+    b, _ = mix_vocal(out, inst.copy(), RATE, balance_db=0.0)
+    assert np.array_equal(a, b)
