@@ -50,3 +50,23 @@ func TestBuildMusicStyle_VocalHasNoInstrumentalWord(t *testing.T) {
 		t.Errorf("vocal style = %q, want %q", got, "rock, x")
 	}
 }
+
+func TestBuildMusicStyle_HumDropsBPMAndKey(t *testing.T) {
+	v, tonic, scale := 120, model.Tonic("C"), model.Scale("major")
+	p := &model.RenderJobPayload{Brief: model.Brief{
+		Genre: "pop", Vibes: []string{"dreamy"},
+		BPM: model.BPMConfig{Mode: model.BPMModeFixed, Value: &v},
+		Key: model.KeyConfig{Tonic: &tonic, Scale: &scale},
+	}, Arrangement: model.Arrangement{Instruments: []model.Instrument{model.InstrumentPiano}}}
+	if got := buildMusicStyle(p); !strings.Contains(got, "120 BPM") || !strings.Contains(got, "C major") {
+		t.Fatalf("control style %q must have BPM and key", got)
+	}
+	p.Hum = &model.HumJob{Key: "hums/u/p/h.mp3", Fidelity: model.HumFree}
+	got := buildMusicStyle(p)
+	if strings.Contains(got, "BPM") || strings.Contains(got, "C major") {
+		t.Errorf("hum style %q still has BPM or key", got)
+	}
+	if !strings.Contains(got, "dreamy") || !strings.Contains(got, "featuring piano") {
+		t.Errorf("hum style %q lost other parts", got)
+	}
+}

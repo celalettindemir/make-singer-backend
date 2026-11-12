@@ -21,11 +21,15 @@ func buildMusicStyle(p *model.RenderJobPayload) string {
 		parts = append(parts, "instrumental")
 	}
 
-	if v := p.Brief.BPM.Value; v != nil {
-		parts = append(parts, fmt.Sprintf("%d BPM", *v))
-	}
-	if k := p.Brief.Key; k.Tonic != nil && k.Scale != nil {
-		parts = append(parts, fmt.Sprintf("%s %s", *k.Tonic, *k.Scale))
+	// A hum cover takes tempo and key from the melody; naming them would
+	// fight it.
+	if p.Hum == nil {
+		if v := p.Brief.BPM.Value; v != nil {
+			parts = append(parts, fmt.Sprintf("%d BPM", *v))
+		}
+		if k := p.Brief.Key; k.Tonic != nil && k.Scale != nil {
+			parts = append(parts, fmt.Sprintf("%s %s", *k.Tonic, *k.Scale))
+		}
 	}
 	for _, v := range p.Brief.Vibes {
 		if v = strings.TrimSpace(v); v != "" {

@@ -114,6 +114,15 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 	exportService := service.NewExportService(nil, nil, &config.R2Config{})
 	uploadService := service.NewUploadService(nil, &config.R2Config{})
 
+	// Hum upload (the paid hum e2e needs R2 and an audio-service; without
+	// them the service answers 503 and that test skips itself).
+	var humPreparer client.HumPreparer
+	if audioClient := client.NewAudioClient(&cfg.Audio); audioClient.IsConfigured() {
+		humPreparer = audioClient
+	}
+	humService := service.NewHumService(r2Client, &cfg.R2, humPreparer, client.NewOpenAITranscriber(&cfg.OpenAI, &cfg.Hum), cfg.Hum.TranscribeTimeout)
+	humHandler := handler.NewHumHandler(humService)
+
 	// Handlers
 	lyricsHandler := handler.NewLyricsHandler(lyricsService, validate)
 	renderHandler := handler.NewRenderHandler(renderService, validate)
@@ -161,6 +170,8 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 	upload := api.Group("/upload", rateLimiter.UploadLimit(10000))
 	upload.Post("/vocal", uploadHandler.Vocal)
 	upload.Delete("/vocal/:takeId", uploadHandler.DeleteVocal)
+	api.Post("/hum", humHandler.Upload)
+	api.Delete("/hum/:humId", humHandler.Delete)
 
 	// Start Asynq worker server (non-blocking)
 	asynqSrv := asynq.NewServer(
@@ -178,6 +189,12 @@ func setupRealApp(t *testing.T) (*fiber.App, func()) {
 
 	// e2e never deletes accounts; no deleted-mark check is needed.
 	renderWorker := worker.NewRenderWorker(renderService, sunoClient, r2Client, hub, nil)
+	renderWorker.WithCoverWeights(worker.CoverWeights{
+		AudioFaithful: cfg.Hum.AudioWeightFaithful,
+		AudioFree:     cfg.Hum.AudioWeightFree,
+		StyleFaithful: cfg.Hum.StyleWeightFaithful,
+		StyleFree:     cfg.Hum.StyleWeightFree,
+	})
 	// Guided renders need an audio-service on the same R2 bucket.
 	if audioClient := client.NewAudioClient(&cfg.Audio); audioClient.IsConfigured() {
 		renderWorker.WithGuideAudio(audioClient)

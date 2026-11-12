@@ -66,6 +66,7 @@ type RenderWorker struct {
 	deletionChecker deletionmark.Checker // nil: no check
 	credits         credit.Spender       // nil: no credit accounting
 	guideAudio      client.GuideAudio    // nil: vocal renders skip the analysis
+	coverWeights    CoverWeights         // hum cover weights
 	isLastAttempt   func(context.Context) bool
 
 	// afterStatusCheck is a test seam called after the attempt-start status
@@ -237,6 +238,15 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 		return nil, fmt.Errorf("vocal render unavailable, Suno was not called: %w: %w", err, asynq.SkipRetry)
 	}
 	vocal := vocalSep != nil
+	// BEFORE the paid call: a hum render needs the cover call, a vocal and a
+	// signed URL of the hum.
+	var cover client.CoverGenerator
+	var humURL string
+	if payload.Hum != nil {
+		if cover, humURL, err = w.coverPlan(ctx, payload, vocal); err != nil {
+			return nil, err
+		}
+	}
 	analyze := w.analyzeVocal(payload)
 	if vocal && payload.GuideAnalysis && !analyze {
 		log.Printf("Render: vocal analysis requested but audio-service is not configured; skipping it")
@@ -268,7 +278,11 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 		req.VocalGender = payload.Vocal.Voice.SunoGender()
 	}
 
-	progress(10, "Generating music...")
+	if cover != nil {
+		progress(10, "Building the song from the hum...")
+	} else {
+		progress(10, "Generating music...")
+	}
 	// The last check before the paid call. It is atomic against a cancel:
 	// after it returns true, a cancel counts as a running-cancel.
 	claimed, err := claim()
@@ -278,7 +292,21 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 	if !claimed {
 		return nil, errJobCanceled
 	}
-	taskID, err := w.music.GenerateMusic(ctx, req)
+	var taskID string
+	if cover != nil {
+		audioW, styleW := w.coverWeights.For(payload.Hum.Fidelity)
+		taskID, err = cover.UploadCover(ctx, &client.UploadCoverRequest{
+			UploadURL:   humURL,
+			Style:       req.Style,
+			Title:       req.Title,
+			Lyrics:      req.Lyrics,
+			VocalGender: req.VocalGender,
+			AudioWeight: audioW,
+			StyleWeight: styleW,
+		})
+	} else {
+		taskID, err = w.music.GenerateMusic(ctx, req)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("music generation failed: %w", err)
 	}

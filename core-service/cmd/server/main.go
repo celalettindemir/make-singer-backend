@@ -656,6 +656,12 @@ func startWorkerServer(
 	// and before every R2 write.
 	deletionChecker := deletionmark.NewRedisChecker(redisClient)
 	renderWorker := worker.NewRenderWorker(renderService, sunoClient, storage, hub, deletionChecker).WithCredits(creditSpender)
+	renderWorker.WithCoverWeights(worker.CoverWeights{
+		AudioFaithful: cfg.Hum.AudioWeightFaithful,
+		AudioFree:     cfg.Hum.AudioWeightFree,
+		StyleFaithful: cfg.Hum.StyleWeightFaithful,
+		StyleFree:     cfg.Hum.StyleWeightFree,
+	})
 	if cfg.Suno.CallbackToken != "" {
 		renderWorker.WithPollInterval(30 * time.Second)
 	}
