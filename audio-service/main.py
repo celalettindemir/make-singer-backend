@@ -19,6 +19,7 @@ from services.analiz import AnalizService
 from services.archiver import ArchiverService
 from services.encoder import EncoderService
 from services.guide import GuideService
+from services.hum import HumService, HumUnreadable
 from services.master import MasterService
 from services.pitch import PitchService
 from services.storage import StorageService
@@ -220,6 +221,17 @@ class TempoResponse(BaseModel):
     bpm: float | None
 
 
+class HumPrepareRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    input_key: str
+    output_key: str
+
+
+class HumPrepareResponse(BaseModel):
+    duration_ms: int
+
+
 # Services
 storage_service: StorageService | None = None
 master_service: MasterService | None = None
@@ -229,6 +241,7 @@ analiz_service: AnalizService | None = None
 tempo_service: TempoService | None = None
 guide_service: GuideService | None = None
 pitch_service: PitchService | None = None
+hum_service: HumService | None = None
 
 
 @asynccontextmanager
@@ -236,6 +249,7 @@ async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     global storage_service, master_service, encoder_service, archiver_service
     global analiz_service, tempo_service, guide_service, pitch_service
+    global hum_service
 
     # Initialize storage service
     if R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY:
@@ -256,6 +270,7 @@ async def lifespan(app: FastAPI):
     tempo_service = TempoService(storage_service)
     guide_service = GuideService(storage_service)
     pitch_service = PitchService(storage_service)
+    hum_service = HumService(storage_service)
 
     yield
 
@@ -428,6 +443,24 @@ async def tempo_audio(request: TempoRequest):
         return TempoResponse(**result)
     # Genis yakalama BILINCLI: FastAPI ucunda son siginak, her hata 500
     # olarak donsun. BLE001 bu yuzden susturuldu.
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/mirilti-hazirla", response_model=HumPrepareResponse)
+async def hum_prepare(request: HumPrepareRequest):
+    """Mirilti kaydini cozer, suresini olcer, mp3 olarak output_key'e yazar."""
+    if hum_service is None:
+        raise HTTPException(status_code=503, detail="Hum service not initialized")
+
+    try:
+        result = await hum_service.prepare(
+            input_key=request.input_key, output_key=request.output_key
+        )
+        return HumPrepareResponse(**result)
+    except HumUnreadable:
+        raise HTTPException(status_code=422, detail="undecodable")
+    # Genis yakalama BILINCLI: diger uclardaki desen, her hata 500.
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(e))
 
