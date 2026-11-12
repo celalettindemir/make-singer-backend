@@ -1,6 +1,6 @@
 """Golden comparison and bench for the server vocal chain ("C").
 
-usage: python scripts/golden_c.py SPIKE_V3_DIR OUT_DIR [--bench | --builtin]
+usage: python scripts/golden_c.py SPIKE_V3_DIR OUT_DIR [--bench | --builtin] [--balance DB]
 
 Reads the spike recordings by path (they never enter the repo), checks take
 alignment and the band balance against the C2 spike render, writes the
@@ -28,6 +28,7 @@ from scipy import signal
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from services import master as master_module
 from services import vocal_chain
 from services.master import MasterService, _resample, _to_float
 from services.take_align import ALIGN_RATE, find_shift_ms, onset_envelope, place_take
@@ -157,7 +158,7 @@ class _ChainTime(logging.Handler):
         self.lines.append(record.getMessage())
 
 
-def run_process(files, takes, stem_key, guide_key, out_dir):
+def run_process(files, takes, stem_key, guide_key, out_dir, balance_db=0.0):
     """Run MasterService end to end; return (result, log lines, process s)."""
     handler = _ChainTime()
     log = logging.getLogger("uvicorn.error")
@@ -181,6 +182,7 @@ def run_process(files, takes, stem_key, guide_key, out_dir):
             takes,
             "masters/out.wav",
             guide_key,
+            balance_db,
         )
     )
     elapsed = time.perf_counter() - started
@@ -207,7 +209,9 @@ def chain_extra_mb(lines: list[str]) -> float:
     return float("nan")
 
 
-def golden(spike: str, out_dir: str, builtin: bool = False) -> bool:
+def golden(
+    spike: str, out_dir: str, builtin: bool = False, balance: float | None = None
+) -> bool:
     rate = vocal_chain.RATE
     p = lambda rel: os.path.join(spike, rel)
     guide16 = mono(p(GUIDE), ALIGN_RATE)
@@ -273,15 +277,38 @@ def golden(spike: str, out_dir: str, builtin: bool = False) -> bool:
         files[key] = p(rel)
         vtakes.append({"key": key, "start_ms": ms})
     with tempfile.TemporaryDirectory() as tmp:
-        result, lines, _ = run_process(files, vtakes, "stems/stem.mp3", guide_key, tmp)
+        mixes = []
+        real_mix = master_module.mix_vocal
+
+        def spy(*args, **kwargs):
+            mix, info = real_mix(*args, **kwargs)
+            mixes.append(info)
+            return mix, info
+
+        master_module.mix_vocal = spy
+        try:
+            result, lines, _ = run_process(
+                files, vtakes, "stems/stem.mp3", guide_key, tmp, balance or 0.0
+            )
+        finally:
+            master_module.mix_vocal = real_mix
         wav = os.path.join(tmp, "out.wav")
-        mp3 = os.path.join(out_dir, OUT_NAME_BUILTIN if builtin else OUT_NAME)
+        name = OUT_NAME_BUILTIN if builtin else OUT_NAME
+        if balance is not None and not builtin:
+            name = f"C5-denge-{balance:+g}.mp3"
+        mp3 = os.path.join(out_dir, name)
         subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error", "-i", wav, "-b:a", "320k", mp3],
             check=True,
         )
     for line in lines:
         print("  log:", line)
+    for m in mixes:
+        rel = m["vocal_lufs"] + m["vocal_gain_db"] - m["inst_lufs"]
+        print(
+            f"vocal vs music: {rel:+.2f} LU (balance {m['balance_db']:+g} dB, "
+            f"gain {m['vocal_gain_db']:+.2f} dB)"
+        )
     print(f"wrote {mp3} lufs={result['lufs']:.1f} peak_db={result['peak_db']:.2f}")
     print("RESULT:", "PASS" if ok else "FAIL")
     return ok
@@ -348,13 +375,26 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("spike_dir")
     ap.add_argument("out_dir")
+    ap.add_argument(
+        "--balance",
+        type=float,
+        help="vocal balance in dB (-6..6) for the guided render; writes C5-denge-<dB>.mp3",
+    )
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--bench", action="store_true")
     mode.add_argument("--builtin", action="store_true")
     a = ap.parse_args()
     spike = os.path.expanduser(a.spike_dir)
     out_dir = os.path.expanduser(a.out_dir)
-    ok = bench(spike, out_dir) if a.bench else golden(spike, out_dir, builtin=a.builtin)
+    if a.balance is not None and (a.bench or a.builtin):
+        ap.error("--balance only applies to the default guided render")
+    if a.balance is not None and not -6 <= a.balance <= 6:
+        ap.error("--balance must be within -6..6")
+    ok = (
+        bench(spike, out_dir)
+        if a.bench
+        else golden(spike, out_dir, builtin=a.builtin, balance=a.balance)
+    )
     return 0 if ok else 1
 
 
