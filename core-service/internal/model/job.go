@@ -52,6 +52,8 @@ type RenderJobPayload struct {
 	// GuideAnalysis: the note strip and key shift are made (Plus only),
 	// decided server-side at start.
 	GuideAnalysis bool `json:"guideAnalysis,omitempty"`
+	// Hum: the render is a cover of the user's hum (key already resolved).
+	Hum *HumJob `json:"hum,omitempty"`
 }
 
 // MasterJobPayload contains the data for a master job

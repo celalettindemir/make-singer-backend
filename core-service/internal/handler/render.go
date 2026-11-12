@@ -36,6 +36,7 @@ func NewRenderHandler(svc *service.RenderService, v *validator.Validate) *Render
 // @Failure      400 {object} response.ErrorResponse
 // @Failure      401 {object} response.ErrorResponse
 // @Failure      402 {object} response.ErrorResponse
+// @Failure      404 {object} response.ErrorResponse
 // @Failure      429 {object} response.ErrorResponse
 // @Failure      500 {object} response.ErrorResponse
 // @Security     BearerAuth
@@ -67,6 +68,12 @@ func (h *RenderHandler) Start(c *fiber.Ctx) error {
 		}
 		if errors.Is(err, model.ErrInvalidLyrics) {
 			return response.ValidationError(c, i18n.KeyGuideLyricsInvalid, nil)
+		}
+		if errors.Is(err, service.ErrHumNotFound) {
+			return response.NotFound(c, i18n.KeyHumNotFound)
+		}
+		if errors.Is(err, service.ErrHumNeedsVocal) {
+			return response.ValidationError(c, i18n.KeyHumNeedsLyrics, nil)
 		}
 		if errors.Is(err, service.ErrPlanRequired) {
 			return response.PlanRequired(c, string(credit.TierPro))

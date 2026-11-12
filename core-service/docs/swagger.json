@@ -320,6 +320,153 @@
                 }
             }
         },
+        "/api/hum": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Store a 5-30 second hum as mp3, measure it and read the words in it",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Hum"
+                ],
+                "summary": "Upload a hum",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "projectId",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "enum": [
+                            "tr",
+                            "en",
+                            "fr"
+                        ],
+                        "type": "string",
+                        "description": "Language of the words (tr, en, fr); other values are ignored",
+                        "name": "language",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "file",
+                        "description": "Audio file (WAV, MP3, M4A, AAC; max 10MB)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.HumUploadResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/hum/{humId}": {
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Delete an uploaded hum; always 204, even when it is already gone",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Hum"
+                ],
+                "summary": "Delete a hum",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Hum ID",
+                        "name": "humId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "projectId",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/lyrics/generate": {
             "post": {
                 "security": [
@@ -1073,6 +1220,12 @@
                     },
                     "402": {
                         "description": "Payment Required",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/response.ErrorResponse"
                         }
@@ -1879,6 +2032,68 @@
                 "type": {
                     "type": "string",
                     "maxLength": 32
+                }
+            }
+        },
+        "model.HumFidelity": {
+            "type": "string",
+            "enum": [
+                "faithful",
+                "free"
+            ],
+            "x-enum-varnames": [
+                "HumFaithful",
+                "HumFree"
+            ]
+        },
+        "model.HumRequest": {
+            "type": "object",
+            "required": [
+                "fidelity",
+                "humId"
+            ],
+            "properties": {
+                "fidelity": {
+                    "enum": [
+                        "faithful",
+                        "free"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.HumFidelity"
+                        }
+                    ]
+                },
+                "humId": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.HumTranscript": {
+            "type": "object",
+            "properties": {
+                "lines": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "model.HumUploadResponse": {
+            "type": "object",
+            "properties": {
+                "durationMs": {
+                    "type": "integer"
+                },
+                "fileUrl": {
+                    "type": "string"
+                },
+                "humId": {
+                    "type": "string"
+                },
+                "transcript": {
+                    "$ref": "#/definitions/model.HumTranscript"
                 }
             }
         },
@@ -2774,6 +2989,14 @@
                     "allOf": [
                         {
                             "$ref": "#/definitions/model.Instrument"
+                        }
+                    ]
+                },
+                "hum": {
+                    "description": "Hum builds the song on the melody of an uploaded hum; needs Vocal.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.HumRequest"
                         }
                     ]
                 },

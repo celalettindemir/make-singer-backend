@@ -334,6 +334,46 @@ definitions:
     - id
     - type
     type: object
+  model.HumFidelity:
+    enum:
+    - faithful
+    - free
+    type: string
+    x-enum-varnames:
+    - HumFaithful
+    - HumFree
+  model.HumRequest:
+    properties:
+      fidelity:
+        allOf:
+        - $ref: '#/definitions/model.HumFidelity'
+        enum:
+        - faithful
+        - free
+      humId:
+        type: string
+    required:
+    - fidelity
+    - humId
+    type: object
+  model.HumTranscript:
+    properties:
+      lines:
+        items:
+          type: string
+        type: array
+    type: object
+  model.HumUploadResponse:
+    properties:
+      durationMs:
+        type: integer
+      fileUrl:
+        type: string
+      humId:
+        type: string
+      transcript:
+        $ref: '#/definitions/model.HumTranscript'
+    type: object
   model.Instrument:
     enum:
     - drums
@@ -972,6 +1012,10 @@ definitions:
         - pads
         - lead
         - fx
+      hum:
+        allOf:
+        - $ref: '#/definitions/model.HumRequest'
+        description: Hum builds the song on the melody of an uploaded hum; needs Vocal.
       projectId:
         type: string
       projectName:
@@ -1480,6 +1524,103 @@ paths:
       summary: Refresh file URLs
       tags:
       - Files
+  /api/hum:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Store a 5-30 second hum as mp3, measure it and read the words in
+        it
+      parameters:
+      - description: Project ID
+        in: formData
+        name: projectId
+        required: true
+        type: string
+      - description: Language of the words (tr, en, fr); other values are ignored
+        enum:
+        - tr
+        - en
+        - fr
+        in: formData
+        name: language
+        type: string
+      - description: Audio file (WAV, MP3, M4A, AAC; max 10MB)
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.HumUploadResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Upload a hum
+      tags:
+      - Hum
+  /api/hum/{humId}:
+    delete:
+      description: Delete an uploaded hum; always 204, even when it is already gone
+      parameters:
+      - description: Hum ID
+        in: path
+        name: humId
+        required: true
+        type: string
+      - description: Project ID
+        in: query
+        name: projectId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Delete a hum
+      tags:
+      - Hum
   /api/lyrics/generate:
     post:
       consumes:
@@ -1962,6 +2103,10 @@ paths:
             $ref: '#/definitions/response.ErrorResponse'
         "402":
           description: Payment Required
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
           schema:
             $ref: '#/definitions/response.ErrorResponse'
         "429":

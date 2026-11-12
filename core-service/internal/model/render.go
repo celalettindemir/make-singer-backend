@@ -19,6 +19,8 @@ type RenderStartRequest struct {
 	Vocal *VocalRequest `json:"vocal,omitempty" validate:"omitempty"`
 	// ProjectName is shown in notifications; optional.
 	ProjectName string `json:"projectName,omitempty" validate:"max=120"`
+	// Hum builds the song on the melody of an uploaded hum; needs Vocal.
+	Hum *HumRequest `json:"hum,omitempty" validate:"omitempty"`
 }
 
 // VocalRequest is what the vocal render needs: the stock voice, the song

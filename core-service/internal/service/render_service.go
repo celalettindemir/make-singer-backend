@@ -37,6 +37,11 @@ const (
 )
 
 // ErrPlanRequired: the stems render is for an active Pro plan only (R-CRD-16).
+var ErrHumNotFound = errors.New("hum not found")
+
+// ErrHumNeedsVocal: a hum render has to carry the vocal request (the lyrics).
+var ErrHumNeedsVocal = errors.New("a hum render needs a vocal request")
+
 var ErrPlanRequired = errors.New("the stems render needs the Pro plan")
 
 // RenderService handles render job management
@@ -174,6 +179,27 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 			return nil, err
 		}
 	}
+	// A hum must exist (and belong to the caller) before anything is spent.
+	var humJob *model.HumJob
+	if req.Hum != nil {
+		if req.Vocal == nil {
+			return nil, ErrHumNeedsVocal
+		}
+		key, err := client.UserKey("hums", userID, req.ProjectID, req.Hum.HumID+".mp3")
+		if err != nil {
+			return nil, err
+		}
+		if checker, ok := s.r2Client.(client.ObjectChecker); ok {
+			exists, err := checker.Exists(ctx, key)
+			if err != nil {
+				return nil, fmt.Errorf("could not check the hum: %w", err)
+			}
+			if !exists {
+				return nil, ErrHumNotFound
+			}
+		}
+		humJob = &model.HumJob{Key: key, Fidelity: req.Hum.Fidelity}
+	}
 	// The note strip and key shift are a Plus right, decided here and never
 	// a reason to refuse the render. A plan read failure means no analysis.
 	guideAnalysis := false
@@ -212,6 +238,7 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 		FocusInstrument: focus,
 		Vocal:           req.Vocal,
 		GuideAnalysis:   guideAnalysis,
+		Hum:             humJob,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
