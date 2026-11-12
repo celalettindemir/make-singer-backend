@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -203,5 +204,61 @@ func TestLyricsService_MockWithoutConfiguredClient(t *testing.T) {
 	s := NewLyricsService(lyricsprovider.Fixed(client.NewGroqClient(&config.GroqConfig{})))
 	if !s.IsMock() {
 		t.Error("an unconfigured active client must answer mock")
+	}
+}
+
+func TestLyricsService_GenerateStripsMarksAndReturnsCues(t *testing.T) {
+	var requests []map[string]any
+	s := NewLyricsService(lyricsprovider.Fixed(fakeLyricsGroq(t,
+		`{"drafts": [["Gece boyunca şehir ışıkları~", "|", "Sen yanımdayken"], ["Bir satır"]]}`, &requests)))
+	res, err := s.Generate(context.Background(), &model.LyricsGenerateRequest{
+		Genre: "pop", SectionType: model.SectionVerse, Vibes: []string{"x"}, Language: model.LanguageTR,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDrafts := [][]string{{"Gece boyunca şehir ışıkları", "Sen yanımdayken"}, {"Bir satır"}}
+	wantCues := [][][]model.LyricCue{{{{SyllableIndex: 10, Kind: model.CueHold, At: 26}}, {}}, {{}}}
+	if !reflect.DeepEqual(res.Drafts, wantDrafts) || !reflect.DeepEqual(res.Cues, wantCues) {
+		t.Fatalf("drafts %q cues %v", res.Drafts, res.Cues)
+	}
+}
+
+func TestLyricsService_RewriteReturnsParallelCues(t *testing.T) {
+	var requests []map[string]any
+	s := NewLyricsService(lyricsprovider.Fixed(fakeLyricsGroq(t, `{"lines": ["^Seni sevdim~", "gece"]}`, &requests)))
+	res, err := s.Rewrite(context.Background(), &model.LyricsRewriteRequest{
+		CurrentLyrics: "x", Genre: "pop", SectionType: model.SectionVerse, Vibes: []string{"x"}, Language: model.LanguageTR,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCues := [][]model.LyricCue{{{SyllableIndex: 0, Kind: model.CueRise, At: 1}, {SyllableIndex: 3, Kind: model.CueHold, At: 9}}, {}}
+	if !reflect.DeepEqual(res.Lines, []string{"Seni sevdim", "gece"}) || !reflect.DeepEqual(res.Cues, wantCues) {
+		t.Fatalf("lines %q cues %v", res.Lines, res.Cues)
+	}
+}
+
+func TestLyricsService_MockHasCues(t *testing.T) {
+	s := NewLyricsService(lyricsprovider.Fixed(nil))
+	g, _ := s.Generate(context.Background(), &model.LyricsGenerateRequest{})
+	r, _ := s.Rewrite(context.Background(), &model.LyricsRewriteRequest{})
+	for _, lines := range append([][]string{r.Lines}, g.Drafts...) {
+		for _, l := range lines {
+			if strings.ContainsAny(l, "~^|") {
+				t.Fatalf("mark left in %q", l)
+			}
+		}
+	}
+	has := func(cues [][]model.LyricCue) bool {
+		for _, c := range cues {
+			if len(c) > 0 {
+				return true
+			}
+		}
+		return false
+	}
+	if len(g.Cues) != len(g.Drafts) || !has(g.Cues[0]) || len(r.Cues) != len(r.Lines) || !has(r.Cues) {
+		t.Fatalf("cues: %v %v", g.Cues, r.Cues)
 	}
 }

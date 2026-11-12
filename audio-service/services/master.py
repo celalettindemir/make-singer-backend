@@ -202,6 +202,7 @@ class MasterService:
         vocal_takes: list[dict[str, Any]],
         output_key: str,
         guide_key: str | None = None,
+        vocal_balance_db: float = 0.0,
     ) -> dict[str, Any]:
         """
         Process stems through the mastering chain.
@@ -227,6 +228,7 @@ class MasterService:
                 vocal_takes,
                 output_key,
                 guide_key,
+                vocal_balance_db,
             )
 
     def _process(
@@ -237,6 +239,7 @@ class MasterService:
         vocal_takes: list[dict[str, Any]],
         output_key: str,
         guide_key: str | None = None,
+        vocal_balance_db: float = 0.0,
     ) -> dict[str, Any]:
         if profile not in PROFILES:
             profile = "clean"
@@ -275,7 +278,7 @@ class MasterService:
                 holder = [mixed]
                 del mixed
                 mixed, vocal_info = self._apply_vocal_chain(
-                    tmpdir, holder, user_takes, guide_key
+                    tmpdir, holder, user_takes, guide_key, vocal_balance_db
                 )
                 chain_s = time.thread_time() - started
 
@@ -298,12 +301,13 @@ class MasterService:
             if user_takes:
                 logger.info(
                     "vocal chain: vocal_lufs=%.1f inst_lufs=%.1f final_lufs=%.1f "
-                    "peak_db=%.2f chain_s=%.1f",
+                    "peak_db=%.2f chain_s=%.1f balance_db=%.1f",
                     vocal_info.get("vocal_lufs", float("nan")),
                     vocal_info.get("inst_lufs", float("nan")),
                     lufs,
                     peak_db,
                     chain_s,
+                    vocal_balance_db,
                 )
 
             # Export and upload
@@ -330,6 +334,7 @@ class MasterService:
         mixed_holder: list[AudioSegment],
         user_takes: list[dict[str, Any]],
         guide_key: str | None,
+        balance_db: float = 0.0,
     ) -> tuple[AudioSegment, dict[str, float]]:
         """Run the user's takes through the C chain and mix them into the song."""
         rate = vocal_chain.RATE
@@ -396,7 +401,7 @@ class MasterService:
             "/".join(f"{c:.1f}" for c in curve),
         )
         del track
-        mix, info = mix_vocal(out, inst, rate, inplace=True)
+        mix, info = mix_vocal(out, inst, rate, inplace=True, balance_db=balance_db)
         del out, inst
         # The vocal sits +2 LU over the instrumental, so the sum can pass full
         # scale. Scale down like _sum does; finalize_loudness restores the level.

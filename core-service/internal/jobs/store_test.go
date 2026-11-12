@@ -34,7 +34,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("Migrate: %v", err)
 	}
 	if _, err := pool.Exec(context.Background(),
-		`TRUNCATE uretim.isler, uretim.is_olaylari, uretim.cihazlar`); err != nil {
+		`TRUNCATE uretim.isler, uretim.is_olaylari, uretim.cihazlar, uretim.ses_araliklari`); err != nil {
 		t.Fatalf("could not truncate the uretim tables: %v", err)
 	}
 	return pool
@@ -461,5 +461,52 @@ func TestPostgresStore_DeviceRegistry(t *testing.T) {
 	}
 	if ds, _ := s.Devices(ctx, "bob"); len(ds) != 0 {
 		t.Errorf("bob = %+v", ds)
+	}
+}
+
+func TestStore_VocalRangeRoundTrip(t *testing.T) {
+	s := NewPostgresStore(testPool(t), nil)
+	if r, err := s.GetVocalRange(ctx(), "u1"); err != nil || r != nil {
+		t.Fatalf("empty: %v %v", r, err)
+	}
+	in := model.VocalRangeRecord{Low: 45, High: 64, ComfortCenter: 55,
+		MeasuredAt: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC), Source: "measured"}
+	if err := s.SaveVocalRange(ctx(), "u1", in); err != nil {
+		t.Fatal(err)
+	}
+	in.High = 66
+	if err := s.SaveVocalRange(ctx(), "u1", in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetVocalRange(ctx(), "u1")
+	if err != nil || got == nil {
+		t.Fatalf("get: %v %v", got, err)
+	}
+	if got.High != 66 || got.Low != 45 || got.ComfortCenter != 55 || got.Source != "measured" || !got.MeasuredAt.Equal(in.MeasuredAt) {
+		t.Errorf("got %+v", got)
+	}
+	var n int
+	if err := s.pool.QueryRow(ctx(), `SELECT count(*) FROM uretim.ses_araliklari`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("rows = %d, %v", n, err)
+	}
+}
+
+func TestStore_DeleteOwnerRemovesVocalRange(t *testing.T) {
+	s := NewPostgresStore(testPool(t), nil)
+	in := model.VocalRangeRecord{Low: 45, High: 64, ComfortCenter: 55,
+		MeasuredAt: time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC), Source: "assumed"}
+	for _, u := range []string{"u1", "u2"} {
+		if err := s.SaveVocalRange(ctx(), u, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.DeleteOwner(ctx(), "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := s.GetVocalRange(ctx(), "u1"); r != nil {
+		t.Errorf("u1 range survived: %+v", r)
+	}
+	if r, _ := s.GetVocalRange(ctx(), "u2"); r == nil {
+		t.Error("u2 range was deleted")
 	}
 }

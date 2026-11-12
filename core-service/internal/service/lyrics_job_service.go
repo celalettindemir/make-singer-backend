@@ -394,7 +394,7 @@ func (s *LyricsJobService) Retry(ctx context.Context, userID, jobID string) erro
 		snapshot = *j
 		for _, idx := range res.FailedSections() {
 			sr := res.Section(idx)
-			sr.Status, sr.Lines = model.LyricsSectionPending, []string{}
+			sr.Status, sr.Lines, sr.Cues = model.LyricsSectionPending, []string{}, [][]model.LyricCue{}
 		}
 		in.Attempt = attempt
 		in.Charges = append(in.Charges, charges...)
@@ -523,7 +523,7 @@ func FinishLyricsJob(ctx context.Context, repo jobs.Repo, credits credit.Spender
 		if fail {
 			for i := range res.Sections {
 				if sr := &res.Sections[i]; sr.Status != model.LyricsSectionDone && sr.Status != model.LyricsSectionFailed {
-					sr.Status, sr.Lines = model.LyricsSectionFailed, []string{}
+					sr.Status, sr.Lines, sr.Cues = model.LyricsSectionFailed, []string{}, [][]model.LyricCue{}
 				}
 			}
 			raw, err := json.Marshal(res)

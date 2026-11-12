@@ -19,11 +19,11 @@ import (
 	"github.com/makeasinger/api/internal/model"
 )
 
-func (f *fakeLyrics) GenerateStream(ctx context.Context, _ *model.LyricsGenerateRequest, onLine func(string) error) (int, error) {
+func (f *fakeLyrics) GenerateStream(ctx context.Context, _ *model.LyricsGenerateRequest, onLine func(model.LyricLine) error) (int, error) {
 	return f.stream(ctx, onLine)
 }
 
-func (f *fakeLyrics) RewriteStream(ctx context.Context, _ *model.LyricsRewriteRequest, onLine func(string) error) (int, error) {
+func (f *fakeLyrics) RewriteStream(ctx context.Context, _ *model.LyricsRewriteRequest, onLine func(model.LyricLine) error) (int, error) {
 	return f.stream(ctx, onLine)
 }
 
@@ -41,8 +41,17 @@ func streamApp(gen *fakeLyrics, sp credit.Spender, heartbeat time.Duration) *fib
 }
 
 // emits returns a fake stream that sends the lines, then returns err.
-func emits(err error, lines ...string) func(context.Context, func(string) error) (int, error) {
-	return func(_ context.Context, on func(string) error) (int, error) {
+func emits(err error, lines ...string) func(context.Context, func(model.LyricLine) error) (int, error) {
+	ll := make([]model.LyricLine, len(lines))
+	for i, l := range lines {
+		ll[i] = model.LyricLine{Text: l, Cues: []model.LyricCue{}}
+	}
+	return emitsLines(err, ll...)
+}
+
+// emitsLines is emits for lines that carry cues.
+func emitsLines(err error, lines ...model.LyricLine) func(context.Context, func(model.LyricLine) error) (int, error) {
+	return func(_ context.Context, on func(model.LyricLine) error) (int, error) {
 		for i, l := range lines {
 			if e := on(l); e != nil {
 				return i, e
@@ -73,8 +82,8 @@ func TestLyricsStream_EventOrder(t *testing.T) {
 	sp := &credit.FakeSpender{IsEnforced: true, ChargedFirst: true, Bal: 322}
 	resp, body := streamCall(t, streamApp(gen, sp, 0), "/generate/stream", lyricsGenBody, actionA)
 	want := "event: start\ndata: {\"balance\":322}\n\n" +
-		"event: line\ndata: {\"text\":\"Gece\"}\n\n" +
-		"event: line\ndata: {\"text\":\"Şehir\"}\n\n" +
+		"event: line\ndata: {\"text\":\"Gece\",\"cues\":[]}\n\n" +
+		"event: line\ndata: {\"text\":\"Şehir\",\"cues\":[]}\n\n" +
 		"event: done\ndata: {\"lines\":2}\n\n"
 	if body != want {
 		t.Errorf("body =\n%q\nwant\n%q", body, want)
@@ -198,9 +207,9 @@ func TestLyricsStream_FollowUpErrorDoesNotRefund(t *testing.T) {
 
 func TestLyricsStream_Heartbeat(t *testing.T) {
 	gen := newFakeLyrics()
-	gen.stream = func(_ context.Context, on func(string) error) (int, error) {
+	gen.stream = func(_ context.Context, on func(model.LyricLine) error) (int, error) {
 		time.Sleep(70 * time.Millisecond)
-		return 1, on("Gece")
+		return 1, on(model.LyricLine{Text: "Gece", Cues: []model.LyricCue{}})
 	}
 	_, body := streamCall(t, streamApp(gen, nil, 20*time.Millisecond), "/generate/stream", lyricsGenBody, "")
 	ping, line := strings.Index(body, ": ping\n\n"), strings.Index(body, "event: line")
@@ -213,9 +222,9 @@ func TestLyricsStream_ClientGoneCancelsProvider(t *testing.T) {
 	gen := newFakeLyrics()
 	cancelled := make(chan struct{})
 	var started atomic.Bool
-	gen.stream = func(ctx context.Context, on func(string) error) (int, error) {
+	gen.stream = func(ctx context.Context, on func(model.LyricLine) error) (int, error) {
 		started.Store(true)
-		if err := on("Gece"); err != nil {
+		if err := on(model.LyricLine{Text: "Gece", Cues: []model.LyricCue{}}); err != nil {
 			return 0, err
 		}
 		select {
@@ -267,7 +276,7 @@ func TestLyricsStream_ClientGoneCancelsProvider(t *testing.T) {
 
 func TestLyricsStream_PanicBecomesErrorAndRefunds(t *testing.T) {
 	gen := newFakeLyrics()
-	gen.stream = func(context.Context, func(string) error) (int, error) { panic("sdk edge case") }
+	gen.stream = func(context.Context, func(model.LyricLine) error) (int, error) { panic("sdk edge case") }
 	sp := &credit.FakeSpender{IsEnforced: true, ChargedFirst: true}
 	_, body := streamCall(t, streamApp(gen, sp, 0), "/generate/stream", lyricsGenBody, actionA)
 	if !strings.Contains(body, "event: error") || strings.Contains(body, "event: done") {
@@ -275,5 +284,30 @@ func TestLyricsStream_PanicBecomesErrorAndRefunds(t *testing.T) {
 	}
 	if len(sp.ActionRefunds) != 1 {
 		t.Errorf("refunds = %d, want 1", len(sp.ActionRefunds))
+	}
+}
+
+func TestLyricsStream_LineEventCarriesCues(t *testing.T) {
+	gen := newFakeLyrics()
+	gen.stream = emitsLines(nil,
+		model.LyricLine{Text: "a", Cues: []model.LyricCue{}},
+		model.LyricLine{Text: "Seni sevdim", Cues: []model.LyricCue{{SyllableIndex: 3, Kind: model.CueHold, At: 9}}})
+	_, body := streamCall(t, streamApp(gen, nil, 0), "/generate/stream", lyricsGenBody, "")
+	for _, want := range []string{
+		"event: line\ndata: {\"text\":\"a\",\"cues\":[]}",
+		`"cues":[{"syllableIndex":3,"kind":"hold","at":9}]`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestLyricsStream_NilCuesBecomeEmptyArray(t *testing.T) {
+	gen := newFakeLyrics()
+	gen.stream = emitsLines(nil, model.LyricLine{Text: "a"})
+	_, body := streamCall(t, streamApp(gen, nil, 0), "/generate/stream", lyricsGenBody, "")
+	if !strings.Contains(body, "event: line\ndata: {\"text\":\"a\",\"cues\":[]}") {
+		t.Errorf("body = %s", body)
 	}
 }

@@ -358,9 +358,22 @@ def servis_kur(tmp_path, stem=None, **eklenecek):
     return MasterService(depo), depo
 
 
-def calistir(servis, takes=(), profil="clean", guide_key=None, sure_stem=None):
+def calistir(
+    servis,
+    takes=(),
+    profil="clean",
+    guide_key=None,
+    sure_stem=None,
+    vocal_balance_db=0.0,
+):
     return servis._process(
-        ["stems/a.wav"], [{}], profil, list(takes), "out/master.wav", guide_key
+        ["stems/a.wav"],
+        [{}],
+        profil,
+        list(takes),
+        "out/master.wav",
+        guide_key,
+        vocal_balance_db,
     )
 
 
@@ -650,3 +663,50 @@ def test_ayni_anda_iki_master_birbirini_bekler():
 
     asyncio.run(senaryo())
     assert en_cok == 1
+
+
+def test_denge_master_loguna_yazilir(tmp_path, caplog):
+    servis, _ = servis_kur(tmp_path, vocals__kul=dizi_ses(sarki_gibi_vokal(4), 44100))
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        calistir(servis, [{"key": "vocals/kul"}], vocal_balance_db=3.0)
+    assert "balance_db=3.0" in caplog.text
+
+
+def test_denge_artida_kirpilmaz_hedefte_kalir(tmp_path):
+    servis, depo = servis_kur(
+        tmp_path,
+        stem=_tam_olcek_stem(),
+        vocals__kul=dizi_ses(sarki_gibi_vokal(6) / 0.3, 44100),
+    )
+    sonuc = calistir(
+        servis, [{"key": "vocals/kul"}], profil="loud", vocal_balance_db=6.0
+    )
+    ayar = PROFILES["loud"]
+    assert sonuc["lufs"] == pytest.approx(ayar["target_lufs"], abs=0.5)
+    assert sonuc["peak_db"] <= ayar["limiter_threshold"] + 0.01
+    tepe_db = 20 * np.log10(np.max(np.abs(ornekler(oku(depo)))))
+    assert tepe_db <= ayar["limiter_threshold"] + 0.01
+
+
+def test_denge_ai_takeine_uygulanmaz(tmp_path):
+    ses = dizi_ses(sarki_gibi_vokal(5), 44100)
+    servis, depo = servis_kur(tmp_path, guides__app=ses)
+    calistir(servis, [{"key": "guides/app"}], vocal_balance_db=0.0)
+    sifir = ornekler(oku(depo))
+    calistir(servis, [{"key": "guides/app"}], vocal_balance_db=6.0)
+    alti = ornekler(oku(depo))
+    assert np.array_equal(sifir, alti)
+
+
+def test_pydantic_vocal_balance_db_sinirlari():
+    from pydantic import ValidationError
+
+    from main import MasterRequest
+
+    taban = {"stem_keys": ["a"], "mix_settings": [], "output_key": "o"}
+    assert MasterRequest(**taban).vocal_balance_db == 0.0
+    for v in (-6, 0, 6):
+        assert MasterRequest(**taban, vocal_balance_db=v).vocal_balance_db == v
+    for v in (6.5, -6.5):
+        with pytest.raises(ValidationError):
+            MasterRequest(**taban, vocal_balance_db=v)

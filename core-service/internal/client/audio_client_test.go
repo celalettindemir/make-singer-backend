@@ -131,3 +131,20 @@ func TestMasterRequest_GuideKeyOmittedWhenEmpty(t *testing.T) {
 		t.Errorf("request = %s, want guide_key g", b)
 	}
 }
+
+func TestMasterRequest_VocalBalanceOmittedWhenZero(t *testing.T) {
+	b, err := json.Marshal(MasterRequest{})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(b), "vocal_balance_db") {
+		t.Errorf("zero request = %s, want no vocal_balance_db", b)
+	}
+	b, err = json.Marshal(MasterRequest{VocalBalanceDb: 1.5})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"vocal_balance_db":1.5`) {
+		t.Errorf("request = %s, want vocal_balance_db 1.5", b)
+	}
+}

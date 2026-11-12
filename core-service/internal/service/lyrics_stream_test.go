@@ -37,9 +37,9 @@ func (c *streamClient) IsConfigured() bool               { return true }
 
 var _ client.ChatClient = (*streamClient)(nil)
 
-func gather() (*[]string, func(string) error) {
+func gather() (*[]string, func(model.LyricLine) error) {
 	var got []string
-	return &got, func(l string) error { got = append(got, l); return nil }
+	return &got, func(l model.LyricLine) error { got = append(got, l.Text); return nil }
 }
 
 func TestStreamPrompt_NoJSONOneDraft(t *testing.T) {
@@ -73,6 +73,10 @@ func TestStreamPrompt_NoJSONOneDraft(t *testing.T) {
 	}
 	if !strings.Contains(buildStreamSystemPrompt(model.LanguageTR), "Output only the lyric lines, one per line, plain text.") {
 		t.Error("system prompt lacks the plain text rule")
+	}
+	sys := buildStreamSystemPrompt(model.LanguageTR)
+	if !strings.Contains(sys, cueMarkRule) || !strings.HasSuffix(sys, "no explanation. Lines may carry the singing marks described above.") {
+		t.Error("stream system prompt must carry the mark rule and say lines may carry marks")
 	}
 }
 
@@ -137,8 +141,20 @@ func TestGenerateStream_MockStopsOnCancel(t *testing.T) {
 	s.mockDelay = time.Hour
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	n, err := s.GenerateStream(ctx, genWith(model.LyricsContext{}, model.SectionVerse), func(string) error { return nil })
+	n, err := s.GenerateStream(ctx, genWith(model.LyricsContext{}, model.SectionVerse), func(model.LyricLine) error { return nil })
 	if err == nil || n != 0 {
 		t.Fatalf("n=%d err=%v", n, err)
+	}
+}
+
+func TestGenerateStream_EmitsCues(t *testing.T) {
+	s := NewLyricsService(lyricsprovider.Fixed(&streamClient{chunks: []string{"^Seni sev", "dim~\n"}}))
+	var got []model.LyricLine
+	req := genWith(model.LyricsContext{}, model.SectionVerse) // language tr
+	n, err := s.GenerateStream(context.Background(), req, func(l model.LyricLine) error { got = append(got, l); return nil })
+	want := []model.LyricLine{{Text: "Seni sevdim", Cues: []model.LyricCue{
+		{SyllableIndex: 0, Kind: model.CueRise, At: 1}, {SyllableIndex: 3, Kind: model.CueHold, At: 9}}}}
+	if err != nil || n != 1 || !reflect.DeepEqual(got, want) {
+		t.Fatalf("n=%d err=%v got=%v", n, err, got)
 	}
 }

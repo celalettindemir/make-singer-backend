@@ -52,7 +52,8 @@ type RenderService struct {
 	asynqClient *asynq.Client
 	r2Client    client.StorageClient
 	r2Cfg       *config.R2Config
-	credits     credit.Spender // nil: no credit accounting
+	credits     credit.Spender   // nil: no credit accounting
+	ranges      VocalRangeReader // nil: no stored-range fallback
 }
 
 func NewRenderService(repo jobs.Repo, asynqClient *asynq.Client, r2Client client.StorageClient, r2Cfg *config.R2Config) *RenderService {
@@ -69,6 +70,18 @@ func NewRenderService(repo jobs.Repo, asynqClient *asynq.Client, r2Client client
 // free of credits.
 func (s *RenderService) WithCredits(sp credit.Spender) *RenderService {
 	s.credits = sp
+	return s
+}
+
+// VocalRangeReader reads the stored vocal range of a user.
+type VocalRangeReader interface {
+	GetVocalRange(ctx context.Context, userID string) (*model.VocalRangeRecord, error)
+}
+
+// WithVocalRanges lets StartRender fall back to the user's stored vocal range
+// when a vocal request carries none.
+func (s *RenderService) WithVocalRanges(r VocalRangeReader) *RenderService {
+	s.ranges = r
 	return s
 }
 
@@ -179,6 +192,16 @@ func (s *RenderService) StartRender(ctx context.Context, userID string, req *mod
 		req.Vocal.Title = strings.TrimSpace(req.Vocal.Title)
 		if err := req.Vocal.CheckLyrics(); err != nil {
 			return nil, err
+		}
+		// A range in the request always wins; otherwise use the stored one.
+		// A read failure never blocks the render.
+		if req.Vocal.Range == nil && s.ranges != nil {
+			rec, err := s.ranges.GetVocalRange(ctx, userID)
+			if err != nil {
+				log.Printf("User %s: could not read the stored vocal range, rendering without: %v", userID, err)
+			} else if rec != nil {
+				req.Vocal.Range = &model.VocalRange{Low: rec.Low, High: rec.High}
+			}
 		}
 	}
 	// A hum must exist (and belong to the caller) before anything is spent.

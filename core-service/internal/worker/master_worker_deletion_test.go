@@ -16,11 +16,13 @@ import (
 // to R2 itself, so the Master call is the master job's R2 upload.
 type fakeAudio struct {
 	masterCalls int
+	lastReq     *client.MasterRequest
 	err         error // if nil, an error is still returned (see Master)
 }
 
-func (s *fakeAudio) Master(context.Context, *client.MasterRequest) (*client.MasterResponse, error) {
+func (s *fakeAudio) Master(_ context.Context, req *client.MasterRequest) (*client.MasterResponse, error) {
 	s.masterCalls++
+	s.lastReq = req
 	if s.err == nil {
 		// The success path enters the hub broadcast (no hub in the test); the
 		// call is counted and an error is returned.

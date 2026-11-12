@@ -145,7 +145,7 @@ func (w *LyricsWorker) writeSection(ctx context.Context, jobID string, in *model
 				return jobs.ErrSkipWrite
 			}
 			return mutateSection(j, func(res *model.LyricsJobResult, sr *model.LyricsJobSectionResult) {
-				sr.Status, sr.Lines = model.LyricsSectionWriting, []string{}
+				sr.Status, sr.Lines, sr.Cues = model.LyricsSectionWriting, []string{}, [][]model.LyricCue{}
 				em.Emit(jobs.KindSectionStarted, map[string]any{"section": idx})
 			}, idx)
 		})
@@ -194,7 +194,7 @@ func (w *LyricsWorker) writeSection(ctx context.Context, jobID string, in *model
 			return jobs.ErrSkipWrite
 		}
 		return mutateSection(j, func(res *model.LyricsJobResult, sr *model.LyricsJobSectionResult) {
-			sr.Status, sr.Lines = model.LyricsSectionFailed, []string{}
+			sr.Status, sr.Lines, sr.Cues = model.LyricsSectionFailed, []string{}, [][]model.LyricCue{}
 			j.Progress = res.Progress()
 			em.Emit(jobs.KindSectionFailed, map[string]any{"section": idx, "code": service.LyricsErrorCode})
 		}, idx)
@@ -251,20 +251,23 @@ func (w *LyricsWorker) callProvider(ctx context.Context, jobID string, in *model
 
 	idx := sec.Index
 	var lines []string
-	onLine := func(line string) error {
-		if strings.TrimSpace(line) == "" {
+	onLine := func(line model.LyricLine) error {
+		if strings.TrimSpace(line.Text) == "" {
 			return nil
+		}
+		if line.Cues == nil {
+			line.Cues = []model.LyricCue{}
 		}
 		err := w.repo.UpdateWith(ctx, jobID, func(j *model.Job, em jobs.Emitter) error {
 			if isTerminalLyrics(j.Status) {
 				return jobs.ErrSkipWrite
 			}
 			if err := mutateSection(j, func(_ *model.LyricsJobResult, sr *model.LyricsJobSectionResult) {
-				sr.Lines = append(sr.Lines, line)
+				sr.AppendLine(line)
 			}, idx); err != nil {
 				return err
 			}
-			em.Emit(jobs.KindLine, map[string]any{"section": idx, "text": line})
+			em.Emit(jobs.KindLine, map[string]any{"section": idx, "text": line.Text, "cues": line.Cues})
 			return nil
 		})
 		if errors.Is(err, jobs.ErrSkipWrite) {
@@ -273,7 +276,7 @@ func (w *LyricsWorker) callProvider(ctx context.Context, jobID string, in *model
 		if err != nil {
 			return err
 		}
-		lines = append(lines, line)
+		lines = append(lines, line.Text)
 		return nil
 	}
 

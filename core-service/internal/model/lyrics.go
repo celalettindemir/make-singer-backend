@@ -11,8 +11,10 @@ type LyricsGenerateRequest struct {
 
 // LyricsGenerateResponse represents the response for lyrics generation
 type LyricsGenerateResponse struct {
-	Drafts  [][]string `json:"drafts"`
-	Balance int        `json:"balance"`
+	Drafts [][]string `json:"drafts"`
+	// Cues parallels Drafts: draft, line, cue. Empty list for a line without cues.
+	Cues    [][][]LyricCue `json:"cues"`
+	Balance int            `json:"balance"`
 }
 
 // LyricsRewriteRequest represents the request body for lyrics rewriting
@@ -28,6 +30,31 @@ type LyricsRewriteRequest struct {
 
 // LyricsRewriteResponse represents the response for lyrics rewriting
 type LyricsRewriteResponse struct {
-	Lines   []string `json:"lines"`
-	Balance int      `json:"balance"`
+	Lines []string `json:"lines"`
+	// Cues parallels Lines. Empty list for a line without cues.
+	Cues    [][]LyricCue `json:"cues"`
+	Balance int          `json:"balance"`
+}
+
+// Singing cue kinds (spec 9 §3.3).
+const (
+	CueHold   = "hold"
+	CueRise   = "rise"
+	CueBreath = "breath"
+)
+
+// LyricCue is a singing hint on one syllable of a clean lyric line. SyllableIndex
+// counts the line's syllables from 0; At is the Unicode scalar index of that
+// syllable's first vowel in the line text. Breath means "breathe after this
+// syllable". A preview only: never sent to Suno.
+type LyricCue struct {
+	SyllableIndex int    `json:"syllableIndex"`
+	Kind          string `json:"kind"`
+	At            int    `json:"at"`
+}
+
+// LyricLine is one clean lyric line with its cues. Cues is never nil.
+type LyricLine struct {
+	Text string     `json:"text"`
+	Cues []LyricCue `json:"cues"`
 }

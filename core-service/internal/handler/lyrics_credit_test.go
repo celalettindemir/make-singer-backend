@@ -26,7 +26,7 @@ type fakeLyrics struct {
 	err      error
 	drafts   [][]string
 	lines    []string
-	stream   func(ctx context.Context, onLine func(string) error) (int, error)
+	stream   func(ctx context.Context, onLine func(model.LyricLine) error) (int, error)
 	genCalls int
 	rewCalls int
 }

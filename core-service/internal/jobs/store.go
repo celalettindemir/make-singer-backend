@@ -337,6 +337,7 @@ func (s *PostgresStore) DeleteOwner(ctx context.Context, userID string) error {
 	for _, q := range []string{
 		`DELETE FROM uretim.isler WHERE sahip=$1`, // events cascade
 		`DELETE FROM uretim.cihazlar WHERE sahip=$1`,
+		`DELETE FROM uretim.ses_araliklari WHERE sahip=$1`,
 	} {
 		if _, err := tx.Exec(ctx, q, userID); err != nil {
 			return err
@@ -384,5 +385,32 @@ func (s *PostgresStore) Devices(ctx context.Context, userID string) ([]model.Dev
 // DeleteToken removes a token whoever owns it (FCM said it is unregistered).
 func (s *PostgresStore) DeleteToken(ctx context.Context, token string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM uretim.cihazlar WHERE token=$1`, token)
+	return err
+}
+
+// GetVocalRange returns the stored vocal range of userID, or nil, nil when
+// none was saved.
+func (s *PostgresStore) GetVocalRange(ctx context.Context, userID string) (*model.VocalRangeRecord, error) {
+	var r model.VocalRangeRecord
+	err := s.pool.QueryRow(ctx, `SELECT alt, ust, merkez, kaynak, olcum
+		FROM uretim.ses_araliklari WHERE sahip=$1`, userID).
+		Scan(&r.Low, &r.High, &r.ComfortCenter, &r.Source, &r.MeasuredAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.MeasuredAt = r.MeasuredAt.UTC()
+	return &r, nil
+}
+
+// SaveVocalRange upserts the vocal range of userID.
+func (s *PostgresStore) SaveVocalRange(ctx context.Context, userID string, r model.VocalRangeRecord) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO uretim.ses_araliklari (sahip, alt, ust, merkez, kaynak, olcum, guncelleme)
+		VALUES ($1,$2,$3,$4,$5,$6,now())
+		ON CONFLICT (sahip) DO UPDATE SET alt=EXCLUDED.alt, ust=EXCLUDED.ust, merkez=EXCLUDED.merkez,
+			kaynak=EXCLUDED.kaynak, olcum=EXCLUDED.olcum, guncelleme=now()`,
+		userID, r.Low, r.High, r.ComfortCenter, r.Source, r.MeasuredAt)
 	return err
 }

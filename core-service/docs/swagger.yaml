@@ -1,5 +1,10 @@
 basePath: /
 definitions:
+  handler.vocalRangeBody:
+    properties:
+      range:
+        $ref: '#/definitions/model.VocalRangeRecord'
+    type: object
   model.Arrangement:
     properties:
       density:
@@ -500,6 +505,15 @@ definitions:
     - LanguageEN
     - LanguageTR
     - LanguageFR
+  model.LyricCue:
+    properties:
+      at:
+        type: integer
+      kind:
+        type: string
+      syllableIndex:
+        type: integer
+    type: object
   model.LyricTimelineLine:
     properties:
       endMs:
@@ -595,6 +609,16 @@ definitions:
     properties:
       balance:
         type: integer
+      cues:
+        description: 'Cues parallels Drafts: draft, line, cue. Empty list for a line
+          without cues.'
+        items:
+          items:
+            items:
+              $ref: '#/definitions/model.LyricCue'
+            type: array
+          type: array
+        type: array
       drafts:
         items:
           items:
@@ -774,6 +798,13 @@ definitions:
     properties:
       balance:
         type: integer
+      cues:
+        description: Cues parallels Lines. Empty list for a line without cues.
+        items:
+          items:
+            $ref: '#/definitions/model.LyricCue'
+          type: array
+        type: array
       lines:
         items:
           type: string
@@ -830,6 +861,13 @@ definitions:
           type: string
         minItems: 1
         type: array
+      vocalBalanceDb:
+        description: |-
+          VocalBalanceDb shifts the user's voice against the music in the final
+          master (spec 9 section 3.7). Optional; absent means 0.
+        maximum: 6
+        minimum: -6
+        type: number
       vocalTakes:
         items:
           $ref: '#/definitions/model.VocalTake'
@@ -1248,6 +1286,31 @@ definitions:
         maximum: 96
         minimum: 24
         type: integer
+    type: object
+  model.VocalRangeRecord:
+    properties:
+      comfortCenter:
+        maximum: 96
+        minimum: 24
+        type: integer
+      high:
+        maximum: 96
+        minimum: 24
+        type: integer
+      low:
+        maximum: 96
+        minimum: 24
+        type: integer
+      measuredAt:
+        type: string
+      source:
+        enum:
+        - measured
+        - assumed
+        type: string
+    required:
+    - measuredAt
+    - source
     type: object
   model.VocalRequest:
     properties:
@@ -2021,6 +2084,57 @@ paths:
       summary: Get master job status
       tags:
       - Master
+  /api/profile/vocal-range:
+    get:
+      description: Returns the caller's stored vocal range, or null when none was
+        saved.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.vocalRangeBody'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Get the stored vocal range
+      tags:
+      - account
+    put:
+      consumes:
+      - application/json
+      description: Stores the caller's vocal range, replacing any earlier one.
+      parameters:
+      - description: Vocal range
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/model.VocalRangeRecord'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.vocalRangeBody'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Save the vocal range
+      tags:
+      - account
   /api/render/cancel/{jobId}:
     post:
       description: Cancel a running or queued render job

@@ -180,6 +180,9 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 		VocalTakes:  req.VocalTakes,
 		GuideURL:    req.GuideURL,
 	}
+	if req.VocalBalanceDb != nil {
+		payload.VocalBalanceDb = *req.VocalBalanceDb
+	}
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {

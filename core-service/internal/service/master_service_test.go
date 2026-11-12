@@ -343,3 +343,33 @@ func TestStartFinal_GuideURL_CopiedToPayload(t *testing.T) {
 		t.Errorf("payload GuideURL = %q, want %q", payload.GuideURL, req.GuideURL)
 	}
 }
+
+func TestStartFinal_VocalBalanceCopiedToPayload(t *testing.T) {
+	liveRedis(t)
+	for _, tc := range []struct {
+		name string
+		in   *float64
+		want float64
+	}{{"set", func() *float64 { v := 1.5; return &v }(), 1.5}, {"absent", nil, 0}} {
+		repo := jobs.NewMemoryStore(nil)
+		fake := &credit.FakeSpender{IsEnforced: true}
+		s := NewMasterService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+		req := masterFinalRequest(t, "kullanici-a")
+		req.VocalBalanceDb = tc.in
+		resp, err := s.StartFinal(context.Background(), "kullanici-a", req)
+		if err != nil {
+			t.Fatalf("%s: StartFinal: %v", tc.name, err)
+		}
+		job, err := repo.Get(context.Background(), resp.JobID)
+		if err != nil {
+			t.Fatalf("%s: Get: %v", tc.name, err)
+		}
+		var payload model.MasterJobPayload
+		if err := json.Unmarshal(job.Payload, &payload); err != nil {
+			t.Fatalf("%s: payload: %v", tc.name, err)
+		}
+		if payload.VocalBalanceDb != tc.want {
+			t.Errorf("%s: payload balance = %v, want %v", tc.name, payload.VocalBalanceDb, tc.want)
+		}
+	}
+}

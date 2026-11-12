@@ -101,6 +101,22 @@ type LyricsJobSectionResult struct {
 	Index  int      `json:"index"`
 	Status string   `json:"status"`
 	Lines  []string `json:"lines"`
+	// Cues parallels Lines. Absent on results written before cues existed.
+	Cues [][]LyricCue `json:"cues,omitempty"`
+}
+
+// AppendLine adds a line and its cues. Cues is first padded with empty lists
+// to the length of Lines, so a result written before cues existed stays aligned.
+func (s *LyricsJobSectionResult) AppendLine(l LyricLine) {
+	for len(s.Cues) < len(s.Lines) {
+		s.Cues = append(s.Cues, []LyricCue{})
+	}
+	cues := l.Cues
+	if cues == nil {
+		cues = []LyricCue{}
+	}
+	s.Lines = append(s.Lines, l.Text)
+	s.Cues = append(s.Cues, cues)
 }
 
 // LyricsJobResult is the stored and served result of a lyrics job.

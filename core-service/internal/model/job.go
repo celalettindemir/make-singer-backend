@@ -65,4 +65,6 @@ type MasterJobPayload struct {
 	MixSnapshot MixSnapshot   `json:"mixSnapshot"`
 	VocalTakes  []VocalTake   `json:"vocalTakes,omitempty"`
 	GuideURL    string        `json:"guideUrl,omitempty"`
+	// VocalBalanceDb is the voice/music balance in dB; 0 when not set.
+	VocalBalanceDb float64 `json:"vocalBalanceDb,omitempty"`
 }

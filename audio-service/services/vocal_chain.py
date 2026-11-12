@@ -349,9 +349,15 @@ def _lufs(x2: np.ndarray, rate: int, mask: np.ndarray | None = None) -> float:
 
 
 def mix_vocal(
-    vocal: VocalOut, inst: np.ndarray, rate: int, inplace: bool = False
+    vocal: VocalOut,
+    inst: np.ndarray,
+    rate: int,
+    inplace: bool = False,
+    balance_db: float = 0.0,
 ) -> tuple[np.ndarray, dict[str, float]]:
     """Carve the instrumental, set the vocal 2 LU ahead, duck under the voice.
+
+    balance_db shifts the vocal against the instrumental (positive = louder voice).
 
     With inplace=True the carved and ducked instrumental is built in `inst`'s own
     buffer when no padding is needed (saves one full-length copy).
@@ -373,9 +379,9 @@ def mix_vocal(
     mask = act if act.sum() > rate else None
     lv, li = _lufs(voc, rate, mask), _lufs(ins, rate, mask)
     if np.isfinite(lv) and np.isfinite(li):
-        gain_db = li + FRONT_LU - lv
+        gain_db = li + FRONT_LU + balance_db - lv
     else:
-        gain_db = 0.0
+        gain_db = balance_db
     gain = np.float32(10 ** (gain_db / 20))
 
     if act.any():
@@ -390,7 +396,12 @@ def mix_vocal(
     for a in range(0, n, _LUFS_CHUNK):
         ins[:, a : a + _LUFS_CHUNK] *= duck[a : a + _LUFS_CHUNK]
         ins[:, a : a + _LUFS_CHUNK] += voc[:, a : a + _LUFS_CHUNK] * gain
-    info = {"vocal_lufs": lv, "inst_lufs": li, "vocal_gain_db": float(gain_db)}
+    info = {
+        "vocal_lufs": lv,
+        "inst_lufs": li,
+        "vocal_gain_db": float(gain_db),
+        "balance_db": float(balance_db),
+    }
     return ins, info
 
 

@@ -58,6 +58,8 @@ type MasterRequest struct {
 	VocalTakes  []VocalTakeInput `json:"vocal_takes,omitempty"`
 	GuideKey    string           `json:"guide_key,omitempty"`
 	OutputKey   string           `json:"output_key"`
+	// VocalBalanceDb is omitted when 0 (the audio service defaults to 0).
+	VocalBalanceDb float64 `json:"vocal_balance_db,omitempty"`
 }
 
 // MasterResponse represents the response from mastering

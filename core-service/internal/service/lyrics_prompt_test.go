@@ -151,3 +151,37 @@ func TestPrompt_TurkishGuidance(t *testing.T) {
 		t.Error("en system prompt must not carry the Turkish guidance")
 	}
 }
+
+func TestPrompt_CraftRulesUnchanged(t *testing.T) {
+	// guards the live v1.10.3 poet-musician brief: these lines stay verbatim
+	for _, lang := range []model.Language{model.LanguageTR, model.LanguageEN, model.LanguageFR} {
+		p := buildSystemPrompt(lang)
+		for _, s := range []string{
+			"a poet who is also a musician. Every line has to sit on the beat and feel good in the mouth.",
+			"- Sound: repeat vowels and consonants inside lines, and end lines on syllables a singer can hold.",
+			"If a line could be in any song, replace it.",
+			languageGuidance[lang],
+		} {
+			if !strings.Contains(p, s) {
+				t.Fatalf("%s: lost %q", lang, s)
+			}
+		}
+	}
+}
+
+func TestPrompt_SingabilityAndMarksPerLanguage(t *testing.T) {
+	for _, lang := range []model.Language{model.LanguageTR, model.LanguageEN, model.LanguageFR} {
+		for _, p := range []string{buildSystemPrompt(lang), buildStreamSystemPrompt(lang)} {
+			if !strings.Contains(p, singabilityGuidance[lang]) || !strings.Contains(p, cueMarkRule) {
+				t.Fatal(lang)
+			}
+			if strings.Index(p, languageGuidance[lang]) > strings.Index(p, singabilityGuidance[lang]) ||
+				strings.Index(p, singabilityGuidance[lang]) > strings.Index(p, cueMarkRule) {
+				t.Fatalf("%s: wrong order", lang)
+			}
+		}
+	}
+	if !strings.Contains(singabilityGuidance[model.LanguageTR], "(a, e, ı, i)") {
+		t.Fatal("tr vowels")
+	}
+}
