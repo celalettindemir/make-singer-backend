@@ -36,12 +36,14 @@ const (
 	TaskTypeMaster = "master:process"
 )
 
-// ErrPlanRequired: the stems render is for an active Pro plan only (R-CRD-16).
+// ErrHumNotFound: the render request names a hum that is not in the caller's
+// storage prefix.
 var ErrHumNotFound = errors.New("hum not found")
 
 // ErrHumNeedsVocal: a hum render has to carry the vocal request (the lyrics).
 var ErrHumNeedsVocal = errors.New("a hum render needs a vocal request")
 
+// ErrPlanRequired: the stems render is for an active Pro plan only (R-CRD-16).
 var ErrPlanRequired = errors.New("the stems render needs the Pro plan")
 
 // RenderService handles render job management

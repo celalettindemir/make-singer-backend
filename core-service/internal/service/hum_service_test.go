@@ -52,11 +52,15 @@ type fakeTranscriber struct {
 	block   bool
 	calls   int
 	gotLang string
+	gotName string
+	gotData []byte
 }
 
 func (f *fakeTranscriber) Transcribe(ctx context.Context, audio []byte, filename, language string) (*client.Transcription, error) {
 	f.calls++
 	f.gotLang = language
+	f.gotName = filename
+	f.gotData = audio
 	if f.block {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -192,5 +196,83 @@ func TestHumService_Delete_BuildsKey(t *testing.T) {
 	}
 	if err := s.Delete(context.Background(), "u1", "p1", "../x"); !errors.Is(err, client.ErrInvalidSegment) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestHumService_AAC_TranscribesTheConvertedMp3(t *testing.T) {
+	tr := &fakeTranscriber{text: "Oy şeftaşım, şeftaşım. Sarı sarı gözlerine"}
+	st := &humStorage{}
+	s := NewHumService(st, testR2Cfg(), &fakePreparer{durationMs: 9000}, tr, time.Second)
+	var fetched string
+	s.fetch = func(_ context.Context, url string) ([]byte, error) {
+		fetched = url
+		return []byte("MP3DATA"), nil
+	}
+	resp, err := s.Upload(context.Background(), "u1", "p1", model.LanguageTR, "audio/aac", []byte("ADTS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.calls != 1 || tr.gotName != "hum.mp3" || string(tr.gotData) != "MP3DATA" {
+		t.Errorf("transcribed %q (%q) in %d calls, want hum.mp3 with the mp3 bytes", tr.gotName, tr.gotData, tr.calls)
+	}
+	if !strings.Contains(fetched, "hums/u1/p1/"+resp.HumID+".mp3") {
+		t.Errorf("fetched %q", fetched)
+	}
+	if resp.Transcript == nil {
+		t.Error("transcript missing")
+	}
+}
+
+func TestHumService_AAC_FetchFails_NullTranscript(t *testing.T) {
+	tr := &fakeTranscriber{text: "hello there world"}
+	s := NewHumService(&humStorage{}, testR2Cfg(), &fakePreparer{durationMs: 9000}, tr, time.Second)
+	s.fetch = func(context.Context, string) ([]byte, error) { return nil, errors.New("down") }
+	resp, err := s.Upload(context.Background(), "u1", "p1", "", "audio/aac", []byte("ADTS"))
+	if err != nil || resp.Transcript != nil || tr.calls != 0 {
+		t.Fatalf("resp=%+v err=%v calls=%d", resp, err, tr.calls)
+	}
+}
+
+func TestHumService_WAV_SendsTheSource(t *testing.T) {
+	tr := &fakeTranscriber{text: "hello there world"}
+	s := NewHumService(&humStorage{}, testR2Cfg(), &fakePreparer{durationMs: 9000}, tr, time.Second)
+	s.fetch = func(context.Context, string) ([]byte, error) { t.Error("fetch must only run for aac"); return nil, nil }
+	if _, err := s.Upload(context.Background(), "u1", "p1", "", "audio/wav", []byte("RIFF")); err != nil {
+		t.Fatal(err)
+	}
+	if tr.gotName != "hum.wav" || string(tr.gotData) != "RIFF" {
+		t.Errorf("sent %q %q", tr.gotName, tr.gotData)
+	}
+}
+
+type urlFailStorage struct{ humStorage }
+
+func (u *urlFailStorage) URLFor(context.Context, string) (string, time.Time, error) {
+	return "", time.Time{}, errors.New("signer down")
+}
+
+func TestHumService_URLForFails_DeletesMp3(t *testing.T) {
+	st := &urlFailStorage{}
+	tr := &fakeTranscriber{text: "hello world"}
+	s := NewHumService(st, testR2Cfg(), &fakePreparer{durationMs: 9000}, tr, time.Second)
+	if _, err := s.Upload(context.Background(), "u1", "p1", "", "audio/wav", []byte("x")); err == nil {
+		t.Fatal("want an error")
+	}
+	if len(st.deletes) != 2 || !strings.HasSuffix(st.deletes[0], "-src.wav") || !strings.HasSuffix(st.deletes[1], ".mp3") {
+		t.Errorf("deletes = %v", st.deletes)
+	}
+	if tr.calls != 0 {
+		t.Error("no transcription after a signing failure")
+	}
+}
+
+func TestHumService_PrepareFailsOtherwise_DeletesMp3(t *testing.T) {
+	st := &humStorage{}
+	s := NewHumService(st, testR2Cfg(), &fakePreparer{err: errors.New("timeout")}, nil, time.Second)
+	if _, err := s.Upload(context.Background(), "u1", "p1", "", "audio/wav", []byte("x")); err == nil || errors.Is(err, ErrHumUnreadable) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(st.deletes) != 2 || !strings.HasSuffix(st.deletes[0], "-src.wav") || !strings.HasSuffix(st.deletes[1], ".mp3") {
+		t.Errorf("deletes = %v", st.deletes)
 	}
 }

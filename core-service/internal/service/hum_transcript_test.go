@@ -40,6 +40,23 @@ func TestHumLines(t *testing.T) {
 		{"ımm atılır", "ımm seni sevdim", nil, "tr", []string{"seni sevdim"}},
 		{"nanana atılır", "nanana seni sevdim", nil, "tr", []string{"seni sevdim"}},
 		{"lalala atılır", "lalala seni sevdim", nil, "tr", []string{"seni sevdim"}},
+		// I-2: real words at line edges stay (review probes).
+		{"fr: la vie en rose", "La vie en rose. Ta voix me manque. Du soleil dans mes yeux", nil, "fr",
+			[]string{"La vie en rose", "Ta voix me manque", "Du soleil dans mes yeux"}},
+		{"tr: ya sabır", "Ya sabır, ya sabır. Gönlüm de aklım da", nil, "tr",
+			[]string{"Ya sabır, ya sabır", "Gönlüm de aklım da"}},
+		{"tr: ta kendisi", "Ta kendisi geldi", nil, "tr", []string{"Ta kendisi geldi"}},
+		{"tr: yaya dudu", "Yaya geçidinde bekledim. Dudu dilli yarim", nil, "tr",
+			[]string{"Yaya geçidinde bekledim", "Dudu dilli yarim"}},
+		{"en: oh my love", "Oh my love, my darling", nil, "en", []string{"Oh my love, my darling"}},
+		{"en: nana dada", "Nana told me so. I love you Dada", nil, "en",
+			[]string{"Nana told me so", "I love you Dada"}},
+		{"bilinmeyen dil: umum", "Umum halka", nil, "", []string{"Umum halka"}},
+		{"çift lala kalır", "lala seni sevdim", nil, "tr", []string{"lala seni sevdim"}},
+		{"iki heceli dolgu dizisi atılır", "oh la la love you", nil, "en", []string{"love you"}},
+		{"sondaki dolgu dizisi atılır", "love you na na", nil, "en", []string{"love you"}},
+		{"tek hece ortada kalır", "seni la sevdim", nil, "tr", []string{"seni la sevdim"}},
+		{"hmhmhm zinciri atılır", "hmhmhm seni sevdim", nil, "tr", []string{"seni sevdim"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

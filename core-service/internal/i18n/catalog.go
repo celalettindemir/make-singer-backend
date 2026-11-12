@@ -53,6 +53,8 @@ var (
 	KeyHumFileTooLarge     = Key{"hum_file_too_large"}
 	KeyHumDuration         = Key{"hum_duration"}
 	KeyHumUnreadable       = Key{"hum_unreadable"}
+	KeyHumIDsInvalid       = Key{"hum_ids_invalid"}
+	KeyHumProjectInvalid   = Key{"hum_project_invalid"}
 	KeyHumNotFound         = Key{"hum_not_found"}
 	KeyHumNeedsLyrics      = Key{"hum_needs_lyrics"}
 	KeyTicketIssueFailed   = Key{"ticket_issue_failed"}
@@ -177,6 +179,8 @@ var catalog = map[Key]texts{
 	KeyHumFileTooLarge:     {"Dosya boyutu 10 MB sınırını aşıyor.", "The file exceeds the 10 MB limit."},
 	KeyHumDuration:         {"Mırıltı 5 ile 30 saniye arasında olmalı.", "The hum must be 5 to 30 seconds long."},
 	KeyHumUnreadable:       {"Ses dosyası okunamadı.", "The audio file could not be read."},
+	KeyHumIDsInvalid:       {"Geçersiz projectId ya da humId.", "Invalid projectId or humId."},
+	KeyHumProjectInvalid:   {"Geçersiz projectId.", "Invalid projectId."},
 	KeyHumNotFound:         {"Mırıltı bulunamadı.", "Hum not found."},
 	KeyHumNeedsLyrics:      {"Mırıltılı işleme için sözler gerekir.", "A hum render needs lyrics."},
 	KeyTicketIssueFailed:   {"Bilet üretilemedi.", "Could not issue a ticket."},

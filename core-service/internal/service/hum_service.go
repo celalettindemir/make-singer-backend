@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,10 +50,32 @@ type HumService struct {
 	preparer    client.HumPreparer
 	transcriber client.Transcriber
 	timeout     time.Duration
+	// fetch downloads a signed URL; replaced in tests.
+	fetch func(ctx context.Context, url string) ([]byte, error)
+}
+
+// maxHumFetch bounds the converted mp3 read back for transcription (a 30 s
+// hum at 192 kbit/s is under 1 MB).
+const maxHumFetch = 4 << 20
+
+func fetchURL(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, maxHumFetch))
 }
 
 func NewHumService(storage client.StorageClient, r2Cfg *config.R2Config, preparer client.HumPreparer, transcriber client.Transcriber, timeout time.Duration) *HumService {
-	return &HumService{storage: storage, r2Cfg: r2Cfg, preparer: preparer, transcriber: transcriber, timeout: timeout}
+	return &HumService{storage: storage, r2Cfg: r2Cfg, preparer: preparer, transcriber: transcriber, timeout: timeout, fetch: fetchURL}
 }
 
 // Upload writes the source, has audio-service measure and convert it to mp3,
@@ -96,27 +120,35 @@ func (s *HumService) Upload(ctx context.Context, userID, projectID string, lang 
 		if errors.Is(err, client.ErrAudioUnprocessable) {
 			return nil, ErrHumUnreadable
 		}
+		// audio-service may have written the mp3 before it failed (a timeout
+		// on the response, say); remove it best-effort.
+		s.deleteBestEffort(ctx, mp3Key)
 		return nil, fmt.Errorf("could not prepare the hum: %w", err)
 	}
 	if prep.DurationMs < humAcceptMinMs || prep.DurationMs > humAcceptMaxMs {
-		if delErr := s.storage.Delete(ctx, mp3Key); delErr != nil {
-			log.Printf("hum upload: could not delete %s: %v", mp3Key, delErr)
-		}
+		s.deleteBestEffort(ctx, mp3Key)
 		return nil, &HumDurationError{DurationMs: prep.DurationMs}
-	}
-
-	var transcript *model.HumTranscript
-	if lines := s.transcribe(ctx, data, ext, lang); len(lines) > 0 {
-		transcript = &model.HumTranscript{Lines: lines}
 	}
 
 	fileURL, _, err := s.storage.URLFor(ctx, mp3Key)
 	if err != nil {
+		s.deleteBestEffort(ctx, mp3Key)
 		return nil, fmt.Errorf("could not sign the hum URL: %w", err)
+	}
+
+	var transcript *model.HumTranscript
+	if lines := s.transcribe(ctx, data, ext, fileURL, lang); len(lines) > 0 {
+		transcript = &model.HumTranscript{Lines: lines}
 	}
 	log.Printf("hum upload: user=%s project=%s hum=%s durationMs=%d lines=%d",
 		userID, projectID, humID, prep.DurationMs, len(transcriptLines(transcript)))
 	return &model.HumUploadResponse{HumID: humID, FileURL: fileURL, DurationMs: prep.DurationMs, Transcript: transcript}, nil
+}
+
+func (s *HumService) deleteBestEffort(ctx context.Context, key string) {
+	if err := s.storage.Delete(ctx, key); err != nil {
+		log.Printf("hum upload: could not delete %s: %v", key, err)
+	}
 }
 
 func transcriptLines(t *model.HumTranscript) []string {
@@ -128,7 +160,7 @@ func transcriptLines(t *model.HumTranscript) []string {
 
 // transcribe returns the lyric lines or nil when there are none, the
 // transcriber is missing, or it fails or runs out of time.
-func (s *HumService) transcribe(ctx context.Context, data []byte, ext string, lang model.Language) []string {
+func (s *HumService) transcribe(ctx context.Context, data []byte, ext, mp3URL string, lang model.Language) []string {
 	if s.transcriber == nil || !s.transcriber.IsConfigured() {
 		return nil
 	}
@@ -140,6 +172,15 @@ func (s *HumService) transcribe(ctx context.Context, data []byte, ext string, la
 		apiLang = string(lang)
 	default:
 		lang = ""
+	}
+	// OpenAI does not accept raw AAC: transcribe the converted mp3 instead.
+	if ext == "aac" {
+		mp3, err := s.fetch(tctx, mp3URL)
+		if err != nil || len(mp3) == 0 {
+			log.Printf("hum upload: could not read the mp3 for transcription: %v", err)
+			return nil
+		}
+		data, ext = mp3, "mp3"
 	}
 	t, err := s.transcriber.Transcribe(tctx, data, "hum."+ext, apiLang)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/i18n"
 	"github.com/makeasinger/api/internal/model"
@@ -91,7 +92,7 @@ func (h *HumHandler) Upload(c *fiber.Ctx) error {
 		var de *service.HumDurationError
 		switch {
 		case errors.Is(err, client.ErrInvalidSegment):
-			return response.ValidationError(c, i18n.KeyUploadIDsInvalid, nil)
+			return response.ValidationError(c, i18n.KeyHumProjectInvalid, nil)
 		case errors.As(err, &de):
 			return response.ValidationError(c, i18n.KeyHumDuration, map[string]interface{}{
 				"minMs":      model.HumMinMs,
@@ -131,9 +132,13 @@ func (h *HumHandler) Delete(c *fiber.Ctx) error {
 	if projectID == "" {
 		return response.ValidationError(c, i18n.KeyProjectIDRequired, nil)
 	}
-	if err := h.service.Delete(c.Context(), userID, projectID, c.Params("humId")); err != nil {
+	humID := c.Params("humId")
+	if _, err := uuid.Parse(humID); err != nil {
+		return response.ValidationError(c, i18n.KeyHumIDsInvalid, nil)
+	}
+	if err := h.service.Delete(c.Context(), userID, projectID, humID); err != nil {
 		if errors.Is(err, client.ErrInvalidSegment) {
-			return response.ValidationError(c, i18n.KeyUploadIDsInvalid, nil)
+			return response.ValidationError(c, i18n.KeyHumIDsInvalid, nil)
 		}
 		return internalError(c, err)
 	}

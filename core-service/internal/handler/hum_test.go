@@ -8,6 +8,8 @@ import (
 	"mime/multipart"
 	"net/http/httptest"
 	"net/textproto"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -140,5 +142,76 @@ func TestHumHandler_Delete_MissingProject400(t *testing.T) {
 	}
 	if resp.StatusCode != 400 {
 		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}
+
+type langProbe struct{ got []string }
+
+func (p *langProbe) Transcribe(_ context.Context, _ []byte, _ string, language string) (*client.Transcription, error) {
+	p.got = append(p.got, language)
+	return &client.Transcription{Text: "hello there world"}, nil
+}
+func (p *langProbe) IsConfigured() bool { return true }
+
+func humLangRequest(t *testing.T, app *fiber.App, language string) int {
+	t.Helper()
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	_ = w.WriteField("projectId", "p1")
+	if language != "" {
+		_ = w.WriteField("language", language)
+	}
+	header := textproto.MIMEHeader{}
+	header.Set("Content-Disposition", `form-data; name="file"; filename="hum.wav"`)
+	header.Set("Content-Type", "audio/wav")
+	part, _ := w.CreatePart(header)
+	_, _ = part.Write([]byte("RIFF"))
+	_ = w.Close()
+	req := httptest.NewRequest("POST", "/hum", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := app.Test(req, -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode
+}
+
+// An unknown language reaches the service as "" and is never sent to OpenAI.
+func TestHumHandler_Upload_LanguageFiltering(t *testing.T) {
+	probe := &langProbe{}
+	svc := service.NewHumService(&humTestStorage{}, &config.R2Config{PublicBucket: "pub", PrivateBucket: "priv", PublicURL: "https://cdn"},
+		humTestPreparer{12000}, probe, time.Second)
+	h := NewHumHandler(svc)
+	app := fiber.New()
+	app.Post("/hum", func(c *fiber.Ctx) error { c.Locals("userId", "user-1"); return h.Upload(c) })
+	for _, lang := range []string{"de", "TR", "tr", "fr", ""} {
+		if code := humLangRequest(t, app, lang); code != 201 {
+			t.Fatalf("language %q: status %d", lang, code)
+		}
+	}
+	want := []string{"", "", "tr", "fr", ""}
+	if !reflect.DeepEqual(probe.got, want) {
+		t.Errorf("languages sent = %q, want %q", probe.got, want)
+	}
+}
+
+func TestHumHandler_Delete_BadHumID400(t *testing.T) {
+	app, st := humApp(12000)
+	for _, id := range []string{"abc", "..%2Fx", "0b8f2c1e-1111-4222-8333"} {
+		resp, err := app.Test(httptest.NewRequest("DELETE", "/hum/"+id+"?projectId=p1", nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&got)
+		if resp.StatusCode != 400 {
+			t.Fatalf("%s: status = %d", id, resp.StatusCode)
+		}
+		if msg := got["error"].(map[string]any)["message"]; msg == nil || !strings.Contains(msg.(string), "humId") {
+			t.Errorf("%s: no message in %v", id, got)
+		}
+	}
+	if len(st.deleted) != 0 {
+		t.Errorf("deleted = %v", st.deleted)
 	}
 }

@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -180,5 +181,39 @@ func TestRenderWorker_CoverRejected_FinalAttemptRefunds(t *testing.T) {
 	}
 	if got := renderRefunds(cs.fake); len(got) != 1 || got[0].ID != testJobID || got[0].Op != credit.OpRenderMix {
 		t.Errorf("refunds = %+v, want one render_mix", got)
+	}
+}
+
+// A permanent Suno rejection of the cover is final at once: not retried, and
+// the held credit comes back even though this is not the last attempt.
+func TestRenderWorker_CoverPermanentRejection_NoRetryRefunds(t *testing.T) {
+	cs := newCreditSetup(t, model.JobStatusQueued, &signStorage{})
+	base := &vocalSuno{}
+	rejected := fmt.Errorf("%w: %w", client.ErrCoverRejected, &client.SunoAPIError{Code: 422, Msg: "bad audio"})
+	s := &coverSuno{vocalSuno: *base, t: t, coverErr: rejected}
+	cs.w.music = s
+	cs.w.isLastAttempt = func(context.Context) bool { return false }
+	err := cs.w.ProcessTask(context.Background(), vocalTask(t, humPayload(model.HumFree)))
+	if !errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("want SkipRetry, got %v", err)
+	}
+	if st := jobStatus(t, cs.svc); st != model.JobStatusFailed {
+		t.Errorf("status = %s, want failed", st)
+	}
+	if got := renderRefunds(cs.fake); len(got) != 1 {
+		t.Errorf("refunds = %+v, want one", got)
+	}
+}
+
+// A retryable failure on a non-final attempt keeps the job alive.
+func TestRenderWorker_CoverTransientError_Retries(t *testing.T) {
+	cs := newCreditSetup(t, model.JobStatusQueued, &signStorage{})
+	base := &vocalSuno{}
+	s := &coverSuno{vocalSuno: *base, t: t, coverErr: &client.SunoAPIError{Code: 429, Msg: "slow down"}}
+	cs.w.music = s
+	cs.w.isLastAttempt = func(context.Context) bool { return false }
+	err := cs.w.ProcessTask(context.Background(), vocalTask(t, humPayload(model.HumFree)))
+	if err == nil || errors.Is(err, asynq.SkipRetry) {
+		t.Fatalf("want a retryable error, got %v", err)
 	}
 }

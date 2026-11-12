@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 )
@@ -62,5 +63,26 @@ func TestUploadCover_EnvelopeError(t *testing.T) {
 	})
 	if _, err := c.UploadCover(context.Background(), &UploadCoverRequest{UploadURL: "u"}); err == nil {
 		t.Fatal("want an error for a code 400 envelope")
+	}
+}
+
+func TestUploadCover_PermanentRejection(t *testing.T) {
+	for _, code := range []int{400, 413, 422} {
+		c := testSuno(t, func(w http.ResponseWriter, r *http.Request) { writeEnvelope(w, code, nil) })
+		_, err := c.UploadCover(context.Background(), &UploadCoverRequest{UploadURL: "u"})
+		if !errors.Is(err, ErrCoverRejected) {
+			t.Errorf("code %d: err = %v, want ErrCoverRejected", code, err)
+		}
+	}
+}
+
+func TestUploadCover_RetryableRejections(t *testing.T) {
+	for _, code := range []int{402, 429, 455, 500} {
+		c := testSuno(t, func(w http.ResponseWriter, r *http.Request) { writeEnvelope(w, code, nil) })
+		_, err := c.UploadCover(context.Background(), &UploadCoverRequest{UploadURL: "u"})
+		var apiErr *SunoAPIError
+		if err == nil || errors.Is(err, ErrCoverRejected) || !errors.As(err, &apiErr) {
+			t.Errorf("code %d: err = %v, want a plain SunoAPIError", code, err)
+		}
 	}
 }

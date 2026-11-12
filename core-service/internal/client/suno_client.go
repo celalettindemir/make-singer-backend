@@ -266,6 +266,32 @@ func (c *SunoClient) WaitStems(ctx context.Context, stemTaskID string, interval,
 	return result, vocalURL, err
 }
 
+// SunoAPIError is a rejection from the Suno API: an HTTP status outside 2xx
+// (Status) or an envelope code other than 200 (Code).
+type SunoAPIError struct {
+	Status int
+	Code   int
+	Msg    string
+}
+
+func (e *SunoAPIError) Error() string {
+	if e.Status != 0 {
+		return fmt.Sprintf("suno API error (status %d): %s", e.Status, e.Msg)
+	}
+	return fmt.Sprintf("suno API error (code %d): %s", e.Code, e.Msg)
+}
+
+// permanent reports a rejection a retry cannot fix: a bad request, a payload
+// too large or an unprocessable file. Rate limits (429), credits (402),
+// timeouts (408) and maintenance (455) are left retryable.
+func (e *SunoAPIError) permanent() bool {
+	n := e.Status
+	if n == 0 {
+		n = e.Code
+	}
+	return n == 400 || n == 413 || n == 422
+}
+
 // transientError is the error class waitFor tolerates (network, 5xx, malformed
 // response).
 type transientError struct{ error }
@@ -432,7 +458,7 @@ func (c *SunoClient) do(req *http.Request, out any) error {
 	log.Printf("[Suno API] %d %s %s", resp.StatusCode, req.Method, req.URL.Path)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("suno API error (status %d): %s", resp.StatusCode, string(raw))
+		return &SunoAPIError{Status: resp.StatusCode, Msg: string(raw)}
 	}
 
 	var envelope struct {
@@ -444,7 +470,7 @@ func (c *SunoClient) do(req *http.Request, out any) error {
 		return fmt.Errorf("suno response could not be decoded: %w", err)
 	}
 	if envelope.Code != 200 {
-		return fmt.Errorf("suno API error (code %d): %s", envelope.Code, envelope.Msg)
+		return &SunoAPIError{Code: envelope.Code, Msg: envelope.Msg}
 	}
 	if out == nil || len(envelope.Data) == 0 || string(envelope.Data) == "null" {
 		return nil

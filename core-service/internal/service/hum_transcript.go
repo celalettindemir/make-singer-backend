@@ -15,34 +15,45 @@ const (
 )
 
 var (
-	humFillersCommon = []string{
-		"na", "la", "da", "ta", "pa", "ba", "du", "dum", "ya", "yam", "pam", "nan", "lan",
-		"hmm", "hm", "mm", "ımm", "ım", "eee", "ee", "aaa", "ooo", "uuu", "oh", "ah", "uh", "ha",
+	// Pure fillers are never words. They are dropped at line edges, alone or
+	// as a chain of at least three repeats ("hmhmhm").
+	humPureFillersCommon = []string{
+		"hmm", "hm", "mm", "ımm", "ım", "eee", "ee", "aaa", "ooo", "uuu", "yam", "pam", "dum",
 	}
-	humFillersByLang = map[model.Language][]string{
+	humPureFillersByLang = map[model.Language][]string{
 		model.LanguageTR: {"ıı", "ıım"},
 		model.LanguageEN: {"um", "uhm", "huh"},
 		model.LanguageFR: {"euh", "heu"},
 	}
-	// Syllables that are real words when doubled ("baba", "papa") need three
-	// repeats before they count as filler.
-	humWordSyllables = map[string]bool{"ba": true, "pa": true}
+	// Word-like syllables are real words on their own ("la", "ya", "oh", "da"),
+	// so they are only filler in a run of two or more filler tokens at a line
+	// edge, or as one token of at least three repeats ("nanana"). Doubles such
+	// as "baba", "nana", "yaya" stay: the user's words are never altered.
+	humWordLike = []string{
+		"na", "la", "da", "ta", "pa", "ba", "du", "ya", "nan", "lan", "oh", "ah", "uh", "ha",
+	}
 )
 
-// humFillerSet is the filler list for lang; an unknown or empty language
+const (
+	kindWord     = iota // a real word: stays
+	kindWordLike        // may be filler, only inside an edge run
+	kindStrong          // filler wherever it stands at an edge
+)
+
+// humFillerSet is the pure filler list for lang; an unknown or empty language
 // gets the union of all languages.
 func humFillerSet(lang model.Language) map[string]bool {
 	set := make(map[string]bool)
-	for _, w := range humFillersCommon {
+	for _, w := range humPureFillersCommon {
 		set[humLower(w)] = true
 	}
-	if extra, ok := humFillersByLang[lang]; ok {
+	if extra, ok := humPureFillersByLang[lang]; ok {
 		for _, w := range extra {
 			set[humLower(w)] = true
 		}
 		return set
 	}
-	for _, extra := range humFillersByLang {
+	for _, extra := range humPureFillersByLang {
 		for _, w := range extra {
 			set[humLower(w)] = true
 		}
@@ -74,29 +85,53 @@ func repeatsUnit(word, unit string) bool {
 	return strings.Repeat(unit, len(word)/len(unit)) == word
 }
 
-func isHumFiller(key string, fillers map[string]bool) bool {
-	if key == "" || fillers[key] {
-		return true
+// repeatsAtLeast3 reports whether word is unit repeated three or more times.
+func repeatsAtLeast3(word, unit string) bool {
+	return unit != "" && len(word) >= 3*len(unit) && repeatsUnit(word, unit)
+}
+
+// humTokenKind classifies one word key as kindWord, kindWordLike or kindStrong.
+func humTokenKind(key string, pure map[string]bool) int {
+	if key == "" || pure[key] {
+		return kindStrong
 	}
-	for syl := range fillers {
-		if len(key) < len(syl)*2 || !repeatsUnit(key, syl) {
-			continue
+	for syl := range pure {
+		if repeatsAtLeast3(key, syl) {
+			return kindStrong
 		}
-		if humWordSyllables[syl] && len(key) < len(syl)*3 {
-			continue
-		}
-		return true
 	}
-	runes := []rune(key)
-	if len(runes) >= 2 && repeatsUnit(key, string(runes[0])) {
-		return true
+	for _, syl := range humWordLike {
+		if repeatsAtLeast3(key, syl) {
+			return kindStrong
+		}
+	}
+	if runes := []rune(key); len(runes) >= 3 && repeatsUnit(key, string(runes[0])) {
+		return kindStrong
 	}
 	// hmm, ımm, mm (not "im")
 	rest := strings.TrimLeft(key, "hı")
 	if len(key)-len(rest) <= 1 && rest != "" && strings.Trim(rest, "m") == "" {
-		return true
+		return kindStrong
 	}
-	return false
+	for _, syl := range humWordLike {
+		if key == syl {
+			return kindWordLike
+		}
+	}
+	return kindWord
+}
+
+// humEdgeRun is how many leading filler tokens of kinds to drop: a run of two
+// or more filler-ish tokens, or a single strong one.
+func humEdgeRun(kinds []int) int {
+	k := 0
+	for k < len(kinds) && kinds[k] != kindWord {
+		k++
+	}
+	if k >= 2 || (k == 1 && kinds[0] == kindStrong) {
+		return k
+	}
+	return 0
 }
 
 // splitHumSentences breaks free text at . ! ? … ; and line ends; commas stay.
@@ -132,23 +167,22 @@ func HumLines(t *client.Transcription, lang model.Language) []string {
 				continue
 			}
 			words := strings.Fields(text)
-			isFiller := make([]bool, len(words))
+			kinds := make([]int, len(words))
 			for i, w := range words {
-				isFiller[i] = isHumFiller(humWordKey(w), fillers)
+				kinds[i] = humTokenKind(humWordKey(w), fillers)
 			}
-			start, end := 0, len(words)
-			for start < end && isFiller[start] {
-				start++
+			start := humEdgeRun(kinds)
+			rev := make([]int, 0, len(kinds)-start)
+			for i := len(kinds) - 1; i >= start; i-- {
+				rev = append(rev, kinds[i])
 			}
-			for end > start && isFiller[end-1] {
-				end--
-			}
-			if start == end {
+			end := len(words) - humEdgeRun(rev)
+			if start >= end {
 				continue
 			}
 			count := 0
 			for i := start; i < end; i++ {
-				if !isFiller[i] && len([]rune(humWordKey(words[i]))) >= 2 {
+				if kinds[i] != kindStrong && len([]rune(humWordKey(words[i]))) >= 2 {
 					count++
 				}
 			}

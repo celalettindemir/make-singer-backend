@@ -1,6 +1,8 @@
 """Mirilti hazirlama testleri: sentetik ses, ag yok (ffmpeg gerekir)."""
 
 import shutil
+import subprocess
+import tracemalloc
 
 import numpy as np
 import pytest
@@ -65,3 +67,30 @@ def test_mirilti_ucu_okunamazda_422(monkeypatch):
     client = TestClient(main.app)
     resp = client.post("/mirilti-hazirla", json={"input_key": "a", "output_key": "b"})
     assert resp.status_code == 422
+
+
+def _uzun_opus(tmp_path, dakika: int) -> bytes:
+    """Kucuk ama cozulunce cok buyuk: dusuk bit hizli stereo 48 kHz Opus."""
+    yol = tmp_path / "uzun.ogg"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+         "-t", str(dakika * 60), "-c:a", "libopus", "-b:a", "6k", str(yol)],
+        check=True,
+    )
+    return yol.read_bytes()
+
+
+@pytest.mark.asyncio
+async def test_cok_uzun_kucuk_dosya_butun_cozulmez(tmp_path):
+    kaynak = _uzun_opus(tmp_path, 20)
+    assert len(kaynak) < 2 * 1024 * 1024  # dosya kucuk, cozulmus hali ~230 MB
+    sahte = SahteStorage(kaynak, str(tmp_path / "cikti.mp3"))
+    tracemalloc.start()
+    try:
+        sonuc = await HumService(sahte).prepare("hums/u/p/h-src.wav", "hums/u/p/h.mp3")
+        _, tepe = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    # Sunucunun 30.5 s ust siniri bunu reddeder; yine de 31 s'de kesilmis olmali.
+    assert 30500 < sonuc["duration_ms"] <= 31500
+    assert tepe < 100 * 1024 * 1024

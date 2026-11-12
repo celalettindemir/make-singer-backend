@@ -14,6 +14,12 @@ from pydub.exceptions import CouldntDecodeError
 
 from .storage import StorageService
 
+# The server accepts 5-30 s (+0.5 s). ffmpeg stops after this many seconds so a
+# small but highly compressible upload (hours of 6 kbps Opus) cannot be decoded
+# whole into memory; a longer file then reads as 31 s and is rejected by the
+# server's range check.
+DECODE_LIMIT_S = 31
+
 
 class HumUnreadable(Exception):
     """Dosya ses olarak cozulemedi ya da bos."""
@@ -35,7 +41,7 @@ class HumService:
             cikis = os.path.join(tmpdir, "cikis.mp3")
             self.storage.download_key_to_file(input_key, giris)
             try:
-                ses = AudioSegment.from_file(giris)
+                ses = AudioSegment.from_file(giris, duration=DECODE_LIMIT_S)
             except (CouldntDecodeError, IndexError) as e:
                 raise HumUnreadable(str(e)) from e
             sure_ms = len(ses)

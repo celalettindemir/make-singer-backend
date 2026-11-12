@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -22,6 +23,11 @@ type UploadCoverRequest struct {
 type CoverGenerator interface {
 	UploadCover(ctx context.Context, req *UploadCoverRequest) (string, error)
 }
+
+// ErrCoverRejected marks a permanent Suno rejection of an upload-cover call
+// (bad request, file too large or unprocessable). Nothing was charged and a
+// retry would be rejected again.
+var ErrCoverRejected = errors.New("suno rejected the cover request")
 
 var _ CoverGenerator = (*SunoClient)(nil)
 
@@ -48,6 +54,10 @@ func (c *SunoClient) UploadCover(ctx context.Context, req *UploadCoverRequest) (
 		TaskID string `json:"taskId"`
 	}
 	if err := c.post(ctx, "/api/v1/generate/upload-cover", body, &data); err != nil {
+		var apiErr *SunoAPIError
+		if errors.As(err, &apiErr) && apiErr.permanent() {
+			return "", fmt.Errorf("%w: %w", ErrCoverRejected, err)
+		}
 		return "", err
 	}
 	if data.TaskID == "" {

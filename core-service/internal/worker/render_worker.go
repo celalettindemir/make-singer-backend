@@ -308,6 +308,11 @@ func (w *RenderWorker) generateWithSuno(ctx context.Context, payload *model.Rend
 		taskID, err = w.music.GenerateMusic(ctx, req)
 	}
 	if err != nil {
+		if errors.Is(err, client.ErrCoverRejected) {
+			// A permanent rejection: nothing was charged and a retry would be
+			// rejected again, so fail (and refund) at once.
+			return nil, fmt.Errorf("music generation failed: %w: %w", err, asynq.SkipRetry)
+		}
 		return nil, fmt.Errorf("music generation failed: %w", err)
 	}
 	charged := func(what string, err error) error {
