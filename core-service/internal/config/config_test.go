@@ -667,3 +667,30 @@ func TestPushConfig_DefaultOffAndProjectID(t *testing.T) {
 		t.Errorf("push = %+v", cfg.Push)
 	}
 }
+
+func TestLoad_HumDefaults(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	h := cfg.Hum
+	if h.TranscribeModel != "gpt-4o-transcribe" || h.TranscribeFallbackModel != "whisper-1" {
+		t.Errorf("models = %q / %q", h.TranscribeModel, h.TranscribeFallbackModel)
+	}
+	if h.TranscribeTimeout != 20*time.Second {
+		t.Errorf("TranscribeTimeout = %v, want 20s", h.TranscribeTimeout)
+	}
+	if h.AudioWeightFaithful != 0.9 || h.AudioWeightFree != 0.6 || h.StyleWeightFaithful != 0.5 || h.StyleWeightFree != 0.6 {
+		t.Errorf("weights = %+v", h)
+	}
+	if cfg.RateLimit.HumPerMin != 10 {
+		t.Errorf("HumPerMin = %d, want 10", cfg.RateLimit.HumPerMin)
+	}
+}
+
+func TestLoad_HumWeightOutOfRange(t *testing.T) {
+	t.Setenv("HUM_AUDIO_WEIGHT_FREE", "1.5")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted an audio weight of 1.5")
+	}
+}

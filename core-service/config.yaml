@@ -24,6 +24,7 @@ ratelimit:
   public_web_visitor_per_min: 30 # per visitor (X-Ziyaretci-Ip) within the web requests, also checked; <=0 disables
   purchases_per_min: 20 # RATELIMIT_PURCHASES_PER_MIN: POST /api/purchases/*, per user
   webhooks_per_min: 120 # RATELIMIT_WEBHOOKS_PER_MIN: store webhooks, per IP
+  hum_per_min: 10 # RATELIMIT_HUM_PER_MIN: POST/DELETE /api/hum, per user
   # Cloudflare edge ranges whose CF-Connecting-IP is trusted for per-IP limits (comma-separated CIDRs).
   # Unset = the built-in Cloudflare list (clientip.DefaultCloudflareRanges); empty string disables the header.
   # cloudflare_ranges: ""
@@ -88,6 +89,16 @@ openai:
   reasoning_effort: "low" # empty = not sent
   temperature_generate: 0.8 # not sent: reasoning models reject temperature
   temperature_rewrite: 0.6
+
+# Hum (melody) uploads: OpenAI speech-to-text and Suno Upload and Cover weights
+hum:
+  transcribe_model: "gpt-4o-transcribe" # HUM_TRANSCRIBE_MODEL
+  transcribe_fallback_model: "whisper-1" # HUM_TRANSCRIBE_FALLBACK_MODEL
+  transcribe_timeout: "20s" # HUM_TRANSCRIBE_TIMEOUT: whole budget incl. fallback
+  audio_weight_faithful: 0.9 # HUM_AUDIO_WEIGHT_FAITHFUL (each weight in [0, 1])
+  audio_weight_free: 0.6 # HUM_AUDIO_WEIGHT_FREE
+  style_weight_faithful: 0.5 # HUM_STYLE_WEIGHT_FAITHFUL
+  style_weight_free: 0.6 # HUM_STYLE_WEIGHT_FREE
 
 # Anthropic (lyrics provider)
 anthropic:

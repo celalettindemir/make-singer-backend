@@ -38,6 +38,7 @@ type Config struct {
 	RateLimit RateLimitConfig
 	Groq      GroqConfig
 	OpenAI    OpenAIConfig
+	Hum       HumConfig
 	Anthropic AnthropicConfig
 	Lyrics    LyricsConfig
 	R2        R2Config
@@ -74,6 +75,9 @@ type RedisConfig struct {
 }
 
 type RateLimitConfig struct {
+	// HumPerMin is the per-minute per-user limit shared by POST /api/hum and
+	// DELETE /api/hum/{humId}.
+	HumPerMin      int
 	LyricsPerMin   int
 	RenderPerHour  int
 	MasterPerHour  int
@@ -217,6 +221,19 @@ type OpenAIConfig struct {
 	ReasoningEffort     string
 	TemperatureGenerate float64
 	TemperatureRewrite  float64
+}
+
+// HumConfig configures hum (melody) uploads: speech-to-text and the Suno
+// Upload and Cover weights.
+type HumConfig struct {
+	TranscribeModel         string
+	TranscribeFallbackModel string
+	TranscribeTimeout       time.Duration
+
+	AudioWeightFaithful float64
+	AudioWeightFree     float64
+	StyleWeightFaithful float64
+	StyleWeightFree     float64
 }
 
 // AnthropicConfig is the Anthropic Messages API client configuration.
@@ -448,6 +465,14 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("ratelimit.cloudflare_ranges", "RATELIMIT_CLOUDFLARE_RANGES")
 	_ = viper.BindEnv("ratelimit.purchases_per_min", "RATELIMIT_PURCHASES_PER_MIN")
 	_ = viper.BindEnv("ratelimit.webhooks_per_min", "RATELIMIT_WEBHOOKS_PER_MIN")
+	_ = viper.BindEnv("ratelimit.hum_per_min", "RATELIMIT_HUM_PER_MIN")
+	_ = viper.BindEnv("hum.transcribe_model", "HUM_TRANSCRIBE_MODEL")
+	_ = viper.BindEnv("hum.transcribe_fallback_model", "HUM_TRANSCRIBE_FALLBACK_MODEL")
+	_ = viper.BindEnv("hum.transcribe_timeout", "HUM_TRANSCRIBE_TIMEOUT")
+	_ = viper.BindEnv("hum.audio_weight_faithful", "HUM_AUDIO_WEIGHT_FAITHFUL")
+	_ = viper.BindEnv("hum.audio_weight_free", "HUM_AUDIO_WEIGHT_FREE")
+	_ = viper.BindEnv("hum.style_weight_faithful", "HUM_STYLE_WEIGHT_FAITHFUL")
+	_ = viper.BindEnv("hum.style_weight_free", "HUM_STYLE_WEIGHT_FREE")
 	_ = viper.BindEnv("credits.enforce", "CREDITS_ENFORCE")
 	_ = viper.BindEnv("credits.plan_plus", "CREDITS_PLAN_PLUS")
 	_ = viper.BindEnv("credits.plan_pro", "CREDITS_PLAN_PRO")
@@ -499,6 +524,14 @@ func Load() (*Config, error) {
 	viper.SetDefault("ratelimit.public_web_visitor_per_min", 30)
 	viper.SetDefault("ratelimit.purchases_per_min", 20)
 	viper.SetDefault("ratelimit.webhooks_per_min", 120)
+	viper.SetDefault("ratelimit.hum_per_min", 10)
+	viper.SetDefault("hum.transcribe_model", "gpt-4o-transcribe")
+	viper.SetDefault("hum.transcribe_fallback_model", "whisper-1")
+	viper.SetDefault("hum.transcribe_timeout", "20s")
+	viper.SetDefault("hum.audio_weight_faithful", 0.9)
+	viper.SetDefault("hum.audio_weight_free", 0.6)
+	viper.SetDefault("hum.style_weight_faithful", 0.5)
+	viper.SetDefault("hum.style_weight_free", 0.6)
 	viper.SetDefault("credits.enforce", false)
 	viper.SetDefault("push.enabled", false)
 	viper.SetDefault("credits.plan_plus", 300)
@@ -633,6 +666,7 @@ func Load() (*Config, error) {
 			PublicWebVisitorPerMin:   viper.GetInt("ratelimit.public_web_visitor_per_min"),
 			PurchasesPerMin:          viper.GetInt("ratelimit.purchases_per_min"),
 			WebhooksPerMin:           viper.GetInt("ratelimit.webhooks_per_min"),
+			HumPerMin:                viper.GetInt("ratelimit.hum_per_min"),
 		},
 		Groq: GroqConfig{
 			APIKey:  viper.GetString("groq.api_key"),
@@ -651,6 +685,15 @@ func Load() (*Config, error) {
 			ReasoningEffort:     viper.GetString("openai.reasoning_effort"),
 			TemperatureGenerate: viper.GetFloat64("openai.temperature_generate"),
 			TemperatureRewrite:  viper.GetFloat64("openai.temperature_rewrite"),
+		},
+		Hum: HumConfig{
+			TranscribeModel:         viper.GetString("hum.transcribe_model"),
+			TranscribeFallbackModel: viper.GetString("hum.transcribe_fallback_model"),
+			TranscribeTimeout:       viper.GetDuration("hum.transcribe_timeout"),
+			AudioWeightFaithful:     viper.GetFloat64("hum.audio_weight_faithful"),
+			AudioWeightFree:         viper.GetFloat64("hum.audio_weight_free"),
+			StyleWeightFaithful:     viper.GetFloat64("hum.style_weight_faithful"),
+			StyleWeightFree:         viper.GetFloat64("hum.style_weight_free"),
 		},
 		Anthropic: AnthropicConfig{
 			APIKey:              viper.GetString("anthropic.api_key"),
@@ -788,6 +831,17 @@ func Load() (*Config, error) {
 	}
 	cfg.RateLimit.Cloudflare = cloudflare
 	cfg.Auth.Cloudflare = cloudflare
+
+	for name, w := range map[string]float64{
+		"hum.audio_weight_faithful": cfg.Hum.AudioWeightFaithful,
+		"hum.audio_weight_free":     cfg.Hum.AudioWeightFree,
+		"hum.style_weight_faithful": cfg.Hum.StyleWeightFaithful,
+		"hum.style_weight_free":     cfg.Hum.StyleWeightFree,
+	} {
+		if w < 0 || w > 1 {
+			return nil, fmt.Errorf("%s: %v is outside [0, 1]", name, w)
+		}
+	}
 
 	return cfg, nil
 }
