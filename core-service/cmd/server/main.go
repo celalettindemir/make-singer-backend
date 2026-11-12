@@ -300,6 +300,11 @@ func main() {
 	masterService := service.NewMasterService(jobStore, asynqClient, storage, &cfg.R2).WithCredits(creditService)
 	exportService := service.NewExportService(storage, audioClient, &cfg.R2)
 	uploadService := service.NewUploadService(storage, &cfg.R2)
+	var humPreparer client.HumPreparer // stays a nil interface when audio-service is not configured
+	if audioClient.IsConfigured() {
+		humPreparer = audioClient
+	}
+	humService := service.NewHumService(storage, &cfg.R2, humPreparer, client.NewOpenAITranscriber(&cfg.OpenAI, &cfg.Hum), cfg.Hum.TranscribeTimeout)
 	fileService := service.NewFileService(storage, &cfg.R2)
 	wsTicketService := service.NewWSTicketService(redisClient, jobStore)
 
@@ -337,6 +342,7 @@ func main() {
 		service.NewJobCenter(jobStore, renderService, masterService).WithLyrics(lyricsJobService, lyricsJobService), validate)
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
+	humHandler := handler.NewHumHandler(humService)
 	fileHandler := handler.NewFileHandler(fileService, validate)
 	wsTicketHandler := handler.NewWSTicketHandler(wsTicketService, validate)
 	creditRoutes := creditRouteHandlers{
@@ -499,6 +505,11 @@ func main() {
 	upload := api.Group("/upload", rateLimiter.UploadLimit(cfg.RateLimit.UploadPerHour))
 	upload.Post("/vocal", uploadHandler.Vocal)
 	upload.Delete("/vocal/:takeId", uploadHandler.DeleteVocal)
+
+	// Hum routes (own rate bucket, shared by upload and delete)
+	humLimit := rateLimiter.Limit("hum", cfg.RateLimit.HumPerMin, time.Minute)
+	api.Post("/hum", humLimit, humHandler.Upload)
+	api.Delete("/hum/:humId", humLimit, humHandler.Delete)
 
 	// WebSocket ticket: obtained with an authenticated request.
 	api.Post("/ws/ticket", rateLimiter.WSTicketLimit(cfg.RateLimit.WSTicketPerMin), wsTicketHandler.Issue)
