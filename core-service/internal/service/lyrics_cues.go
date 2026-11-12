@@ -114,6 +114,7 @@ func kindOrder(k string) int {
 // text is left. It never fails otherwise.
 func parseCueLine(raw string, lang model.Language) (model.LyricLine, bool) {
 	var words []cueWord
+	pendingRise := false
 	for _, part := range strings.Fields(raw) {
 		w := strings.Map(func(r rune) rune {
 			if r == '^' || r == '~' || r == '|' {
@@ -124,17 +125,29 @@ func parseCueLine(raw string, lang model.Language) (model.LyricLine, bool) {
 		hold := strings.Contains(part, "~")
 		rise := strings.Contains(part, "^")
 		breath := strings.Contains(part, "|")
+		leadBar, trailBar := strings.HasPrefix(part, "|"), strings.HasSuffix(part, "|")
 		if w == "" {
-			if breath && len(words) > 0 {
-				words[len(words)-1].breath = true
+			// A standalone mark: "~" and "|" belong to the previous word, "^" to the next.
+			if len(words) > 0 {
+				if breath {
+					words[len(words)-1].breath = true
+				}
+				if hold {
+					words[len(words)-1].hold = true
+				}
+			}
+			if rise {
+				pendingRise = true
 			}
 			continue
 		}
-		cw := cueWord{text: w, hold: hold, rise: rise}
+		cw := cueWord{text: w, hold: hold, rise: rise || pendingRise}
+		pendingRise = false
 		if breath {
-			if strings.HasPrefix(part, "|") && !strings.HasSuffix(part, "|") && len(words) > 0 {
+			if leadBar && len(words) > 0 {
 				words[len(words)-1].breath = true
-			} else {
+			}
+			if trailBar || !leadBar {
 				cw.breath = true
 			}
 		}
@@ -152,6 +165,9 @@ func parseCueLine(raw string, lang model.Language) (model.LyricLine, bool) {
 		pos += len([]rune(w.text)) + 1
 	}
 	text := strings.Join(texts, " ")
+	if isSectionLabel(text) {
+		return model.LyricLine{}, false
+	}
 	nuclei := syllableNuclei(text, lang)
 
 	var cues []model.LyricCue

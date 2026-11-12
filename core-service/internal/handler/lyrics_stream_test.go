@@ -302,3 +302,12 @@ func TestLyricsStream_LineEventCarriesCues(t *testing.T) {
 		}
 	}
 }
+
+func TestLyricsStream_NilCuesBecomeEmptyArray(t *testing.T) {
+	gen := newFakeLyrics()
+	gen.stream = emitsLines(nil, model.LyricLine{Text: "a"})
+	_, body := streamCall(t, streamApp(gen, nil, 0), "/generate/stream", lyricsGenBody, "")
+	if !strings.Contains(body, "event: line\ndata: {\"text\":\"a\",\"cues\":[]}") {
+		t.Errorf("body = %s", body)
+	}
+}

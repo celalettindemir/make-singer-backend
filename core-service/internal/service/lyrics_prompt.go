@@ -61,7 +61,7 @@ Do not include any text outside the JSON structure.`)
 // buildStreamSystemPrompt is the system prompt of the streaming routes: the
 // same writer brief, but plain lines instead of JSON.
 func buildStreamSystemPrompt(language model.Language) string {
-	return systemPrompt(language, `Output only the lyric lines, one per line, plain text. No title, no section labels, no numbering, no quotes, no explanation.`)
+	return systemPrompt(language, `Output only the lyric lines, one per line, plain text. No title, no section labels, no numbering, no quotes, no explanation. Lines may carry the singing marks described above.`)
 }
 
 func systemPrompt(language model.Language, outputRule string) string {

@@ -1941,7 +1941,7 @@ paths:
       - BearerAuth: []
       summary: Get the stored vocal range
       tags:
-      - Profile
+      - account
     put:
       consumes:
       - application/json
@@ -1972,7 +1972,7 @@ paths:
       - BearerAuth: []
       summary: Save the vocal range
       tags:
-      - Profile
+      - account
   /api/render/cancel/{jobId}:
     post:
       description: Cancel a running or queued render job

@@ -399,6 +399,19 @@ func TestLyricsWorker_StoresCuesWithLines(t *testing.T) {
 	}
 }
 
+func TestLyricsWorker_NilCuesEmitAsEmptyArray(t *testing.T) {
+	e := newLyricsEnv(t, "generate", []int{0}, nil, nil, step{cued: []model.LyricLine{{Text: "Gece", Cues: nil}}})
+	if err := e.process(t); err != nil {
+		t.Fatalf("ProcessTask: %v", err)
+	}
+	evs, _ := e.repo.EventsAfter(context.Background(), lyricsOwner, lyricsJobID, 0, 1000)
+	for _, ev := range evs {
+		if ev.Kind == jobs.KindLine && !strings.Contains(string(ev.Data), `"cues":[]`) {
+			t.Errorf("line event = %s", ev.Data)
+		}
+	}
+}
+
 func TestLyricsWorker_PadsMissingCuesBeforeAppend(t *testing.T) {
 	sr := model.LyricsJobSectionResult{Lines: []string{"eski satır"}} // written before cues existed
 	sr.AppendLine(model.LyricLine{Text: "yeni", Cues: []model.LyricCue{{SyllableIndex: 1, Kind: model.CueHold, At: 3}}})

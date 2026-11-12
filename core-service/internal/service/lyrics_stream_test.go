@@ -74,6 +74,10 @@ func TestStreamPrompt_NoJSONOneDraft(t *testing.T) {
 	if !strings.Contains(buildStreamSystemPrompt(model.LanguageTR), "Output only the lyric lines, one per line, plain text.") {
 		t.Error("system prompt lacks the plain text rule")
 	}
+	sys := buildStreamSystemPrompt(model.LanguageTR)
+	if !strings.Contains(sys, cueMarkRule) || !strings.HasSuffix(sys, "no explanation. Lines may carry the singing marks described above.") {
+		t.Error("stream system prompt must carry the mark rule and say lines may carry marks")
+	}
 }
 
 func TestGenerateStream_EmitsCleanLines(t *testing.T) {

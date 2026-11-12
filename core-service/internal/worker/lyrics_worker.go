@@ -255,6 +255,9 @@ func (w *LyricsWorker) callProvider(ctx context.Context, jobID string, in *model
 		if strings.TrimSpace(line.Text) == "" {
 			return nil
 		}
+		if line.Cues == nil {
+			line.Cues = []model.LyricCue{}
+		}
 		err := w.repo.UpdateWith(ctx, jobID, func(j *model.Job, em jobs.Emitter) error {
 			if isTerminalLyrics(j.Status) {
 				return jobs.ErrSkipWrite

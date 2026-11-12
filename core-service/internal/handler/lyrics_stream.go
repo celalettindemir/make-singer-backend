@@ -170,6 +170,9 @@ func (h *LyricsHandler) stream(c *fiber.Ctx, op string, act *lyricsAction, run f
 		for {
 			select {
 			case l := <-lines:
+				if l.Cues == nil {
+					l.Cues = []model.LyricCue{}
+				}
 				if !event("line", l) {
 					gone()
 					return

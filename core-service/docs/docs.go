@@ -921,7 +921,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "Profile"
+                    "account"
                 ],
                 "summary": "Get the stored vocal range",
                 "responses": {
@@ -953,7 +953,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "Profile"
+                    "account"
                 ],
                 "summary": "Save the vocal range",
                 "parameters": [

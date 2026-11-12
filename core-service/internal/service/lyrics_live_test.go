@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ func TestLyricsLive_TurkishCues(t *testing.T) {
 	}
 	cfg := &config.OpenAIConfig{
 		APIKey: key, BaseURL: "https://api.openai.com/v1", Model: "gpt-6.1-sol",
-		MaxTokens: 4000, ReasoningEffort: "medium", TemperatureGenerate: 0.8, TemperatureRewrite: 0.6,
+		MaxTokens: 8000, ReasoningEffort: "medium", TemperatureGenerate: 0.8, TemperatureRewrite: 0.6,
 	}
 	if m := os.Getenv("OPENAI_MODEL"); m != "" {
 		cfg.Model = m
@@ -33,29 +34,34 @@ func TestLyricsLive_TurkishCues(t *testing.T) {
 	if e := os.Getenv("OPENAI_REASONING_EFFORT"); e != "" {
 		cfg.ReasoningEffort = e
 	}
+	if v := os.Getenv("OPENAI_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.MaxTokens = n
+		}
+	}
 	svc := NewLyricsService(lyricsprovider.Fixed(client.NewOpenAIClient(cfg)))
 
 	for _, section := range []model.SectionType{model.SectionChorus, model.SectionVerse} {
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		res, err := svc.Generate(ctx, &model.LyricsGenerateRequest{
+		// The apps write lyrics through the stream path, so sample that one.
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		var lines []model.LyricLine
+		n, err := svc.GenerateStream(ctx, &model.LyricsGenerateRequest{
 			Genre: model.Genre("pop"), SectionType: section,
 			Vibes: []string{"melancholic", "romantic"}, Language: model.LanguageTR,
+		}, func(l model.LyricLine) error {
+			lines = append(lines, l)
+			return nil
 		})
 		cancel()
 		if err != nil {
-			t.Fatalf("Generate %s: %v", section, err)
+			t.Fatalf("GenerateStream %s: %v", section, err)
 		}
-		if len(res.Cues) != len(res.Drafts) {
-			t.Fatalf("%s: %d drafts but %d cue lists", section, len(res.Drafts), len(res.Cues))
+		if n != len(lines) {
+			t.Fatalf("%s: stream reported %d lines but emitted %d", section, n, len(lines))
 		}
-		for d, lines := range res.Drafts {
-			if len(res.Cues[d]) != len(lines) {
-				t.Fatalf("%s draft %d: %d lines but %d cue lists", section, d, len(lines), len(res.Cues[d]))
-			}
-			t.Logf("--- %s draft %d", section, d+1)
-			for i, line := range lines {
-				t.Logf("%s    %v", renderLiveCues(line, res.Cues[d][i]), res.Cues[d][i])
-			}
+		t.Logf("--- %s (stream)", section)
+		for _, line := range lines {
+			t.Logf("%s    %v", renderLiveCues(line.Text, line.Cues), line.Cues)
 		}
 	}
 }

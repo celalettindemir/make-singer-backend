@@ -919,7 +919,7 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Profile"
+                    "account"
                 ],
                 "summary": "Get the stored vocal range",
                 "responses": {
@@ -951,7 +951,7 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Profile"
+                    "account"
                 ],
                 "summary": "Save the vocal range",
                 "parameters": [

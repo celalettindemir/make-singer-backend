@@ -34,7 +34,7 @@ type vocalRangeBody struct {
 // Get handles GET /api/profile/vocal-range.
 // @Summary      Get the stored vocal range
 // @Description  Returns the caller's stored vocal range, or null when none was saved.
-// @Tags         Profile
+// @Tags         account
 // @Produce      json
 // @Success      200 {object} vocalRangeBody
 // @Failure      401 {object} response.ErrorResponse
@@ -55,7 +55,7 @@ func (h *VocalRangeHandler) Get(c *fiber.Ctx) error {
 // Put handles PUT /api/profile/vocal-range: saves (replaces) the caller's range.
 // @Summary      Save the vocal range
 // @Description  Stores the caller's vocal range, replacing any earlier one.
-// @Tags         Profile
+// @Tags         account
 // @Accept       json
 // @Produce      json
 // @Param        request body model.VocalRangeRecord true "Vocal range"

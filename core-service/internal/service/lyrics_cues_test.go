@@ -86,3 +86,38 @@ func TestParseCueLine_DuplicateAndVowellessMarksDropped(t *testing.T) {
 		t.Fatal(l)
 	}
 }
+
+func TestParseCueLine_SpacedAndLeadingMarks(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want []model.LyricCue
+	}{
+		{"ışıkları ~", []model.LyricCue{{SyllableIndex: 3, Kind: model.CueHold, At: 7}}},
+		{"^ Gece boyunca", []model.LyricCue{{SyllableIndex: 0, Kind: model.CueRise, At: 1}}},
+		{"|Seni sevdim", []model.LyricCue{}},
+	}
+	for _, c := range cases {
+		l, ok := parseCueLine(c.raw, model.LanguageTR)
+		if !ok || !reflect.DeepEqual(l.Cues, c.want) {
+			t.Errorf("%q: ok=%v cues=%+v want %+v", c.raw, ok, l.Cues, c.want)
+		}
+	}
+	l, _ := parseCueLine("Gece |boyunca| şehir", model.LanguageTR)
+	kinds := map[int]bool{}
+	for _, c := range l.Cues {
+		if c.Kind == model.CueBreath {
+			kinds[c.SyllableIndex] = true
+		}
+	}
+	if !kinds[1] || !kinds[4] {
+		t.Errorf("|boyunca| should breathe after Gece (1) and boyunca (4): %+v", l.Cues)
+	}
+}
+
+func TestParseCueLine_MarkedSectionLabelDropped(t *testing.T) {
+	for _, raw := range []string{"Nakarat~", "^Verse", "Chorus |"} {
+		if l, ok := parseCueLine(raw, model.LanguageTR); ok {
+			t.Errorf("%q kept as %q", raw, l.Text)
+		}
+	}
+}
