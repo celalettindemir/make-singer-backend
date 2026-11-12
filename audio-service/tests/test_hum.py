@@ -73,8 +73,22 @@ def _uzun_opus(tmp_path, dakika: int) -> bytes:
     """Kucuk ama cozulunce cok buyuk: dusuk bit hizli stereo 48 kHz Opus."""
     yol = tmp_path / "uzun.ogg"
     subprocess.run(
-        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
-         "-t", str(dakika * 60), "-c:a", "libopus", "-b:a", "6k", str(yol)],
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=stereo",
+            "-t",
+            str(dakika * 60),
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "6k",
+            str(yol),
+        ],
         check=True,
     )
     return yol.read_bytes()
