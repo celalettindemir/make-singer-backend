@@ -155,6 +155,7 @@ func writeContext(b *strings.Builder, ctx model.LyricsContext, rewrite bool) {
 			b.WriteString("No topic was given: take it from the written sections.\n")
 		}
 	}
+	writeHumLines(b, ctx.HumLines)
 }
 
 // songBlock lists the song's sections and marks the target. With

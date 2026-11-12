@@ -37,6 +37,7 @@ type LyricsJobRequest struct {
 	BPM         *int                `json:"bpm,omitempty" validate:"omitempty,min=40,max=220"`
 	Song        []LyricsSongSection `json:"song" validate:"required,min=1,max=32,dive"`
 	Sections    []LyricsJobSection  `json:"sections" validate:"required,min=1,max=12,dive"`
+	HumLines    []string            `json:"humLines,omitempty" validate:"omitempty,max=8,dive,max=200"`
 }
 
 // LyricsJobStartResponse is the 202 answer of POST /api/lyrics/jobs.
@@ -72,7 +73,7 @@ func (r *LyricsJobRequest) GenerateFor(sec LyricsJobSection, song []LyricsSongSe
 	idx := sec.Index
 	req := &LyricsGenerateRequest{
 		Genre: r.Genre, Vibes: r.Vibes, Language: r.Language,
-		LyricsContext: LyricsContext{Topic: r.Topic, BPM: r.BPM, Song: song, SectionIndex: &idx},
+		LyricsContext: LyricsContext{Topic: r.Topic, BPM: r.BPM, Song: song, SectionIndex: &idx, HumLines: r.HumLines},
 	}
 	if idx >= 0 && idx < len(song) {
 		req.SectionType = song[idx].Type
@@ -86,7 +87,7 @@ func (r *LyricsJobRequest) RewriteFor(sec LyricsJobSection, song []LyricsSongSec
 	idx := sec.Index
 	req := &LyricsRewriteRequest{
 		Genre: r.Genre, Vibes: r.Vibes, Language: r.Language, Instructions: sec.Instructions,
-		LyricsContext: LyricsContext{Topic: r.Topic, BPM: r.BPM, Song: song, SectionIndex: &idx},
+		LyricsContext: LyricsContext{Topic: r.Topic, BPM: r.BPM, Song: song, SectionIndex: &idx, HumLines: r.HumLines},
 	}
 	if idx >= 0 && idx < len(r.Song) {
 		req.SectionType = r.Song[idx].Type

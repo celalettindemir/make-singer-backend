@@ -16,6 +16,9 @@ type LyricsContext struct {
 	BPM          *int                `json:"bpm,omitempty" validate:"omitempty,min=40,max=220"`
 	Song         []LyricsSongSection `json:"song,omitempty" validate:"omitempty,max=32,dive"`
 	SectionIndex *int                `json:"sectionIndex,omitempty"`
+	// HumLines are the words the user sang in a hum (native 10); the lyricist
+	// writes lines that fit them.
+	HumLines []string `json:"humLines,omitempty" validate:"omitempty,max=8,dive,max=200"`
 }
 
 // ErrSectionIndex is returned by CheckIndex.
