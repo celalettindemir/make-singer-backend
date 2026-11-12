@@ -544,6 +544,14 @@ definitions:
         - latin
         - reggae
         - blues
+      humLines:
+        description: |-
+          HumLines are the words the user sang in a hum (native 10); the lyricist
+          writes lines that fit them.
+        items:
+          type: string
+        maxItems: 8
+        type: array
       language:
         allOf:
         - $ref: '#/definitions/model.Language'
@@ -616,6 +624,11 @@ definitions:
         - latin
         - reggae
         - blues
+      humLines:
+        items:
+          type: string
+        maxItems: 8
+        type: array
       language:
         allOf:
         - $ref: '#/definitions/model.Language'
@@ -706,6 +719,14 @@ definitions:
         - latin
         - reggae
         - blues
+      humLines:
+        description: |-
+          HumLines are the words the user sang in a hum (native 10); the lyricist
+          writes lines that fit them.
+        items:
+          type: string
+        maxItems: 8
+        type: array
       instructions:
         maxLength: 500
         type: string

@@ -2329,6 +2329,14 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "humLines": {
+                    "description": "HumLines are the words the user sang in a hum (native 10); the lyricist\nwrites lines that fit them.",
+                    "type": "array",
+                    "maxItems": 8,
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "language": {
                     "enum": [
                         "en",
@@ -2434,6 +2442,13 @@ const docTemplate = `{
                             "$ref": "#/definitions/model.Genre"
                         }
                     ]
+                },
+                "humLines": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "language": {
                     "enum": [
@@ -2557,6 +2572,14 @@ const docTemplate = `{
                             "$ref": "#/definitions/model.Genre"
                         }
                     ]
+                },
+                "humLines": {
+                    "description": "HumLines are the words the user sang in a hum (native 10); the lyricist\nwrites lines that fit them.",
+                    "type": "array",
+                    "maxItems": 8,
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "instructions": {
                     "type": "string",
