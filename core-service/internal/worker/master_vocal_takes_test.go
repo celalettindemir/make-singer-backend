@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"testing"
 
 	"github.com/makeasinger/api/internal/client"
@@ -80,5 +81,15 @@ func TestMasterWorker_GuideKeyUnresolvable_Omitted(t *testing.T) {
 	}
 	if got := w.guideKey("job-1", payload); got != "" {
 		t.Errorf("guideKey = %q, want empty for a foreign key", got)
+	}
+}
+
+func TestMasterWorker_PassesVocalBalance(t *testing.T) {
+	audio := &fakeAudio{}
+	p := masterPayload()
+	p.VocalBalanceDb = -2
+	_ = masterTestWorker(audio, nil).processWithAudioService(context.Background(), "j1", p)
+	if audio.lastReq == nil || audio.lastReq.VocalBalanceDb != -2 {
+		t.Fatalf("audio request = %+v, want VocalBalanceDb -2", audio.lastReq)
 	}
 }

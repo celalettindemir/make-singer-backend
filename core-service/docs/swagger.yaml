@@ -800,6 +800,13 @@ definitions:
           type: string
         minItems: 1
         type: array
+      vocalBalanceDb:
+        description: |-
+          VocalBalanceDb shifts the user's voice against the music in the final
+          master (spec 9 section 3.7). Optional; absent means 0.
+        maximum: 6
+        minimum: -6
+        type: number
       vocalTakes:
         items:
           $ref: '#/definitions/model.VocalTake'

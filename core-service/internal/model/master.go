@@ -46,6 +46,9 @@ type MasterFinalRequest struct {
 	// reference and alignment target (spec 12 section 3.3). Never mixed, no
 	// Plus gate.
 	GuideURL string `json:"guideUrl,omitempty" validate:"omitempty,url"`
+	// VocalBalanceDb shifts the user's voice against the music in the final
+	// master (spec 9 section 3.7). Optional; absent means 0.
+	VocalBalanceDb *float64 `json:"vocalBalanceDb,omitempty" validate:"omitempty,min=-6,max=6"`
 	// ProjectName is shown in notifications; optional.
 	ProjectName string `json:"projectName,omitempty" validate:"max=120"`
 }

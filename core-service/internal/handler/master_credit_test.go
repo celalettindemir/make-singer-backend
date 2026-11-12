@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -94,5 +96,49 @@ func TestMasterHandler_GuidesKeyNeedsPlusIs403(t *testing.T) {
 	}
 	if len(fake.Spends) != 0 {
 		t.Errorf("spends = %+v, want none", fake.Spends)
+	}
+}
+
+func TestMasterHandler_VocalBalanceOutOfRangeIs400(t *testing.T) {
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	fake := &credit.FakeSpender{IsEnforced: true}
+	cfg := &config.R2Config{AccountID: "hesap123", PublicBucket: "pub", PrivateBucket: "priv", PublicURL: "https://cdn.example.com"}
+	svc := service.NewMasterService(repo, nil, nil, cfg).WithCredits(fake)
+	h := NewMasterHandler(svc, validator.New())
+	app := fiber.New()
+	app.Post("/final", asUser("kullanici-a"), h.Final)
+
+	key, err := client.UserKey("stems", "kullanici-a", "p1", "a.mp3")
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	body := `{"projectId":"11111111-1111-4111-8111-111111111111","profile":"clean","vocalBalanceDb":6.5,"stemUrls":["` + client.UnsignedURL(key, cfg) +
+		`"],"mixSnapshot":{"channels":[{"stemId":"s1","volumeDb":0}],"preset":"default"}}`
+	req := httptest.NewRequest(http.MethodPost, "/final", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	var out struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Error.Code != "VALIDATION_ERROR" {
+		t.Errorf("code = %q, want VALIDATION_ERROR", out.Error.Code)
+	}
+	if len(fake.Spends) != 0 {
+		t.Errorf("spends = %d, want 0", len(fake.Spends))
+	}
+	if n, _ := repo.List(context.Background(), "kullanici-a", time.Time{}, 1000); len(n) != 0 {
+		t.Errorf("jobs = %d, want 0", len(n))
 	}
 }

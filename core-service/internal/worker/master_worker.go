@@ -155,6 +155,8 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 		VocalTakes:  vocalTakes,
 		GuideKey:    w.guideKey(jobID, payload),
 		OutputKey:   outputKey,
+
+		VocalBalanceDb: payload.VocalBalanceDb,
 	}
 
 	// Step 5: Wait for mastering to complete (with progress updates)

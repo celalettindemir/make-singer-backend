@@ -2614,6 +2614,12 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "vocalBalanceDb": {
+                    "description": "VocalBalanceDb shifts the user's voice against the music in the final\nmaster (spec 9 section 3.7). Optional; absent means 0.",
+                    "type": "number",
+                    "maximum": 6,
+                    "minimum": -6
+                },
                 "vocalTakes": {
                     "type": "array",
                     "items": {
