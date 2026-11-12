@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -186,6 +187,9 @@ func (c *AudioClient) post(ctx context.Context, endpoint string, body interface{
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
+	if resp.StatusCode == http.StatusUnprocessableEntity {
+		return fmt.Errorf("%w: %s", ErrAudioUnprocessable, string(respBody))
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("audio service error (status %d): %s", resp.StatusCode, string(respBody))
 	}
@@ -196,6 +200,9 @@ func (c *AudioClient) post(ctx context.Context, endpoint string, body interface{
 
 	return nil
 }
+
+// ErrAudioUnprocessable: audio-service answered 422, the input could not be decoded.
+var ErrAudioUnprocessable = errors.New("audio service could not decode the input")
 
 // IsConfigured returns true if the client has valid configuration
 func (c *AudioClient) IsConfigured() bool {

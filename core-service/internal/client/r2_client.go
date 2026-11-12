@@ -2,16 +2,20 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	"github.com/makeasinger/api/internal/config"
 )
 
@@ -209,4 +213,45 @@ func (c *R2Client) DeletePrefix(ctx context.Context, prefix string) (int, error)
 		deleted += len(objects)
 	}
 	return deleted, nil
+}
+
+// ObjectChecker reports whether an object exists. Storage backends that can
+// answer this (R2) implement it; callers skip the check when they cannot.
+type ObjectChecker interface {
+	Exists(ctx context.Context, key string) (bool, error)
+}
+
+var _ ObjectChecker = (*R2Client)(nil)
+
+// Exists runs HeadObject in the key's bucket. A missing object is (false, nil).
+func (c *R2Client) Exists(ctx context.Context, key string) (bool, error) {
+	_, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(BucketFor(key, c.cfg)),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check R2 object: %w", err)
+	}
+	return true, nil
+}
+
+// isNotFound: the S3 error means "no such object".
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var nf *types.NotFound
+	var nk *types.NoSuchKey
+	if errors.As(err, &nf) || errors.As(err, &nk) {
+		return true
+	}
+	var api smithy.APIError
+	if errors.As(err, &api) && (api.ErrorCode() == "NotFound" || api.ErrorCode() == "NoSuchKey") {
+		return true
+	}
+	var re *awshttp.ResponseError
+	return errors.As(err, &re) && re.HTTPStatusCode() == http.StatusNotFound
 }

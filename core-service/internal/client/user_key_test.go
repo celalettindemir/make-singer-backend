@@ -98,6 +98,7 @@ func TestUserPrefixes(t *testing.T) {
 	want := []string{
 		"exports/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
 		"guides/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
+		"hums/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
 		"masters/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
 		"previews/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
 		"stems/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
@@ -120,5 +121,15 @@ func TestUserKey_Guides(t *testing.T) {
 	got, err := UserKey("guides", "u1", "p1", "j1.mp3")
 	if err != nil || got != "guides/u1/p1/j1.mp3" {
 		t.Fatalf("UserKey(guides) = %q, %v; want guides/u1/p1/j1.mp3", got, err)
+	}
+}
+
+func TestUserKey_Hums(t *testing.T) {
+	got, err := UserKey("hums", "u1", "p1", "h1-src.wav")
+	if err != nil || got != "hums/u1/p1/h1-src.wav" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if err := VerifyKeyOwner("hums/u1/p1/h1.mp3", "u2"); !errors.Is(err, ErrKeyNotOwned) {
+		t.Fatal("foreign hum accepted")
 	}
 }

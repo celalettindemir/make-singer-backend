@@ -2,11 +2,17 @@ package client
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	neturl "net/url"
 	"strings"
 	"testing"
 	"time"
 
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/makeasinger/api/internal/config"
 )
 
@@ -94,5 +100,27 @@ func TestNewR2Client_RequiresPublicURL(t *testing.T) {
 	cfg.PublicURL = ""
 	if _, err := NewR2Client(cfg); err == nil {
 		t.Error("expected an error when R2_PUBLIC_URL is empty")
+	}
+}
+
+func TestIsNotFound(t *testing.T) {
+	notFoundHTTP := &awshttp.ResponseError{
+		ResponseError: &smithyhttp.ResponseError{
+			Response: &smithyhttp.Response{Response: &http.Response{StatusCode: 404}},
+			Err:      errors.New("not found"),
+		},
+	}
+	for _, err := range []error{
+		&types.NotFound{}, &types.NoSuchKey{},
+		&smithy.GenericAPIError{Code: "NotFound"}, notFoundHTTP,
+	} {
+		if !isNotFound(err) {
+			t.Errorf("isNotFound(%T) = false, want true", err)
+		}
+	}
+	for _, err := range []error{errors.New("boom"), &smithy.GenericAPIError{Code: "AccessDenied"}, nil} {
+		if isNotFound(err) {
+			t.Errorf("isNotFound(%v) = true, want false", err)
+		}
 	}
 }
