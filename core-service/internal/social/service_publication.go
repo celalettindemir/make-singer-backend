@@ -144,7 +144,7 @@ func (s *Service) CreatePublication(ctx context.Context, userID string, req Publ
 		if err != nil {
 			return nil, err
 		}
-		if client.IsImportKey(key) {
+		if client.IsImportKey(key) || client.IsImportMasterKey(key) {
 			return nil, ErrImportNotPublishable
 		}
 		insert.Preparation.Stems = append(insert.Preparation.Stems, PreparationStem{

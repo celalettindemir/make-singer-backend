@@ -16,3 +16,9 @@ func TestMasterFileName_ImportPrefix(t *testing.T) {
 		t.Errorf("no stems: %q", got)
 	}
 }
+
+func TestMasterFileName_ImportMasterAsStem(t *testing.T) {
+	if got := masterFileName([]string{"masters/u/p/imp-3f2b.wav"}); !strings.HasPrefix(got, "imp-") {
+		t.Errorf("import master as stem: %q, want imp-<uuid>.wav", got)
+	}
+}

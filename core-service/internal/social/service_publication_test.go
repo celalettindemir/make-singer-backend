@@ -426,3 +426,16 @@ func TestCreatePublication_NormalMaster_Unchanged(t *testing.T) {
 		t.Fatalf("CreatePublication: %v", err)
 	}
 }
+
+func TestCreatePublication_ImportMasterAsStem_Rejected(t *testing.T) {
+	store := storeWithProfile()
+	s, q := newTestService(store)
+	req := publicationRequestA()
+	req.Stems[0].URL = "masters/" + userA + "/p1/imp-3f2b.wav"
+	if _, err := s.CreatePublication(context.Background(), userA, req); !errors.Is(err, ErrImportNotPublishable) {
+		t.Fatalf("want ErrImportNotPublishable: %v", err)
+	}
+	if len(store.inserted) != 0 || len(q.tasks) != 0 {
+		t.Fatal("nothing may be saved or enqueued")
+	}
+}

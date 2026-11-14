@@ -440,4 +440,7 @@ func TestStartPreview_ImportVocalInStems_Rejected(t *testing.T) {
 	if _, err := s.Preview(context.Background(), "kullanici-a", req); !errors.Is(err, ErrImportVocalInMix) {
 		t.Fatalf("err = %v, want ErrImportVocalInMix", err)
 	}
+	if len(fake.Spends) != 0 {
+		t.Errorf("spends = %v, want none", fake.Spends)
+	}
 }

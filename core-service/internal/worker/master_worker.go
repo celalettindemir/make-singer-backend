@@ -464,7 +464,7 @@ func (w *MasterWorker) generateMockRecord(payload *model.MasterJobPayload) (*mod
 // gets the imp- prefix so that publication can refuse it later.
 func masterFileName(stemKeys []string) string {
 	for _, k := range stemKeys {
-		if client.IsImportKey(k) {
+		if client.IsImportKey(k) || client.IsImportMasterKey(k) {
 			return "imp-" + uuid.New().String() + ".wav"
 		}
 	}
