@@ -70,6 +70,9 @@ services:
       SUNO_BASE_URL: ${SUNO_BASE_URL:-https://api.sunoapi.org}
       AUDIO_SERVICE_URL: http://audio-service:8084
       AUDIO_SERVICE_TIMEOUT: "120"
+      # Kendi sarkini getir (spec 14a): kapali yayina girer, Task 15'te acilir.
+      SEPARATION_SERVICE_URL: http://separation-service:8085
+      IMPORT_ENABLED: "false"
       # Kesfet web onizlemesi: make-singer-frontend'in X-Web-Anahtari degeri
       # (iki stack'te ayni). Bos ise web sunucusu da IP basina 30/dk sinirda.
       SOSYAL_WEB_ANAHTARI: ${SOSYAL_WEB_ANAHTARI:-}
@@ -216,6 +219,50 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+
+  # =============================================================================
+  # SEPARATION SERVICE - Demucs stem separation for imports (Python/torch)
+  # =============================================================================
+  separation-service:
+    image: ${DOCKER_USER}/${SEPARATION_IMAGE:-make-singer-separation}:${SEPARATION_VERSION:-latest}
+    environment:
+      LOG_LEVEL: debug
+      TORCH_THREADS: "2"
+      R2_ACCOUNT_ID_FILE: /run/secrets/r2_account_id
+      R2_ACCESS_KEY_ID_FILE: /run/secrets/r2_access_key_id
+      R2_SECRET_ACCESS_KEY_FILE: /run/secrets/r2_secret_access_key
+      R2_PUBLIC_BUCKET: ${R2_PUBLIC_BUCKET:-makeasinger-public}
+      R2_PRIVATE_BUCKET: ${R2_PRIVATE_BUCKET:-makeasinger-private}
+      R2_PUBLIC_URL: ${R2_PUBLIC_URL:-https://makesinger-cdn.celalettindemir.dev}
+    secrets:
+      - r2_account_id
+      - r2_access_key_id
+      - r2_secret_access_key
+    networks:
+      - make-singer-backend
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+      labels:
+        - "traefik.enable=false"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8085/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
 # =============================================================================
 # NETWORKS

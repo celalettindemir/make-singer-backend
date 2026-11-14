@@ -379,6 +379,13 @@ definitions:
       transcript:
         $ref: '#/definitions/model.HumTranscript'
     type: object
+  model.ImportStartResponse:
+    properties:
+      durationMs:
+        type: integer
+      jobId:
+        type: string
+    type: object
   model.Instrument:
     enum:
     - drums
@@ -1705,6 +1712,113 @@ paths:
       summary: Delete a hum
       tags:
       - Hum
+  /api/imports:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Store a track, measure it, charge the import and queue an import
+        job
+      parameters:
+      - description: Project ID
+        in: formData
+        name: projectId
+        required: true
+        type: string
+      - description: Project name for the push text
+        in: formData
+        name: projectName
+        type: string
+      - description: Audio file (WAV, MP3, M4A, AAC)
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/model.ImportStartResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "402":
+          description: Payment Required
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Bring your own track
+      tags:
+      - Upload
+  /api/imports/{jobId}/retry:
+    post:
+      description: Start a new import job from the stored source of a failed or canceled
+        import
+      parameters:
+      - description: Import job ID
+        in: path
+        name: jobId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/model.ImportStartResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "402":
+          description: Payment Required
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "410":
+          description: Gone
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/response.ErrorResponse'
+      security:
+      - BearerAuth: []
+      summary: Run a failed import again
+      tags:
+      - Upload
   /api/lyrics/generate:
     post:
       consumes:

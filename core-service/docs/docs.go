@@ -469,6 +469,168 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/imports": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Store a track, measure it, charge the import and queue an import job",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Upload"
+                ],
+                "summary": "Bring your own track",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project ID",
+                        "name": "projectId",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Project name for the push text",
+                        "name": "projectName",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "file",
+                        "description": "Audio file (WAV, MP3, M4A, AAC)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/model.ImportStartResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "Payment Required",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/imports/{jobId}/retry": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Start a new import job from the stored source of a failed or canceled import",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Upload"
+                ],
+                "summary": "Run a failed import again",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Import job ID",
+                        "name": "jobId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/model.ImportStartResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "402": {
+                        "description": "Payment Required",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/response.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/lyrics/generate": {
             "post": {
                 "security": [
@@ -2184,6 +2346,17 @@ const docTemplate = `{
                 },
                 "transcript": {
                     "$ref": "#/definitions/model.HumTranscript"
+                }
+            }
+        },
+        "model.ImportStartResponse": {
+            "type": "object",
+            "properties": {
+                "durationMs": {
+                    "type": "integer"
+                },
+                "jobId": {
+                    "type": "string"
                 }
             }
         },
