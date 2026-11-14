@@ -81,7 +81,9 @@ def ayir(
         overlap=0.25,
         progress=False,
     )[0]
-    cikti = cikti * std + ort
+    # In place: two stem-sized temporaries less on a long track.
+    cikti *= std
+    cikti += ort
     sonuc = {
         STEM_MAP[ad]: np.asarray(cikti[i], dtype=np.float32)
         for i, ad in enumerate(model.sources)
