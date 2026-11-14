@@ -1,5 +1,6 @@
 """Measures BPM and key of a user-uploaded source song ("bring your own song")."""
 
+import asyncio
 import json
 import os
 import tempfile
@@ -30,6 +31,10 @@ class ImportAudioService:
         self.storage = storage
 
     async def measure(self, input_key: str) -> dict[str, Any]:
+        # Blocking work (decode, analysis) must stay off the event loop.
+        return await asyncio.to_thread(self._measure, input_key)
+
+    def _measure(self, input_key: str) -> dict[str, Any]:
         ses = self._decode(input_key)
         ses = ses.set_channels(1).set_frame_rate(ANALIZ_HIZI)
         ornekler = mono_ornekler(ses)
@@ -54,9 +59,25 @@ class ImportAudioService:
 
     async def prepare(self, input_key: str) -> dict[str, Any]:
         """Decodes the whole file (no length cap) and reports its duration."""
+        return await asyncio.to_thread(self._prepare, input_key)
+
+    def _prepare(self, input_key: str) -> dict[str, Any]:
         return {"duration_ms": len(self._decode(input_key))}
 
     async def notes(
+        self,
+        vocal_key: str,
+        words: list[dict[str, Any]],
+        sections: list[dict[str, Any]],
+        bpm: float,
+        notes_key: str,
+    ) -> dict[str, Any]:
+        """Guide note strip from the separated vocal; same clock, offset 0."""
+        return await asyncio.to_thread(
+            self._notes, vocal_key, words, sections, bpm, notes_key
+        )
+
+    def _notes(
         self,
         vocal_key: str,
         words: list[dict[str, Any]],
