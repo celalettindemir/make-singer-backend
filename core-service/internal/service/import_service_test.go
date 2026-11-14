@@ -47,7 +47,6 @@ type importAudio struct {
 	client.ImportAudio
 	ms     int
 	err    error
-	events *[]string
 	inputs []string
 }
 

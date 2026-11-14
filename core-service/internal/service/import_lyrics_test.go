@@ -93,7 +93,7 @@ func TestImportLines_SplitWithoutWordsUsesCharRatio(t *testing.T) {
 		if got[i].StartMs < got[i-1].EndMs || got[i].StartMs > got[i-1].EndMs+100 {
 			t.Fatalf("lines not adjacent at %d: %+v %+v", i, got[i-1], got[i])
 		}
-		if got[i].Words != nil && len(got[i].Words) != 0 {
+		if len(got[i].Words) != 0 {
 			t.Fatal("no words expected")
 		}
 	}
