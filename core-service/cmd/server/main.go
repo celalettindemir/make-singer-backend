@@ -756,6 +756,7 @@ func startWorkerServer(
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeMaster, masterWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeAccountCleanup, worker.NewAccountWorker(accountService).ProcessTask)
+	mux.HandleFunc(service.TaskTypeImportSourceCleanup, worker.NewImportCleanupWorker(jobStore, storage).ProcessTask)
 	mux.HandleFunc(social.TaskTypePrepare, socialWorker.Prepare)
 	mux.HandleFunc(social.TaskTypeDeleteFiles, socialWorker.DeleteFiles)
 	mux.HandleFunc(social.TaskTypeSweepStale, socialWorker.SweepStale)
