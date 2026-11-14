@@ -39,6 +39,7 @@ type Config struct {
 	Groq      GroqConfig
 	OpenAI    OpenAIConfig
 	Hum       HumConfig
+	Import    ImportConfig
 	Anthropic AnthropicConfig
 	Lyrics    LyricsConfig
 	R2        R2Config
@@ -77,12 +78,15 @@ type RedisConfig struct {
 type RateLimitConfig struct {
 	// HumPerMin is the per-minute per-user limit shared by POST /api/hum and
 	// DELETE /api/hum/{humId}.
-	HumPerMin      int
-	LyricsPerMin   int
-	RenderPerHour  int
-	MasterPerHour  int
-	ExportPerHour  int
-	UploadPerHour  int
+	HumPerMin     int
+	LyricsPerMin  int
+	RenderPerHour int
+	MasterPerHour int
+	ExportPerHour int
+	UploadPerHour int
+	// ImportPerHour is the hourly per-user limit for POST /api/import
+	// (bring-your-own-track uploads and retries).
+	ImportPerHour  int
 	WSTicketPerMin int
 	SignPerMin     int
 	// SocialPublicationPerHour is the hourly per-user limit for
@@ -234,6 +238,21 @@ type HumConfig struct {
 	AudioWeightFree     float64
 	StyleWeightFaithful float64
 	StyleWeightFree     float64
+}
+
+// ImportConfig configures "bring your own track" imports: upload limits, the
+// separation service and the timed-transcription budget.
+type ImportConfig struct {
+	Enabled           bool
+	MaxBytes          int64
+	MinMs             int
+	MaxMs             int
+	TranscribeTimeout time.Duration
+	SeparationURL     string
+	SeparationTimeout time.Duration
+	Concurrency       int
+	// SourceRetention is how long a failed import's source file is kept.
+	SourceRetention time.Duration
 }
 
 // AnthropicConfig is the Anthropic Messages API client configuration.
@@ -473,6 +492,16 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("hum.audio_weight_free", "HUM_AUDIO_WEIGHT_FREE")
 	_ = viper.BindEnv("hum.style_weight_faithful", "HUM_STYLE_WEIGHT_FAITHFUL")
 	_ = viper.BindEnv("hum.style_weight_free", "HUM_STYLE_WEIGHT_FREE")
+	_ = viper.BindEnv("ratelimit.import_per_hour", "RATE_LIMIT_IMPORT_PER_HOUR")
+	_ = viper.BindEnv("import.enabled", "IMPORT_ENABLED")
+	_ = viper.BindEnv("import.max_bytes", "IMPORT_MAX_BYTES")
+	_ = viper.BindEnv("import.min_ms", "IMPORT_MIN_MS")
+	_ = viper.BindEnv("import.max_ms", "IMPORT_MAX_MS")
+	_ = viper.BindEnv("import.transcribe_timeout", "IMPORT_TRANSCRIBE_TIMEOUT")
+	_ = viper.BindEnv("import.separation_url", "SEPARATION_SERVICE_URL")
+	_ = viper.BindEnv("import.separation_timeout", "SEPARATION_SERVICE_TIMEOUT")
+	_ = viper.BindEnv("import.concurrency", "IMPORT_CONCURRENCY")
+	_ = viper.BindEnv("import.source_retention", "IMPORT_SOURCE_RETENTION")
 	_ = viper.BindEnv("credits.enforce", "CREDITS_ENFORCE")
 	_ = viper.BindEnv("credits.plan_plus", "CREDITS_PLAN_PLUS")
 	_ = viper.BindEnv("credits.plan_pro", "CREDITS_PLAN_PRO")
@@ -532,6 +561,16 @@ func Load() (*Config, error) {
 	viper.SetDefault("hum.audio_weight_free", 0.6)
 	viper.SetDefault("hum.style_weight_faithful", 0.5)
 	viper.SetDefault("hum.style_weight_free", 0.6)
+	viper.SetDefault("ratelimit.import_per_hour", 10)
+	viper.SetDefault("import.enabled", false)
+	viper.SetDefault("import.max_bytes", 52428800)
+	viper.SetDefault("import.min_ms", 30000)
+	viper.SetDefault("import.max_ms", 480000)
+	viper.SetDefault("import.transcribe_timeout", "180s")
+	viper.SetDefault("import.separation_url", "http://localhost:8085")
+	viper.SetDefault("import.separation_timeout", "900s")
+	viper.SetDefault("import.concurrency", 1)
+	viper.SetDefault("import.source_retention", "24h")
 	viper.SetDefault("credits.enforce", false)
 	viper.SetDefault("push.enabled", false)
 	viper.SetDefault("credits.plan_plus", 300)
@@ -655,6 +694,7 @@ func Load() (*Config, error) {
 			MasterPerHour:  viper.GetInt("ratelimit.master_per_hour"),
 			ExportPerHour:  viper.GetInt("ratelimit.export_per_hour"),
 			UploadPerHour:  viper.GetInt("ratelimit.upload_per_hour"),
+			ImportPerHour:  viper.GetInt("ratelimit.import_per_hour"),
 			WSTicketPerMin: viper.GetInt("ratelimit.ws_ticket_per_min"),
 			SignPerMin:     viper.GetInt("ratelimit.sign_per_min"),
 
@@ -694,6 +734,17 @@ func Load() (*Config, error) {
 			AudioWeightFree:         viper.GetFloat64("hum.audio_weight_free"),
 			StyleWeightFaithful:     viper.GetFloat64("hum.style_weight_faithful"),
 			StyleWeightFree:         viper.GetFloat64("hum.style_weight_free"),
+		},
+		Import: ImportConfig{
+			Enabled:           viper.GetBool("import.enabled"),
+			MaxBytes:          viper.GetInt64("import.max_bytes"),
+			MinMs:             viper.GetInt("import.min_ms"),
+			MaxMs:             viper.GetInt("import.max_ms"),
+			TranscribeTimeout: viper.GetDuration("import.transcribe_timeout"),
+			SeparationURL:     viper.GetString("import.separation_url"),
+			SeparationTimeout: viper.GetDuration("import.separation_timeout"),
+			Concurrency:       viper.GetInt("import.concurrency"),
+			SourceRetention:   viper.GetDuration("import.source_retention"),
 		},
 		Anthropic: AnthropicConfig{
 			APIKey:              viper.GetString("anthropic.api_key"),

@@ -33,6 +33,7 @@ var ownedKinds = map[string]bool{
 	"previews": true,
 	"guides":   true,
 	"hums":     true,
+	"imports":  true,
 }
 
 // segmentPattern: cannot carry "/" or "..", starts with a letter or digit, and

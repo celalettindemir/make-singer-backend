@@ -99,6 +99,7 @@ func TestUserPrefixes(t *testing.T) {
 		"exports/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
 		"guides/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
 		"hums/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
+		"imports/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
 		"masters/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
 		"previews/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",
 		"stems/6f1c2a9e-1b2c-4d3e-8f9a-0b1c2d3e4f5a/",

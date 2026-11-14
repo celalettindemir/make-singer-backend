@@ -25,6 +25,7 @@ ratelimit:
   purchases_per_min: 20 # RATELIMIT_PURCHASES_PER_MIN: POST /api/purchases/*, per user
   webhooks_per_min: 120 # RATELIMIT_WEBHOOKS_PER_MIN: store webhooks, per IP
   hum_per_min: 10 # RATELIMIT_HUM_PER_MIN: POST/DELETE /api/hum, per user
+  import_per_hour: 10 # RATE_LIMIT_IMPORT_PER_HOUR: bring-your-own-track uploads and retries, per user
   # Cloudflare edge ranges whose CF-Connecting-IP is trusted for per-IP limits (comma-separated CIDRs).
   # Unset = the built-in Cloudflare list (clientip.DefaultCloudflareRanges); empty string disables the header.
   # cloudflare_ranges: ""
@@ -89,6 +90,18 @@ openai:
   reasoning_effort: "low" # empty = not sent
   temperature_generate: 0.8 # not sent: reasoning models reject temperature
   temperature_rewrite: 0.6
+
+# Bring-your-own-track imports: limits, separation service, timed transcription
+import:
+  enabled: false # IMPORT_ENABLED
+  max_bytes: 52428800 # IMPORT_MAX_BYTES (50 MB)
+  min_ms: 30000 # IMPORT_MIN_MS
+  max_ms: 480000 # IMPORT_MAX_MS (8 min)
+  transcribe_timeout: "180s" # IMPORT_TRANSCRIBE_TIMEOUT
+  separation_url: "http://localhost:8085" # SEPARATION_SERVICE_URL
+  separation_timeout: "900s" # SEPARATION_SERVICE_TIMEOUT
+  concurrency: 1 # IMPORT_CONCURRENCY: import worker slots
+  source_retention: "24h" # IMPORT_SOURCE_RETENTION: failed imports keep the source this long
 
 # Hum (melody) uploads: OpenAI speech-to-text and Suno Upload and Cover weights
 hum:

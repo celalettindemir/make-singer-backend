@@ -694,3 +694,23 @@ func TestLoad_HumWeightOutOfRange(t *testing.T) {
 		t.Fatal("Load accepted an audio weight of 1.5")
 	}
 }
+
+func TestConfig_ImportDefaults(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	im := cfg.Import
+	if im.Enabled || im.MaxBytes != 52428800 || im.MinMs != 30000 || im.MaxMs != 480000 {
+		t.Errorf("import = %+v", im)
+	}
+	if im.TranscribeTimeout != 180*time.Second || im.SeparationTimeout != 900*time.Second {
+		t.Errorf("timeouts = %v / %v", im.TranscribeTimeout, im.SeparationTimeout)
+	}
+	if im.SeparationURL != "http://localhost:8085" || im.Concurrency != 1 || im.SourceRetention != 24*time.Hour {
+		t.Errorf("import = %+v", im)
+	}
+	if cfg.RateLimit.ImportPerHour != 10 {
+		t.Errorf("ImportPerHour = %d, want 10", cfg.RateLimit.ImportPerHour)
+	}
+}
