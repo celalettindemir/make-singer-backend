@@ -43,3 +43,24 @@ func TestUserKey_ImportsOwned(t *testing.T) {
 		t.Errorf("other user: %v, want ErrKeyNotOwned", err)
 	}
 }
+
+func TestImportKeys_Tainted(t *testing.T) {
+	tests := []struct {
+		key  string
+		want bool
+	}{
+		{"imports/u/j/vocal.mp3", true},
+		{"imports/u/j/rest.mp3", true},
+		{"masters/u/p/imp-x.wav", true},
+		{"exports/u/imp-x.mp3", true},
+		{"masters/u/p/x.wav", false},
+		{"exports/u/x.mp3", false},
+		{"stems/u/p/imp-x.mp3", false},
+		{"stems/u/p/a.mp3", false},
+	}
+	for _, tc := range tests {
+		if got := IsImportTainted(tc.key); got != tc.want {
+			t.Errorf("IsImportTainted(%q) = %v, want %v", tc.key, got, tc.want)
+		}
+	}
+}

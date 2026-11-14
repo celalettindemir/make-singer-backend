@@ -20,3 +20,14 @@ func IsImportVocalKey(key string) bool {
 func IsImportMasterKey(key string) bool {
 	return strings.HasPrefix(key, "masters/") && strings.HasPrefix(path.Base(key), "imp-")
 }
+
+// IsImportTainted reports whether the key is, or was derived from, a
+// bring-your-own-track import: anything under imports/, or a master/export
+// whose file name carries the imp- prefix. Tainted keys are never publishable.
+func IsImportTainted(key string) bool {
+	if IsImportKey(key) {
+		return true
+	}
+	first, _, _ := strings.Cut(key, "/")
+	return (first == "masters" || first == "exports") && strings.HasPrefix(path.Base(key), "imp-")
+}

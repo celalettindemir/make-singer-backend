@@ -439,3 +439,18 @@ func TestCreatePublication_ImportMasterAsStem_Rejected(t *testing.T) {
 		t.Fatal("nothing may be saved or enqueued")
 	}
 }
+
+func TestCreatePublication_ImportKeyAsMaster_Rejected(t *testing.T) {
+	for _, name := range []string{"vocal.mp3", "rest.mp3"} {
+		store := storeWithProfile()
+		s, q := newTestService(store)
+		req := publicationRequestA()
+		req.MasterURL = "imports/" + userA + "/j1/" + name
+		if _, err := s.CreatePublication(context.Background(), userA, req); !errors.Is(err, ErrImportNotPublishable) {
+			t.Fatalf("%s: want ErrImportNotPublishable: %v", name, err)
+		}
+		if len(store.inserted) != 0 || len(q.tasks) != 0 {
+			t.Fatal("nothing may be saved or enqueued")
+		}
+	}
+}
