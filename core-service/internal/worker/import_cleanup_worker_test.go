@@ -111,3 +111,14 @@ func TestImportCleanup_DeletesWhenFailedJobOlderThanRetention(t *testing.T) {
 		t.Fatalf("deleted = %v", st.deleted)
 	}
 }
+
+func TestImportCleanup_DeletesWhenOwnJobCompletedJustAtRetention(t *testing.T) {
+	repo, st := jobs.NewMemoryStore(nil), &impStorage{}
+	failedImportJob(t, repo, cleanupRetention-time.Second)
+	if err := NewImportCleanupWorker(repo, st, cleanupRetention).ProcessTask(context.Background(), cleanupTask(impOwner, impSrc)); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.deleted) != 1 {
+		t.Fatalf("own job at the retention edge must not keep the source: %v", st.deleted)
+	}
+}

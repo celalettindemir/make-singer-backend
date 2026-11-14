@@ -19,6 +19,14 @@ import (
 // retention so a retry that started after the failure is always seen.
 const importCleanupLookback = 48 * time.Hour
 
+// recentGrace shrinks the "recent failure" window. The cleanup task of the job
+// that failed at T0 runs at about T0+retention; with clock skew between pods or
+// a CompletedAt stamped by the database it can fire slightly early, and that job
+// would then count as a recent failure and the source would never be deleted
+// (no later task exists). Failures within the grace of the retention edge are
+// therefore treated as the task's own job.
+const recentGrace = 5 * time.Minute
+
 // ImportCleanupWorker deletes an import source that was kept after a failed or
 // canceled job, unless a retry still uses it.
 type ImportCleanupWorker struct {
@@ -58,7 +66,7 @@ func (w *ImportCleanupWorker) ProcessTask(ctx context.Context, t *asynq.Task) er
 		case model.JobStatusQueued, model.JobStatusRunning:
 		case model.JobStatusFailed, model.JobStatusCanceled:
 			// A recent failure keeps the source; its own cleanup task deletes it.
-			if j.CompletedAt == nil || !j.CompletedAt.After(now.Add(-w.retention)) {
+			if j.CompletedAt == nil || !j.CompletedAt.After(now.Add(-w.retention).Add(recentGrace)) {
 				continue
 			}
 		default:
