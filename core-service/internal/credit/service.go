@@ -138,7 +138,7 @@ func refundTur(op Operation) string { return debitTur(op) + "_iade" }
 
 func knownOperation(op Operation) bool {
 	switch op {
-	case OpRenderMix, OpRenderFocus, OpRenderStems, OpLyricsGenerate, OpLyricsRewrite, OpMaster:
+	case OpRenderMix, OpRenderFocus, OpRenderStems, OpLyricsGenerate, OpLyricsRewrite, OpMaster, OpImport:
 		return true
 	}
 	return false
@@ -286,6 +286,7 @@ type CostTable struct {
 	Render RenderCosts `json:"render"`
 	Lyrics LyricsCosts `json:"lyrics"`
 	Master int         `json:"master"`
+	Import int         `json:"import"`
 }
 
 // RenderCosts are the render prices.
@@ -377,6 +378,7 @@ func (s *Service) Summary(ctx context.Context, userID string) (Summary, error) {
 			Render: RenderCosts{Mix: c.RenderMix, Focus: c.RenderFocus, Stems: c.RenderStems},
 			Lyrics: LyricsCosts{Generate: c.LyricsGenerate, Rewrite: c.LyricsRewrite},
 			Master: c.Master,
+			Import: c.Import,
 		},
 		StoreAccountToken: acct.StoreToken.String(),
 		Enforced:          s.set.Enforce,

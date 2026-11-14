@@ -8,6 +8,7 @@ type Costs struct {
 	LyricsGenerate int
 	LyricsRewrite  int
 	Master         int
+	Import         int
 }
 
 // Operation names a billable operation.
@@ -20,6 +21,7 @@ const (
 	OpLyricsGenerate Operation = "lyrics_generate"
 	OpLyricsRewrite  Operation = "lyrics_rewrite"
 	OpMaster         Operation = "master"
+	OpImport         Operation = "import_separate"
 )
 
 // Of returns the cost of op, or 0 for an unknown operation.
@@ -37,6 +39,8 @@ func (c Costs) Of(op Operation) int {
 		return c.LyricsRewrite
 	case OpMaster:
 		return c.Master
+	case OpImport:
+		return c.Import
 	default:
 		return 0
 	}

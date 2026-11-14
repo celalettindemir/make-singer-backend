@@ -1,5 +1,5 @@
-FILE	config-yaml	5234a880485be4f4d9d9f46e422a659e509b6f9622196fbda22d1bd625f75600
-FILE	env-example	7a281dd02dbeb1163f37658a90ab226483635960c9d1e66ee297b208b6d46a2b
+FILE	config-yaml	6d806b845e10b4766d4e51e36807ce03a82c8a10f88291e67e1be3a29fe460cc
+FILE	env-example	ad6e7af1d1fb777493b4009a18d87a3f34501e75a4424c7caf30ea4fb069775e
 FILE	kimlik-migration-001	805c4a7704084d815a950e8fb3c14ca36de2cfc52e668355def91a7da38c024c
 FILE	kimlik-migration-002	1c8915357fd9a37ca07ca364f134e352d6e8afbabc5520df35d8a70163adfd9f
 FILE	kimlik-migration-003	fc96a44b344fe3e5f359fc07890bb62f09f6515ce2c23f49391391f0bc501401
@@ -1282,6 +1282,7 @@ STR	"CREATE SCHEMA IF NOT EXISTS kredi"
 STR	"CREATE SCHEMA IF NOT EXISTS sosyal"
 STR	"CREATE SCHEMA IF NOT EXISTS uretim"
 STR	"CREATE_TASK_FAILED"
+STR	"CREDITS_COST_IMPORT"
 STR	"CREDITS_COST_LYRICS_GENERATE"
 STR	"CREDITS_COST_LYRICS_REWRITE"
 STR	"CREDITS_COST_MASTER"
@@ -2351,6 +2352,9 @@ STR	"credited"
 STR	"credits.100"
 STR	"credits.1000"
 STR	"credits.300"
+STR	"credits.costs.import"
+STR	"credits.costs.import"
+STR	"credits.costs.import"
 STR	"credits.costs.lyrics_generate"
 STR	"credits.costs.lyrics_generate"
 STR	"credits.costs.lyrics_generate"
@@ -2743,6 +2747,7 @@ STR	"import.source_retention"
 STR	"import.transcribe_timeout"
 STR	"import.transcribe_timeout"
 STR	"import.transcribe_timeout"
+STR	"import_separate"
 STR	"imports"
 STR	"imports/"
 STR	"index_out_of_range"
@@ -4078,6 +4083,7 @@ TAG	json:"id"
 TAG	json:"id" validate:"required"
 TAG	json:"id" validate:"required,max=64"
 TAG	json:"id_token"
+TAG	json:"import"
 TAG	json:"includeMaster"
 TAG	json:"includeVocals"
 TAG	json:"index"

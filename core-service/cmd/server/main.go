@@ -800,6 +800,7 @@ func creditSettings(cfg *config.Config) credit.Settings {
 			LyricsGenerate: c.Costs.LyricsGenerate,
 			LyricsRewrite:  c.Costs.LyricsRewrite,
 			Master:         c.Costs.Master,
+			Import:         c.Costs.Import,
 		},
 	}
 }

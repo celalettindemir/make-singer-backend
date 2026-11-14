@@ -55,6 +55,7 @@ credits:
     lyrics_generate: 2 # CREDITS_COST_LYRICS_GENERATE
     lyrics_rewrite: 1 # CREDITS_COST_LYRICS_REWRITE
     master: 3 # CREDITS_COST_MASTER
+    import: 23 # CREDITS_COST_IMPORT
   refill_interval: 1h # CREDITS_REFILL_INTERVAL: annual-plan refill sweep period
 
 # Apple App Store

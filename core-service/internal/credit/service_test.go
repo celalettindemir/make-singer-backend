@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,7 +99,7 @@ func testSettings(enforce bool) Settings {
 	return Settings{
 		Enforce:     enforce,
 		PlanCredits: map[Tier]int{TierPlus: 300, TierPro: 1000},
-		Costs:       Costs{RenderMix: 23, RenderFocus: 43, RenderStems: 63, LyricsGenerate: 2, LyricsRewrite: 1, Master: 3},
+		Costs:       Costs{RenderMix: 23, RenderFocus: 43, RenderStems: 63, LyricsGenerate: 2, LyricsRewrite: 1, Master: 3, Import: 23},
 		RefundGrace: 168 * time.Hour,
 	}
 }
@@ -298,7 +299,7 @@ func TestLyrics_ActionChargesLots(t *testing.T) {
 	assertLotLedger(t, store)
 }
 
-const getCreditsFixture = `{"balance": 84, "debt": 0, "lots": [{"source": "plan", "amount": 60, "expiresAt": "2026-11-01T00:00:00Z"}, {"source": "campaign", "amount": 24, "expiresAt": "2026-12-31T23:59:59Z"}], "plan": {"tier": "plus", "period": "monthly", "status": "active", "periodEnd": "2026-11-01T00:00:00Z", "autoRenew": true, "pendingTier": null}, "planCredits": {"plus": 300, "pro": 1000}, "costs": {"render": {"mix": 23, "focus": 43, "stems": 63}, "lyrics": {"generate": 2, "rewrite": 1}, "master": 3}, "gift": {"amount": 24, "expiresAt": "2026-12-31T23:59:59Z"}, "storeAccountToken": "3f6c1a52-8d47-4b1e-9a60-2c5d7e91b0a4", "enforced": true}`
+const getCreditsFixture = `{"balance": 84, "debt": 0, "lots": [{"source": "plan", "amount": 60, "expiresAt": "2026-11-01T00:00:00Z"}, {"source": "campaign", "amount": 24, "expiresAt": "2026-12-31T23:59:59Z"}], "plan": {"tier": "plus", "period": "monthly", "status": "active", "periodEnd": "2026-11-01T00:00:00Z", "autoRenew": true, "pendingTier": null}, "planCredits": {"plus": 300, "pro": 1000}, "costs": {"render": {"mix": 23, "focus": 43, "stems": 63}, "lyrics": {"generate": 2, "rewrite": 1}, "master": 3, "import": 23}, "gift": {"amount": 24, "expiresAt": "2026-12-31T23:59:59Z"}, "storeAccountToken": "3f6c1a52-8d47-4b1e-9a60-2c5d7e91b0a4", "enforced": true}`
 
 func decodeJSON(t *testing.T, v any) any {
 	t.Helper()
@@ -628,5 +629,63 @@ func TestSummary_CostsHaveNoGuide(t *testing.T) {
 	}
 	if string(b) != `{"mix":23,"focus":43,"stems":63}` {
 		t.Fatalf("render costs = %s", b)
+	}
+}
+
+func TestCosts_OfImport(t *testing.T) {
+	c := Costs{Import: 23}
+	if got := c.Of(OpImport); got != 23 {
+		t.Fatalf("Of(OpImport) = %d, want 23", got)
+	}
+	if OpImport != Operation("import_separate") {
+		t.Fatalf("OpImport = %q, want import_separate", OpImport)
+	}
+}
+
+func TestCostTable_IncludesImport(t *testing.T) {
+	got, err := newTestService(&fakeLedger{acct: &Account{UserID: "u1"}}, true).Summary(context.Background(), "u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Costs.Import != 23 {
+		t.Fatalf("Costs.Import = %d, want 23", got.Costs.Import)
+	}
+	b, err := json.Marshal(got.Costs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"import":23`) {
+		t.Fatalf("costs JSON = %s, want an import key", b)
+	}
+}
+
+func TestService_SpendImportDebitsRenderKind(t *testing.T) {
+	l := &fakeLedger{bal: 100}
+	s := newTestService(l, true)
+	bal, err := s.Spend(context.Background(), "u1", OpImport, "job1", "p1")
+	if err != nil || bal != 77 {
+		t.Fatalf("Spend import = %d, %v; want 77", bal, err)
+	}
+	if l.debit.amount != 23 || l.debit.tur != "render" || l.debit.meta.Reason != "import_separate" {
+		t.Fatalf("debit = %+v", l.debit)
+	}
+}
+
+func TestRefund_ImportUsesRenderRefundKind(t *testing.T) {
+	store, u := newStore(t)
+	seed(t, store, u, 0, 40)
+	ctx := context.Background()
+	s := newTestService(store, true)
+	if _, err := s.Spend(ctx, u, OpImport, "i1", "3f2c8a10-5b7e-4c1d-9a2f-6e8b0c4d2a71"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Refund(ctx, OpImport, "i1"); err != nil {
+		t.Fatal(err)
+	}
+	if b := balance(t, store, u, lotNow); b != 40 {
+		t.Fatalf("balance after refund = %d, want 40", b)
+	}
+	if n := count(t, store, `SELECT count(*) FROM kredi.hareket WHERE tur = 'render_iade' AND ref = 'i1'`); n != 1 {
+		t.Fatalf("render_iade rows = %d, want 1", n)
 	}
 }

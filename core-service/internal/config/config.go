@@ -152,6 +152,7 @@ type CreditCosts struct {
 	LyricsGenerate int
 	LyricsRewrite  int
 	Master         int
+	Import         int
 }
 
 // CreditConfig is the configuration of the credit system.
@@ -511,6 +512,7 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("credits.costs.lyrics_generate", "CREDITS_COST_LYRICS_GENERATE")
 	_ = viper.BindEnv("credits.costs.lyrics_rewrite", "CREDITS_COST_LYRICS_REWRITE")
 	_ = viper.BindEnv("credits.costs.master", "CREDITS_COST_MASTER")
+	_ = viper.BindEnv("credits.costs.import", "CREDITS_COST_IMPORT")
 	_ = viper.BindEnv("credits.refund_grace", "CREDITS_REFUND_GRACE")
 	_ = viper.BindEnv("credits.refill_interval", "CREDITS_REFILL_INTERVAL")
 	_ = viper.BindEnv("credits.expire_interval", "CREDITS_EXPIRE_INTERVAL")
@@ -581,6 +583,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("credits.costs.lyrics_generate", 2)
 	viper.SetDefault("credits.costs.lyrics_rewrite", 1)
 	viper.SetDefault("credits.costs.master", 3)
+	viper.SetDefault("credits.costs.import", 23)
 	viper.SetDefault("credits.refund_grace", "168h")
 	viper.SetDefault("credits.refill_interval", "1h")
 	viper.SetDefault("credits.expire_interval", "1h")
@@ -819,6 +822,7 @@ func Load() (*Config, error) {
 				LyricsGenerate: viper.GetInt("credits.costs.lyrics_generate"),
 				LyricsRewrite:  viper.GetInt("credits.costs.lyrics_rewrite"),
 				Master:         viper.GetInt("credits.costs.master"),
+				Import:         viper.GetInt("credits.costs.import"),
 			},
 			RefundGrace:    viper.GetDuration("credits.refund_grace"),
 			RefillInterval: viper.GetDuration("credits.refill_interval"),
