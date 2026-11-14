@@ -25,7 +25,7 @@ ratelimit:
   purchases_per_min: 20 # RATELIMIT_PURCHASES_PER_MIN: POST /api/purchases/*, per user
   webhooks_per_min: 120 # RATELIMIT_WEBHOOKS_PER_MIN: store webhooks, per IP
   hum_per_min: 10 # RATELIMIT_HUM_PER_MIN: POST/DELETE /api/hum, per user
-  import_per_hour: 10 # RATE_LIMIT_IMPORT_PER_HOUR: bring-your-own-track uploads and retries, per user
+  import_per_hour: 10 # RATELIMIT_IMPORT_PER_HOUR: bring-your-own-track uploads and retries, per user
   # Cloudflare edge ranges whose CF-Connecting-IP is trusted for per-IP limits (comma-separated CIDRs).
   # Unset = the built-in Cloudflare list (clientip.DefaultCloudflareRanges); empty string disables the header.
   # cloudflare_ranges: ""

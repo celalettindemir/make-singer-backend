@@ -492,7 +492,7 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("hum.audio_weight_free", "HUM_AUDIO_WEIGHT_FREE")
 	_ = viper.BindEnv("hum.style_weight_faithful", "HUM_STYLE_WEIGHT_FAITHFUL")
 	_ = viper.BindEnv("hum.style_weight_free", "HUM_STYLE_WEIGHT_FREE")
-	_ = viper.BindEnv("ratelimit.import_per_hour", "RATE_LIMIT_IMPORT_PER_HOUR")
+	_ = viper.BindEnv("ratelimit.import_per_hour", "RATELIMIT_IMPORT_PER_HOUR")
 	_ = viper.BindEnv("import.enabled", "IMPORT_ENABLED")
 	_ = viper.BindEnv("import.max_bytes", "IMPORT_MAX_BYTES")
 	_ = viper.BindEnv("import.min_ms", "IMPORT_MIN_MS")
