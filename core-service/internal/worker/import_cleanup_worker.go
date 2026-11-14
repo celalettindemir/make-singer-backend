@@ -22,13 +22,16 @@ const importCleanupLookback = 48 * time.Hour
 // ImportCleanupWorker deletes an import source that was kept after a failed or
 // canceled job, unless a retry still uses it.
 type ImportCleanupWorker struct {
-	repo    jobs.Repo
-	storage client.StorageClient
-	now     func() time.Time
+	repo      jobs.Repo
+	storage   client.StorageClient
+	retention time.Duration
+	now       func() time.Time
 }
 
-func NewImportCleanupWorker(repo jobs.Repo, storage client.StorageClient) *ImportCleanupWorker {
-	return &ImportCleanupWorker{repo: repo, storage: storage, now: time.Now}
+// NewImportCleanupWorker: retention is the time a failed job's source is kept;
+// a failure newer than that is cleaned up by its own, later task.
+func NewImportCleanupWorker(repo jobs.Repo, storage client.StorageClient, retention time.Duration) *ImportCleanupWorker {
+	return &ImportCleanupWorker{repo: repo, storage: storage, retention: retention, now: time.Now}
 }
 
 func (w *ImportCleanupWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
@@ -46,9 +49,19 @@ func (w *ImportCleanupWorker) ProcessTask(ctx context.Context, t *asynq.Task) er
 	if err != nil {
 		return fmt.Errorf("could not list import jobs: %w", err)
 	}
+	now := w.now()
 	for _, j := range list {
-		if j.Type != model.JobTypeImport ||
-			(j.Status != model.JobStatusQueued && j.Status != model.JobStatusRunning) {
+		if j.Type != model.JobTypeImport {
+			continue
+		}
+		switch j.Status {
+		case model.JobStatusQueued, model.JobStatusRunning:
+		case model.JobStatusFailed, model.JobStatusCanceled:
+			// A recent failure keeps the source; its own cleanup task deletes it.
+			if j.CompletedAt == nil || !j.CompletedAt.After(now.Add(-w.retention)) {
+				continue
+			}
+		default:
 			continue
 		}
 		var ip model.ImportPayload

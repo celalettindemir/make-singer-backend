@@ -13,6 +13,8 @@ import (
 	"github.com/makeasinger/api/internal/service"
 )
 
+const cleanupRetention = 24 * time.Hour
+
 func cleanupTask(owner, key string) *asynq.Task {
 	b, _ := json.Marshal(service.ImportCleanupPayload{OwnerID: owner, SourceKey: key})
 	return asynq.NewTask(service.TaskTypeImportSourceCleanup, b)
@@ -31,7 +33,7 @@ func addImportJob(t *testing.T, repo jobs.Repo, id, key string, st model.JobStat
 func TestImportCleanup_DeletesSource(t *testing.T) {
 	repo, st := jobs.NewMemoryStore(nil), &impStorage{}
 	addImportJob(t, repo, impJobID, impSrc, model.JobStatusFailed)
-	if err := NewImportCleanupWorker(repo, st).ProcessTask(context.Background(), cleanupTask(impOwner, impSrc)); err != nil {
+	if err := NewImportCleanupWorker(repo, st, cleanupRetention).ProcessTask(context.Background(), cleanupTask(impOwner, impSrc)); err != nil {
 		t.Fatal(err)
 	}
 	if len(st.deleted) != 1 || st.deleted[0] != impSrc {
@@ -43,7 +45,7 @@ func TestImportCleanup_SkipsWhenActiveRetryUsesSource(t *testing.T) {
 	for _, status := range []model.JobStatus{model.JobStatusQueued, model.JobStatusRunning} {
 		repo, st := jobs.NewMemoryStore(nil), &impStorage{}
 		addImportJob(t, repo, impJobID, impSrc, status)
-		if err := NewImportCleanupWorker(repo, st).ProcessTask(context.Background(), cleanupTask(impOwner, impSrc)); err != nil {
+		if err := NewImportCleanupWorker(repo, st, cleanupRetention).ProcessTask(context.Background(), cleanupTask(impOwner, impSrc)); err != nil {
 			t.Fatal(err)
 		}
 		if len(st.deleted) != 0 {
@@ -55,13 +57,13 @@ func TestImportCleanup_SkipsWhenActiveRetryUsesSource(t *testing.T) {
 func TestImportCleanup_MissingObjectIsNotError(t *testing.T) {
 	// No job and no object: storage Delete is idempotent and returns nil.
 	st := &impStorage{}
-	if err := NewImportCleanupWorker(jobs.NewMemoryStore(nil), st).ProcessTask(context.Background(), cleanupTask(impOwner, impSrc)); err != nil {
+	if err := NewImportCleanupWorker(jobs.NewMemoryStore(nil), st, cleanupRetention).ProcessTask(context.Background(), cleanupTask(impOwner, impSrc)); err != nil {
 		t.Fatalf("missing object must not fail: %v", err)
 	}
 }
 
 func TestImportCleanup_BadPayloadSkipRetry(t *testing.T) {
-	w := NewImportCleanupWorker(jobs.NewMemoryStore(nil), &impStorage{})
+	w := NewImportCleanupWorker(jobs.NewMemoryStore(nil), &impStorage{}, cleanupRetention)
 	bad := []*asynq.Task{
 		asynq.NewTask(service.TaskTypeImportSourceCleanup, []byte("{")),
 		cleanupTask(impOwner, "imports/u2/x/source.mp3"),
@@ -72,5 +74,40 @@ func TestImportCleanup_BadPayloadSkipRetry(t *testing.T) {
 		if err := w.ProcessTask(context.Background(), task); !errors.Is(err, asynq.SkipRetry) {
 			t.Fatalf("case %d: want SkipRetry, got %v", i, err)
 		}
+	}
+}
+
+func failedImportJob(t *testing.T, repo jobs.Repo, completedAgo time.Duration) {
+	t.Helper()
+	addImportJob(t, repo, impJobID, impSrc, model.JobStatusRunning)
+	done := time.Now().Add(-completedAgo)
+	err := repo.Update(context.Background(), impJobID, func(j *model.Job) error {
+		j.Status, j.CompletedAt = model.JobStatusFailed, &done
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestImportCleanup_SkipsWhenRecentFailedJobUsesSource(t *testing.T) {
+	repo, st := jobs.NewMemoryStore(nil), &impStorage{}
+	failedImportJob(t, repo, 3*time.Hour)
+	if err := NewImportCleanupWorker(repo, st, cleanupRetention).ProcessTask(context.Background(), cleanupTask(impOwner, impSrc)); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.deleted) != 0 {
+		t.Fatalf("source deleted despite recent failure: %v", st.deleted)
+	}
+}
+
+func TestImportCleanup_DeletesWhenFailedJobOlderThanRetention(t *testing.T) {
+	repo, st := jobs.NewMemoryStore(nil), &impStorage{}
+	failedImportJob(t, repo, 25*time.Hour)
+	if err := NewImportCleanupWorker(repo, st, cleanupRetention).ProcessTask(context.Background(), cleanupTask(impOwner, impSrc)); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.deleted) != 1 {
+		t.Fatalf("deleted = %v", st.deleted)
 	}
 }
