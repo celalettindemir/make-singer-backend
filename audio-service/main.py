@@ -20,6 +20,7 @@ from services.archiver import ArchiverService
 from services.encoder import EncoderService
 from services.guide import GuideService
 from services.hum import HumService, HumUnreadable
+from services.import_audio import ImportAudioService, ImportUnreadable
 from services.master import MasterService
 from services.pitch import PitchService
 from services.storage import StorageService
@@ -233,6 +234,22 @@ class HumPrepareResponse(BaseModel):
     duration_ms: int
 
 
+class ImportMeasureRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    input_key: str
+
+
+class ImportKey(BaseModel):
+    tonic: str
+    scale: Literal["major", "minor"]
+
+
+class ImportMeasureResponse(BaseModel):
+    bpm: float | None
+    key: ImportKey | None
+
+
 # Services
 storage_service: StorageService | None = None
 master_service: MasterService | None = None
@@ -243,6 +260,7 @@ tempo_service: TempoService | None = None
 guide_service: GuideService | None = None
 pitch_service: PitchService | None = None
 hum_service: HumService | None = None
+import_service: ImportAudioService | None = None
 
 
 @asynccontextmanager
@@ -250,7 +268,7 @@ async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     global storage_service, master_service, encoder_service, archiver_service
     global analiz_service, tempo_service, guide_service, pitch_service
-    global hum_service
+    global hum_service, import_service
 
     # Initialize storage service
     if R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY:
@@ -272,6 +290,7 @@ async def lifespan(app: FastAPI):
     guide_service = GuideService(storage_service)
     pitch_service = PitchService(storage_service)
     hum_service = HumService(storage_service)
+    import_service = ImportAudioService(storage_service)
 
     yield
 
@@ -463,6 +482,22 @@ async def hum_prepare(request: HumPrepareRequest):
     except HumUnreadable:
         raise HTTPException(status_code=422, detail="undecodable")
     # Genis yakalama BILINCLI: diger uclardaki desen, her hata 500.
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ice-aktar-olc", response_model=ImportMeasureResponse)
+async def import_measure(request: ImportMeasureRequest):
+    """BPM and key of an uploaded source song; either may be None."""
+    if import_service is None:
+        raise HTTPException(status_code=503, detail="Import service not initialized")
+
+    try:
+        result = await import_service.measure(input_key=request.input_key)
+        return ImportMeasureResponse(**result)
+    except ImportUnreadable:
+        raise HTTPException(status_code=422, detail="undecodable")
+    # Broad catch on purpose: same pattern as the other endpoints.
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(e))
 
