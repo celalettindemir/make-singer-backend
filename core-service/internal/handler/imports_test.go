@@ -166,3 +166,62 @@ func TestImportHandler_MapsErrors(t *testing.T) {
 		}
 	})
 }
+
+type importGoneStorage struct {
+	*humTestStorage
+	gone bool
+}
+
+func (s importGoneStorage) Exists(context.Context, string) (bool, error) { return !s.gone, nil }
+
+func TestImportHandler_RetryMapsErrors(t *testing.T) {
+	const jobID = "11111111-1111-4111-8111-111111111111"
+	run := func(t *testing.T, status model.JobStatus, gone bool) (int, map[string]any) {
+		t.Helper()
+		repo := jobs.NewMemoryStore(nil)
+		payload := `{"sourceKey":"imports/user-1/x/source.mp3","durationMs":95000,"contentType":"audio/mpeg"}`
+		if err := repo.Create(context.Background(), &model.Job{
+			ID: jobID, Type: model.JobTypeImport, OwnerID: "user-1", Status: status,
+			ProjectID: "p1", Payload: []byte(payload), CreatedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		svc := service.NewImportService(service.ImportDeps{
+			Cfg:  config.ImportConfig{Enabled: true, MinMs: 30000, MaxMs: 480000},
+			Repo: repo, Storage: importGoneStorage{&humTestStorage{}, gone}, Audio: importTestAudio{ms: 95000},
+			Queue: importTestQueue{}, Credits: &credit.FakeSpender{IsEnforced: true, Bal: 100},
+		})
+		h := NewImportHandler(svc, 1024, 30000, 480000)
+		app := fiber.New()
+		app.Post("/imports/:jobId/retry", func(c *fiber.Ctx) error { c.Locals("userId", "user-1"); return h.Retry(c) })
+		resp, err := app.Test(httptest.NewRequest("POST", "/imports/"+jobID+"/retry", nil), -1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		var got map[string]any
+		_ = json.Unmarshal(b, &got)
+		if inner, ok := got["error"].(map[string]any); ok {
+			got = inner
+		}
+		return resp.StatusCode, got
+	}
+	t.Run("202", func(t *testing.T) {
+		code, got := run(t, model.JobStatusFailed, false)
+		if code != 202 || got["jobId"] == "" || got["jobId"] == jobID {
+			t.Fatalf("%d %v", code, got)
+		}
+	})
+	t.Run("source gone", func(t *testing.T) {
+		code, got := run(t, model.JobStatusFailed, true)
+		if code != 410 || got["code"] != "IMPORT_SOURCE_GONE" {
+			t.Fatalf("%d %v", code, got)
+		}
+	})
+	t.Run("not retryable", func(t *testing.T) {
+		code, got := run(t, model.JobStatusSucceeded, false)
+		if code != 409 || got["code"] != "JOB_NOT_RETRYABLE" {
+			t.Fatalf("%d %v", code, got)
+		}
+	})
+}

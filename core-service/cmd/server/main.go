@@ -346,7 +346,7 @@ func main() {
 	lyricsJobService := service.NewLyricsJobService(jobStore, asynqClient, asynqInspector, lyricsService, validate).WithCredits(creditService)
 	lyricsHandler.WithJobs(lyricsJobService)
 	jobsHandler := handler.NewJobsHandler(
-		service.NewJobCenter(jobStore, renderService, masterService).WithLyrics(lyricsJobService, lyricsJobService), validate)
+		service.NewJobCenter(jobStore, renderService, masterService).WithLyrics(lyricsJobService, lyricsJobService).WithImport(importService), validate)
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
 	humHandler := handler.NewHumHandler(humService)
@@ -527,6 +527,7 @@ func main() {
 	// Bring your own track (own hourly bucket; the retry route shares it)
 	importLimit := rateLimiter.Limit("import", cfg.RateLimit.ImportPerHour, time.Hour)
 	api.Post("/imports", importLimit, importHandler.Upload)
+	api.Post("/imports/:jobId/retry", importLimit, importHandler.Retry)
 
 	// WebSocket ticket: obtained with an authenticated request.
 	api.Post("/ws/ticket", rateLimiter.WSTicketLimit(cfg.RateLimit.WSTicketPerMin), wsTicketHandler.Issue)

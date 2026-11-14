@@ -25,6 +25,7 @@ const (
 	CodeBalanceTooLow        = "BALANCE_TOO_LOW"
 	CodeJobActive            = "JOB_ACTIVE"
 	CodeJobNotRetryable      = "JOB_NOT_RETRYABLE"
+	CodeImportSourceGone     = "IMPORT_SOURCE_GONE"
 )
 
 type ErrorResponse struct {

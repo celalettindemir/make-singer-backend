@@ -4,9 +4,11 @@ import (
 	"errors"
 	"io"
 	"regexp"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/credit"
 	"github.com/makeasinger/api/internal/i18n"
@@ -130,4 +132,45 @@ func (h *ImportHandler) startError(c *fiber.Ctx, err error) error {
 		return response.ValidationError(c, i18n.KeyHumProjectInvalid, nil)
 	}
 	return internalError(c, err)
+}
+
+// Retry handles POST /api/imports/:jobId/retry
+// @Summary      Run a failed import again
+// @Description  Start a new import job from the stored source of a failed or canceled import
+// @Tags         Upload
+// @Produce      json
+// @Param        jobId path string true "Import job ID"
+// @Success      202 {object} model.ImportStartResponse
+// @Failure      401 {object} response.ErrorResponse
+// @Failure      402 {object} response.ErrorResponse
+// @Failure      404 {object} response.ErrorResponse
+// @Failure      409 {object} response.ErrorResponse
+// @Failure      410 {object} response.ErrorResponse
+// @Failure      429 {object} response.ErrorResponse
+// @Failure      503 {object} response.ErrorResponse
+// @Security     BearerAuth
+// @Router       /api/imports/{jobId}/retry [post]
+func (h *ImportHandler) Retry(c *fiber.Ctx) error {
+	userID, ok := requestOwner(c)
+	if !ok {
+		return response.Unauthorized(c, i18n.KeyUnauthenticated)
+	}
+	// Params aliases fasthttp's buffer, so the id is copied.
+	id := strings.Clone(c.Params("jobId"))
+	if _, err := uuid.Parse(id); err != nil {
+		return response.NotFound(c, i18n.KeyJobNotFound)
+	}
+	result, err := h.service.Retry(c.Context(), userID, id)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrJobNotFound):
+			return response.NotFound(c, i18n.KeyJobNotFound)
+		case errors.Is(err, service.ErrImportNotRetryable):
+			return response.Error(c, fiber.StatusConflict, response.CodeJobNotRetryable, i18n.KeyImportNotRetryable, map[string]string{})
+		case errors.Is(err, service.ErrImportSourceGone):
+			return response.Error(c, fiber.StatusGone, response.CodeImportSourceGone, i18n.KeyImportSourceGone, map[string]string{})
+		}
+		return h.startError(c, err)
+	}
+	return response.Accepted(c, result)
 }

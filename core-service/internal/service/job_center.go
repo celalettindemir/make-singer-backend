@@ -35,6 +35,12 @@ type LyricsRetrier interface {
 	Retry(ctx context.Context, userID, jobID string) error
 }
 
+// ImportCanceler cancels an import job, refunds it and schedules the source
+// cleanup.
+type ImportCanceler interface {
+	Cancel(ctx context.Context, userID, jobID string) error
+}
+
 // JobCenter reads jobs of every type and dispatches cancel and retry by type.
 type JobCenter struct {
 	repo   jobs.Repo
@@ -42,6 +48,7 @@ type JobCenter struct {
 	master *MasterService
 	cancel JobCanceler
 	retry  LyricsRetrier
+	imp    ImportCanceler
 }
 
 func NewJobCenter(repo jobs.Repo, render *RenderService, master *MasterService) *JobCenter {
@@ -53,6 +60,14 @@ func NewJobCenter(repo jobs.Repo, render *RenderService, master *MasterService) 
 // start any).
 func (c *JobCenter) WithLyrics(cancel JobCanceler, retry LyricsRetrier) *JobCenter {
 	c.cancel, c.retry = cancel, retry
+	return c
+}
+
+// WithImport wires the import side. Without it an import job answers cancel
+// with ErrJobNotFound. Retry of an import job is always ErrNotRetryable here;
+// POST /api/imports/:jobId/retry is its own endpoint.
+func (c *JobCenter) WithImport(cancel ImportCanceler) *JobCenter {
+	c.imp = cancel
 	return c
 }
 
@@ -150,6 +165,11 @@ func (c *JobCenter) Cancel(ctx context.Context, userID, id string) error {
 			return ErrJobNotFound
 		}
 		return c.cancel.Cancel(ctx, userID, id)
+	case model.JobTypeImport:
+		if c.imp == nil {
+			return ErrJobNotFound
+		}
+		return c.imp.Cancel(ctx, userID, id)
 	}
 	return ErrJobNotFound
 }

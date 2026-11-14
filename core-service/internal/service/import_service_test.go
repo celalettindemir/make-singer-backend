@@ -22,7 +22,10 @@ type importStorage struct {
 	mu      sync.Mutex
 	events  []string
 	deleted []string
+	gone    bool
 }
+
+func (s *importStorage) Exists(_ context.Context, _ string) (bool, error) { return !s.gone, nil }
 
 func (s *importStorage) Upload(ctx context.Context, key string, body io.Reader, ct string) (string, time.Time, error) {
 	_, _ = io.Copy(io.Discard, body)
@@ -220,5 +223,174 @@ func TestImportService_Disabled(t *testing.T) {
 	_, err := e.svc.Start(context.Background(), "u1", importUpload())
 	if !errors.Is(err, ErrImportDisabled) || len(e.st.events) != 0 {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+const (
+	oldImportID    = "11111111-1111-4111-8111-111111111111"
+	liveImportID   = "22222222-2222-4222-8222-222222222222"
+	cancelImportID = "33333333-3333-4333-8333-333333333333"
+)
+
+const importSrcKey = "imports/u1/old/source.mp3"
+
+func seedImportJob(t *testing.T, e *importEnv, id string, status model.JobStatus) {
+	t.Helper()
+	payload := `{"sourceKey":"` + importSrcKey + `","durationMs":95000,"contentType":"audio/mpeg"}`
+	err := e.repo.Create(context.Background(), &model.Job{
+		ID: id, Type: model.JobTypeImport, OwnerID: "u1", Status: status,
+		ProjectID: "p1", ProjectName: "Gece", Payload: []byte(payload), CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestImportService_Retry_NewJobSameSource(t *testing.T) {
+	e := newImportEnv(95000)
+	seedImportJob(t, e, oldImportID, model.JobStatusFailed)
+	resp, err := e.svc.Retry(context.Background(), "u1", oldImportID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.JobID == "" || resp.JobID == oldImportID || resp.DurationMs != 95000 {
+		t.Fatalf("resp = %+v", resp)
+	}
+	job, err := e.repo.Get(context.Background(), resp.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != model.JobStatusQueued || job.ProjectID != "p1" || job.ProjectName != "Gece" ||
+		!strings.Contains(string(job.Payload), importSrcKey) || !strings.Contains(string(job.Payload), `"contentType":"audio/mpeg"`) {
+		t.Fatalf("job = %+v payload %s", job, job.Payload)
+	}
+	if len(e.spender.Spends) != 1 || e.spender.Spends[0].ID != resp.JobID || e.spender.Spends[0].Op != credit.OpImport {
+		t.Fatalf("spends = %+v", e.spender.Spends)
+	}
+	if len(e.queue.tasks) != 1 || e.queue.tasks[0].Type() != TaskTypeImport || !strings.Contains(string(e.queue.tasks[0].Payload()), resp.JobID) {
+		t.Fatalf("tasks = %v", e.queue.tasks)
+	}
+	if len(e.st.deleted) != 0 || len(e.st.events) != 0 {
+		t.Fatalf("storage touched: %v %v", e.st.deleted, e.st.events)
+	}
+}
+
+func TestImportService_Retry_CanceledAllowed(t *testing.T) {
+	e := newImportEnv(95000)
+	seedImportJob(t, e, oldImportID, model.JobStatusCanceled)
+	if _, err := e.svc.Retry(context.Background(), "u1", oldImportID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestImportService_RetrySourceGone_NoDebit(t *testing.T) {
+	e := newImportEnv(95000)
+	e.st.gone = true
+	seedImportJob(t, e, oldImportID, model.JobStatusFailed)
+	_, err := e.svc.Retry(context.Background(), "u1", oldImportID)
+	if !errors.Is(err, ErrImportSourceGone) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(e.spender.Spends) != 0 || len(e.queue.tasks) != 0 {
+		t.Fatalf("spends %v tasks %v", e.spender.Spends, e.queue.tasks)
+	}
+	list, _ := e.repo.List(context.Background(), "u1", time.Now().Add(-time.Hour), 50)
+	if len(list) != 0 { // the seeded failed job has no completion time, so List skips it
+		t.Fatalf("a job was created: %+v", list)
+	}
+}
+
+func TestImportService_Retry_NotFailed_NotRetryable(t *testing.T) {
+	for _, st := range []model.JobStatus{model.JobStatusSucceeded, model.JobStatusRunning, model.JobStatusQueued} {
+		e := newImportEnv(95000)
+		seedImportJob(t, e, oldImportID, st)
+		_, err := e.svc.Retry(context.Background(), "u1", oldImportID)
+		if !errors.Is(err, ErrImportNotRetryable) {
+			t.Fatalf("%s: err = %v", st, err)
+		}
+		if len(e.spender.Spends) != 0 {
+			t.Fatalf("%s: spent", st)
+		}
+	}
+}
+
+func TestImportService_Retry_OtherOwner_NotFound(t *testing.T) {
+	e := newImportEnv(95000)
+	seedImportJob(t, e, oldImportID, model.JobStatusFailed)
+	if _, err := e.svc.Retry(context.Background(), "u2", oldImportID); !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestImportService_Retry_ActiveImport_Conflict(t *testing.T) {
+	e := newImportEnv(95000)
+	seedImportJob(t, e, oldImportID, model.JobStatusFailed)
+	seedImportJob(t, e, liveImportID, model.JobStatusRunning)
+	_, err := e.svc.Retry(context.Background(), "u1", oldImportID)
+	if jobs.ActiveJobID(err) != liveImportID {
+		t.Fatalf("err = %v", err)
+	}
+	if len(e.spender.Spends) != 0 {
+		t.Fatal("spent")
+	}
+}
+
+func TestJobCenter_CancelImport_RefundsAndSchedulesCleanup(t *testing.T) {
+	for _, st := range []model.JobStatus{model.JobStatusQueued, model.JobStatusRunning} {
+		e := newImportEnv(95000)
+		e.svc.d.Cfg.SourceRetention = 24 * time.Hour
+		seedImportJob(t, e, cancelImportID, st)
+		center := NewJobCenter(e.repo, nil, nil).WithImport(e.svc)
+		if err := center.Cancel(context.Background(), "u1", cancelImportID); err != nil {
+			t.Fatalf("%s: %v", st, err)
+		}
+		job, _ := e.repo.Get(context.Background(), cancelImportID)
+		if job.Status != model.JobStatusCanceled || job.CompletedAt == nil {
+			t.Fatalf("%s: job = %+v", st, job)
+		}
+		if len(e.spender.Refunds) != 1 || e.spender.Refunds[0].Op != credit.OpImport || e.spender.Refunds[0].ID != cancelImportID {
+			t.Fatalf("%s: refunds = %+v", st, e.spender.Refunds)
+		}
+		if len(e.queue.tasks) != 1 || e.queue.tasks[0].Type() != TaskTypeImportSourceCleanup {
+			t.Fatalf("%s: tasks = %v", st, e.queue.tasks)
+		}
+		want := `{"ownerId":"u1","sourceKey":"` + importSrcKey + `"}`
+		if string(e.queue.tasks[0].Payload()) != want {
+			t.Fatalf("payload = %s", e.queue.tasks[0].Payload())
+		}
+		var queue string
+		var delay time.Duration
+		for _, o := range e.queue.opts[0] {
+			switch o.Type() {
+			case asynq.QueueOpt:
+				queue = o.Value().(string)
+			case asynq.ProcessInOpt:
+				delay = o.Value().(time.Duration)
+			}
+		}
+		if queue != "bakim" || delay != 24*time.Hour {
+			t.Fatalf("%s: queue %q delay %v", st, queue, delay)
+		}
+		if err := center.Cancel(context.Background(), "u1", cancelImportID); !errors.Is(err, ErrJobAlreadyCompleted) {
+			t.Fatalf("second cancel = %v", err)
+		}
+		if len(e.spender.Refunds) != 1 {
+			t.Fatal("refunded twice")
+		}
+		if err := center.Cancel(context.Background(), "u2", cancelImportID); !errors.Is(err, ErrJobNotFound) {
+			t.Fatalf("foreign cancel = %v", err)
+		}
+	}
+}
+
+func TestJobCenter_RetryImport_NotRetryable(t *testing.T) {
+	e := newImportEnv(95000)
+	seedImportJob(t, e, cancelImportID, model.JobStatusFailed)
+	center := NewJobCenter(e.repo, nil, nil).WithImport(e.svc)
+	if err := center.Retry(context.Background(), "u1", cancelImportID); !errors.Is(err, ErrNotRetryable) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(e.spender.Spends) != 0 || len(e.queue.tasks) != 0 {
+		t.Fatal("generic retry started something")
 	}
 }
