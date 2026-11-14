@@ -50,8 +50,11 @@ func (h *Hub) snapshot(ctx context.Context, jobID string) []byte {
 		code := job.ErrorCode
 		if code == "" {
 			code = "RENDER_FAILED"
-			if job.Type == model.JobTypeMaster {
+			switch job.Type {
+			case model.JobTypeMaster:
 				code = "MASTER_FAILED"
+			case model.JobTypeImport:
+				code = "IMPORT_FAILED"
 			}
 		}
 		message := ""

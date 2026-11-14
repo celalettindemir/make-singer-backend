@@ -26,6 +26,8 @@ var (
 	lyricsDoneBare = copyText{"Sözlerin hazır", "Your lyrics are ready"}
 	lyricsPartial  = copyText{"Sözlerin hazır, %d bölüm yazılamadı", "Your lyrics are ready, %d sections could not be written"}
 	renderDone     = copyText{"Şarkın hazır — dinlemeye gel", "Your song is ready — come listen"}
+	importDone     = copyText{"Şarkın söylemeye hazır — %s", "Your track is ready to sing — %s"}
+	importDoneBare = copyText{"Şarkın söylemeye hazır", "Your track is ready to sing"}
 	masterDone     = copyText{"Son halin hazır", "Your final mix is ready"}
 	failedRefund   = copyText{"Şarkın üretilemedi, kredin iade edildi", "Your song could not be made, your credits were refunded"}
 	failedShadow   = copyText{"Şarkın üretilemedi", "Your song could not be made"}
@@ -63,6 +65,12 @@ func Compose(job model.Job, lang string, creditsEnforced bool) Message {
 			body = fmt.Sprintf(lyricsDone.pick(lang), job.ProjectName)
 		default:
 			body = lyricsDoneBare.pick(lang)
+		}
+	case job.Type == model.JobTypeImport:
+		if job.ProjectName != "" {
+			body = fmt.Sprintf(importDone.pick(lang), job.ProjectName)
+		} else {
+			body = importDoneBare.pick(lang)
 		}
 	case job.Type == model.JobTypeMaster:
 		body = masterDone.pick(lang)

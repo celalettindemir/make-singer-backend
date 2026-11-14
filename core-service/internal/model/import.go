@@ -26,3 +26,38 @@ type ImportPayload struct {
 	DurationMs  int    `json:"durationMs"`
 	ContentType string `json:"contentType"`
 }
+
+// ImportStemRecord is the stored form of one separated stem: the object key,
+// signed on every read, and the length in seconds.
+type ImportStemRecord struct {
+	ID         string     `json:"id"`
+	Instrument Instrument `json:"instrument"`
+	Key        string     `json:"key"`
+	Duration   float64    `json:"duration"`
+}
+
+// ImportRecord is the stored result of an import job (column sonuc): the
+// ImportResult with object keys in place of signed URLs. Guide.NotesKey is
+// the notes.json key.
+type ImportRecord struct {
+	DurationMs    int                    `json:"durationMs"`
+	BPM           *float64               `json:"bpm"`
+	Key           *KeyResult             `json:"key"`
+	Structure     []ImportSection        `json:"structure"`
+	Lyrics        []ImportLyricsSection  `json:"lyrics"`
+	Stems         []ImportStemRecord     `json:"stems"`
+	LyricTimeline []LyricTimelineSection `json:"lyricTimeline"`
+	Guide         *GuideRecord           `json:"guide"`
+}
+
+// ImportResult is the result of an import job returned by GET /api/jobs/:id.
+type ImportResult struct {
+	DurationMs    int                    `json:"durationMs"`
+	BPM           *float64               `json:"bpm"`
+	Key           *KeyResult             `json:"key"`
+	Structure     []ImportSection        `json:"structure"`
+	Lyrics        []ImportLyricsSection  `json:"lyrics"`
+	Stems         []StemResult           `json:"stems"`
+	LyricTimeline []LyricTimelineSection `json:"lyricTimeline"`
+	Guide         *GuideResult           `json:"guide"`
+}

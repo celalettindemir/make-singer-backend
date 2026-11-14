@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/makeasinger/api/internal/client"
 	"github.com/makeasinger/api/internal/jobs"
 	"github.com/makeasinger/api/internal/model"
 )
@@ -49,6 +50,7 @@ type JobCenter struct {
 	cancel JobCanceler
 	retry  LyricsRetrier
 	imp    ImportCanceler
+	store  client.StorageClient
 }
 
 func NewJobCenter(repo jobs.Repo, render *RenderService, master *MasterService) *JobCenter {
@@ -68,6 +70,12 @@ func (c *JobCenter) WithLyrics(cancel JobCanceler, retry LyricsRetrier) *JobCent
 // POST /api/imports/:jobId/retry is its own endpoint.
 func (c *JobCenter) WithImport(cancel ImportCanceler) *JobCenter {
 	c.imp = cancel
+	return c
+}
+
+// WithImportStorage gives Detail the storage that signs an import result.
+func (c *JobCenter) WithImportStorage(storage client.StorageClient) *JobCenter {
+	c.store = storage
 	return c
 }
 
@@ -138,8 +146,57 @@ func (c *JobCenter) Detail(ctx context.Context, userID, id string) (*model.JobDe
 		if d.Result, err = json.Marshal(res); err != nil {
 			return nil, err
 		}
+	case model.JobTypeImport:
+		if job.Status != model.JobStatusSucceeded || len(job.Result) == 0 {
+			return d, nil
+		}
+		var record model.ImportRecord
+		if err := json.Unmarshal(job.Result, &record); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal import result: %w", err)
+		}
+		res, err := BuildImportResult(ctx, c.store, &record)
+		if err != nil {
+			return nil, err
+		}
+		if d.Result, err = json.Marshal(res); err != nil {
+			return nil, err
+		}
 	}
 	return d, nil
+}
+
+// BuildImportResult signs the stored keys of an import result. Signed URLs
+// are never stored: every call signs again.
+func BuildImportResult(ctx context.Context, storage client.StorageClient, rec *model.ImportRecord) (*model.ImportResult, error) {
+	if storage == nil {
+		return nil, errors.New("no storage to sign the import result")
+	}
+	res := &model.ImportResult{
+		DurationMs: rec.DurationMs, BPM: rec.BPM, Key: rec.Key,
+		Structure: rec.Structure, Lyrics: rec.Lyrics, LyricTimeline: rec.LyricTimeline,
+		Stems: make([]model.StemResult, 0, len(rec.Stems)),
+	}
+	for _, st := range rec.Stems {
+		if st.Key == "" {
+			return nil, fmt.Errorf("the import stem record has no object key: %s", st.ID)
+		}
+		u, exp, err := storage.URLFor(ctx, st.Key)
+		if err != nil {
+			return nil, fmt.Errorf("could not generate the stem URL: %w", err)
+		}
+		res.Stems = append(res.Stems, model.StemResult{
+			ID: st.ID, Instrument: st.Instrument, FileURL: u, Duration: st.Duration,
+			ExpiresAt: model.ExpiresPtr(exp),
+		})
+	}
+	if rec.Guide != nil && rec.Guide.NotesKey != nil && *rec.Guide.NotesKey != "" {
+		u, _, err := storage.URLFor(ctx, *rec.Guide.NotesKey)
+		if err != nil {
+			return nil, fmt.Errorf("could not generate the notes URL: %w", err)
+		}
+		res.Guide = &model.GuideResult{NotesURL: &u, PitchShiftSemitones: rec.Guide.PitchShiftSemitones}
+	}
+	return res, nil
 }
 
 // Events returns the events after afterSeq (at most 500), ascending.

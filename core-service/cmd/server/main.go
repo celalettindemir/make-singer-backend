@@ -346,7 +346,7 @@ func main() {
 	lyricsJobService := service.NewLyricsJobService(jobStore, asynqClient, asynqInspector, lyricsService, validate).WithCredits(creditService)
 	lyricsHandler.WithJobs(lyricsJobService)
 	jobsHandler := handler.NewJobsHandler(
-		service.NewJobCenter(jobStore, renderService, masterService).WithLyrics(lyricsJobService, lyricsJobService).WithImport(importService), validate)
+		service.NewJobCenter(jobStore, renderService, masterService).WithLyrics(lyricsJobService, lyricsJobService).WithImport(importService).WithImportStorage(storage), validate)
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
 	humHandler := handler.NewHumHandler(humService)
@@ -572,6 +572,10 @@ func main() {
 	// Start Asynq worker server
 	go startWorkerServer(cfg, redisClient, jobStore, renderService, masterService, sunoClient, audioClient, storage, hub, accountService, socialWorker, creditWorker, creditService, lyricsService, lyricsJobService)
 
+	if cfg.Import.Enabled && cfg.Import.SeparationURL != "" && audioClient.IsConfigured() {
+		go startImportWorkerServer(cfg, redisClient, jobStore, storage, audioClient, importService, creditService)
+	}
+
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -630,6 +634,66 @@ func asynqQueues() map[string]int {
 	}
 }
 
+func asynqLogLevelFor(cfg *config.Config) asynq.LogLevel {
+	switch {
+	case strings.EqualFold(cfg.Server.LogLevel, "debug"):
+		return asynq.DebugLevel
+	case strings.EqualFold(cfg.Server.LogLevel, "warn"):
+		return asynq.WarnLevel
+	case strings.EqualFold(cfg.Server.LogLevel, "error"):
+		return asynq.ErrorLevel
+	}
+	return asynq.InfoLevel
+}
+
+// startImportWorkerServer runs the dedicated asynq server of the import
+// queue. It is separate from the main server so a long separation never
+// blocks the other queues and waiting imports stay queued. Like the main
+// server, Run stops it on SIGINT/SIGTERM.
+func startImportWorkerServer(
+	cfg *config.Config,
+	redisClient *redis.Client,
+	jobStore *jobs.PostgresStore,
+	storage client.StorageClient,
+	audioClient *client.AudioClient,
+	importService *service.ImportService,
+	creditSpender credit.Spender,
+) {
+	concurrency := cfg.Import.Concurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	srv := asynq.NewServer(
+		asynq.RedisClientOpt{
+			Addr:     cfg.Redis.Addr,
+			Password: cfg.Redis.Password,
+			DB:       cfg.Redis.DB,
+		},
+		asynq.Config{
+			Concurrency: concurrency,
+			Queues:      map[string]int{service.ImportQueue: 1},
+			LogLevel:    asynqLogLevelFor(cfg),
+		},
+	)
+	// A nil transcriber interface (not a typed nil) when OpenAI is not set.
+	var transcriber client.TimedTranscriber
+	if t := client.NewOpenAITranscriber(&cfg.OpenAI, &cfg.Hum); t.IsConfigured() {
+		transcriber = t
+	}
+	w := worker.NewImportWorker(worker.ImportWorkerDeps{
+		Repo: jobStore, Storage: storage, Separator: client.NewSeparationClient(&cfg.Import), Audio: audioClient,
+		Transcriber: transcriber, Credits: creditSpender,
+		Deletion:          deletionmark.NewRedisChecker(redisClient),
+		ScheduleCleanup:   importService.ScheduleSourceCleanup,
+		TranscribeTimeout: cfg.Import.TranscribeTimeout,
+	})
+	mux := asynq.NewServeMux()
+	mux.HandleFunc(service.TaskTypeImport, w.ProcessTask)
+	if err := srv.Run(mux); err != nil {
+		log.Printf("Asynq import worker error: %v", err)
+	}
+}
+
 func startWorkerServer(
 	cfg *config.Config,
 	redisClient *redis.Client,
@@ -647,14 +711,7 @@ func startWorkerServer(
 	lyricsGenerator service.LyricsGenerator,
 	lyricsJobs *service.LyricsJobService,
 ) {
-	asynqLogLevel := asynq.InfoLevel
-	if strings.EqualFold(cfg.Server.LogLevel, "debug") {
-		asynqLogLevel = asynq.DebugLevel
-	} else if strings.EqualFold(cfg.Server.LogLevel, "warn") {
-		asynqLogLevel = asynq.WarnLevel
-	} else if strings.EqualFold(cfg.Server.LogLevel, "error") {
-		asynqLogLevel = asynq.ErrorLevel
-	}
+	asynqLogLevel := asynqLogLevelFor(cfg)
 
 	srv := asynq.NewServer(
 		asynq.RedisClientOpt{
