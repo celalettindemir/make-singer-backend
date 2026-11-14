@@ -184,3 +184,79 @@ func TestService_UnknownHostIsInvalidURL(t *testing.T) {
 		t.Errorf("StartFinal: want ErrInvalidURL, got: %v", err)
 	}
 }
+
+func TestExportMaster_ImportVocal_Rejected(t *testing.T) {
+	cfg := testR2Cfg()
+	audio := &fakeAudio{}
+	s := NewExportService(&fakeStorage{}, audio, cfg)
+	vocal := client.UnsignedURL("imports/kullanici-a/j1/vocal.mp3", cfg)
+
+	if _, err := s.ExportMP3(context.Background(), "kullanici-a", &model.ExportMP3Request{MasterFileURL: vocal}); !errors.Is(err, ErrImportVocalInMix) {
+		t.Errorf("mp3: want ErrImportVocalInMix, got: %v", err)
+	}
+	if _, err := s.ExportWAV(context.Background(), "kullanici-a", &model.ExportWAVRequest{MasterFileURL: vocal}); !errors.Is(err, ErrImportVocalInMix) {
+		t.Errorf("wav: want ErrImportVocalInMix, got: %v", err)
+	}
+	if audio.encode != nil {
+		t.Error("audio-service was called with the original vocal")
+	}
+}
+
+func TestExportStems_ImportVocal_Rejected(t *testing.T) {
+	cfg := testR2Cfg()
+	vocal := client.UnsignedURL("imports/kullanici-a/j1/vocal.mp3", cfg)
+	stem := client.UnsignedURL("stems/kullanici-a/p1/s1.mp3", cfg)
+	for name, req := range map[string]*model.ExportStemsRequest{
+		"stem":   {StemURLs: []string{stem, vocal}},
+		"vocal":  {StemURLs: []string{stem}, IncludeVocals: true, VocalURLs: []string{vocal}},
+		"master": {StemURLs: []string{stem}, IncludeMaster: true, MasterURL: vocal},
+	} {
+		audio := &fakeAudio{}
+		s := NewExportService(&fakeStorage{}, audio, cfg)
+		if _, err := s.ExportStems(context.Background(), "kullanici-a", req); !errors.Is(err, ErrImportVocalInMix) {
+			t.Errorf("%s: want ErrImportVocalInMix, got: %v", name, err)
+		}
+		if audio.zip != nil {
+			t.Errorf("%s: a zip was created with the original vocal", name)
+		}
+	}
+}
+
+func TestExport_ImportMaster_ImpPrefix(t *testing.T) {
+	cfg := testR2Cfg()
+	audio := &fakeAudio{}
+	s := NewExportService(&fakeStorage{}, audio, cfg)
+
+	tainted := client.UnsignedURL("masters/kullanici-a/p1/imp-3f2b.wav", cfg)
+	if _, err := s.ExportMP3(context.Background(), "kullanici-a", &model.ExportMP3Request{MasterFileURL: tainted}); err != nil {
+		t.Fatalf("ExportMP3: %v", err)
+	}
+	if !strings.HasPrefix(audio.encode.OutputKey, "exports/kullanici-a/imp-") || !strings.HasSuffix(audio.encode.OutputKey, ".mp3") {
+		t.Errorf("mp3 output = %q, want exports/<u>/imp-<id>.mp3", audio.encode.OutputKey)
+	}
+	if _, err := s.ExportWAV(context.Background(), "kullanici-a", &model.ExportWAVRequest{MasterFileURL: tainted}); err != nil {
+		t.Fatalf("ExportWAV: %v", err)
+	}
+	if !strings.HasPrefix(audio.encode.OutputKey, "exports/kullanici-a/imp-") {
+		t.Errorf("wav output = %q", audio.encode.OutputKey)
+	}
+
+	zipReq := &model.ExportStemsRequest{StemURLs: []string{
+		client.UnsignedURL("stems/kullanici-a/p1/s1.mp3", cfg),
+		client.UnsignedURL("imports/kullanici-a/j1/drums.mp3", cfg),
+	}}
+	if _, err := s.ExportStems(context.Background(), "kullanici-a", zipReq); err != nil {
+		t.Fatalf("ExportStems: %v", err)
+	}
+	if !strings.HasPrefix(audio.zip.OutputKey, "exports/kullanici-a/imp-") || !strings.HasSuffix(audio.zip.OutputKey, ".zip") {
+		t.Errorf("zip output = %q", audio.zip.OutputKey)
+	}
+
+	clean := client.UnsignedURL("masters/kullanici-a/p1/m1.wav", cfg)
+	if _, err := s.ExportMP3(context.Background(), "kullanici-a", &model.ExportMP3Request{MasterFileURL: clean}); err != nil {
+		t.Fatalf("ExportMP3 clean: %v", err)
+	}
+	if strings.Contains(audio.encode.OutputKey, "/imp-") {
+		t.Errorf("clean export tainted: %q", audio.encode.OutputKey)
+	}
+}

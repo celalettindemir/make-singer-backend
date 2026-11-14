@@ -62,6 +62,9 @@ func (h *ExportHandler) MP3(c *fiber.Ctx) error {
 		if errors.Is(err, client.ErrInvalidURL) {
 			return response.ValidationError(c, i18n.KeyInvalidFileURL, nil)
 		}
+		if errors.Is(err, service.ErrImportVocalInMix) {
+			return response.ValidationError(c, i18n.KeyImportVocalInMix, nil)
+		}
 		return internalError(c, err)
 	}
 
@@ -106,6 +109,9 @@ func (h *ExportHandler) WAV(c *fiber.Ctx) error {
 		if errors.Is(err, client.ErrInvalidURL) {
 			return response.ValidationError(c, i18n.KeyInvalidFileURL, nil)
 		}
+		if errors.Is(err, service.ErrImportVocalInMix) {
+			return response.ValidationError(c, i18n.KeyImportVocalInMix, nil)
+		}
 		return internalError(c, err)
 	}
 
@@ -149,6 +155,9 @@ func (h *ExportHandler) Stems(c *fiber.Ctx) error {
 		}
 		if errors.Is(err, client.ErrInvalidURL) {
 			return response.ValidationError(c, i18n.KeyInvalidFileURL, nil)
+		}
+		if errors.Is(err, service.ErrImportVocalInMix) {
+			return response.ValidationError(c, i18n.KeyImportVocalInMix, nil)
 		}
 		return internalError(c, err)
 	}

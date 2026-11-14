@@ -33,6 +33,18 @@ func NewExportService(storage client.StorageClient, audioClient client.AudioProc
 	}
 }
 
+// exportFileName names an export output. An export derived from any
+// import-tainted input gets the imp- prefix so that it can never be published
+// or used as a clean stem later.
+func exportFileName(id, ext string, inputKeys ...string) string {
+	for _, k := range inputKeys {
+		if client.IsImportTainted(k) {
+			return "imp-" + id + ext
+		}
+	}
+	return id + ext
+}
+
 // ExportMP3 exports master to MP3 format
 func (s *ExportService) ExportMP3(ctx context.Context, userID string, req *model.ExportMP3Request) (*model.ExportMP3Response, error) {
 	quality := 320
@@ -45,6 +57,9 @@ func (s *ExportService) ExportMP3(ctx context.Context, userID string, req *model
 	if err != nil {
 		return nil, fmt.Errorf("could not resolve the master URL: %w", err)
 	}
+	if err := rejectImportVocal([]string{inputKey}); err != nil {
+		return nil, err
+	}
 
 	// Use mock response if audio client is not configured
 	if s.audioClient == nil {
@@ -52,7 +67,7 @@ func (s *ExportService) ExportMP3(ctx context.Context, userID string, req *model
 	}
 
 	exportID := uuid.New().String()
-	outputKey, err := client.UserKey("exports", userID, exportID+".mp3")
+	outputKey, err := client.UserKey("exports", userID, exportFileName(exportID, ".mp3", inputKey))
 	if err != nil {
 		return nil, err
 	}
@@ -122,6 +137,9 @@ func (s *ExportService) ExportWAV(ctx context.Context, userID string, req *model
 	if err != nil {
 		return nil, fmt.Errorf("could not resolve the master URL: %w", err)
 	}
+	if err := rejectImportVocal([]string{inputKey}); err != nil {
+		return nil, err
+	}
 
 	// Use mock response if audio client is not configured
 	if s.audioClient == nil {
@@ -129,7 +147,7 @@ func (s *ExportService) ExportWAV(ctx context.Context, userID string, req *model
 	}
 
 	exportID := uuid.New().String()
-	outputKey, err := client.UserKey("exports", userID, exportID+".wav")
+	outputKey, err := client.UserKey("exports", userID, exportFileName(exportID, ".wav", inputKey))
 	if err != nil {
 		return nil, err
 	}
@@ -209,13 +227,21 @@ func (s *ExportService) ExportStems(ctx context.Context, userID string, req *mod
 		})
 	}
 
+	inputKeys := make([]string, len(files))
+	for i, f := range files {
+		inputKeys[i] = f.Key
+	}
+	if err := rejectImportVocal(inputKeys); err != nil {
+		return nil, err
+	}
+
 	// Use mock response if audio client is not configured
 	if s.audioClient == nil {
 		return s.exportStemsMock(userID, req)
 	}
 
 	exportID := uuid.New().String()
-	outputKey, err := client.UserKey("exports", userID, exportID+".zip")
+	outputKey, err := client.UserKey("exports", userID, exportFileName(exportID, ".zip", inputKeys...))
 	if err != nil {
 		return nil, err
 	}
