@@ -250,6 +250,39 @@ class ImportMeasureResponse(BaseModel):
     key: ImportKey | None
 
 
+class ImportPrepareRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    input_key: str
+
+
+class ImportPrepareResponse(BaseModel):
+    duration_ms: int
+
+
+class ImportSection(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    id: str
+    lines: list[str] = []
+
+
+class ImportNotesRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    vocal_key: str
+    words: list[GuideWord]
+    sections: list[ImportSection] = Field(min_length=1)
+    bpm: float = Field(gt=0)
+    notes_key: str
+
+
+class ImportNotesResponse(BaseModel):
+    notes_url: str
+    range_midi: list[int] | None
+    lines_matched: int
+
+
 # Services
 storage_service: StorageService | None = None
 master_service: MasterService | None = None
@@ -498,6 +531,42 @@ async def import_measure(request: ImportMeasureRequest):
     except ImportUnreadable:
         raise HTTPException(status_code=422, detail="undecodable")
     # Broad catch on purpose: same pattern as the other endpoints.
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ice-aktar-hazirla", response_model=ImportPrepareResponse)
+async def import_prepare(request: ImportPrepareRequest):
+    """Decodes the whole upload and returns its duration."""
+    if import_service is None:
+        raise HTTPException(status_code=503, detail="Import service not initialized")
+
+    try:
+        result = await import_service.prepare(input_key=request.input_key)
+        return ImportPrepareResponse(**result)
+    except ImportUnreadable:
+        raise HTTPException(status_code=422, detail="undecodable")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/ice-aktar-notalar", response_model=ImportNotesResponse)
+async def import_notes(request: ImportNotesRequest):
+    """Guide notes from the separated vocal stem (offset 0)."""
+    if import_service is None:
+        raise HTTPException(status_code=503, detail="Import service not initialized")
+
+    try:
+        result = await import_service.notes(
+            vocal_key=request.vocal_key,
+            words=[w.model_dump() for w in request.words],
+            sections=[s.model_dump() for s in request.sections],
+            bpm=request.bpm,
+            notes_key=request.notes_key,
+        )
+        return ImportNotesResponse(**result)
+    except ImportUnreadable:
+        raise HTTPException(status_code=422, detail="undecodable")
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(e))
 
