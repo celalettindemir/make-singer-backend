@@ -373,3 +373,71 @@ func TestStartFinal_VocalBalanceCopiedToPayload(t *testing.T) {
 		}
 	}
 }
+
+func TestStartFinal_ImportVocalInStems_Rejected_NoDebit(t *testing.T) {
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	fake := &credit.FakeSpender{IsEnforced: true, Plus: true}
+	s := NewMasterService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
+	req := masterFinalRequest(t, "kullanici-a")
+	req.StemURLs = append(req.StemURLs, masterKeyURL(t, "imports", "kullanici-a", "vocal.mp3"))
+	n := jobCount(t, repo)
+	if _, err := s.StartFinal(context.Background(), "kullanici-a", req); !errors.Is(err, ErrImportVocalInMix) {
+		t.Fatalf("err = %v, want ErrImportVocalInMix", err)
+	}
+	if len(fake.Spends) != 0 || jobCount(t, repo) != n {
+		t.Errorf("spends = %v, jobs grew = %v; want neither", fake.Spends, jobCount(t, repo) != n)
+	}
+}
+
+func TestStartFinal_ImportVocalInTakes_Rejected_NoDebit(t *testing.T) {
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	fake := &credit.FakeSpender{IsEnforced: true, Plus: true}
+	s := NewMasterService(repo, nil, nil, testR2Cfg()).WithCredits(fake)
+	req := masterFinalRequest(t, "kullanici-a")
+	req.VocalTakes = []model.VocalTake{{SectionID: "s1", TakeID: "t1", FileURL: masterKeyURL(t, "imports", "kullanici-a", "vocal.mp3")}}
+	n := jobCount(t, repo)
+	if _, err := s.StartFinal(context.Background(), "kullanici-a", req); !errors.Is(err, ErrImportVocalInMix) {
+		t.Fatalf("err = %v, want ErrImportVocalInMix", err)
+	}
+	if len(fake.Spends) != 0 || jobCount(t, repo) != n {
+		t.Errorf("spends = %v; want none and no job", fake.Spends)
+	}
+}
+
+func TestStartFinal_ImportVocalAsGuide_AcceptedWithoutPlus(t *testing.T) {
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	fake := &credit.FakeSpender{IsEnforced: true} // HasPlan false
+	s := NewMasterService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	req := masterFinalRequest(t, "kullanici-a")
+	req.GuideURL = masterKeyURL(t, "imports", "kullanici-a", "vocal.mp3")
+	if _, err := s.StartFinal(context.Background(), "kullanici-a", req); err != nil {
+		t.Fatalf("StartFinal: %v", err)
+	}
+}
+
+func TestStartFinal_ImportStemsNoGuidesGate(t *testing.T) {
+	liveRedis(t)
+	repo := jobs.NewMemoryStore(nil)
+	fake := &credit.FakeSpender{IsEnforced: true} // HasPlan false
+	s := NewMasterService(repo, creditAsynqClient(t), nil, testR2Cfg()).WithCredits(fake)
+	req := masterFinalRequest(t, "kullanici-a")
+	req.StemURLs = []string{
+		masterKeyURL(t, "imports", "kullanici-a", "drums.mp3"),
+		masterKeyURL(t, "imports", "kullanici-a", "bass.mp3"),
+	}
+	if _, err := s.StartFinal(context.Background(), "kullanici-a", req); err != nil {
+		t.Fatalf("StartFinal: %v", err)
+	}
+}
+
+func TestStartPreview_ImportVocalInStems_Rejected(t *testing.T) {
+	fake := &credit.FakeSpender{Plus: true}
+	s := NewMasterService(nil, nil, nil, testR2Cfg()).WithCredits(fake)
+	req := &model.MasterPreviewRequest{StemURLs: []string{masterKeyURL(t, "imports", "kullanici-a", "vocal.mp3")}}
+	if _, err := s.Preview(context.Background(), "kullanici-a", req); !errors.Is(err, ErrImportVocalInMix) {
+		t.Fatalf("err = %v, want ErrImportVocalInMix", err)
+	}
+}

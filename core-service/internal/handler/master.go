@@ -33,6 +33,8 @@ func masterInputError(c *fiber.Ctx, err error) (error, bool) {
 		return response.NotFound(c, i18n.KeyFileNotFound), true
 	case errors.Is(err, client.ErrInvalidURL):
 		return response.ValidationError(c, i18n.KeyInvalidFileURL, nil), true
+	case errors.Is(err, service.ErrImportVocalInMix):
+		return response.ValidationError(c, i18n.KeyImportVocalInMix, nil), true
 	case errors.Is(err, service.ErrPlusRequired):
 		return response.PlanRequired(c, string(credit.TierPlus)), true
 	}

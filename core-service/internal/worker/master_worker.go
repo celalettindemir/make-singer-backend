@@ -119,7 +119,7 @@ func (w *MasterWorker) processWithAudioService(ctx context.Context, jobID string
 	// Step 4: Call audio service for mastering
 	w.updateJobStatus(ctx, jobID, model.JobStatusRunning, 20, "Starting mastering process...")
 
-	outputKey, err := client.UserKey("masters", payload.OwnerID, payload.ProjectID, uuid.New().String()+".wav")
+	outputKey, err := client.UserKey("masters", payload.OwnerID, payload.ProjectID, masterFileName(stemKeys))
 	if err != nil {
 		err = fmt.Errorf("master key: %w: %w", err, asynq.SkipRetry)
 		w.failFinal(ctx, jobID, "Invalid job owner or project", err)
@@ -458,4 +458,15 @@ func (w *MasterWorker) generateMockRecord(payload *model.MasterJobPayload) (*mod
 		PeakDb:   -0.3,
 		LUFS:     -14,
 	}, nil
+}
+
+// masterFileName names the master output. A master built from imported stems
+// gets the imp- prefix so that publication can refuse it later.
+func masterFileName(stemKeys []string) string {
+	for _, k := range stemKeys {
+		if client.IsImportKey(k) {
+			return "imp-" + uuid.New().String() + ".wav"
+		}
+	}
+	return uuid.New().String() + ".wav"
 }

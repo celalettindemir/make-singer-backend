@@ -124,6 +124,7 @@ var socialErrors = []struct {
 	{social.ErrInvalidStatus, fiber.StatusConflict, "durum", i18n.KeySocialBadStatus},
 	{social.ErrSelfFollow, fiber.StatusUnprocessableEntity, "kendini_takip", i18n.KeySocialSelfFollow},
 	{social.ErrCommentsDisabled, fiber.StatusForbidden, "yorum_kapali", i18n.KeySocialCommentsDisabled},
+	{social.ErrImportNotPublishable, fiber.StatusUnprocessableEntity, "dogrulama", i18n.KeyImportNotPublishable},
 	{social.ErrForbidden, fiber.StatusForbidden, "yetki", i18n.KeySocialForbidden},
 }
 

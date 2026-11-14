@@ -26,6 +26,8 @@ var (
 	ErrSelfFollow       = errors.New("you cannot follow yourself")
 	ErrCommentsDisabled = errors.New("comments are disabled for this publication")
 	ErrForbidden        = errors.New("you are not allowed to do this")
+	// ErrImportNotPublishable: works made from an imported track are personal-use only.
+	ErrImportNotPublishable = errors.New("works made from imported tracks cannot be published")
 )
 
 // ValidationError is a field-level validation failure. errors.Is matches

@@ -136,10 +136,16 @@ func (s *Service) CreatePublication(ctx context.Context, userID string, req Publ
 	if insert.Preparation.MasterKey, err = s.resolveKey(req.MasterURL, id, "masterUrl"); err != nil {
 		return nil, err
 	}
+	if client.IsImportMasterKey(insert.Preparation.MasterKey) {
+		return nil, ErrImportNotPublishable
+	}
 	for _, stem := range req.Stems {
 		key, err := s.resolveKey(stem.URL, id, "stem url")
 		if err != nil {
 			return nil, err
+		}
+		if client.IsImportKey(key) {
+			return nil, ErrImportNotPublishable
 		}
 		insert.Preparation.Stems = append(insert.Preparation.Stems, PreparationStem{
 			ID: stem.ID, Instrument: stem.Instrument, Duration: stem.Duration, Key: key,

@@ -392,3 +392,37 @@ func TestService_Files(t *testing.T) {
 		t.Fatalf("a stranger cannot see a publication in preparation: %v", err)
 	}
 }
+
+func TestCreatePublication_ImportMaster_Rejected(t *testing.T) {
+	store := storeWithProfile()
+	s, q := newTestService(store)
+	req := publicationRequestA()
+	req.MasterURL = "masters/" + userA + "/p1/imp-3f2b.wav"
+	if _, err := s.CreatePublication(context.Background(), userA, req); !errors.Is(err, ErrImportNotPublishable) {
+		t.Fatalf("want ErrImportNotPublishable: %v", err)
+	}
+	if len(store.inserted) != 0 || len(q.tasks) != 0 {
+		t.Fatal("nothing may be saved or enqueued")
+	}
+}
+
+func TestCreatePublication_ImportStem_Rejected(t *testing.T) {
+	store := storeWithProfile()
+	s, q := newTestService(store)
+	req := publicationRequestA()
+	req.Stems[0].URL = "imports/" + userA + "/j1/drums.mp3"
+	if _, err := s.CreatePublication(context.Background(), userA, req); !errors.Is(err, ErrImportNotPublishable) {
+		t.Fatalf("want ErrImportNotPublishable: %v", err)
+	}
+	if len(store.inserted) != 0 || len(q.tasks) != 0 {
+		t.Fatal("nothing may be saved or enqueued")
+	}
+}
+
+func TestCreatePublication_NormalMaster_Unchanged(t *testing.T) {
+	store := storeWithProfile()
+	s, _ := newTestService(store)
+	if _, err := s.CreatePublication(context.Background(), userA, publicationRequestA()); err != nil {
+		t.Fatalf("CreatePublication: %v", err)
+	}
+}

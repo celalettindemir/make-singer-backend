@@ -23,6 +23,20 @@ import (
 // Pro) plan only.
 var ErrPlusRequired = errors.New("the app's vocal needs the Plus plan")
 
+// ErrImportVocalInMix: the separated original vocal of an imported track may
+// only be a guide; it is never accepted as a stem or a vocal take.
+var ErrImportVocalInMix = errors.New("the imported track's vocal cannot go into the mix")
+
+// rejectImportVocal refuses any key that is the original vocal of an import.
+func rejectImportVocal(keys []string) error {
+	for _, k := range keys {
+		if client.IsImportVocalKey(k) {
+			return ErrImportVocalInMix
+		}
+	}
+	return nil
+}
+
 // usesAppVocal reports whether any key is the app's AI vocal (stored under
 // guides/), as opposed to the user's own takes (vocals/) and stems (stems/).
 func usesAppVocal(keys []string) bool {
@@ -103,6 +117,9 @@ func (s *MasterService) Preview(ctx context.Context, userID string, req *model.M
 		}
 		keys = append(keys, k)
 	}
+	if err := rejectImportVocal(keys); err != nil {
+		return nil, err
+	}
 	if err := s.requirePlusForAppVocal(ctx, userID, keys); err != nil {
 		return nil, err
 	}
@@ -149,6 +166,9 @@ func (s *MasterService) StartFinal(ctx context.Context, userID string, req *mode
 		if _, err := client.ResolveOwnedKey(req.GuideURL, userID, s.r2Cfg); err != nil {
 			return nil, fmt.Errorf("guide URL: %w", err)
 		}
+	}
+	if err := rejectImportVocal(keys); err != nil {
+		return nil, err
 	}
 	if err := s.requirePlusForAppVocal(ctx, userID, keys); err != nil {
 		return nil, err
