@@ -20,6 +20,10 @@ ANALIZ_HIZI = 22050
 # A male-range pass that lands this high means the singer is female.
 KADIN_MEDYAN_HZ = 250.0
 GUIDE_HIZI = ANALYSIS_RATE
+# /ice-aktar-hazirla decodes at most this many seconds: core refuses anything
+# above 480.5 s, so a longer file only has to read as "too long" without being
+# decoded whole into memory (a 50 MiB file can be an hour of PCM).
+KAYNAK_SINIR_SN = 482
 
 
 class ImportUnreadable(Exception):
@@ -44,7 +48,7 @@ class ImportAudioService:
             "key": {"tonic": ton[0], "scale": ton[1]} if ton else None,
         }
 
-    def _decode(self, input_key: str) -> AudioSegment:
+    def _decode(self, input_key: str, sinir_sn: float | None = None) -> AudioSegment:
         if not self.storage:
             raise RuntimeError("Storage service not configured")
 
@@ -53,16 +57,18 @@ class ImportAudioService:
             giris = os.path.join(tmpdir, "giris" + uzanti)
             self.storage.download_key_to_file(input_key, giris)
             try:
-                return AudioSegment.from_file(giris)
+                if sinir_sn is None:
+                    return AudioSegment.from_file(giris)
+                return AudioSegment.from_file(giris, duration=sinir_sn)
             except Exception as e:  # pydub raises many types
                 raise ImportUnreadable(str(e)) from e
 
     async def prepare(self, input_key: str) -> dict[str, Any]:
-        """Decodes the whole file (no length cap) and reports its duration."""
+        """Reports the decoded duration, decoding at most KAYNAK_SINIR_SN seconds."""
         return await asyncio.to_thread(self._prepare, input_key)
 
     def _prepare(self, input_key: str) -> dict[str, Any]:
-        return {"duration_ms": len(self._decode(input_key))}
+        return {"duration_ms": len(self._decode(input_key, KAYNAK_SINIR_SN))}
 
     async def notes(
         self,

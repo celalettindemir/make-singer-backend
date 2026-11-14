@@ -26,7 +26,7 @@ def sahte_ses(monkeypatch, ornekler):
         ornekler.tobytes(), frame_rate=ORNEK_HIZI, sample_width=2, channels=1
     )
     monkeypatch.setattr(
-        import_module.AudioSegment, "from_file", staticmethod(lambda _yol: ses)
+        import_module.AudioSegment, "from_file", staticmethod(lambda _yol, **_k: ses)
     )
 
 
@@ -105,7 +105,7 @@ async def test_hazirla_tum_sureyi_olcer(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_hazirla_bozuk_dosya_422(monkeypatch):
-    def patla(_yol):
+    def patla(_yol, **_k):
         raise RuntimeError("bad file")
 
     monkeypatch.setattr(import_module.AudioSegment, "from_file", staticmethod(patla))
@@ -180,3 +180,26 @@ async def test_kadin_araligi_secilir(monkeypatch):
         for n in s["notes"]
     ]
     assert any(abs(m - 69) <= 1 for m in midiler)
+
+
+class GercekDosyaStorage:
+    """Depo sahtesi: indirilen dosyaya gercek bir wav yazar."""
+
+    def __init__(self, ses):
+        self.ses = ses
+
+    def download_key_to_file(self, key, path):
+        self.ses.export(path, format="wav")
+
+
+@pytest.mark.asyncio
+async def test_hazirla_uzun_dosya_sinirda_kesilir():
+    # 500 s sessizlik, 8 kHz mono: sinirin (482 s) uzerinde.
+    uzun = AudioSegment.silent(duration=500_000, frame_rate=8000).set_channels(1)
+
+    sonuc = await ImportAudioService(GercekDosyaStorage(uzun)).prepare(
+        "imports/u/p/uzun.wav"
+    )
+
+    # Core 480 500 ms ustunu reddeder; kesik okuma yine de bu esigi asar.
+    assert 480_500 < sonuc["duration_ms"] <= 482_000
