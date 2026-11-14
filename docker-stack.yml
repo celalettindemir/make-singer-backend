@@ -226,7 +226,7 @@ services:
   separation-service:
     image: ${DOCKER_USER}/${SEPARATION_IMAGE:-make-singer-separation}:${SEPARATION_VERSION:-latest}
     environment:
-      LOG_LEVEL: debug
+      LOG_LEVEL: info
       TORCH_THREADS: "2"
       R2_ACCOUNT_ID_FILE: /run/secrets/r2_account_id
       R2_ACCESS_KEY_ID_FILE: /run/secrets/r2_access_key_id
