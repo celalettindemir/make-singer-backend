@@ -1,0 +1,7 @@
+-r requirements.txt
+# CPU-only wheels; torch is pinned to the newest build demucs 4.0.1 runs with
+# (verified by the agir test inside the image).
+--extra-index-url https://download.pytorch.org/whl/cpu
+demucs==4.0.1
+torch==2.11.0
+torchaudio==2.11.0

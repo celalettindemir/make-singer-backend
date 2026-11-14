@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# ffmpeg decodes uploads and encodes the mp3 stems
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libsndfile1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements.txt requirements-separation.txt ./
+RUN pip install --no-cache-dir -r requirements-separation.txt
+
+# Bake the model into the image so pods start without a download
+RUN python -c "from demucs.pretrained import get_model; get_model('htdemucs')"
+
+# Copy application code
+COPY . .
+
+# TORCH_THREADS sets the torch thread count (default 2)
+CMD ["sh", "-c", "uvicorn separation_main:app --host 0.0.0.0 --port 8085 --log-level ${LOG_LEVEL:-info}"]
