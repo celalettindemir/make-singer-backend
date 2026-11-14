@@ -58,10 +58,15 @@ type impAudio struct {
 	measureErr, notesErr error
 	notesReqs            []*client.ImportNotesRequest
 	bpm                  *float64
+	// duringMeasure runs inside the measurement (a cancel while it runs).
+	duringMeasure func()
 }
 
 func (a *impAudio) IsConfigured() bool { return true }
 func (a *impAudio) MeasureImport(context.Context, *client.ImportMeasureRequest) (*client.ImportMeasureResponse, error) {
+	if a.duringMeasure != nil {
+		a.duringMeasure()
+	}
 	if a.measureErr != nil {
 		return nil, a.measureErr
 	}
@@ -335,6 +340,68 @@ func TestImportWorker_TerminalJob_NoOp(t *testing.T) {
 		}
 		if len(e.sep.reqs) != 0 || len(e.sp.Refunds) != 0 || e.job(t).Status != st {
 			t.Fatalf("%s: touched the job", st)
+		}
+	}
+}
+
+// A cancel or failure between two attempts leaves the earlier attempt's
+// outputs behind; the next attempt deletes them, except for a succeeded job.
+func TestImportWorker_TerminalAtStart_DeletesOutputsUnlessSucceeded(t *testing.T) {
+	for _, st := range []model.JobStatus{model.JobStatusCanceled, model.JobStatusFailed, model.JobStatusSucceeded} {
+		t.Run(string(st), func(t *testing.T) {
+			e := newImpEnv(t, st)
+			if err := e.run(); err != nil {
+				t.Fatal(err)
+			}
+			if st == model.JobStatusSucceeded {
+				if len(e.st.deleted) != 0 {
+					t.Fatalf("deleted %v from a succeeded job", e.st.deleted)
+				}
+				return
+			}
+			assertOutputsDeletedSourceKept(t, e.st.deleted)
+		})
+	}
+}
+
+// Another writer (a cancel, the stale sweep, an overlapping run) can end the
+// job while this attempt works. The attempt then deletes the outputs, unless
+// the job ended succeeded: those stems are the result.
+func TestImportWorker_EndedMeanwhile_DeletesOutputsUnlessSucceeded(t *testing.T) {
+	end := func(e *impEnv, st model.JobStatus) func() {
+		return func() {
+			_ = e.repo.Update(context.Background(), impJobID, func(j *model.Job) error { j.Status = st; return nil })
+		}
+	}
+	cases := []struct {
+		name    string
+		arrange func(e *impEnv, st model.JobStatus)
+	}{
+		{"after separation", func(e *impEnv, st model.JobStatus) { e.sep.after = end(e, st) }},
+		{"during a failing last measurement", func(e *impEnv, st model.JobStatus) {
+			e.audio.measureErr, e.last, e.audio.duringMeasure = errors.New("bad audio"), true, end(e, st)
+		}},
+		{"before the final write", func(e *impEnv, st model.JobStatus) {
+			e.w.d.Fetch = func(context.Context, string) ([]byte, error) { end(e, st)(); return nil, errors.New("gone") }
+		}},
+	}
+	for _, c := range cases {
+		for _, st := range []model.JobStatus{model.JobStatusCanceled, model.JobStatusFailed, model.JobStatusSucceeded} {
+			t.Run(c.name+"/"+string(st), func(t *testing.T) {
+				e := newImpEnv(t, model.JobStatusQueued)
+				c.arrange(e, st)
+				_ = e.run()
+				if j := e.job(t); j.Status != st || len(e.sp.Refunds) != 0 {
+					t.Fatalf("job %v refunds %v: the other writer's end must stand", j.Status, e.sp.Refunds)
+				}
+				if st == model.JobStatusSucceeded {
+					if len(e.st.deleted) != 0 {
+						t.Fatalf("deleted %v from a succeeded job", e.st.deleted)
+					}
+					return
+				}
+				assertOutputsDeletedSourceKept(t, e.st.deleted)
+			})
 		}
 	}
 }

@@ -117,6 +117,9 @@ func (w *ImportWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		return err
 	}
 	if importTerminal(job.Status) {
+		// A cancel or failure between attempts leaves the earlier attempt's
+		// outputs behind.
+		w.dropOutputs(ctx, job, job.Status)
 		return nil
 	}
 	jobID, owner := job.ID, job.OwnerID
@@ -159,9 +162,6 @@ func (w *ImportWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	}
 
 	if ok, err := w.step(ctx, job, p.SourceKey, importStepAnalyzing, importProgressAnalyzing, false); err != nil || !ok {
-		if err == nil {
-			w.deleteOutputs(ctx, job) // canceled after separation
-		}
 		return err
 	}
 	meas, err := d.Audio.MeasureImport(ctx, &client.ImportMeasureRequest{InputKey: p.SourceKey})
@@ -173,9 +173,6 @@ func (w *ImportWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 
 	// From here on nothing fails the job: lyrics and notes are best effort.
 	if ok, err := w.step(ctx, job, p.SourceKey, importStepTranscribing, importProgressTranscribing, false); err != nil || !ok {
-		if err == nil {
-			w.deleteOutputs(ctx, job)
-		}
 		return err
 	}
 	lines, words := w.transcribe(ctx, jobID, stems[0].Key)
@@ -184,9 +181,6 @@ func (w *ImportWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	var guide *model.GuideRecord
 	if len(lines) > 0 {
 		if ok, err := w.step(ctx, job, p.SourceKey, importStepNotes, importProgressNotes, false); err != nil || !ok {
-			if err == nil {
-				w.deleteOutputs(ctx, job)
-			}
 			return err
 		}
 		guide = w.notes(ctx, jobID, owner, outPrefix, stems[0].Key, lyr, words, meas.BPM)
@@ -213,8 +207,10 @@ func (w *ImportWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		return err
 	}
 	done := false
+	var ended model.JobStatus
 	err = d.Repo.UpdateWith(ctx, jobID, func(j *model.Job, _ jobs.Emitter) error {
 		if importTerminal(j.Status) {
+			ended = j.Status
 			return jobs.ErrSkipWrite
 		}
 		now := time.Now().UTC()
@@ -228,9 +224,7 @@ func (w *ImportWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		return err
 	}
 	if !done {
-		// Canceled (or ended by the stale sweep) meanwhile: the refund was
-		// given, so the stems must not stay signable.
-		w.deleteOutputs(ctx, job)
+		w.dropOutputs(ctx, job, ended)
 		return nil
 	}
 	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -254,12 +248,18 @@ func (w *ImportWorker) checkOwner(ctx context.Context, jobID, owner string) erro
 
 // step is setStep with the last-attempt rule: a repo error on the final
 // attempt fails and refunds the job (earlier attempts return it for the retry).
+// When another writer already ended the job, step drops the outputs and ok is
+// false: the caller stops without error.
 func (w *ImportWorker) step(ctx context.Context, job *model.Job, sourceKey, step string, progress int, start bool) (bool, error) {
-	ok, err := w.setStep(ctx, job.ID, step, progress, start)
+	ended, ok, err := w.setStep(ctx, job.ID, step, progress, start)
 	if err != nil {
 		w.failFinal(ctx, job, sourceKey, true, err)
+		return false, err
 	}
-	return ok, err
+	if !ok {
+		w.dropOutputs(ctx, job, ended)
+	}
+	return ok, nil
 }
 
 // deleteOutputs removes the job's separated stems and notes (best effort).
@@ -267,11 +267,23 @@ func (w *ImportWorker) deleteOutputs(ctx context.Context, job *model.Job) {
 	service.DeleteImportOutputs(ctx, w.d.Storage, job.OwnerID, job.ID)
 }
 
-// setStep moves the job to running at the given step. ok is false when the
-// job is already terminal (canceled): the caller stops without error.
-func (w *ImportWorker) setStep(ctx context.Context, jobID, step string, progress int, start bool) (bool, error) {
+// dropOutputs handles a job that another writer ended while this attempt
+// worked: a cancel or a failure refunded it, so its stems must not stay
+// signable; a job that ended succeeded (an overlapping run) keeps them.
+func (w *ImportWorker) dropOutputs(ctx context.Context, job *model.Job, ended model.JobStatus) {
+	if ended == model.JobStatusSucceeded {
+		return
+	}
+	w.deleteOutputs(ctx, job)
+}
+
+// setStep moves the job to running at the given step. When the job is
+// already terminal it writes nothing and returns that state with ok false.
+func (w *ImportWorker) setStep(ctx context.Context, jobID, step string, progress int, start bool) (model.JobStatus, bool, error) {
+	var ended model.JobStatus
 	err := w.d.Repo.UpdateWith(ctx, jobID, func(j *model.Job, _ jobs.Emitter) error {
 		if importTerminal(j.Status) {
+			ended = j.Status
 			return jobs.ErrSkipWrite
 		}
 		j.Status, j.CurrentStep, j.Progress = model.JobStatusRunning, step, progress
@@ -282,9 +294,9 @@ func (w *ImportWorker) setStep(ctx context.Context, jobID, step string, progress
 		return nil
 	})
 	if errors.Is(err, jobs.ErrSkipWrite) {
-		return false, nil
+		return ended, false, nil
 	}
-	return err == nil, err
+	return ended, err == nil, err
 }
 
 // transcribe returns the lyric lines and the words of the vocal stem. Any
@@ -390,8 +402,10 @@ func (w *ImportWorker) failFinal(ctx context.Context, job *model.Job, sourceKey 
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	failed := false
+	var ended model.JobStatus
 	uerr := d.Repo.UpdateWith(fctx, job.ID, func(j *model.Job, _ jobs.Emitter) error {
 		if importTerminal(j.Status) {
+			ended = j.Status
 			return jobs.ErrSkipWrite
 		}
 		msg := "Import failed"
@@ -404,7 +418,12 @@ func (w *ImportWorker) failFinal(ctx context.Context, job *model.Job, sourceKey 
 		log.Printf("import job %s: could not mark the job failed: %v", job.ID, uerr)
 	}
 	if !failed {
-		return // canceled meanwhile: cancel refunded and scheduled the cleanup
+		// Ended meanwhile: the cancel or the stale sweep gave the refund and
+		// scheduled the cleanup. A DB error leaves the job to the stale sweep.
+		if errors.Is(uerr, jobs.ErrSkipWrite) {
+			w.dropOutputs(ctx, job, ended)
+		}
+		return
 	}
 	if refund {
 		w.deleteOutputs(ctx, job)
