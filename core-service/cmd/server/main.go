@@ -305,6 +305,13 @@ func main() {
 		humPreparer = audioClient
 	}
 	humService := service.NewHumService(storage, &cfg.R2, humPreparer, client.NewOpenAITranscriber(&cfg.OpenAI, &cfg.Hum), cfg.Hum.TranscribeTimeout)
+	var importAudio client.ImportAudio // stays a nil interface when audio-service is not configured
+	if audioClient.IsConfigured() {
+		importAudio = audioClient
+	}
+	importService := service.NewImportService(service.ImportDeps{
+		Cfg: cfg.Import, Repo: jobStore, Storage: storage, Audio: importAudio, Queue: asynqClient, Credits: creditService,
+	})
 	fileService := service.NewFileService(storage, &cfg.R2)
 	wsTicketService := service.NewWSTicketService(redisClient, jobStore)
 
@@ -343,6 +350,7 @@ func main() {
 	exportHandler := handler.NewExportHandler(exportService, validate)
 	uploadHandler := handler.NewUploadHandler(uploadService, validate)
 	humHandler := handler.NewHumHandler(humService)
+	importHandler := handler.NewImportHandler(importService, cfg.Import.MaxBytes, cfg.Import.MinMs, cfg.Import.MaxMs)
 	fileHandler := handler.NewFileHandler(fileService, validate)
 	wsTicketHandler := handler.NewWSTicketHandler(wsTicketService, validate)
 	creditRoutes := creditRouteHandlers{
@@ -363,7 +371,8 @@ func main() {
 	// Initialize Fiber app
 	app := fiber.New(fiber.Config{
 		ErrorHandler: customErrorHandler,
-		BodyLimit:    50 * 1024 * 1024, // 50MB
+		// 60 MB: an import upload may be IMPORT_MAX_BYTES (50 MiB) plus multipart framing.
+		BodyLimit: 60 * 1024 * 1024,
 	})
 
 	// Global middleware
@@ -514,6 +523,10 @@ func main() {
 	humLimit := rateLimiter.Limit("hum", cfg.RateLimit.HumPerMin, time.Minute)
 	api.Post("/hum", humLimit, humHandler.Upload)
 	api.Delete("/hum/:humId", humLimit, humHandler.Delete)
+
+	// Bring your own track (own hourly bucket; the retry route shares it)
+	importLimit := rateLimiter.Limit("import", cfg.RateLimit.ImportPerHour, time.Hour)
+	api.Post("/imports", importLimit, importHandler.Upload)
 
 	// WebSocket ticket: obtained with an authenticated request.
 	api.Post("/ws/ticket", rateLimiter.WSTicketLimit(cfg.RateLimit.WSTicketPerMin), wsTicketHandler.Issue)

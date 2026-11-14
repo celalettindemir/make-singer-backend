@@ -38,6 +38,7 @@ const (
 	JobTypeRender = "render"
 	JobTypeMaster = "master"
 	JobTypeLyrics = "lyrics"
+	JobTypeImport = "import"
 )
 
 // RenderJobPayload contains the data for a render job

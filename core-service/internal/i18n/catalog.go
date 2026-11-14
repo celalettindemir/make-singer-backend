@@ -30,36 +30,42 @@ var (
 	KeyRequestFailed    = Key{"request_failed"}
 
 	// Jobs, files, uploads and WebSocket tickets.
-	KeyJobIDRequired       = Key{"job_id_required"}
-	KeyJobNotFound         = Key{"job_not_found"}
-	KeyJobNotCompleted     = Key{"job_not_completed"}
-	KeyJobAlreadyCompleted = Key{"job_already_completed"}
-	KeyJobActive           = Key{"job_active"}
-	KeyJobNotRetryable     = Key{"job_not_retryable"}
-	KeyStemSettingsInvalid = Key{"stem_settings_invalid"}
-	KeyGuideLyricsInvalid  = Key{"guide_lyrics_invalid"}
-	KeyFileNotFound        = Key{"file_not_found"}
-	KeyInvalidFileURL      = Key{"invalid_file_url"}
-	KeyURLSignFailed       = Key{"url_sign_failed"}
-	KeyProjectIDRequired   = Key{"project_id_required"}
-	KeySectionIDRequired   = Key{"section_id_required"}
-	KeyFileRequired        = Key{"file_required"}
-	KeyFileTooLarge        = Key{"file_too_large"}
-	KeyFileTypeInvalid     = Key{"file_type_invalid"}
-	KeyFileOpenFailed      = Key{"file_open_failed"}
-	KeyUploadIDsInvalid    = Key{"upload_ids_invalid"}
-	KeyVocalIDsRequired    = Key{"vocal_ids_required"}
-	KeyVocalIDsInvalid     = Key{"vocal_ids_invalid"}
-	KeyHumFileTooLarge     = Key{"hum_file_too_large"}
-	KeyHumDuration         = Key{"hum_duration"}
-	KeyHumUnreadable       = Key{"hum_unreadable"}
-	KeyHumIDsInvalid       = Key{"hum_ids_invalid"}
-	KeyHumProjectInvalid   = Key{"hum_project_invalid"}
-	KeyHumNotFound         = Key{"hum_not_found"}
-	KeyHumNeedsLyrics      = Key{"hum_needs_lyrics"}
-	KeyTicketIssueFailed   = Key{"ticket_issue_failed"}
-	KeyTicketInvalid       = Key{"ticket_invalid"}
-	KeyTicketCheckFailed   = Key{"ticket_check_failed"}
+	KeyJobIDRequired        = Key{"job_id_required"}
+	KeyJobNotFound          = Key{"job_not_found"}
+	KeyJobNotCompleted      = Key{"job_not_completed"}
+	KeyJobAlreadyCompleted  = Key{"job_already_completed"}
+	KeyJobActive            = Key{"job_active"}
+	KeyJobNotRetryable      = Key{"job_not_retryable"}
+	KeyStemSettingsInvalid  = Key{"stem_settings_invalid"}
+	KeyGuideLyricsInvalid   = Key{"guide_lyrics_invalid"}
+	KeyFileNotFound         = Key{"file_not_found"}
+	KeyInvalidFileURL       = Key{"invalid_file_url"}
+	KeyURLSignFailed        = Key{"url_sign_failed"}
+	KeyProjectIDRequired    = Key{"project_id_required"}
+	KeySectionIDRequired    = Key{"section_id_required"}
+	KeyFileRequired         = Key{"file_required"}
+	KeyFileTooLarge         = Key{"file_too_large"}
+	KeyFileTypeInvalid      = Key{"file_type_invalid"}
+	KeyFileOpenFailed       = Key{"file_open_failed"}
+	KeyUploadIDsInvalid     = Key{"upload_ids_invalid"}
+	KeyVocalIDsRequired     = Key{"vocal_ids_required"}
+	KeyVocalIDsInvalid      = Key{"vocal_ids_invalid"}
+	KeyHumFileTooLarge      = Key{"hum_file_too_large"}
+	KeyHumDuration          = Key{"hum_duration"}
+	KeyHumUnreadable        = Key{"hum_unreadable"}
+	KeyHumIDsInvalid        = Key{"hum_ids_invalid"}
+	KeyHumProjectInvalid    = Key{"hum_project_invalid"}
+	KeyHumNotFound          = Key{"hum_not_found"}
+	KeyHumNeedsLyrics       = Key{"hum_needs_lyrics"}
+	KeyImportUnreadable     = Key{"import_unreadable"}
+	KeyImportDuration       = Key{"import_duration"}
+	KeyImportSourceGone     = Key{"import_source_gone"}
+	KeyImportNotRetryable   = Key{"import_not_retryable"}
+	KeyImportVocalInMix     = Key{"import_vocal_in_mix"}
+	KeyImportNotPublishable = Key{"import_not_publishable"}
+	KeyTicketIssueFailed    = Key{"ticket_issue_failed"}
+	KeyTicketInvalid        = Key{"ticket_invalid"}
+	KeyTicketCheckFailed    = Key{"ticket_check_failed"}
 
 	// Social service errors (one per sentinel error).
 	KeySocialNotFound         = Key{"social_not_found"}
@@ -156,36 +162,42 @@ var catalog = map[Key]texts{
 	KeyUpgradeRequired:  {"Bu adres bir WebSocket bağlantısı gerektirir.", "This endpoint requires a WebSocket connection."},
 	KeyRequestFailed:    {"İstek işlenemedi.", "The request could not be processed."},
 
-	KeyJobIDRequired:       {"İş kimliği (jobId) zorunludur.", "Job ID is required."},
-	KeyJobNotFound:         {"İş bulunamadı.", "Job not found."},
-	KeyJobNotCompleted:     {"İş henüz tamamlanmadı.", "The job has not completed yet."},
-	KeyJobAlreadyCompleted: {"İş zaten tamamlandı.", "The job has already completed."},
-	KeyJobActive:           {"Bu proje için zaten çalışan bir söz işi var.", "A lyrics job is already running for this project."},
-	KeyJobNotRetryable:     {"Bu iş yeniden denenemez.", "This job cannot be retried."},
-	KeyStemSettingsInvalid: {"Geçersiz stem ayarları: mod, odak enstrümanı ve enstrüman listesini kontrol edin.", "Invalid stem settings: check mode, focusInstrument and instrument list."},
-	KeyGuideLyricsInvalid:  {"Örnek şarkıcı için söz yok ya da sözler çok uzun (en çok 5000 karakter).", "The guide singer has no lyrics, or the lyrics are too long (at most 5000 characters)."},
-	KeyFileNotFound:        {"Dosya bulunamadı.", "File not found."},
-	KeyInvalidFileURL:      {"Geçersiz dosya adresi.", "Invalid file URL."},
-	KeyURLSignFailed:       {"Dosya adresi üretilemedi.", "Could not generate the file URL."},
-	KeyProjectIDRequired:   {"projectId zorunludur.", "projectId is required."},
-	KeySectionIDRequired:   {"sectionId zorunludur.", "sectionId is required."},
-	KeyFileRequired:        {"Dosya zorunludur.", "A file is required."},
-	KeyFileTooLarge:        {"Dosya boyutu 50 MB sınırını aşıyor.", "The file exceeds the 50 MB limit."},
-	KeyFileTypeInvalid:     {"Geçersiz dosya türü. Desteklenenler: WAV, M4A, MP3, AAC.", "Invalid file type. Supported: WAV, M4A, MP3, AAC."},
-	KeyFileOpenFailed:      {"Dosya açılamadı.", "Could not open the file."},
-	KeyUploadIDsInvalid:    {"Geçersiz projectId ya da sectionId.", "Invalid projectId or sectionId."},
-	KeyVocalIDsRequired:    {"takeId, projectId ve sectionId zorunludur.", "takeId, projectId and sectionId are required."},
-	KeyVocalIDsInvalid:     {"Geçersiz takeId, projectId ya da sectionId.", "Invalid takeId, projectId or sectionId."},
-	KeyHumFileTooLarge:     {"Dosya boyutu 10 MB sınırını aşıyor.", "The file exceeds the 10 MB limit."},
-	KeyHumDuration:         {"Mırıltı 5 ile 30 saniye arasında olmalı.", "The hum must be 5 to 30 seconds long."},
-	KeyHumUnreadable:       {"Ses dosyası okunamadı.", "The audio file could not be read."},
-	KeyHumIDsInvalid:       {"Geçersiz projectId ya da humId.", "Invalid projectId or humId."},
-	KeyHumProjectInvalid:   {"Geçersiz projectId.", "Invalid projectId."},
-	KeyHumNotFound:         {"Mırıltı bulunamadı.", "Hum not found."},
-	KeyHumNeedsLyrics:      {"Mırıltılı işleme için sözler gerekir.", "A hum render needs lyrics."},
-	KeyTicketIssueFailed:   {"Bilet üretilemedi.", "Could not issue a ticket."},
-	KeyTicketInvalid:       {"Geçersiz WebSocket bileti.", "Invalid WebSocket ticket."},
-	KeyTicketCheckFailed:   {"Bilet denetlenemedi.", "Could not verify the ticket."},
+	KeyJobIDRequired:        {"İş kimliği (jobId) zorunludur.", "Job ID is required."},
+	KeyJobNotFound:          {"İş bulunamadı.", "Job not found."},
+	KeyJobNotCompleted:      {"İş henüz tamamlanmadı.", "The job has not completed yet."},
+	KeyJobAlreadyCompleted:  {"İş zaten tamamlandı.", "The job has already completed."},
+	KeyJobActive:            {"Bu proje için zaten çalışan bir söz işi var.", "A lyrics job is already running for this project."},
+	KeyJobNotRetryable:      {"Bu iş yeniden denenemez.", "This job cannot be retried."},
+	KeyStemSettingsInvalid:  {"Geçersiz stem ayarları: mod, odak enstrümanı ve enstrüman listesini kontrol edin.", "Invalid stem settings: check mode, focusInstrument and instrument list."},
+	KeyGuideLyricsInvalid:   {"Örnek şarkıcı için söz yok ya da sözler çok uzun (en çok 5000 karakter).", "The guide singer has no lyrics, or the lyrics are too long (at most 5000 characters)."},
+	KeyFileNotFound:         {"Dosya bulunamadı.", "File not found."},
+	KeyInvalidFileURL:       {"Geçersiz dosya adresi.", "Invalid file URL."},
+	KeyURLSignFailed:        {"Dosya adresi üretilemedi.", "Could not generate the file URL."},
+	KeyProjectIDRequired:    {"projectId zorunludur.", "projectId is required."},
+	KeySectionIDRequired:    {"sectionId zorunludur.", "sectionId is required."},
+	KeyFileRequired:         {"Dosya zorunludur.", "A file is required."},
+	KeyFileTooLarge:         {"Dosya boyutu 50 MB sınırını aşıyor.", "The file exceeds the 50 MB limit."},
+	KeyFileTypeInvalid:      {"Geçersiz dosya türü. Desteklenenler: WAV, M4A, MP3, AAC.", "Invalid file type. Supported: WAV, M4A, MP3, AAC."},
+	KeyFileOpenFailed:       {"Dosya açılamadı.", "Could not open the file."},
+	KeyUploadIDsInvalid:     {"Geçersiz projectId ya da sectionId.", "Invalid projectId or sectionId."},
+	KeyVocalIDsRequired:     {"takeId, projectId ve sectionId zorunludur.", "takeId, projectId and sectionId are required."},
+	KeyVocalIDsInvalid:      {"Geçersiz takeId, projectId ya da sectionId.", "Invalid takeId, projectId or sectionId."},
+	KeyHumFileTooLarge:      {"Dosya boyutu 10 MB sınırını aşıyor.", "The file exceeds the 10 MB limit."},
+	KeyHumDuration:          {"Mırıltı 5 ile 30 saniye arasında olmalı.", "The hum must be 5 to 30 seconds long."},
+	KeyHumUnreadable:        {"Ses dosyası okunamadı.", "The audio file could not be read."},
+	KeyHumIDsInvalid:        {"Geçersiz projectId ya da humId.", "Invalid projectId or humId."},
+	KeyHumProjectInvalid:    {"Geçersiz projectId.", "Invalid projectId."},
+	KeyHumNotFound:          {"Mırıltı bulunamadı.", "Hum not found."},
+	KeyHumNeedsLyrics:       {"Mırıltılı işleme için sözler gerekir.", "A hum render needs lyrics."},
+	KeyImportUnreadable:     {"Şarkı dosyası okunamadı.", "The track file could not be read."},
+	KeyImportDuration:       {"Şarkı 30 saniye ile 8 dakika arasında olmalı.", "The track must be 30 seconds to 8 minutes long."},
+	KeyImportSourceGone:     {"Şarkı dosyası artık yok, yeniden yüklemen gerekir.", "The track file is gone, please upload it again."},
+	KeyImportNotRetryable:   {"Bu içe aktarma yeniden denenemez.", "This import cannot be retried."},
+	KeyImportVocalInMix:     {"İçe aktarılan şarkının vokali miksaja eklenemez.", "The vocal of an imported track cannot go into the mix."},
+	KeyImportNotPublishable: {"İçe aktarılan şarkılardan yapılan işler yayınlanamaz.", "Works made from imported tracks cannot be published."},
+	KeyTicketIssueFailed:    {"Bilet üretilemedi.", "Could not issue a ticket."},
+	KeyTicketInvalid:        {"Geçersiz WebSocket bileti.", "Invalid WebSocket ticket."},
+	KeyTicketCheckFailed:    {"Bilet denetlenemedi.", "Could not verify the ticket."},
 
 	KeySocialNotFound:         {"Aranan içerik bulunamadı.", "The requested item was not found."},
 	KeySocialProfileMissing:   {"Profil henüz oluşturulmamış.", "The profile has not been created yet."},
