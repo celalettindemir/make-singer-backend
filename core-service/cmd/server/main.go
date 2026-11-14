@@ -570,22 +570,32 @@ func main() {
 	}))
 
 	// Start Asynq worker server
-	go startWorkerServer(cfg, redisClient, jobStore, renderService, masterService, sunoClient, audioClient, storage, hub, accountService, socialWorker, creditWorker, creditService, lyricsService, lyricsJobService)
+	go startWorkerServer(cfg, redisClient, jobStore, renderService, masterService, sunoClient, audioClient, storage, hub, accountService, socialWorker, creditWorker, creditService, lyricsService, lyricsJobService, importService)
 
-	if cfg.Import.Enabled && cfg.Import.SeparationURL != "" && audioClient.IsConfigured() {
-		go startImportWorkerServer(cfg, redisClient, jobStore, storage, audioClient, importService, creditService)
+	// The import server is only started when imports are fully configured;
+	// jobs left queued by a turned-off flag are failed by ice-aktar:bayat-tara.
+	var importSrv *asynq.Server
+	if importService.Available() {
+		importSrv = startImportWorkerServer(cfg, redisClient, jobStore, storage, audioClient, importService, creditService)
 	}
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
+	shutdownDone := make(chan struct{})
 	go func() {
 		<-quit
 		log.Println("Shutting down server...")
 		if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {
 			log.Printf("Server shutdown error: %v", err)
 		}
+		// Gracefully stop the import server so an in-flight separation is
+		// requeued instead of lost (Shutdown waits, then requeues active tasks).
+		if importSrv != nil {
+			importSrv.Shutdown()
+		}
+		close(shutdownDone)
 	}()
 
 	// Start server
@@ -594,6 +604,7 @@ func main() {
 	if err := app.Listen(addr); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
+	<-shutdownDone
 }
 
 // newPushWorker builds the push worker. The FCM sender exists only when
@@ -648,8 +659,9 @@ func asynqLogLevelFor(cfg *config.Config) asynq.LogLevel {
 
 // startImportWorkerServer runs the dedicated asynq server of the import
 // queue. It is separate from the main server so a long separation never
-// blocks the other queues and waiting imports stay queued. Like the main
-// server, Run stops it on SIGINT/SIGTERM.
+// blocks the other queues and waiting imports stay queued. It uses Start, not
+// Run, so main stops it with Shutdown after the HTTP server on SIGTERM.
+// It returns nil when the server could not start.
 func startImportWorkerServer(
 	cfg *config.Config,
 	redisClient *redis.Client,
@@ -658,7 +670,7 @@ func startImportWorkerServer(
 	audioClient *client.AudioClient,
 	importService *service.ImportService,
 	creditSpender credit.Spender,
-) {
+) *asynq.Server {
 	concurrency := cfg.Import.Concurrency
 	if concurrency < 1 {
 		concurrency = 1
@@ -689,9 +701,11 @@ func startImportWorkerServer(
 	})
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeImport, w.ProcessTask)
-	if err := srv.Run(mux); err != nil {
+	if err := srv.Start(mux); err != nil {
 		log.Printf("Asynq import worker error: %v", err)
+		return nil
 	}
+	return srv
 }
 
 func startWorkerServer(
@@ -710,6 +724,7 @@ func startWorkerServer(
 	creditSpender credit.Spender,
 	lyricsGenerator service.LyricsGenerator,
 	lyricsJobs *service.LyricsJobService,
+	importService *service.ImportService,
 ) {
 	asynqLogLevel := asynqLogLevelFor(cfg)
 
@@ -749,9 +764,10 @@ func startWorkerServer(
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(service.TaskTypeLyrics, worker.NewLyricsWorker(jobStore, lyricsGenerator, creditSpender).ProcessTask)
 	mux.HandleFunc(worker.TaskTypePush, newPushWorker(cfg, jobStore, creditSpender).ProcessTask)
-	jobsWorker := worker.NewJobsWorker(jobStore, lyricsJobs)
+	jobsWorker := worker.NewJobsWorker(jobStore, lyricsJobs).WithImportStale(importService)
 	mux.HandleFunc(worker.TaskTypeJobsSweep, jobsWorker.Sweep)
 	mux.HandleFunc(worker.TaskTypeLyricsStale, jobsWorker.FailStaleLyrics)
+	mux.HandleFunc(worker.TaskTypeImportStale, jobsWorker.FailStaleImports)
 	mux.HandleFunc(jobs.TaskTypeRedisImport, jobs.NewRedisImportHandler(redisClient, jobStore))
 	mux.HandleFunc(service.TaskTypeRender, renderWorker.ProcessTask)
 	mux.HandleFunc(service.TaskTypeMaster, masterWorker.ProcessTask)
@@ -816,6 +832,11 @@ func scheduleEntries(cfg *config.Config) []scheduleEntry {
 		add(iv, worker.TaskTypeLyricsStale, worker.QueueMaintenance)
 	} else {
 		log.Println("Lyrics stale sweep scheduler disabled (jobs.stale_sweep_interval <= 0)")
+	}
+	if iv := cfg.Import.StaleSweepInterval; iv > 0 {
+		add(iv, worker.TaskTypeImportStale, worker.QueueMaintenance)
+	} else {
+		log.Println("Import stale sweep scheduler disabled (import.stale_sweep_interval <= 0)")
 	}
 	if iv := cfg.Credits.RefillInterval; iv > 0 {
 		add(iv, credit.TaskTypeRefill, credit.QueueCredit)

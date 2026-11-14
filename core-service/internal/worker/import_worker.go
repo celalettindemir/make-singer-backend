@@ -34,7 +34,7 @@ const (
 	importProgressDone         = 100
 
 	// ImportErrorCode is the error code of an import job that failed.
-	ImportErrorCode = "IMPORT_FAILED"
+	ImportErrorCode = service.ImportErrorCode
 
 	// maxImportVocalFetch bounds the vocal stem read back for transcription
 	// (an 8 minute mp3 is about 15 MB).
@@ -59,7 +59,7 @@ type ImportWorkerDeps struct {
 	Deletion deletionmark.Checker
 	// ScheduleCleanup queues the delayed deletion of a failed job's source
 	// (ImportService.ScheduleSourceCleanup).
-	ScheduleCleanup   func(ownerID, sourceKey string) error
+	ScheduleCleanup   func(ownerID, sourceKey, jobID string) error
 	TranscribeTimeout time.Duration
 
 	// IsLastAttempt and Fetch default to asynq's retry state and an HTTP GET
@@ -132,7 +132,7 @@ func (w *ImportWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		w.failFinal(ctx, job, p.SourceKey, !errors.Is(err, errOwnerDeleted), err)
 		return err
 	}
-	if ok, err := w.setStep(ctx, jobID, importStepSeparating, importProgressSeparating, true); err != nil || !ok {
+	if ok, err := w.step(ctx, job, p.SourceKey, importStepSeparating, importProgressSeparating, true); err != nil || !ok {
 		return err
 	}
 
@@ -158,7 +158,10 @@ func (w *ImportWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		durationMs = p.DurationMs
 	}
 
-	if ok, err := w.setStep(ctx, jobID, importStepAnalyzing, importProgressAnalyzing, false); err != nil || !ok {
+	if ok, err := w.step(ctx, job, p.SourceKey, importStepAnalyzing, importProgressAnalyzing, false); err != nil || !ok {
+		if err == nil {
+			w.deleteOutputs(ctx, job) // canceled after separation
+		}
 		return err
 	}
 	meas, err := d.Audio.MeasureImport(ctx, &client.ImportMeasureRequest{InputKey: p.SourceKey})
@@ -169,7 +172,10 @@ func (w *ImportWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 	}
 
 	// From here on nothing fails the job: lyrics and notes are best effort.
-	if ok, err := w.setStep(ctx, jobID, importStepTranscribing, importProgressTranscribing, false); err != nil || !ok {
+	if ok, err := w.step(ctx, job, p.SourceKey, importStepTranscribing, importProgressTranscribing, false); err != nil || !ok {
+		if err == nil {
+			w.deleteOutputs(ctx, job)
+		}
 		return err
 	}
 	lines, words := w.transcribe(ctx, jobID, stems[0].Key)
@@ -177,7 +183,10 @@ func (w *ImportWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 
 	var guide *model.GuideRecord
 	if len(lines) > 0 {
-		if ok, err := w.setStep(ctx, jobID, importStepNotes, importProgressNotes, false); err != nil || !ok {
+		if ok, err := w.step(ctx, job, p.SourceKey, importStepNotes, importProgressNotes, false); err != nil || !ok {
+			if err == nil {
+				w.deleteOutputs(ctx, job)
+			}
 			return err
 		}
 		guide = w.notes(ctx, jobID, owner, outPrefix, stems[0].Key, lyr, words, meas.BPM)
@@ -215,10 +224,14 @@ func (w *ImportWorker) ProcessTask(ctx context.Context, t *asynq.Task) error {
 		return nil
 	})
 	if err != nil && !errors.Is(err, jobs.ErrSkipWrite) {
+		w.failFinal(ctx, job, p.SourceKey, true, err)
 		return err
 	}
 	if !done {
-		return nil // canceled meanwhile; the cancel scheduled the cleanup
+		// Canceled (or ended by the stale sweep) meanwhile: the refund was
+		// given, so the stems must not stay signable.
+		w.deleteOutputs(ctx, job)
+		return nil
 	}
 	dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
@@ -237,6 +250,21 @@ func (w *ImportWorker) checkOwner(ctx context.Context, jobID, owner string) erro
 		log.Printf("import job %s: owner check failed: %v", jobID, err)
 	}
 	return err
+}
+
+// step is setStep with the last-attempt rule: a repo error on the final
+// attempt fails and refunds the job (earlier attempts return it for the retry).
+func (w *ImportWorker) step(ctx context.Context, job *model.Job, sourceKey, step string, progress int, start bool) (bool, error) {
+	ok, err := w.setStep(ctx, job.ID, step, progress, start)
+	if err != nil {
+		w.failFinal(ctx, job, sourceKey, true, err)
+	}
+	return ok, err
+}
+
+// deleteOutputs removes the job's separated stems and notes (best effort).
+func (w *ImportWorker) deleteOutputs(ctx context.Context, job *model.Job) {
+	service.DeleteImportOutputs(ctx, w.d.Storage, job.OwnerID, job.ID)
 }
 
 // setStep moves the job to running at the given step. ok is false when the
@@ -378,13 +406,16 @@ func (w *ImportWorker) failFinal(ctx context.Context, job *model.Job, sourceKey 
 	if !failed {
 		return // canceled meanwhile: cancel refunded and scheduled the cleanup
 	}
+	if refund {
+		w.deleteOutputs(ctx, job)
+	}
 	if refund && d.Credits != nil {
 		if rerr := d.Credits.Refund(fctx, credit.OpImport, job.ID); rerr != nil {
 			log.Printf("import job %s: could not refund: %v", job.ID, rerr)
 		}
 	}
 	if refund && sourceKey != "" && d.ScheduleCleanup != nil {
-		if cerr := d.ScheduleCleanup(job.OwnerID, sourceKey); cerr != nil {
+		if cerr := d.ScheduleCleanup(job.OwnerID, sourceKey, job.ID); cerr != nil {
 			log.Printf("import job %s: could not schedule the source cleanup: %v", job.ID, cerr)
 		}
 	}

@@ -59,6 +59,10 @@ type ImportTaskPayload struct {
 type ImportCleanupPayload struct {
 	OwnerID   string `json:"ownerId"`
 	SourceKey string `json:"sourceKey"`
+	// JobID is the job whose end scheduled this cleanup; the worker does not
+	// count it as a user of the source. Empty in payloads queued before it
+	// existed.
+	JobID string `json:"jobId,omitempty"`
 }
 
 // TaskEnqueuer is the part of *asynq.Client the services use.
@@ -87,11 +91,20 @@ type ImportService struct{ d ImportDeps }
 
 func NewImportService(d ImportDeps) *ImportService { return &ImportService{d: d} }
 
+// Available reports whether imports can run: the flag is on and the separator,
+// storage and audio-service are configured. Start, Retry and the import worker
+// server all use it, so a half-configured deployment never charges a job that
+// nothing can process.
+func (s *ImportService) Available() bool {
+	d := s.d
+	return d.Cfg.Enabled && d.Cfg.SeparationURL != "" && d.Storage != nil && d.Audio != nil && d.Audio.IsConfigured()
+}
+
 // Start stores the file, measures it, charges, creates the job and queues it.
 // A refused file spends nothing and its source is deleted.
 func (s *ImportService) Start(ctx context.Context, userID string, in ImportUpload) (*model.ImportStartResponse, error) {
 	d := s.d
-	if !d.Cfg.Enabled || d.Storage == nil || d.Audio == nil || !d.Audio.IsConfigured() {
+	if !s.Available() {
 		return nil, ErrImportDisabled
 	}
 	if _, err := client.UserKey("imports", userID, in.ProjectID); err != nil {
@@ -133,7 +146,7 @@ func (s *ImportService) Start(ctx context.Context, userID string, in ImportUploa
 
 	if err := s.chargeAndQueue(ctx, userID, jobID, in.ProjectID, in.ProjectName, model.ImportPayload{
 		SourceKey: srcKey, DurationMs: prep.DurationMs, ContentType: in.ContentType,
-	}); err != nil {
+	}, false); err != nil {
 		return nil, err
 	}
 	keep = true
@@ -143,8 +156,10 @@ func (s *ImportService) Start(ctx context.Context, userID string, in ImportUploa
 
 // chargeAndQueue charges the import, creates the queued job and enqueues its
 // task. Any failure after the charge refunds it and leaves no active job.
-// Start and Retry share it.
-func (s *ImportService) chargeAndQueue(ctx context.Context, userID, jobID, projectID, projectName string, p model.ImportPayload) error {
+// Start and Retry share it. cleanupOnEnqueueFail is set by Retry, whose source
+// belongs to an older job: a canceled retry must schedule the source cleanup
+// or nothing ever would (Start deletes its own source instead).
+func (s *ImportService) chargeAndQueue(ctx context.Context, userID, jobID, projectID, projectName string, p model.ImportPayload, cleanupOnEnqueueFail bool) error {
 	d := s.d
 	if _, err := d.Credits.Spend(ctx, userID, credit.OpImport, jobID, projectID); err != nil {
 		return err
@@ -178,6 +193,11 @@ func (s *ImportService) chargeAndQueue(ctx context.Context, userID, jobID, proje
 			j.Status = model.JobStatusCanceled
 			return nil
 		})
+		if cleanupOnEnqueueFail {
+			if cerr := s.ScheduleSourceCleanup(userID, p.SourceKey, jobID); cerr != nil {
+				log.Printf("import: schedule cleanup job=%s: %v", jobID, cerr)
+			}
+		}
 		return fmt.Errorf("failed to enqueue import job: %w", err)
 	}
 	return nil
@@ -188,7 +208,7 @@ func (s *ImportService) chargeAndQueue(ctx context.Context, userID, jobID, proje
 // is ErrImportSourceGone with nothing spent and no job created.
 func (s *ImportService) Retry(ctx context.Context, userID, jobID string) (*model.ImportStartResponse, error) {
 	d := s.d
-	if !d.Cfg.Enabled || d.Storage == nil || d.Audio == nil || !d.Audio.IsConfigured() {
+	if !s.Available() {
 		return nil, ErrImportDisabled
 	}
 	old, err := d.Repo.GetOwned(ctx, userID, jobID)
@@ -216,7 +236,7 @@ func (s *ImportService) Retry(ctx context.Context, userID, jobID string) (*model
 	}
 
 	newID := uuid.NewString()
-	if err := s.chargeAndQueue(ctx, userID, newID, old.ProjectID, old.ProjectName, p); err != nil {
+	if err := s.chargeAndQueue(ctx, userID, newID, old.ProjectID, old.ProjectName, p, true); err != nil {
 		return nil, err
 	}
 	log.Printf("import retry: user=%s old=%s job=%s", userID, jobID, newID)
@@ -252,7 +272,7 @@ func (s *ImportService) Cancel(ctx context.Context, userID, jobID string) error 
 		log.Printf("import cancel: refund job=%s: %v", jobID, err)
 	}
 	if sourceKey != "" {
-		if err := s.ScheduleSourceCleanup(userID, sourceKey); err != nil {
+		if err := s.ScheduleSourceCleanup(userID, sourceKey, jobID); err != nil {
 			log.Printf("import cancel: schedule cleanup job=%s: %v", jobID, err)
 		}
 	}
@@ -261,8 +281,8 @@ func (s *ImportService) Cancel(ctx context.Context, userID, jobID string) error 
 
 // ScheduleSourceCleanup queues the delayed deletion of an import source. The
 // worker skips it while an active import job still uses the source.
-func (s *ImportService) ScheduleSourceCleanup(ownerID, sourceKey string) error {
-	payload, err := json.Marshal(ImportCleanupPayload{OwnerID: ownerID, SourceKey: sourceKey})
+func (s *ImportService) ScheduleSourceCleanup(ownerID, sourceKey, jobID string) error {
+	payload, err := json.Marshal(ImportCleanupPayload{OwnerID: ownerID, SourceKey: sourceKey, JobID: jobID})
 	if err != nil {
 		return err
 	}

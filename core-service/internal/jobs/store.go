@@ -275,9 +275,17 @@ func (s *PostgresStore) List(ctx context.Context, userID string, since time.Time
 }
 
 func (s *PostgresStore) StaleLyricsJobs(ctx context.Context, before time.Time) ([]string, error) {
+	return s.staleJobs(ctx, model.JobTypeLyrics, before)
+}
+
+func (s *PostgresStore) StaleImportJobs(ctx context.Context, before time.Time) ([]string, error) {
+	return s.staleJobs(ctx, model.JobTypeImport, before)
+}
+
+func (s *PostgresStore) staleJobs(ctx context.Context, jobType string, before time.Time) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `SELECT j.id FROM uretim.isler j
-		WHERE j.tur='lyrics' AND j.durum IN ('queued','running')
-		AND COALESCE((SELECT max(e.zaman) FROM uretim.is_olaylari e WHERE e.is_id=j.id), j.olusturma) < $1`, before)
+		WHERE j.tur=$2 AND j.durum IN ('queued','running')
+		AND COALESCE((SELECT max(e.zaman) FROM uretim.is_olaylari e WHERE e.is_id=j.id), j.olusturma) < $1`, before, jobType)
 	if err != nil {
 		return nil, err
 	}

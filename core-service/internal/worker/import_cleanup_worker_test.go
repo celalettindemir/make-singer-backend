@@ -20,6 +20,11 @@ func cleanupTask(owner, key string) *asynq.Task {
 	return asynq.NewTask(service.TaskTypeImportSourceCleanup, b)
 }
 
+func cleanupTaskFor(owner, key, jobID string) *asynq.Task {
+	b, _ := json.Marshal(service.ImportCleanupPayload{OwnerID: owner, SourceKey: key, JobID: jobID})
+	return asynq.NewTask(service.TaskTypeImportSourceCleanup, b)
+}
+
 func addImportJob(t *testing.T, repo jobs.Repo, id, key string, st model.JobStatus) {
 	t.Helper()
 	payload, _ := json.Marshal(model.ImportPayload{SourceKey: key})
@@ -120,5 +125,27 @@ func TestImportCleanup_DeletesWhenOwnJobCompletedJustAtRetention(t *testing.T) {
 	}
 	if len(st.deleted) != 1 {
 		t.Fatalf("own job at the retention edge must not keep the source: %v", st.deleted)
+	}
+}
+
+func TestImportCleanup_ExcludesOwnJob(t *testing.T) {
+	// The task's own job failed a moment ago, well inside the retention window.
+	repo, st := jobs.NewMemoryStore(nil), &impStorage{}
+	failedImportJob(t, repo, time.Hour)
+	if err := NewImportCleanupWorker(repo, st, cleanupRetention).ProcessTask(context.Background(), cleanupTaskFor(impOwner, impSrc, impJobID)); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.deleted) != 1 {
+		t.Fatalf("own job must not keep the source: %v", st.deleted)
+	}
+
+	// Another recent failed job on the same source still keeps it.
+	repo, st = jobs.NewMemoryStore(nil), &impStorage{}
+	failedImportJob(t, repo, time.Hour)
+	if err := NewImportCleanupWorker(repo, st, cleanupRetention).ProcessTask(context.Background(), cleanupTaskFor(impOwner, impSrc, "other-job")); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.deleted) != 0 {
+		t.Fatalf("another recent failed job must keep the source: %v", st.deleted)
 	}
 }

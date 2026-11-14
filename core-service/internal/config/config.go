@@ -254,6 +254,11 @@ type ImportConfig struct {
 	Concurrency       int
 	// SourceRetention is how long a failed import's source file is kept.
 	SourceRetention time.Duration
+	// StaleSweepInterval is how often the stale import sweep runs (<= 0
+	// disables it); StaleAfter is how long a queued or running import may show
+	// no activity before the sweep fails and refunds it.
+	StaleSweepInterval time.Duration
+	StaleAfter         time.Duration
 }
 
 // AnthropicConfig is the Anthropic Messages API client configuration.
@@ -503,6 +508,8 @@ func Load() (*Config, error) {
 	_ = viper.BindEnv("import.separation_timeout", "SEPARATION_SERVICE_TIMEOUT")
 	_ = viper.BindEnv("import.concurrency", "IMPORT_CONCURRENCY")
 	_ = viper.BindEnv("import.source_retention", "IMPORT_SOURCE_RETENTION")
+	_ = viper.BindEnv("import.stale_sweep_interval", "IMPORT_STALE_SWEEP_INTERVAL")
+	_ = viper.BindEnv("import.stale_after", "IMPORT_STALE_AFTER")
 	_ = viper.BindEnv("credits.enforce", "CREDITS_ENFORCE")
 	_ = viper.BindEnv("credits.plan_plus", "CREDITS_PLAN_PLUS")
 	_ = viper.BindEnv("credits.plan_pro", "CREDITS_PLAN_PRO")
@@ -573,6 +580,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("import.separation_timeout", "900s")
 	viper.SetDefault("import.concurrency", 1)
 	viper.SetDefault("import.source_retention", "24h")
+	viper.SetDefault("import.stale_sweep_interval", "15m")
+	viper.SetDefault("import.stale_after", "2h")
 	viper.SetDefault("credits.enforce", false)
 	viper.SetDefault("push.enabled", false)
 	viper.SetDefault("credits.plan_plus", 300)
@@ -739,15 +748,17 @@ func Load() (*Config, error) {
 			StyleWeightFree:         viper.GetFloat64("hum.style_weight_free"),
 		},
 		Import: ImportConfig{
-			Enabled:           viper.GetBool("import.enabled"),
-			MaxBytes:          viper.GetInt64("import.max_bytes"),
-			MinMs:             viper.GetInt("import.min_ms"),
-			MaxMs:             viper.GetInt("import.max_ms"),
-			TranscribeTimeout: viper.GetDuration("import.transcribe_timeout"),
-			SeparationURL:     viper.GetString("import.separation_url"),
-			SeparationTimeout: viper.GetDuration("import.separation_timeout"),
-			Concurrency:       viper.GetInt("import.concurrency"),
-			SourceRetention:   viper.GetDuration("import.source_retention"),
+			Enabled:            viper.GetBool("import.enabled"),
+			MaxBytes:           viper.GetInt64("import.max_bytes"),
+			MinMs:              viper.GetInt("import.min_ms"),
+			MaxMs:              viper.GetInt("import.max_ms"),
+			TranscribeTimeout:  viper.GetDuration("import.transcribe_timeout"),
+			SeparationURL:      viper.GetString("import.separation_url"),
+			SeparationTimeout:  viper.GetDuration("import.separation_timeout"),
+			Concurrency:        viper.GetInt("import.concurrency"),
+			SourceRetention:    viper.GetDuration("import.source_retention"),
+			StaleSweepInterval: viper.GetDuration("import.stale_sweep_interval"),
+			StaleAfter:         viper.GetDuration("import.stale_after"),
 		},
 		Anthropic: AnthropicConfig{
 			APIKey:              viper.GetString("anthropic.api_key"),

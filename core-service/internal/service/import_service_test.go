@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -63,10 +64,15 @@ type importFakeQueue struct {
 	tasks []*asynq.Task
 	opts  [][]asynq.Option
 	err   error
+	// failType, when set, fails only the tasks of that type.
+	failType string
 }
 
 func (q *importFakeQueue) Enqueue(t *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
-	if q.err != nil {
+	if q.err != nil || (q.failType != "" && t.Type() == q.failType) {
+		if q.err == nil {
+			return nil, errors.New("redis down")
+		}
 		return nil, q.err
 	}
 	q.tasks = append(q.tasks, t)
@@ -89,7 +95,7 @@ func newImportEnv(ms int) *importEnv {
 		repo: jobs.NewMemoryStore(nil), spender: &credit.FakeSpender{IsEnforced: true, Bal: 100},
 	}
 	e.svc = NewImportService(ImportDeps{
-		Cfg:  config.ImportConfig{Enabled: true, MinMs: 30000, MaxMs: 480000},
+		Cfg:  config.ImportConfig{Enabled: true, SeparationURL: "http://separation:8085", MinMs: 30000, MaxMs: 480000, StaleAfter: 2 * time.Hour},
 		Repo: e.repo, Storage: e.st, Audio: e.audio, Queue: e.queue, Credits: e.spender,
 	})
 	return e
@@ -226,6 +232,23 @@ func TestImportService_Disabled(t *testing.T) {
 	}
 }
 
+func TestImportService_Disabled_WhenSeparatorUnconfigured(t *testing.T) {
+	e := newImportEnv(95000)
+	e.svc.d.Cfg.SeparationURL = ""
+	if e.svc.Available() {
+		t.Fatal("Available with no separator")
+	}
+	if _, err := e.svc.Start(context.Background(), "u1", importUpload()); !errors.Is(err, ErrImportDisabled) {
+		t.Fatalf("Start err = %v", err)
+	}
+	if _, err := e.svc.Retry(context.Background(), "u1", oldImportID); !errors.Is(err, ErrImportDisabled) {
+		t.Fatalf("Retry err = %v", err)
+	}
+	if len(e.st.events) != 0 || len(e.spender.Spends) != 0 {
+		t.Fatalf("touched storage %v or credits %v", e.st.events, e.spender.Spends)
+	}
+}
+
 const (
 	oldImportID    = "11111111-1111-4111-8111-111111111111"
 	liveImportID   = "22222222-2222-4222-8222-222222222222"
@@ -354,7 +377,7 @@ func TestJobCenter_CancelImport_RefundsAndSchedulesCleanup(t *testing.T) {
 		if len(e.queue.tasks) != 1 || e.queue.tasks[0].Type() != TaskTypeImportSourceCleanup {
 			t.Fatalf("%s: tasks = %v", st, e.queue.tasks)
 		}
-		want := `{"ownerId":"u1","sourceKey":"` + importSrcKey + `"}`
+		want := `{"ownerId":"u1","sourceKey":"` + importSrcKey + `","jobId":"` + cancelImportID + `"}`
 		if string(e.queue.tasks[0].Payload()) != want {
 			t.Fatalf("payload = %s", e.queue.tasks[0].Payload())
 		}
@@ -392,5 +415,93 @@ func TestJobCenter_RetryImport_NotRetryable(t *testing.T) {
 	}
 	if len(e.spender.Spends) != 0 || len(e.queue.tasks) != 0 {
 		t.Fatal("generic retry started something")
+	}
+}
+
+func TestImportService_RetryEnqueueFails_SchedulesCleanup(t *testing.T) {
+	e := newImportEnv(95000)
+	seedImportJob(t, e, oldImportID, model.JobStatusFailed)
+	// The first enqueue (the retry's task) fails; the cleanup task goes through.
+	e.queue.failType = TaskTypeImport
+	if _, err := e.svc.Retry(context.Background(), "u1", oldImportID); err == nil {
+		t.Fatal("expected the enqueue error")
+	}
+	if len(e.spender.Refunds) != 1 {
+		t.Fatalf("refunds = %+v", e.spender.Refunds)
+	}
+	if len(e.queue.tasks) != 1 || e.queue.tasks[0].Type() != TaskTypeImportSourceCleanup {
+		t.Fatalf("tasks = %v", e.queue.tasks)
+	}
+	var p ImportCleanupPayload
+	if err := json.Unmarshal(e.queue.tasks[0].Payload(), &p); err != nil || p.SourceKey != importSrcKey || p.OwnerID != "u1" || p.JobID == "" || p.JobID == oldImportID {
+		t.Fatalf("cleanup payload = %+v, %v", p, err)
+	}
+}
+
+// staleImportJob seeds a job of the given status whose only activity (its
+// creation) was age ago.
+func staleImportJob(t *testing.T, e *importEnv, id string, status model.JobStatus, age time.Duration) {
+	t.Helper()
+	payload := `{"sourceKey":"` + importSrcKey + `","durationMs":95000,"contentType":"audio/mpeg"}`
+	err := e.repo.Create(context.Background(), &model.Job{
+		ID: id, Type: model.JobTypeImport, OwnerID: "u1", Status: status,
+		ProjectID: "p1", ProjectName: "Gece", Payload: []byte(payload), CreatedAt: time.Now().UTC().Add(-age),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestImportStaleSweep_FailsRefundsAndSchedulesCleanup(t *testing.T) {
+	for _, st := range []model.JobStatus{model.JobStatusQueued, model.JobStatusRunning} {
+		e := newImportEnv(95000)
+		e.svc.d.Cfg.SourceRetention = 24 * time.Hour
+		staleImportJob(t, e, liveImportID, st, 3*time.Hour)
+		// The event of creation is recent in the memory store; age it by
+		// sweeping at a later "now".
+		n, err := e.svc.FailStale(context.Background(), time.Now().Add(3*time.Hour))
+		if err != nil || n != 1 {
+			t.Fatalf("%s: n=%d err=%v", st, n, err)
+		}
+		job, _ := e.repo.Get(context.Background(), liveImportID)
+		if job.Status != model.JobStatusFailed || job.ErrorCode != "IMPORT_FAILED" || job.CompletedAt == nil {
+			t.Fatalf("%s: job = %+v", st, job)
+		}
+		if len(e.spender.Refunds) != 1 || e.spender.Refunds[0].Op != credit.OpImport || e.spender.Refunds[0].ID != liveImportID {
+			t.Fatalf("%s: refunds = %+v", st, e.spender.Refunds)
+		}
+		if len(e.st.deleted) != 5 || e.st.deleted[0] != "imports/u1/"+liveImportID+"/vocal.mp3" {
+			t.Fatalf("%s: deleted outputs = %v", st, e.st.deleted)
+		}
+		for _, k := range e.st.deleted {
+			if k == importSrcKey {
+				t.Fatalf("%s: the source was deleted by the sweep", st)
+			}
+		}
+		if len(e.queue.tasks) != 1 || e.queue.tasks[0].Type() != TaskTypeImportSourceCleanup ||
+			!strings.Contains(string(e.queue.tasks[0].Payload()), `"jobId":"`+liveImportID+`"`) {
+			t.Fatalf("%s: tasks = %v", st, e.queue.tasks)
+		}
+		// A second sweep finds nothing and refunds nothing more.
+		if n, _ := e.svc.FailStale(context.Background(), time.Now().Add(3*time.Hour)); n != 0 || len(e.spender.Refunds) != 1 {
+			t.Fatalf("%s: second sweep n=%d refunds=%d", st, n, len(e.spender.Refunds))
+		}
+	}
+}
+
+func TestImportStaleSweep_SkipsFreshAndTerminal(t *testing.T) {
+	e := newImportEnv(95000)
+	staleImportJob(t, e, liveImportID, model.JobStatusRunning, time.Minute)
+	staleImportJob(t, e, cancelImportID, model.JobStatusCanceled, 5*time.Hour)
+	staleImportJob(t, e, oldImportID, model.JobStatusSucceeded, 5*time.Hour)
+	n, err := e.svc.FailStale(context.Background(), time.Now())
+	if err != nil || n != 0 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if len(e.spender.Refunds) != 0 || len(e.st.deleted) != 0 || len(e.queue.tasks) != 0 {
+		t.Fatalf("refunds %v deleted %v tasks %v", e.spender.Refunds, e.st.deleted, e.queue.tasks)
+	}
+	if job, _ := e.repo.Get(context.Background(), liveImportID); job.Status != model.JobStatusRunning {
+		t.Fatalf("fresh job = %v", job.Status)
 	}
 }

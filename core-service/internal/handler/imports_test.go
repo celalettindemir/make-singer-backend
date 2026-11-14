@@ -50,7 +50,7 @@ type importTestEnv struct {
 func importApp(ms int, enabled bool, maxBytes int64) *importTestEnv {
 	e := &importTestEnv{repo: jobs.NewMemoryStore(nil), spender: &credit.FakeSpender{IsEnforced: true, Bal: 100}}
 	svc := service.NewImportService(service.ImportDeps{
-		Cfg:  config.ImportConfig{Enabled: enabled, MinMs: 30000, MaxMs: 480000},
+		Cfg:  config.ImportConfig{Enabled: enabled, SeparationURL: "http://separation:8085", MinMs: 30000, MaxMs: 480000},
 		Repo: e.repo, Storage: &humTestStorage{}, Audio: importTestAudio{ms: ms}, Queue: importTestQueue{}, Credits: e.spender,
 	})
 	h := NewImportHandler(svc, maxBytes, 30000, 480000)
@@ -154,7 +154,7 @@ func TestImportHandler_MapsErrors(t *testing.T) {
 	t.Run("unreadable", func(t *testing.T) {
 		e := importApp(0, true, 1024)
 		svc := service.NewImportService(service.ImportDeps{
-			Cfg:  config.ImportConfig{Enabled: true, MinMs: 30000, MaxMs: 480000},
+			Cfg:  config.ImportConfig{Enabled: true, SeparationURL: "http://separation:8085", MinMs: 30000, MaxMs: 480000},
 			Repo: e.repo, Storage: &humTestStorage{}, Audio: importTestAudio{err: client.ErrAudioUnprocessable}, Queue: importTestQueue{}, Credits: e.spender,
 		})
 		h := NewImportHandler(svc, 1024, 30000, 480000)
@@ -187,7 +187,7 @@ func TestImportHandler_RetryMapsErrors(t *testing.T) {
 			t.Fatal(err)
 		}
 		svc := service.NewImportService(service.ImportDeps{
-			Cfg:  config.ImportConfig{Enabled: true, MinMs: 30000, MaxMs: 480000},
+			Cfg:  config.ImportConfig{Enabled: true, SeparationURL: "http://separation:8085", MinMs: 30000, MaxMs: 480000},
 			Repo: repo, Storage: importGoneStorage{&humTestStorage{}, gone}, Audio: importTestAudio{ms: 95000},
 			Queue: importTestQueue{}, Credits: &credit.FakeSpender{IsEnforced: true, Bal: 100},
 		})

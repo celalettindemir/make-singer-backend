@@ -103,6 +103,8 @@ import:
   separation_timeout: "900s" # SEPARATION_SERVICE_TIMEOUT
   concurrency: 1 # IMPORT_CONCURRENCY: import worker slots
   source_retention: "24h" # IMPORT_SOURCE_RETENTION: failed imports keep the source this long
+  stale_sweep_interval: "15m" # IMPORT_STALE_SWEEP_INTERVAL: stale import sweep, <= 0 disables
+  stale_after: "2h" # IMPORT_STALE_AFTER: no activity this long = failed and refunded
 
 # Hum (melody) uploads: OpenAI speech-to-text and Suno Upload and Cover weights
 hum:

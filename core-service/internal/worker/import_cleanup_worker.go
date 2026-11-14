@@ -19,13 +19,13 @@ import (
 // retention so a retry that started after the failure is always seen.
 const importCleanupLookback = 48 * time.Hour
 
-// recentGrace shrinks the "recent failure" window. The cleanup task of the job
-// that failed at T0 runs at about T0+retention; with clock skew between pods or
-// a CompletedAt stamped by the database it can fire slightly early, and that job
-// would then count as a recent failure and the source would never be deleted
-// (no later task exists). Failures within the grace of the retention edge are
-// therefore treated as the task's own job.
-const recentGrace = 5 * time.Minute
+// legacyRecentGrace shrinks the "recent failure" window for payloads without a
+// job id (queued before the id existed). The cleanup task of the job that
+// failed at T0 runs at about T0+retention; with clock skew between pods or a
+// CompletedAt stamped by the database it can fire slightly early, and without
+// knowing its own job the worker would count it as a recent failure. Payloads
+// with a job id skip that job exactly and need no grace.
+const legacyRecentGrace = 5 * time.Minute
 
 // ImportCleanupWorker deletes an import source that was kept after a failed or
 // canceled job, unless a retry still uses it.
@@ -58,15 +58,19 @@ func (w *ImportCleanupWorker) ProcessTask(ctx context.Context, t *asynq.Task) er
 		return fmt.Errorf("could not list import jobs: %w", err)
 	}
 	now := w.now()
+	grace := time.Duration(0)
+	if p.JobID == "" {
+		grace = legacyRecentGrace
+	}
 	for _, j := range list {
-		if j.Type != model.JobTypeImport {
+		if j.Type != model.JobTypeImport || (p.JobID != "" && j.ID == p.JobID) {
 			continue
 		}
 		switch j.Status {
 		case model.JobStatusQueued, model.JobStatusRunning:
 		case model.JobStatusFailed, model.JobStatusCanceled:
 			// A recent failure keeps the source; its own cleanup task deletes it.
-			if j.CompletedAt == nil || !j.CompletedAt.After(now.Add(-w.retention).Add(recentGrace)) {
+			if j.CompletedAt == nil || !j.CompletedAt.After(now.Add(-w.retention).Add(grace)) {
 				continue
 			}
 		default:

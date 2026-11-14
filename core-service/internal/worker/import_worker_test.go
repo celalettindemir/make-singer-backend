@@ -37,6 +37,8 @@ type impSeparator struct {
 	reqs  []*client.SeparateRequest
 	err   error
 	stems []client.SeparatedStem
+	// after runs once the separation finished (a cancel during separation).
+	after func()
 }
 
 func (s *impSeparator) IsConfigured() bool { return true }
@@ -44,6 +46,9 @@ func (s *impSeparator) Separate(_ context.Context, r *client.SeparateRequest) (*
 	s.reqs = append(s.reqs, r)
 	if s.err != nil {
 		return nil, s.err
+	}
+	if s.after != nil {
+		s.after()
 	}
 	return &client.SeparateResponse{DurationMs: 60000, Stems: s.stems}, nil
 }
@@ -125,7 +130,7 @@ func newImpEnv(t *testing.T, status model.JobStatus) *impEnv {
 	e.w = NewImportWorker(ImportWorkerDeps{
 		Repo: e.repo, Storage: e.st, Separator: e.sep, Audio: e.audio, Transcriber: e.tr, Credits: e.sp,
 		Deletion: impDeleted{e},
-		ScheduleCleanup: func(owner, key string) error {
+		ScheduleCleanup: func(owner, key, _ string) error {
 			e.cleaned = append(e.cleaned, owner+"|"+key)
 			return nil
 		},
@@ -292,9 +297,8 @@ func TestImportWorker_SeparationFails_LastAttempt_RefundsAndSchedulesCleanup(t *
 	if !reflect.DeepEqual(e.cleaned, []string{impOwner + "|" + impSrc}) {
 		t.Fatalf("cleaned = %v", e.cleaned)
 	}
-	if len(e.st.deleted) != 0 {
-		t.Fatalf("source deleted: %v", e.st.deleted)
-	}
+	// The refund also removes any partial outputs, never the source.
+	assertOutputsDeletedSourceKept(t, e.st.deleted)
 }
 
 func TestImportWorker_MeasureFails_LastAttempt_Fails(t *testing.T) {
@@ -364,7 +368,86 @@ func TestImportWorker_CanceledDuringRun_NoResultNoRefund(t *testing.T) {
 	if j := e.job(t); j.Status != model.JobStatusCanceled || len(j.Result) != 0 {
 		t.Fatalf("job = %+v", j)
 	}
-	if len(e.st.deleted) != 0 || len(e.sp.Refunds) != 0 {
-		t.Fatalf("deleted %v refunds %v", e.st.deleted, e.sp.Refunds)
+	if len(e.sp.Refunds) != 0 {
+		t.Fatalf("refunds %v", e.sp.Refunds)
+	}
+	assertOutputsDeletedSourceKept(t, e.st.deleted)
+}
+
+// assertOutputsDeletedSourceKept checks that exactly the job's output keys were
+// deleted and the source was not.
+func assertOutputsDeletedSourceKept(t *testing.T, deleted []string) {
+	t.Helper()
+	want := []string{impPref + "vocal.mp3", impPref + "drums.mp3", impPref + "bass.mp3", impPref + "rest.mp3", impPref + "notes.json"}
+	if !reflect.DeepEqual(deleted, want) {
+		t.Fatalf("deleted = %v, want the job outputs %v", deleted, want)
+	}
+}
+
+func TestImportWorker_CanceledAfterSeparation_DeletesOutputs(t *testing.T) {
+	e := newImpEnv(t, model.JobStatusQueued)
+	e.sep.after = func() {
+		_ = e.repo.Update(context.Background(), impJobID, func(j *model.Job) error { j.Status = model.JobStatusCanceled; return nil })
+	}
+	if err := e.run(); err != nil {
+		t.Fatal(err)
+	}
+	if j := e.job(t); j.Status != model.JobStatusCanceled || len(j.Result) != 0 {
+		t.Fatalf("job = %+v", j)
+	}
+	if len(e.sp.Refunds) != 0 || len(e.cleaned) != 0 {
+		t.Fatalf("refunds %v cleaned %v", e.sp.Refunds, e.cleaned)
+	}
+	assertOutputsDeletedSourceKept(t, e.st.deleted)
+}
+
+func TestImportWorker_SeparationOK_MeasureFailsLastAttempt_DeletesOutputs(t *testing.T) {
+	e := newImpEnv(t, model.JobStatusQueued)
+	e.audio.measureErr = errors.New("bad audio")
+	e.last = true
+	if err := e.run(); err == nil {
+		t.Fatal("expected the error")
+	}
+	if len(e.sp.Refunds) != 1 {
+		t.Fatalf("refunds = %v", e.sp.Refunds)
+	}
+	assertOutputsDeletedSourceKept(t, e.st.deleted)
+}
+
+// finalWriteFailRepo fails the update that would mark the job succeeded.
+type finalWriteFailRepo struct{ jobs.Repo }
+
+func (r finalWriteFailRepo) UpdateWith(ctx context.Context, id string, fn func(*model.Job, jobs.Emitter) error) error {
+	probe := &model.Job{Status: model.JobStatusRunning}
+	if err := fn(probe, nil); err == nil && probe.Status == model.JobStatusSucceeded {
+		return errors.New("db down")
+	}
+	return r.Repo.UpdateWith(ctx, id, fn)
+}
+
+func TestImportWorker_FinalWriteErrorLastAttempt_FailsAndRefunds(t *testing.T) {
+	e := newImpEnv(t, model.JobStatusQueued)
+	e.w.d.Repo = finalWriteFailRepo{e.repo}
+	e.last = true
+	if err := e.run(); err == nil {
+		t.Fatal("expected the error")
+	}
+	if j := e.job(t); j.Status != model.JobStatusFailed || j.ErrorCode != "IMPORT_FAILED" {
+		t.Fatalf("job = %+v", j)
+	}
+	if len(e.sp.Refunds) != 1 || len(e.cleaned) != 1 {
+		t.Fatalf("refunds %v cleaned %v", e.sp.Refunds, e.cleaned)
+	}
+	assertOutputsDeletedSourceKept(t, e.st.deleted)
+}
+
+func TestImportWorker_FinalWriteError_NotLastAttempt_LeavesJobForRetry(t *testing.T) {
+	e := newImpEnv(t, model.JobStatusQueued)
+	e.w.d.Repo = finalWriteFailRepo{e.repo}
+	if err := e.run(); err == nil {
+		t.Fatal("expected the error so asynq retries")
+	}
+	if j := e.job(t); j.Status != model.JobStatusRunning || len(e.sp.Refunds) != 0 || len(e.st.deleted) != 0 {
+		t.Fatalf("job %v refunds %v deleted %v", j.Status, e.sp.Refunds, e.st.deleted)
 	}
 }

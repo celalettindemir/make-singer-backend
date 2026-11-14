@@ -369,3 +369,29 @@ func TestAsynqQueues_Weights(t *testing.T) {
 		}
 	}
 }
+
+func TestScheduler_RegistersImportStaleSweep(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Import.StaleSweepInterval = 15 * time.Minute
+	entries := scheduleEntries(cfg)
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	e := entries[0]
+	if e.spec != "@every 15m0s" || e.task.Type() != "ice-aktar:bayat-tara" {
+		t.Fatalf("entry = %q %q", e.spec, e.task.Type())
+	}
+	var queue string
+	var maxRetry int
+	for _, o := range e.opts {
+		switch o.Type() {
+		case asynq.QueueOpt:
+			queue = o.Value().(string)
+		case asynq.MaxRetryOpt:
+			maxRetry = o.Value().(int)
+		}
+	}
+	if queue != "bakim" || maxRetry != 0 {
+		t.Fatalf("queue %q maxRetry %d", queue, maxRetry)
+	}
+}

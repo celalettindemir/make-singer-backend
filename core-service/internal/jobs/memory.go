@@ -187,11 +187,19 @@ func (m *MemoryStore) List(_ context.Context, userID string, since time.Time, li
 }
 
 func (m *MemoryStore) StaleLyricsJobs(_ context.Context, before time.Time) ([]string, error) {
+	return m.staleJobs(model.JobTypeLyrics, before)
+}
+
+func (m *MemoryStore) StaleImportJobs(_ context.Context, before time.Time) ([]string, error) {
+	return m.staleJobs(model.JobTypeImport, before)
+}
+
+func (m *MemoryStore) staleJobs(jobType string, before time.Time) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := []string{}
 	for id, j := range m.jobs {
-		if j.Type != model.JobTypeLyrics || (j.Status != model.JobStatusQueued && j.Status != model.JobStatusRunning) {
+		if j.Type != jobType || (j.Status != model.JobStatusQueued && j.Status != model.JobStatusRunning) {
 			continue
 		}
 		last := j.CreatedAt

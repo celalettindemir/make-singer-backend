@@ -13,6 +13,8 @@ const (
 	TaskTypeJobsSweep = "uretim:temizle"
 	// TaskTypeLyricsStale fails idle lyrics jobs.
 	TaskTypeLyricsStale = "soz:bayat-tara"
+	// TaskTypeImportStale fails idle import jobs.
+	TaskTypeImportStale = "ice-aktar:bayat-tara"
 	// QueueMaintenance is the queue of the periodic sweeps.
 	QueueMaintenance = "bakim"
 )
@@ -27,10 +29,22 @@ type StaleLyricsFailer interface {
 	FailStale(ctx context.Context, now time.Time) (int, error)
 }
 
+// StaleImportFailer ends the import jobs nobody is working on.
+type StaleImportFailer interface {
+	FailStale(ctx context.Context, now time.Time) (int, error)
+}
+
 // JobsWorker runs the periodic job maintenance tasks.
 type JobsWorker struct {
 	sweeper JobSweeper
 	lyrics  StaleLyricsFailer
+	imports StaleImportFailer
+}
+
+// WithImportStale enables the ice-aktar:bayat-tara handler.
+func (w *JobsWorker) WithImportStale(f StaleImportFailer) *JobsWorker {
+	w.imports = f
+	return w
 }
 
 func NewJobsWorker(sweeper JobSweeper, lyrics StaleLyricsFailer) *JobsWorker {
@@ -63,6 +77,21 @@ func (w *JobsWorker) FailStaleLyrics(ctx context.Context, _ *asynq.Task) error {
 	}
 	if n > 0 {
 		log.Printf("jobs: failed %d stale lyrics job(s)", n)
+	}
+	return nil
+}
+
+// FailStaleImports fails import jobs whose worker was lost and refunds them.
+func (w *JobsWorker) FailStaleImports(ctx context.Context, _ *asynq.Task) error {
+	if w.imports == nil {
+		return nil
+	}
+	n, err := w.imports.FailStale(ctx, time.Now())
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		log.Printf("jobs: failed %d stale import job(s)", n)
 	}
 	return nil
 }

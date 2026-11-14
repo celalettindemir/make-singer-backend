@@ -420,6 +420,14 @@ func scenarioStale(t *testing.T, r Repo) {
 	if err != nil || len(ids) != 1 || ids[0] != lyr.ID {
 		t.Fatalf("stale = %v %v, want only the running lyrics job", ids, err)
 	}
+	imp := newJob("u1", model.JobTypeImport, "p4")
+	if err := r.Create(ctx(), imp); err != nil {
+		t.Fatal(err)
+	}
+	ids, err = r.StaleImportJobs(ctx(), time.Now().Add(time.Minute))
+	if err != nil || len(ids) != 1 || ids[0] != imp.ID {
+		t.Fatalf("stale imports = %v %v, want only the import job", ids, err)
+	}
 }
 
 func TestPostgresStore_DeviceRegistry(t *testing.T) {

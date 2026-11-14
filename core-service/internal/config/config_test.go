@@ -710,6 +710,9 @@ func TestConfig_ImportDefaults(t *testing.T) {
 	if im.SeparationURL != "http://localhost:8085" || im.Concurrency != 1 || im.SourceRetention != 24*time.Hour {
 		t.Errorf("import = %+v", im)
 	}
+	if im.StaleSweepInterval != 15*time.Minute || im.StaleAfter != 2*time.Hour {
+		t.Errorf("stale sweep = %v / %v", im.StaleSweepInterval, im.StaleAfter)
+	}
 	if cfg.RateLimit.ImportPerHour != 10 {
 		t.Errorf("ImportPerHour = %d, want 10", cfg.RateLimit.ImportPerHour)
 	}

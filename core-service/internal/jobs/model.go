@@ -91,6 +91,8 @@ type Repo interface {
 	// StaleLyricsJobs returns the ids of lyrics jobs that are queued or running
 	// and have shown no activity (no event) since before.
 	StaleLyricsJobs(ctx context.Context, before time.Time) ([]string, error)
+	// StaleImportJobs is StaleLyricsJobs for import jobs.
+	StaleImportJobs(ctx context.Context, before time.Time) ([]string, error)
 	EventsAfter(ctx context.Context, userID, id string, afterSeq int64, limit int) ([]Event, error)
 	Sweep(ctx context.Context, now time.Time) (jobs, events int64, err error)
 	// DeleteOwner removes the user's jobs, events and devices.
